@@ -230,6 +230,26 @@ export type DshMuxClient = {
   /** Permanent teardown: settles in-flight streams and stops reconnecting. */
   disconnect(): void;
   isConnected(): boolean;
+  /**
+   * Fires on every RECOVERABLE socket close (server terminate, network drop,
+   * failed connect attempt) — i.e. exactly when the R9 reconnect window
+   * opens. A fatal frame (binary / invalid JSON) does NOT fire this: there is
+   * no recovery, and every in-flight stream settles with the fatal error
+   * instead. Mirrors the kimiWebWs `onClose` precedent.
+   */
+  onConnectionLost(listener: (info: DshMuxConnectionInfo) => void): () => void;
+  /**
+   * Fires when a socket opened and every in-flight stream was re-opened on it
+   * (the first connect fires it too). Mirrors the kimiWebWs `onReconnectReady`
+   * precedent; the mux stays the only owner of backoff and stream reopening.
+   */
+  onReconnectReady(listener: () => void): () => void;
+};
+
+/** Close information carried by `onConnectionLost` (code/reason are optional). */
+export type DshMuxConnectionInfo = {
+  readonly code?: number;
+  readonly reason?: string;
 };
 
 type StreamRecord = {
@@ -258,6 +278,8 @@ export function createDshMuxClient(options: DshMuxClientOptions): DshMuxClient {
     options.webSocketCtor ?? (globalThis.WebSocket as unknown as DshMuxSocketCtor | undefined);
 
   const streams = new Map<string, StreamRecord>();
+  const connectionLostListeners = new Set<(info: DshMuxConnectionInfo) => void>();
+  const reconnectReadyListeners = new Set<() => void>();
   let streamCounter = 0;
   let socket: DshMuxSocket | null = null;
   let connecting: Promise<void> | null = null;
@@ -272,6 +294,28 @@ export function createDshMuxClient(options: DshMuxClientOptions): DshMuxClient {
 
   function isConnected(): boolean {
     return socket !== null && socket.readyState === SOCKET_OPEN;
+  }
+
+  function closeInfoOf(event: unknown): DshMuxConnectionInfo {
+    if (typeof event !== 'object' || event === null) return {};
+    const code = (event as { code?: unknown }).code;
+    const reason = (event as { reason?: unknown }).reason;
+    return {
+      ...(typeof code === 'number' ? { code } : {}),
+      ...(typeof reason === 'string' ? { reason } : {}),
+    };
+  }
+
+  function notifyConnectionLost(event: unknown): void {
+    if (connectionLostListeners.size === 0) return;
+    const info = closeInfoOf(event);
+    const listeners = [...connectionLostListeners];
+    for (const listener of listeners) listener(info);
+  }
+
+  function notifyReconnectReady(): void {
+    const listeners = [...reconnectReadyListeners];
+    for (const listener of listeners) listener();
   }
 
   function createRecord(
@@ -374,18 +418,21 @@ export function createDshMuxClient(options: DshMuxClientOptions): DshMuxClient {
         settleWaiter();
         reconnectAttempt = 0;
         flushPendingOpens();
+        notifyReconnectReady();
       });
       ws.addEventListener('message', (event) => handleSocketMessage(event));
       ws.addEventListener('error', () => {
         settleWaiter(new DshMuxError('connection-failed', 'dsh mux: websocket error'));
       });
-      ws.addEventListener('close', () => {
+      ws.addEventListener('close', (event) => {
         if (socket === ws) socket = null;
         settleWaiter(new DshMuxError('connection-failed', 'dsh mux: websocket closed before open'));
         if (stopped) return;
         // Every in-flight stream must be re-opened on the next socket.
         for (const record of streams.values()) record.openSent = false;
         scheduleReconnect();
+        // Recoverable loss: the R9 reconnect window is now open.
+        notifyConnectionLost(event);
       });
     });
   }
@@ -591,5 +638,17 @@ export function createDshMuxClient(options: DshMuxClientOptions): DshMuxClient {
     cancel,
     disconnect,
     isConnected,
+    onConnectionLost(listener: (info: DshMuxConnectionInfo) => void) {
+      connectionLostListeners.add(listener);
+      return () => {
+        connectionLostListeners.delete(listener);
+      };
+    },
+    onReconnectReady(listener: () => void) {
+      reconnectReadyListeners.add(listener);
+      return () => {
+        reconnectReadyListeners.delete(listener);
+      };
+    },
   };
 }

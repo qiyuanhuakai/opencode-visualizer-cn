@@ -25,18 +25,37 @@
  *      `payload.args = {clientId, eventId, outcome}` (protocol correction:
  *      `{args:{…}}` is the envelope payload, not the whole HTTP body).
  *
- * Reconnect semantics follow the replay boundary contract (task 7):
- *   - R1/R2: a snapshot is authoritative full state; the seq gate is reset
- *     and the snapshot re-applied (upsert by identity), `cursor` is the
- *     single watermark;
- *   - R10: `clientId` is per-connection — a dropped socket voids it and the
- *     next ready frame replaces it, so a stale clientId is never answered
- *     with;
- *   - R11: `$events` never replays the disconnect window, so after a
- *     reconnect snapshot the bridge re-derives pending approvals through the
- *     injected `reconcileApprovals` hook (completeness: Todo 23);
+ * Reconnect semantics follow the replay boundary contract (task 7) through
+ * the per-session sync state machine (`dshSyncStateMachine.ts`, Todo 23):
+ *
+ *   live → degraded (connection lost: heartbeat miss / close 1001) →
+ *   rebuilding (transport reconnected, streams re-opened per R9) → live
+ *
+ *   - R1/R2: a snapshot is authoritative full state; the superseded part
+ *     set is explicitly cleared through the shared facade's existing
+ *     `removeMessage` API and the snapshot re-applied (upsert by identity),
+ *     `cursor` is the single watermark, and already-applied seqs are never
+ *     replayed;
+ *   - R4: reconnect recovery is snapshot-only. `session/page` is exposed as
+ *     the history-only window fill (R5/R6: `throughSeq` ≤ cursor, `beforeSeq`
+ *     open upper bound) and is NEVER used to fill a reconnect gap;
+ *   - R9: on reconnect the bridge waits for each stream's own first frame
+ *     (ready / snapshot); frames admitted meanwhile are buffered and applied
+ *     in arrival order, seq-gated against the snapshot;
+ *   - R10: `clientId` is per-connection — a dropped connection voids it and
+ *     the next ready frame replaces it, so a stale clientId is never answered
+ *     with (and an answer queued for the dead connection is dropped, not
+ *     flushed with a foreign id);
+ *   - R11: `$events` never replays the disconnect window, so pending
+ *     approvals are dropped with the connection and re-derived from the
+ *     session's authoritative state through `reconcileApprovals`;
  *   - R13: follow streams are downlink-only — half-close is `cancel`, and
- *     this bridge has no uplink `end` path at all.
+ *     this bridge has no uplink `end` path at all;
+ *   - R14: binary / invalid-json frames are fatal — the session goes
+ *     `detached` and nothing is re-opened;
+ *   - R15: frames admitted into a terminal session are silently dropped;
+ *   - R16: a host `error` frame kills a stream — recovery is a FRESH open
+ *     (new streamId, same connection), never a retry of the dead one.
  *
  * Popup side effects (Todo 24's `onToolPart` / `onLiveReasoning` /
  * `onLiveSubagent`) fire ONLY for live frames; snapshot rebuilds, history
@@ -54,13 +73,20 @@ import {
   type DshJsonValue,
 } from '../backends/dsh/types';
 import { createDshRpcClient, deriveDshBridgeHttpUrl } from '../utils/dshRpc';
+import { DshMuxError } from '../utils/dshMux';
 import type { MessageInfo, MessagePart } from '../types/sse';
+import {
+  createDshSessionSyncState,
+  dshFollowFrameSeq,
+  type DshSessionSyncState,
+} from './dshSyncStateMachine';
 import type {
   DshApprovalRequest,
   DshBridgeSessionState,
   DshBridgeStreamHandle,
   DshCompletion,
   DshFrameOrigin,
+  DshHistoryFillResult,
   DshMessageBridge,
   DshMessageBridgeOptions,
   DshSyncState,
@@ -69,12 +95,21 @@ import type {
 
 /** The logical `$events` stream endpoint on the mux (upstream name, docs §8.1). */
 const EVENTS_ENDPOINT = '$events';
+/** The follow endpoint, also used for the R16 fresh re-open. */
+const FOLLOW_ENDPOINT = 'session/follow';
 /** The answer route: `POST <bridge>/dsh/$events/result` (docs §7.1 special endpoints). */
 const EVENTS_RESULT_NAMESPACE = '$events';
 const EVENTS_RESULT_METHOD = 'result';
 
 /** Guard so a long-lived session cannot grow the answered-set without bound. */
 const MAX_ANSWERED_EVENT_IDS = 1024;
+
+/**
+ * Stream-drop codes that must NOT be recovered from: binary / invalid-json
+ * frames are protocol violations the client itself caused (R14 — retrying
+ * only replays the violation), and a local cancel or disposal is deliberate.
+ */
+const TERMINAL_DROP_CODES = new Set(['binary-frame', 'invalid-json', 'disposed', 'stream-cancelled']);
 
 const USER_QUESTIONS_REJECTION =
   'dsh: user-questions/request has no question UI in this client; the request was declined so the turn is not left hanging';
@@ -112,6 +147,24 @@ function resolveBridgeHttpPrefix(baseUrl: string): string {
   return trimmed;
 }
 
+/** The mux error code of a stream drop, when the drop carries one. */
+function dropCodeOf(error: unknown): string | undefined {
+  return error instanceof DshMuxError ? error.code : undefined;
+}
+
+/** The declared snapshot cursor (R2: == max(records.seq)); -1 when absent. */
+function snapshotCursorOf(value: Record<string, unknown>): number {
+  const cursor = value.cursor;
+  return typeof cursor === 'number' && Number.isFinite(cursor) ? cursor : -1;
+}
+
+/** The snapshot header version — the epoch substitute for dsh. */
+function snapshotVersionOf(value: Record<string, unknown>): number | undefined {
+  const header = isRecord(value.header) ? value.header : {};
+  const version = header.version;
+  return typeof version === 'number' && Number.isFinite(version) ? version : undefined;
+}
+
 export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessageBridge {
   const resultClient = createDshRpcClient({
     baseUrl: resolveBridgeHttpPrefix(options.rpc.baseUrl),
@@ -129,6 +182,13 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
   /** Terminal answers held back while no connection clientId is available. */
   const queuedResponses: Array<{ eventId: string; outcome: DshWaterfallOutcome }> = [];
   const unsubscribers: Array<() => void> = [];
+
+  /** Per-session sync state machines (Todo 23; the transition table lives in the module). */
+  const syncs = new Map<string, DshSessionSyncState>();
+  /** Message ids this bridge applied per session — the R1 superseded set. */
+  const ownedMessages = new Map<string, Set<string>>();
+  /** Sessions with a fresh follow open awaiting its first frame (R16/gap recovery). */
+  const pendingFollowOpens = new Set<string>();
 
   let eventsHandle: DshBridgeStreamHandle | undefined;
   const followHandles: DshBridgeStreamHandle[] = [];
@@ -149,6 +209,15 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     return normalizer;
   }
 
+  function syncFor(sessionId: string): DshSessionSyncState {
+    let sync = syncs.get(sessionId);
+    if (!sync) {
+      sync = createDshSessionSyncState();
+      syncs.set(sessionId, sync);
+    }
+    return sync;
+  }
+
   function setSync(sessionId: string, sync: DshSyncState): void {
     const previous = sessionStates.get(sessionId);
     sessionStates.set(sessionId, { ...previous, sessionId, sync });
@@ -164,6 +233,18 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     });
   }
 
+  /** Publish the machine's phase as the bridge-visible sync state. */
+  function publishSync(sessionId: string): void {
+    const sync = syncs.get(sessionId);
+    if (sync === undefined) return;
+    const cursor = sync.cursor();
+    const phase = sync.phase();
+    if (phase === 'degraded') setSync(sessionId, { kind: 'degraded', cursor });
+    else if (phase === 'rebuilding') setSync(sessionId, { kind: 'rebuilding', cursor });
+    else if (phase === 'detached') setSync(sessionId, { kind: 'detached' });
+    else setSync(sessionId, { kind: 'live', cursor });
+  }
+
   function completionOf(kind: string, code?: string, message?: string): DshCompletion {
     return {
       kind,
@@ -175,6 +256,31 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
   // -------------------------------------------------------------------------
   // Op application (Todo 18 ops → shared message facade + popup surfaces)
   // -------------------------------------------------------------------------
+
+  function ownMessage(sessionId: string, messageId: string): void {
+    let ids = ownedMessages.get(sessionId);
+    if (!ids) {
+      ids = new Set();
+      ownedMessages.set(sessionId, ids);
+    }
+    ids.add(messageId);
+  }
+
+  /**
+   * R1 authoritative switch: the snapshot IS the session state, so the part
+   * set it supersedes is explicitly cleared through the shared facade's
+   * existing `removeMessage` API (the `useMessages` contract itself is never
+   * touched) before the snapshot is re-applied.
+   */
+  function clearOwnedMessages(sessionId: string): void {
+    const owned = ownedMessages.get(sessionId);
+    if (owned === undefined || owned.size === 0) return;
+    for (const messageId of owned) {
+      options.msg.removeMessage?.(messageId);
+      messages.delete(messageId);
+    }
+    owned.clear();
+  }
 
   function applyPartOp(part: MessagePart, origin: DshFrameOrigin, sessionId: string): void {
     options.msg.updatePart(part);
@@ -203,10 +309,12 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     result: DshNormalizeResult,
     origin: DshFrameOrigin,
     sessionId: string,
+    authoritative: boolean,
   ): void {
     for (const op of result.ops) {
       if (op.kind === 'message') {
         messages.set(op.message.id, op.message);
+        ownMessage(sessionId, op.message.id);
         options.msg.updateMessage(op.message);
         continue;
       }
@@ -215,6 +323,13 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
         continue;
       }
       if (op.kind === 'turn') {
+        // Busy/completion come from authoritative frames only: a live frame
+        // and a follow snapshot are authoritative; a history page window is
+        // a partial view that must not fabricate transient UI state.
+        if (!authoritative) {
+          options.onSessionEvent?.(op, { origin, sessionId });
+          continue;
+        }
         if (op.phase === 'started') {
           mergeSession(sessionId, { busy: true });
         } else {
@@ -246,64 +361,163 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
       if (sessionId === undefined) return;
       streamSessions.set(handle, sessionId);
       if (primarySessionId === undefined) primarySessionId = sessionId;
-      // R1: the snapshot is authoritative full state, so the seq gate is reset
-      // and every record re-applied (upsert by identity) — a reconnect that
-      // replays already-seen seqs must not skip them silently, and a record
-      // from the disconnect window must not be lost either.
-      const normalizer = normalizerFor(sessionId);
-      normalizer.reset();
-      setSync(sessionId, { kind: 'rebuilding' });
-      const result = normalizer.ingest(value);
-      applyResult(result, 'snapshot-rebuild', sessionId);
-      setSync(sessionId, { kind: 'live', cursor: normalizer.cursor() });
-      reconcileAfterRebuild(sessionId);
+      applyFollowSnapshot(sessionId, value);
       return;
     }
 
     const sessionId = streamSessions.get(handle) ?? primarySessionId;
     if (sessionId === undefined) return;
-    const normalizer = normalizerFor(sessionId);
-    const result = normalizer.ingest(value);
-    applyResult(result, 'live', sessionId);
-    setSync(sessionId, { kind: 'live', cursor: normalizer.cursor() });
+    admitFollowFrame(sessionId, value);
   }
 
   /**
-   * R11 re-derivation: `$events` never replays the disconnect window, so the
-   * pending-approval state is re-derived from the session's authoritative
-   * state (the injected hook reads the follow snapshot records/projections).
-   * A synchronous hook is applied synchronously; a promise is awaited.
+   * R1: the snapshot is authoritative full state — reset the seq gate, clear
+   * the superseded part set, re-apply every record (upsert by identity), then
+   * drain the frames buffered during degraded/rebuilding in arrival order.
+   * A late snapshot (cursor behind the watermark) is dropped instead of
+   * overwriting newer state.
    */
-  function reconcileAfterRebuild(sessionId: string): void {
-    const derive = options.reconcileApprovals;
-    if (derive === undefined || stopped) return;
-    const requests = derive(sessionId);
-    if (isPromiseLike(requests)) {
-      void Promise.resolve(requests).then((list) => {
-        if (stopped) return;
-        for (const request of list) surfaceApproval(request);
-      });
+  function applyFollowSnapshot(sessionId: string, value: Record<string, unknown>): void {
+    const sync = syncFor(sessionId);
+    const plan = sync.planSnapshot({
+      cursor: snapshotCursorOf(value),
+      version: snapshotVersionOf(value),
+    });
+    if (plan.action === 'drop-stale') {
+      publishSync(sessionId);
       return;
     }
-    for (const request of requests) surfaceApproval(request);
+
+    sync.beginSnapshotApply();
+    publishSync(sessionId);
+    clearOwnedMessages(sessionId);
+    const normalizer = normalizerFor(sessionId);
+    normalizer.reset();
+    const result = normalizer.ingest(value);
+    applyResult(result, 'snapshot-rebuild', sessionId, true);
+    // The normalizer's applied watermark is the honest cursor (R2: equal to
+    // the declared one on the wire); a malformed declaration cannot inflate it.
+    sync.commitSnapshot(normalizer.cursor(), snapshotVersionOf(value));
+    pendingFollowOpens.delete(sessionId);
+    publishSync(sessionId);
+
+    const buffered = plan.buffered;
+    for (let index = 0; index < buffered.length; index += 1) {
+      const decision = sync.admitFrame(buffered[index]);
+      if (decision.action === 'apply') {
+        const drained = normalizer.ingest(buffered[index]);
+        applyResult(drained, 'live', sessionId, true);
+        sync.noteApplied(dshFollowFrameSeq(buffered[index]));
+        continue;
+      }
+      if (decision.action === 'gap') {
+        // A gap inside the drained frames: keep the rest buffered and ask
+        // for a fresh authoritative state instead of skipping seqs.
+        sync.bufferFrames(buffered.slice(index + 1));
+        publishSync(sessionId);
+        reopenFollow(sessionId);
+        return;
+      }
+      // 'drop': the snapshot already covered this seq (no duplication).
+    }
+    publishSync(sessionId);
+    reconcileAfterRebuild(sessionId);
   }
 
-  function watchStream(handle: DshBridgeStreamHandle, onDrop: () => void): void {
-    if (handle.promise === undefined) return;
-    handle.promise.catch(() => onDrop());
+  /**
+   * Live/joining follow frame admission. The state machine decides: apply
+   * (in-order seq, volatile delta, or the first frame of a mid-stream join),
+   * buffer (degraded/rebuilding), drop (duplicate, late, terminal) or gap
+   * (missing seqs → rebuild from authority, never a silent skip).
+   */
+  function admitFollowFrame(sessionId: string, value: DshJsonValue): void {
+    const sync = syncFor(sessionId);
+    const decision = sync.admitFrame(value);
+    if (decision.action === 'drop' || decision.action === 'buffer') return;
+    if (decision.action === 'gap') {
+      publishSync(sessionId);
+      reopenFollow(sessionId);
+      return;
+    }
+    const normalizer = normalizerFor(sessionId);
+    const result = normalizer.ingest(value);
+    applyResult(result, 'live', sessionId, true);
+    sync.noteApplied(dshFollowFrameSeq(value));
+    publishSync(sessionId);
   }
 
-  function attachFollow(handle: DshBridgeStreamHandle): void {
+  /**
+   * R16/gap recovery: open a FRESH follow stream (new streamId, same
+   * connection — measured legal, never a 1008) and wait for its snapshot.
+   * The mux re-opens in-flight streams by itself on a socket reconnect (Todo
+   * 5); this path covers streams that settled and are therefore gone.
+   */
+  function reopenFollow(sessionId: string): void {
+    if (stopped || pendingFollowOpens.has(sessionId)) return;
+    pendingFollowOpens.add(sessionId);
+    const handle = options.mux.open(FOLLOW_ENDPOINT, {
+      args: { request: { address: { kind: 'session', sessionId } } },
+    });
+    registerFollow(handle, sessionId);
+  }
+
+  function registerFollow(handle: DshBridgeStreamHandle, sessionId?: string): void {
     if (stopped) {
       handle.cancel();
       return;
     }
     followHandles.push(handle);
-    watchStream(handle, () => {
-      const sessionId = streamSessions.get(handle);
-      if (sessionId !== undefined) setSync(sessionId, { kind: 'detached' });
-    });
+    if (sessionId !== undefined) {
+      streamSessions.set(handle, sessionId);
+      // A join-time binding is the primary session (the bootstrap entry):
+      // without it the no-argument accessors would stay blind until a
+      // reconnect re-taught the session from a snapshot.
+      if (primarySessionId === undefined) primarySessionId = sessionId;
+    }
+    watchFollowStream(handle, sessionId);
     unsubscribers.push(handle.onItem((value) => handleFollowFrame(handle, value)));
+  }
+
+  /**
+   * Attach a live `session/follow` stream. The first authoritative frame
+   * rebinds the stream's session; every later snapshot (reconnect) is applied
+   * as authoritative full state (R1).
+   *
+   * The optional `sessionId` is the join-time binding: the bootstrap pipeline
+   * consumes the stream's first (snapshot) frame itself, so without it the
+   * bridge would drop live records until a reconnect re-taught the session.
+   * Omitting it keeps the snapshot-learned binding (the landed behavior).
+   */
+  function attachFollow(handle: DshBridgeStreamHandle, sessionId?: string): void {
+    registerFollow(handle, sessionId);
+  }
+
+  function watchFollowStream(handle: DshBridgeStreamHandle, sessionId?: string): void {
+    if (handle.promise === undefined) return;
+    handle.promise.catch((error: unknown) => {
+      const id = sessionId ?? streamSessions.get(handle);
+      if (id === undefined || stopped) return;
+      const code = dropCodeOf(error);
+      if (code !== undefined && TERMINAL_DROP_CODES.has(code)) {
+        // Fatal protocol violation (R14) or a deliberate teardown: terminal.
+        pendingFollowOpens.delete(id);
+        syncFor(id).markTerminal();
+        publishSync(id);
+        return;
+      }
+      if (code === 'stream-error' || code === 'host-cancelled') {
+        // R16: the stream is dead — rebuild with a fresh open.
+        syncFor(id).forceRebuild();
+        publishSync(id);
+        reopenFollow(id);
+        return;
+      }
+      // The transport died (connection-failed / unclassified): the mux owns
+      // the backoff reconnect, so the session degrades until the re-opened
+      // stream delivers its snapshot.
+      pendingFollowOpens.delete(id);
+      markSessionLost(id);
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -357,12 +571,30 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
   function startEventsStream(): void {
     const handle = options.mux.open(EVENTS_ENDPOINT, { args: {} });
     eventsHandle = handle;
-    watchStream(handle, () => {
-      // R10: a dropped connection's clientId is void from here on; answers
-      // are held until the re-opened stream's ready frame arrives.
-      clientId = undefined;
-    });
+    watchEventsStream(handle);
     unsubscribers.push(handle.onItem((value) => handleEventsFrame(value)));
+  }
+
+  function watchEventsStream(handle: DshBridgeStreamHandle): void {
+    if (handle.promise === undefined) return;
+    handle.promise.catch((error: unknown) => {
+      // R10: any stream drop voids the connection's clientId until a fresh
+      // ready frame re-establishes it.
+      clientId = undefined;
+      if (stopped) return;
+      const code = dropCodeOf(error);
+      if (code === 'stream-error' || code === 'host-cancelled') {
+        // R16: the stream is dead — rebuild with a fresh open.
+        eventsHandle = undefined;
+        startEventsStream();
+        return;
+      }
+      if (code !== undefined && TERMINAL_DROP_CODES.has(code)) return;
+      // The transport died with the stream: the connection is gone.
+      voidConnectionClientId();
+      const lostSessions = [...syncs.keys()];
+      for (const sessionId of lostSessions) markSessionLost(sessionId);
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -415,6 +647,21 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     for (const entry of held) void sendResult(currentClientId, entry.eventId, entry.outcome);
   }
 
+  /**
+   * The connection is gone: the per-connection clientId is void (R10), and so
+   * is everything that depended on it. Answers still queued for the dead
+   * connection are dropped and un-marked (they were never delivered, and a
+   * re-derived approval must be answerable on the new connection); pending
+   * approvals came from the dead `$events` broadcast and are re-derived from
+   * the session's authoritative state after the reconnect snapshot (R11).
+   */
+  function voidConnectionClientId(): void {
+    clientId = undefined;
+    const held = queuedResponses.splice(0, queuedResponses.length);
+    for (const entry of held) answeredEventIds.delete(entry.eventId);
+    approvals.clear();
+  }
+
   function surfaceApproval(request: DshApprovalRequest): void {
     if (stopped) return;
     if (answeredEventIds.has(request.eventId) || approvals.has(request.eventId)) return;
@@ -427,6 +674,106 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     // The host cancelled the request: a later answer would target a request
     // nobody is waiting for anymore.
     markAnswered(eventId);
+  }
+
+  // -------------------------------------------------------------------------
+  // Reconnect state machine transitions (Todo 23)
+  // -------------------------------------------------------------------------
+
+  function handleConnectionLost(): void {
+    if (stopped) return;
+    voidConnectionClientId();
+    const lostSessions = [...syncs.keys()];
+    for (const sessionId of lostSessions) markSessionLost(sessionId);
+  }
+
+  function handleReconnectReady(): void {
+    if (stopped) return;
+    const degradedSessions = [...syncs.keys()];
+    for (const sessionId of degradedSessions) {
+      const sync = syncs.get(sessionId);
+      if (sync === undefined || sync.phase() !== 'degraded') continue;
+      sync.markAwaitingSnapshot();
+      publishSync(sessionId);
+    }
+  }
+
+  /**
+   * live | rebuilding → degraded for one session: the transport is down, so
+   * the busy flag is cleared instead of being falsely preserved (the
+   * reconnect snapshot re-derives it from the authoritative turn records).
+   */
+  function markSessionLost(sessionId: string): void {
+    if (stopped) return;
+    const sync = syncs.get(sessionId);
+    if (sync === undefined || sync.phase() === 'detached') return;
+    sync.markConnectionLost();
+    publishSync(sessionId);
+    mergeSession(sessionId, { busy: false });
+  }
+
+  /**
+   * R11 re-derivation: `$events` never replays the disconnect window, so the
+   * pending-approval state is re-derived from the session's authoritative
+   * state (the injected hook reads the follow snapshot records/projections).
+   * A synchronous hook is applied synchronously; a promise is awaited behind
+   * the session's generation fence, so a commit from a superseded attempt
+   * (backend switch, newer snapshot) is dropped.
+   */
+  function reconcileAfterRebuild(sessionId: string): void {
+    const derive = options.reconcileApprovals;
+    if (derive === undefined || stopped) return;
+    const sync = syncs.get(sessionId);
+    const generation = sync?.generation() ?? -1;
+    const requests = derive(sessionId);
+    if (isPromiseLike(requests)) {
+      void Promise.resolve(requests).then((list) => {
+        if (stopped) return;
+        if (sync !== undefined && !sync.isCurrent(generation)) return;
+        for (const request of list) surfaceApproval(request);
+      });
+      return;
+    }
+    for (const request of requests) surfaceApproval(request);
+  }
+
+  // -------------------------------------------------------------------------
+  // session/page history windows (R5/R6 — history only, never reconnect fill)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Fill one history window BELOW the watermark with `session/page`
+   * (R5/R6: `throughSeq` ≤ cursor, `beforeSeq` open upper bound, default
+   * `cursor + 1`). Records apply through the replay path (close-only
+   * callbacks, no busy re-derivation) and the normalizer's seq gate makes the
+   * merge idempotent. Reconnect recovery NEVER goes through here (R4): the
+   * reconnect snapshot is full state.
+   */
+  async function fillHistoryWindow(
+    sessionId: string,
+    window: { beforeSeq?: number; throughSeq?: number } = {},
+  ): Promise<DshHistoryFillResult> {
+    const sync = syncs.get(sessionId);
+    if (sync === undefined) return { ok: false, reason: 'no-watermark' };
+    const plan = sync.planHistoryPage({ sessionId, ...window });
+    if (!plan.ok) return plan;
+    const fetchPage = options.fetchPage;
+    if (fetchPage === undefined) return { ok: false, reason: 'no-page-source' };
+    const generation = sync.generation();
+    const page = await fetchPage(plan.request);
+    if (stopped) return { ok: false, reason: 'stale' };
+    if (!sync.isCurrent(generation)) return { ok: false, reason: 'stale' };
+    const normalizer = normalizerFor(sessionId);
+    const before = normalizer.stats();
+    const result = normalizer.ingest({ records: page.records });
+    applyResult(result, 'snapshot-rebuild', sessionId, false);
+    const after = normalizer.stats();
+    return {
+      ok: true,
+      request: plan.request,
+      applied: after.appliedRecordCount - before.appliedRecordCount,
+      duplicates: after.duplicateRecordCount - before.duplicateRecordCount,
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -459,6 +806,17 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     eventsHandle?.cancel();
     eventsHandle = undefined;
     for (const sessionId of sessionStates.keys()) setSync(sessionId, { kind: 'detached' });
+    for (const sync of syncs.values()) sync.markTerminal();
+    pendingFollowOpens.clear();
+  }
+
+  // The mux owns the transport reconnect (Todo 5: backoff + stream re-open);
+  // these hooks only tell the state machine WHEN the window opens (R9).
+  if (options.mux.onConnectionLost) {
+    unsubscribers.push(options.mux.onConnectionLost(() => handleConnectionLost()));
+  }
+  if (options.mux.onReconnectReady) {
+    unsubscribers.push(options.mux.onReconnectReady(() => handleReconnectReady()));
   }
 
   startEventsStream();
@@ -471,6 +829,7 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
       // popups, no re-normalization, no op application.
       options.msg.loadHistory(entries);
     },
+    fillHistoryWindow,
     resolveApproval,
     rejectApproval,
     rejectAllApprovals,

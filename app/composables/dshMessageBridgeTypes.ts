@@ -13,6 +13,7 @@ import type { DshJsonValue, DshRpcArgs } from '../backends/dsh/types';
 import type { DshNormalizeOp } from '../backends/dsh/ops';
 import type { MessageInfo, MessagePart } from '../types/sse';
 import type { DshRpcFetcher, DshRpcTokenProvider } from '../utils/dshRpc';
+import type { DshMuxConnectionInfo } from '../utils/dshMux';
 
 /**
  * Structural view of a mux stream handle (superset of `DshMuxStreamHandle`).
@@ -37,10 +38,64 @@ export type DshBridgeStreamHandle = {
  * real client (`createDshMuxClient`); the `session/follow` stream arrives
  * through `attachFollow` because the bootstrap pipeline opens it itself (it
  * needs the snapshot cursor before handing control over).
+ *
+ * The two optional lifecycle hooks mirror the kimiWebWs precedent
+ * (`onClose` / `onReconnectReady`): the mux owns the transport reconnect
+ * (Todo 5 — exponential backoff, re-open of every in-flight stream), so the
+ * bridge only needs to be told WHEN the connection dropped (every session
+ * degrades; the per-connection clientId is void) and WHEN it came back
+ * (degraded → rebuilding, awaiting the re-opened stream's snapshot). A mux
+ * without them degrades gracefully: transitions still happen through stream
+ * drops and snapshot frames.
  */
 export type DshBridgeMux = {
   open(endpoint: string, payload: DshRpcArgs): DshBridgeStreamHandle;
+  /** Fires on every recoverable socket close (heartbeat loss / 1001). */
+  onConnectionLost?: (listener: (info: DshMuxConnectionInfo) => void) => () => void;
+  /** Fires when a socket opened and in-flight streams were re-opened (R9). */
+  onReconnectReady?: (listener: () => void) => () => void;
 };
+
+/** One `session/page` request as planned by the sync state machine (R5/R6). */
+export type DshHistoryPageRequest = {
+  /** Closed upper bound; never above the watermark (R6). */
+  readonly throughSeq: number;
+  /** Open upper bound (`seq < beforeSeq`); `cursor + 1` includes the cursor. */
+  readonly beforeSeq: number;
+};
+
+/** One `session/page` window as returned by the bridge HTTP route. */
+export type DshHistoryPageWindow = {
+  readonly records: readonly DshJsonValue[];
+};
+
+export type DshBridgePageFetcher = (
+  request: DshHistoryPageRequest & { readonly sessionId: string },
+) => Promise<DshHistoryPageWindow>;
+
+export type DshHistoryFillResult =
+  | {
+      ok: true;
+      request: DshHistoryPageRequest & { readonly sessionId: string };
+      /** Records newly applied through the replay path. */
+      applied: number;
+      /** Records the seq gate recognized as already applied. */
+      duplicates: number;
+    }
+  | {
+      ok: false;
+      reason:
+        /** No follow watermark yet (R7: the watermark comes from snapshots). */
+        | 'no-watermark'
+        /** The window would reach above the watermark: not history-only. */
+        | 'before-seq-above-cursor'
+        /** throughSeq above the cursor is a wire bad-request (R6). */
+        | 'through-seq-above-cursor'
+        /** No page source was injected. */
+        | 'no-page-source'
+        /** A newer authoritative state landed while the window was in flight. */
+        | 'stale';
+    };
 
 /**
  * Outcome of a waterfall answer (`docs/dsh.md` §7.1 special endpoints row:
@@ -77,12 +132,21 @@ export type DshFrameContext = {
   readonly sessionId?: string;
 };
 
+/**
+ * Per-session sync phase (Todo 23 state machine, mirroring the kimi Todo 22
+ * precedent):
+ *   live → degraded (connection lost) → rebuilding (snapshot pending) → live
+ * `detached` is terminal (fatal frame / stopped); `replaying` covers the
+ * window between an attach and its first authoritative frame.
+ */
 export type DshSyncState =
   | { readonly kind: 'detached' }
   /** attach → first authoritative frame. */
   | { readonly kind: 'replaying' }
-  /** A reconnect snapshot is being applied (authoritative full state). */
-  | { readonly kind: 'rebuilding' }
+  /** Connection lost (heartbeat loss / close 1001): awaiting backoff + reopen. */
+  | { readonly kind: 'degraded'; readonly cursor: number }
+  /** Streams re-opened, authoritative snapshot pending (R9). */
+  | { readonly kind: 'rebuilding'; readonly cursor: number }
   | { readonly kind: 'live'; readonly cursor: number };
 
 export type DshCompletion = {
@@ -117,7 +181,16 @@ export type DshMessageBridgeOptions = {
     updateMessage(info: MessageInfo): void;
     updatePart(part: MessagePart): void;
     loadHistory(entries: unknown[]): void;
+    /**
+     * Existing `useMessages` API, used only for the R1 authoritative switch:
+     * the snapshot replaces the local view, so the superseded part set is
+     * explicitly removed before the snapshot is re-applied. Optional so a
+     * facade without it still works (upserts alone stay idempotent).
+     */
+    removeMessage?(id: string): void;
   };
+  /** `session/page` source for history-only windows (R5/R6); never reconnect gap-fill (R4). */
+  readonly fetchPage?: DshBridgePageFetcher;
   /** `approval/request` waterfall frame → the existing permission UI surface. */
   readonly onApprovalRequest?: (request: DshApprovalRequest) => void;
   /** Read-only `$events` broadcast (`api-session/*`, `plugin-manager/*`, …). */
@@ -154,10 +227,25 @@ export type DshMessageBridge = {
    * Attach the live `session/follow` stream the bootstrap pipeline opened.
    * The first authoritative frame rebinds the stream's session; every later
    * snapshot (reconnect) is applied as authoritative full state (R1).
+   *
+   * `sessionId` is the optional join-time binding (the bootstrap consumes the
+   * first snapshot frame itself, so live records need the session up front);
+   * omitting it keeps the snapshot-learned binding.
    */
-  attachFollow(handle: DshBridgeStreamHandle): void;
+  attachFollow(handle: DshBridgeStreamHandle, sessionId?: string): void;
   /** Pre-normalized snapshot/history entries: loaded, never popped up. */
   applyHistory(entries: unknown[]): void;
+  /**
+   * History-only `session/page` fill for a window BELOW the watermark
+   * (R5/R6: throughSeq ≤ cursor, beforeSeq open upper bound). Reconnect
+   * recovery NEVER goes through here (R4) — it is the snapshot's job.
+   * Records apply through the replay path (no popups) and the seq gate makes
+   * the merge idempotent (already-applied records count as duplicates).
+   */
+  fillHistoryWindow(
+    sessionId: string,
+    window?: { beforeSeq?: number; throughSeq?: number },
+  ): Promise<DshHistoryFillResult>;
   /** Answer a pending approval with an explicit outcome (the UI decision). */
   resolveApproval(eventId: string, outcome: DshWaterfallOutcome): void;
   /** Answer one pending approval with the safe-rejection outcome. */
