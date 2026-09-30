@@ -509,6 +509,55 @@ describe('useKimiWebMessageBridge', () => {
     expect(onToolPart).toHaveBeenCalledOnce();
   });
 
+  it('hydrates usage and context from the snapshot during rebuild', async () => {
+    const snapshotRequest = deferred<KimiWebSnapshot>();
+    const { source, bridge } = createHarness({ getSnapshot: () => snapshotRequest.promise });
+    await enterLive(source, bridge, 21);
+    source.emitResync();
+    snapshotRequest.resolve(snapshot({
+      session: {
+        id: SESSION_ID,
+        workspace_id: 'workspace-1',
+        title: 'Fixture',
+        busy: true,
+        main_turn_active: true,
+        pending_interaction: 'none',
+        archived: false,
+        usage: {
+          input_tokens: 128,
+          output_tokens: 64,
+          cache_read_tokens: 32,
+          cache_creation_tokens: 16,
+          total_cost_usd: 0.01,
+          context_tokens: 21109,
+          context_limit: 320000,
+          turn_count: 3,
+        },
+      },
+    }));
+    await vi.waitFor(() => expect(bridge.syncState(SESSION_ID).kind).toBe('live'));
+    expect(bridge.sessionState(SESSION_ID)).toMatchObject({
+      contextTokens: 21109,
+      maxContextTokens: 320000,
+      usage: { total: { inputOther: 128, output: 64, inputCacheRead: 32, inputCacheCreation: 16 } },
+    });
+    bridge.stop();
+  });
+
+  it('keeps live context when the rebuild snapshot carries no usage', async () => {
+    const snapshotRequest = deferred<KimiWebSnapshot>();
+    const { source, bridge } = createHarness({ getSnapshot: () => snapshotRequest.promise });
+    await enterLive(source, bridge, 9);
+    source.emitFrame(statusFrame(10, { contextTokens: 20379, maxContextTokens: 320000 }));
+    expect(bridge.sessionState(SESSION_ID)).toMatchObject({ contextTokens: 20379, maxContextTokens: 320000 });
+
+    source.emitResync();
+    snapshotRequest.resolve(snapshot());
+    await vi.waitFor(() => expect(bridge.syncState(SESSION_ID).kind).toBe('live'));
+    expect(bridge.sessionState(SESSION_ID)).toMatchObject({ contextTokens: 20379, maxContextTokens: 320000 });
+    bridge.stop();
+  });
+
   it('loads history through the replay-suppressed path', () => {
     const { bridge, loadHistory, onToolPart, onLiveReasoning, onLiveSubagent } = createHarness();
     const entries = [{ fixture: 'Todo 15 normalized history' }];

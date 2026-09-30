@@ -49,6 +49,7 @@
                   :kimi-undo-available="kimiUndoAvailable"
                   :load-message-diffs="loadMessageDiffs"
                   :has-message-diffs="hasMessageDiffs"
+                  :kimi-session-context="kimiSessionContext"
                   :card-actions-disabled="backendKind === 'kimi-web' && isThinking"
                   :is-latest-root="root.id === latestRootId"
                   :assistant-html="getAssistantHtml(root.id)"
@@ -157,6 +158,7 @@ const props = defineProps<{
   kimiUndoAvailable?: boolean;
   loadMessageDiffs?: (sessionId: string, messageId: string) => Promise<MessageDiffEntry[]>;
   hasMessageDiffs?: (sessionId: string, messageId: string) => Promise<boolean>;
+  kimiSessionContext?: { used: number; limit: number } | null;
 }>();
 
 const emit = defineEmits<{

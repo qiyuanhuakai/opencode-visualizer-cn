@@ -2,6 +2,7 @@ import { reactive, shallowReactive } from 'vue';
 import {
   createKimiWebNormalizer,
   type KimiWebNormalizer,
+  type KimiWebUsage,
 } from '../backends/kimiWeb/normalize';
 import type { KimiWebNormalizeOp } from '../backends/kimiWeb/normalize';
 import type { KimiWebSnapshot } from '../utils/kimiWeb';
@@ -33,6 +34,10 @@ const DEFAULT_MAX_BUFFERED_FRAMES = 1000;
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
+type KimiWebSessionPatchDraft = {
+  -readonly [K in keyof KimiWebBridgeSessionState]?: KimiWebBridgeSessionState[K];
+};
 
 function ackCursor(ack: KimiWebWsAck, sessionId: string): KimiWebWsCursor | undefined {
   const cursors = isRecord(ack.payload?.cursors) ? ack.payload.cursors : undefined;
@@ -279,13 +284,25 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
     if (rebuilding?.kind !== 'rebuilding') return;
     clearEpochState(sessionId);
     applyAuthoritativeEntries(authoritativeEntries(snapshot));
-    mergeSession(sessionId, {
+    const sessionPatch: KimiWebSessionPatchDraft = {
       busy: snapshot.session.busy,
       mainTurnActive: snapshot.session.main_turn_active,
       pendingInteraction: snapshot.session.pending_interaction,
       lastTurnReason: snapshot.session.last_turn_reason,
       currentPromptId: snapshot.session.current_prompt_id,
-    });
+    };
+    const usage = snapshot.session.usage;
+    if (usage) {
+      const total: KimiWebUsage = {};
+      if (Number.isFinite(usage.input_tokens)) total.inputOther = usage.input_tokens;
+      if (Number.isFinite(usage.output_tokens)) total.output = usage.output_tokens;
+      if (Number.isFinite(usage.cache_read_tokens)) total.inputCacheRead = usage.cache_read_tokens;
+      if (Number.isFinite(usage.cache_creation_tokens)) total.inputCacheCreation = usage.cache_creation_tokens;
+      if (Object.keys(total).length > 0) sessionPatch.usage = { total };
+      if (Number.isFinite(usage.context_tokens)) sessionPatch.contextTokens = usage.context_tokens;
+      if (Number.isFinite(usage.context_limit)) sessionPatch.maxContextTokens = usage.context_limit;
+    }
+    mergeSession(sessionId, sessionPatch);
     seedInFlight(snapshot);
     const cursor = drainSnapshotBuffer(sessionId, snapshot, rebuilding.buffered);
     if (!cursor || recoveryGenerations.get(sessionId) !== generation) return;

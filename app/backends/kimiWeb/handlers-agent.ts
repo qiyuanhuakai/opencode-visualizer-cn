@@ -11,7 +11,7 @@ import {
   type KimiWebPayload,
   type KimiWebWireFrame,
 } from './wire';
-import { sessionOf, type KimiWebCore } from './parts';
+import { sessionOf, buildMessage, type KimiWebCore } from './parts';
 import type { KimiWebHandler } from './handlers-core';
 
 function handleAgentLifecycle(_core: KimiWebCore, frame: KimiWebWireFrame, payload: KimiWebPayload, ops: KimiWebNormalizeOp[]) {
@@ -36,13 +36,25 @@ function handleAgentStatus(core: KimiWebCore, frame: KimiWebWireFrame, payload: 
   });
   const usage = isRecord(payload.usage) ? payload.usage : undefined;
   if (usage) core.agentUsage.set(`${sessionId}|${agentId}`, usage);
+  const contextKey = `${sessionId}|${agentId}`;
+  const previousContext = core.agentContexts.get(contextKey);
+  const contextTokens = asNumber(payload.contextTokens);
+  const maxContextTokens = asNumber(payload.maxContextTokens);
+  core.agentContexts.set(contextKey, {
+    ...previousContext,
+    ...(contextTokens === undefined ? {} : { contextTokens }),
+    ...(maxContextTokens === undefined ? {} : { maxContextTokens }),
+  });
+  const contextChanged =
+    (contextTokens !== undefined && contextTokens !== previousContext?.contextTokens) ||
+    (maxContextTokens !== undefined && maxContextTokens !== previousContext?.maxContextTokens);
   ops.push({
     kind: 'agent', phase: 'status', sessionId, agentId,
     status: {
       model: model || undefined,
       thinkingEffort: asString(payload.thinkingEffort) || undefined,
-      contextTokens: asNumber(payload.contextTokens),
-      maxContextTokens: asNumber(payload.maxContextTokens),
+      contextTokens,
+      maxContextTokens,
       contextUsage: asNumber(payload.contextUsage),
       planMode: asBoolean(payload.planMode),
       swarmMode: asBoolean(payload.swarmMode),
@@ -52,6 +64,13 @@ function handleAgentStatus(core: KimiWebCore, frame: KimiWebWireFrame, payload: 
       phase: isRecord(payload.phase) ? payload.phase : undefined,
     },
   });
+  if (contextChanged) {
+    const turnId = core.agentTurns.get(contextKey);
+    if (turnId !== undefined) {
+      const group = core.groups.get(`${core.subagentIdentity(sessionId, agentId, turnId)}|${turnId}`);
+      if (group) ops.push({ kind: 'message', message: buildMessage(core, group) });
+    }
+  }
 }
 
 export const AGENT_HANDLERS: Record<string, KimiWebHandler> = {

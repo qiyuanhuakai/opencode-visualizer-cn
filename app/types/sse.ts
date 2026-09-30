@@ -300,6 +300,8 @@ export type AssistantMessageInfo = {
   structured?: unknown;
   variant?: string;
   finish?: string;
+  contextTokens?: number;
+  maxContextTokens?: number;
 };
 
 /** MessageInfo = User | Assistant (discriminated on `role`). */

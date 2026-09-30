@@ -356,7 +356,7 @@ export interface LocaleMessages {
       noData: string;
       model: string;
       contextLimit: string;
-      totalTokens: string;
+      currentContext: string;
       usagePercent: string;
       inputTokens: string;
       outputTokens: string;

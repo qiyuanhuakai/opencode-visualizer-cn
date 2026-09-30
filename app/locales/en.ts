@@ -362,7 +362,7 @@ const messages: LocaleMessages = {
       noData: 'No token data available',
       model: 'Model',
       contextLimit: 'Context limit',
-      totalTokens: 'Total tokens',
+      currentContext: 'Current context',
       usagePercent: 'Usage',
       inputTokens: 'Input tokens',
       outputTokens: 'Output tokens',

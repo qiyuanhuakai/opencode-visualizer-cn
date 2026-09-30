@@ -47,6 +47,7 @@ export type KimiWebCore = {
   agentModels: Map<string, { providerID: string; modelID: string }>;
   agentUsage: Map<string, KimiWebUsageReport>;
   agentProfiles: Map<string, { effort?: string; permission?: string }>;
+  agentContexts: Map<string, { contextTokens?: number; maxContextTokens?: number }>;
   promptIds: Map<string, string>;
   promptUserMessageIds: Map<string, string>;
   subagentIdentity: (sessionId: string, agentId: string, turnId?: number) => string;
@@ -102,6 +103,7 @@ export function buildMessage(core: KimiWebCore, group: KimiWebGroup): MessageInf
     providerID: 'kimi-code',
     modelID: 'unknown',
   };
+  const context = core.agentContexts.get(`${group.sessionId}|${group.agentId}`);
   const message: AssistantMessageInfo = {
     id: group.messageID,
     sessionID: group.sessionID,
@@ -121,6 +123,12 @@ export function buildMessage(core: KimiWebCore, group: KimiWebGroup): MessageInf
       reasoning: 0,
       cache: { read: usage?.inputCacheRead ?? 0, write: usage?.inputCacheCreation ?? 0 },
     },
+    ...(context && context.contextTokens !== undefined && Number.isFinite(context.contextTokens)
+      ? { contextTokens: context.contextTokens }
+      : {}),
+    ...(context && context.maxContextTokens !== undefined && Number.isFinite(context.maxContextTokens)
+      ? { maxContextTokens: context.maxContextTokens }
+      : {}),
   };
   if (group.error) message.error = group.error;
   return message;

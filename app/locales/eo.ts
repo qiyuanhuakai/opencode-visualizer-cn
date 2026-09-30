@@ -361,7 +361,7 @@ const messages: LocaleMessages = {
       noData: 'Neniu token-datumo disponebla',
       model: 'Modelo',
       contextLimit: 'Konteksta limo',
-      totalTokens: 'Entutaj tokenoj',
+      currentContext: 'Nuna kunteksto',
       usagePercent: 'Uzado',
       inputTokens: 'Enigaj tokenoj',
       outputTokens: 'Eligaj tokenoj',

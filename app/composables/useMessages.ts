@@ -232,11 +232,15 @@ function normalizeUsage(info?: MessageInfo): MessageUsage | undefined {
   if (!info || info.role !== 'assistant') return undefined;
   const tokens = normalizeTokens(info.tokens);
   if (!tokens) return undefined;
+  const contextTokens = asNumber(info.contextTokens);
+  const maxContextTokens = asNumber(info.maxContextTokens);
   return {
     tokens,
     cost: asNumber(info.cost),
     providerId: getProviderId(info),
     modelId: getModelId(info),
+    ...(contextTokens === undefined ? {} : { contextTokens }),
+    ...(maxContextTokens === undefined ? {} : { maxContextTokens }),
   };
 }
 

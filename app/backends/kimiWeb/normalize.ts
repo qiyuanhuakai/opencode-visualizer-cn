@@ -48,6 +48,7 @@ export function createKimiWebNormalizer(options: { now?: () => number } = {}): K
     agentModels: new Map(),
     agentUsage: new Map(),
     agentProfiles: new Map(),
+    agentContexts: new Map(),
     promptIds: new Map(),
     promptUserMessageIds: new Map(),
     subagentIdentity(sessionId: string, agentId: string, turnId?: number) {
@@ -106,6 +107,7 @@ export function createKimiWebNormalizer(options: { now?: () => number } = {}): K
       core.agentModels.clear();
       core.agentUsage.clear();
       core.agentProfiles.clear();
+      core.agentContexts.clear();
       core.promptIds.clear();
       core.promptUserMessageIds.clear();
     },

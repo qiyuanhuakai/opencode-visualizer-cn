@@ -248,6 +248,54 @@ describe('kimiWeb/normalize', () => {
     expect(opsOfKind(lifecycle.ops, 'agent').map((op) => op.phase)).toEqual(['created', 'disposed', 'disposed']);
   });
 
+  it('attaches the latest agent context to the turn message and rebuilds it only on change', () => {
+    const normalizer = createKimiWebNormalizer();
+    const base = { sessionId: 'session-ctx', agentId: 'main', turnId: 3 };
+    normalizer.ingest({ type: 'turn.started', payload: { ...base, promptId: 'prompt-3' } });
+    const first = normalizer.ingest({ type: 'agent.status.updated', payload: { ...base, contextTokens: 21109, maxContextTokens: 320000 } });
+    const afterFirst = opsOfKind(first.ops, 'message');
+    expect(afterFirst).toHaveLength(1);
+    expect(afterFirst[0].message).toMatchObject({ contextTokens: 21109, maxContextTokens: 320000 });
+
+    const unchanged = normalizer.ingest({ type: 'agent.status.updated', payload: { ...base, contextTokens: 21109, maxContextTokens: 320000 } });
+    expect(opsOfKind(unchanged.ops, 'message')).toHaveLength(0);
+
+    const changed = normalizer.ingest({ type: 'agent.status.updated', payload: { ...base, contextTokens: 42000, maxContextTokens: 320000 } });
+    const afterChange = opsOfKind(changed.ops, 'message');
+    expect(afterChange).toHaveLength(1);
+    expect(afterChange[0].message).toMatchObject({ contextTokens: 42000, maxContextTokens: 320000 });
+  });
+
+  it('omits context fields from the message until a status reports them', () => {
+    const { ops } = ingest([
+      { type: 'turn.started', payload: { sessionId: 'session-ctx', agentId: 'main', turnId: 0, promptId: 'p' } },
+    ]);
+    const message = opsOfKind(ops, 'message')[0].message as AssistantMessageInfo;
+    expect(message.contextTokens).toBeUndefined();
+    expect(message.maxContextTokens).toBeUndefined();
+  });
+
+  it('keeps the last known context when a later status omits it', () => {
+    const normalizer = createKimiWebNormalizer();
+    const base = { sessionId: 'session-ctx', agentId: 'main', turnId: 0 };
+    normalizer.ingest({ type: 'turn.started', payload: { ...base, promptId: 'p' } });
+    normalizer.ingest({ type: 'agent.status.updated', payload: { ...base, contextTokens: 100, maxContextTokens: 200 } });
+    const statusOnly = normalizer.ingest({ type: 'agent.status.updated', payload: { ...base, planMode: true } });
+    expect(opsOfKind(statusOnly.ops, 'message')).toHaveLength(0);
+    const changed = normalizer.ingest({ type: 'agent.status.updated', payload: { ...base, contextTokens: 150 } });
+    const messages = opsOfKind(changed.ops, 'message');
+    expect(messages).toHaveLength(1);
+    expect(messages[0].message).toMatchObject({ contextTokens: 150, maxContextTokens: 200 });
+  });
+
+  it('does not rebuild a message for context when no turn group is active', () => {
+    const { ops } = ingest([
+      { type: 'agent.status.updated', payload: { sessionId: 'session-ctx', agentId: 'main', turnId: 0, contextTokens: 100, maxContextTokens: 200 } },
+    ]);
+    expect(opsOfKind(ops, 'message')).toHaveLength(0);
+    expect(opsOfKind(ops, 'agent')).toHaveLength(1);
+  });
+
   it('adds completed step usage to its own turn without repeating a step or borrowing session totals', () => {
     const normalizer = createKimiWebNormalizer();
     const base = { sessionId: 'session-test', agentId: 'main', turnId: 2 };
