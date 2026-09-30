@@ -212,6 +212,40 @@ describe('useMessages history and realtime state', () => {
     ]);
   });
 
+  it('keeps a continuation turn with a resolved user parent out of roots', () => {
+    const messages = useMessages();
+    messages.loadHistory([
+      { info: userMessage('prompt-1', { sessionID: 'session-1' }), parts: [] },
+      {
+        info: assistantMessage('session-1:main:1', { sessionID: 'session-1', parentID: 'prompt-1' }),
+        parts: [],
+      },
+    ]);
+
+    expect(messages.roots.value.map((root) => root.id)).toEqual(['prompt-1']);
+  });
+
+  it('keeps a subagent transcript out of main-session roots when nested under the spawning turn', () => {
+    const messages = useMessages();
+    messages.loadHistory([
+      { info: userMessage('prompt-1', { sessionID: 'session-1' }), parts: [] },
+      {
+        info: assistantMessage('session-1:main:1', { sessionID: 'session-1', parentID: 'prompt-1' }),
+        parts: [],
+      },
+      {
+        info: assistantMessage('session-1:agent-0:0:agent-0:0', {
+          sessionID: 'session-1:agent-0:0',
+          parentID: 'session-1:main:1',
+        }),
+        parts: [],
+      },
+    ]);
+
+    const mainSessionRoots = messages.roots.value.filter((root) => root.sessionID === 'session-1');
+    expect(mainSessionRoots.map((root) => root.id)).toEqual(['prompt-1']);
+  });
+
   it('preserves older canonical history when later realtime-only updates touch the newest message', () => {
     const messages = useMessages();
 
