@@ -10,6 +10,7 @@ import type { BackendKind } from '../backends/types';
 import {
   DEFAULT_ACP_BRIDGE_URL,
   DEFAULT_CODEX_BRIDGE_URL,
+  DEFAULT_DSH_BRIDGE_URL,
   DEFAULT_KIMI_WEB_BRIDGE_URL,
   getPersistedAcpBridgeToken,
   getPersistedAcpBridgeUrl,
@@ -30,9 +31,11 @@ const backendKind = ref<BackendKind>('opencode');
 const codexBridgeUrl = ref(DEFAULT_CODEX_BRIDGE_URL);
 const acpBridgeUrl = ref(DEFAULT_ACP_BRIDGE_URL);
 const kimiWebBridgeUrl = ref(DEFAULT_KIMI_WEB_BRIDGE_URL);
+const dshBridgeUrl = ref(DEFAULT_DSH_BRIDGE_URL);
 const codexBridgeToken = ref('');
 const acpBridgeToken = ref('');
 const kimiWebBridgeToken = ref('');
+const dshBridgeToken = ref('');
 const acpAgentId = ref('');
 
 function applyCredentials(next: Credentials) {
@@ -60,6 +63,9 @@ export function useCredentials() {
       return acpBridgeUrl.value.trim().length > 0 && acpAgentId.value.trim().length > 0;
     }
     if (backendKind.value === 'kimi-web') return kimiWebBridgeUrl.value.trim().length > 0;
+    if (backendKind.value === 'dsh') {
+      return dshBridgeUrl.value.trim().length > 0 && dshBridgeToken.value.trim().length > 0;
+    }
     return url.value.trim().length > 0;
   });
 
@@ -129,6 +135,17 @@ export function useCredentials() {
     else storageRemove(StorageKeys.auth.kimiWebBridgeToken);
   }
 
+  function saveDsh(newBridgeUrl: string, newBridgeToken: string) {
+    const bridgeUrl = newBridgeUrl.trim();
+    if (!bridgeUrl) throw new Error('dsh bridge URL is required.');
+    saveBackendKind('dsh');
+    dshBridgeUrl.value = bridgeUrl;
+    dshBridgeToken.value = newBridgeToken;
+    storageSet(StorageKeys.auth.dshBridgeUrl, bridgeUrl);
+    if (newBridgeToken.trim()) storageSet(StorageKeys.auth.dshBridgeToken, newBridgeToken);
+    else storageRemove(StorageKeys.auth.dshBridgeToken);
+  }
+
   function load() {
     if (typeof window === 'undefined') return;
 
@@ -152,6 +169,7 @@ export function useCredentials() {
       backendKind.value =
         storedBackendKind === 'codex' ||
         storedBackendKind === 'kimi-web' ||
+        storedBackendKind === 'dsh' ||
         (storedBackendKind === 'acp' && storedAcpAgentId)
           ? storedBackendKind
           : 'opencode';
@@ -173,6 +191,8 @@ export function useCredentials() {
       kimiWebBridgeUrl.value =
         storageGet(StorageKeys.auth.kimiWebBridgeUrl) ?? DEFAULT_KIMI_WEB_BRIDGE_URL;
       kimiWebBridgeToken.value = storageGet(StorageKeys.auth.kimiWebBridgeToken) ?? '';
+      dshBridgeUrl.value = storageGet(StorageKeys.auth.dshBridgeUrl) ?? DEFAULT_DSH_BRIDGE_URL;
+      dshBridgeToken.value = storageGet(StorageKeys.auth.dshBridgeToken) ?? '';
       acpAgentId.value = storedAcpAgentId;
     } catch {
       return;
@@ -185,6 +205,7 @@ export function useCredentials() {
     const preservedCodexUrl = codexBridgeUrl.value;
     const preservedAcpUrl = acpBridgeUrl.value;
     const preservedKimiWebUrl = kimiWebBridgeUrl.value;
+    const preservedDshUrl = dshBridgeUrl.value;
     url.value = preservedUrl;
     username.value = '';
     password.value = '';
@@ -210,6 +231,10 @@ export function useCredentials() {
         storageSet(StorageKeys.auth.kimiWebBridgeUrl, preservedKimiWebUrl);
         storageRemove(StorageKeys.auth.kimiWebBridgeToken);
         kimiWebBridgeToken.value = '';
+      } else if (preservedBackendKind === 'dsh') {
+        storageSet(StorageKeys.auth.dshBridgeUrl, preservedDshUrl);
+        storageRemove(StorageKeys.auth.dshBridgeToken);
+        dshBridgeToken.value = '';
       }
     } catch {
       return;
@@ -220,7 +245,10 @@ export function useCredentials() {
     window.addEventListener('storage', (event) => {
       if (event.key === storageKey(StorageKeys.auth.backendKind)) {
         backendKind.value =
-          event.newValue === 'codex' || event.newValue === 'acp' || event.newValue === 'kimi-web'
+          event.newValue === 'codex' ||
+          event.newValue === 'acp' ||
+          event.newValue === 'kimi-web' ||
+          event.newValue === 'dsh'
             ? event.newValue
             : 'opencode';
         return;
@@ -255,6 +283,16 @@ export function useCredentials() {
 
       if (event.key === storageKey(StorageKeys.auth.kimiWebBridgeToken)) {
         kimiWebBridgeToken.value = event.newValue ?? '';
+        return;
+      }
+
+      if (event.key === storageKey(StorageKeys.auth.dshBridgeUrl)) {
+        dshBridgeUrl.value = event.newValue ?? DEFAULT_DSH_BRIDGE_URL;
+        return;
+      }
+
+      if (event.key === storageKey(StorageKeys.auth.dshBridgeToken)) {
+        dshBridgeToken.value = event.newValue ?? '';
         return;
       }
 
@@ -295,6 +333,8 @@ export function useCredentials() {
     codexBridgeToken,
     acpBridgeToken,
     kimiWebBridgeToken,
+    dshBridgeUrl,
+    dshBridgeToken,
     acpAgentId,
     authHeader,
     baseUrl,
@@ -304,6 +344,7 @@ export function useCredentials() {
     saveCodex,
     saveAcp,
     saveKimiWeb,
+    saveDsh,
     load,
     clear,
   };

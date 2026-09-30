@@ -319,4 +319,152 @@ describe('useCredentials', () => {
     }
     expect(credentials.kimiWebBridgeToken.value).toBe('');
   });
+
+  it('persists and restores dsh bridge credentials', async () => {
+    const first = await importFresh();
+    first.saveDsh('ws://bridge.test:23004/dsh/ws', 'dsh-bridge-secret');
+
+    expect(first.backendKind.value).toBe('dsh');
+    expect(first.dshBridgeUrl.value).toBe('ws://bridge.test:23004/dsh/ws');
+    expect(first.dshBridgeToken.value).toBe('dsh-bridge-secret');
+    expect(first.isConfigured.value).toBe(true);
+    expect(electronStore.get('opencode.auth.backendKind.v1')).toBe('dsh');
+    expect(electronStore.get('opencode.auth.dshBridgeUrl.v1')).toBe(
+      'ws://bridge.test:23004/dsh/ws',
+    );
+    expect(electronStore.get('opencode.auth.dshBridgeToken.v1')).toBe('dsh-bridge-secret');
+
+    vi.resetModules();
+    const second = await importFresh();
+    second.load();
+
+    expect(second.backendKind.value).toBe('dsh');
+    expect(second.dshBridgeUrl.value).toBe('ws://bridge.test:23004/dsh/ws');
+    expect(second.dshBridgeToken.value).toBe('dsh-bridge-secret');
+    expect(second.isConfigured.value).toBe(true);
+  });
+
+  it('trims the dsh bridge URL and drops a blank bridge token from storage', async () => {
+    const credentials = await importFresh();
+
+    credentials.saveDsh('  ws://localhost:23004/dsh/ws  ', '   ');
+
+    expect(credentials.dshBridgeUrl.value).toBe('ws://localhost:23004/dsh/ws');
+    expect(electronStore.get('opencode.auth.dshBridgeToken.v1')).toBeUndefined();
+  });
+
+  it('rejects an empty dsh bridge URL before activating the backend', async () => {
+    const credentials = await importFresh();
+
+    expect(() => credentials.saveDsh('   ', 'token')).toThrow('dsh bridge URL is required.');
+    expect(credentials.backendKind.value).toBe('opencode');
+    expect(electronStore.get('opencode.auth.backendKind.v1')).toBeUndefined();
+    expect(electronStore.get('opencode.auth.dshBridgeUrl.v1')).toBeUndefined();
+  });
+
+  it('clears the dsh bridge token but keeps the persisted URL', async () => {
+    const credentials = await importFresh();
+
+    credentials.saveDsh('ws://bridge.test:23004/dsh/ws', 'secret');
+    expect(credentials.isConfigured.value).toBe(true);
+    credentials.clear();
+
+    expect(credentials.dshBridgeUrl.value).toBe('ws://bridge.test:23004/dsh/ws');
+    expect(credentials.dshBridgeToken.value).toBe('');
+    expect(credentials.isConfigured.value).toBe(false);
+    expect(electronStore.get('opencode.auth.dshBridgeToken.v1')).toBeUndefined();
+    expect(electronStore.get('opencode.auth.dshBridgeUrl.v1')).toBe(
+      'ws://bridge.test:23004/dsh/ws',
+    );
+  });
+
+  it('requires both the dsh URL and token for isConfigured', async () => {
+    const credentials = await importFresh();
+
+    credentials.saveDsh('ws://localhost:23004/dsh/ws', '');
+    expect(credentials.isConfigured.value).toBe(false);
+
+    credentials.saveDsh('ws://localhost:23004/dsh/ws', 'token');
+    expect(credentials.isConfigured.value).toBe(true);
+  });
+
+  it('restores the dsh backend kind and credentials from storage', async () => {
+    electronStore.set('opencode.auth.backendKind.v1', 'dsh');
+    electronStore.set('opencode.auth.dshBridgeUrl.v1', 'ws://bridge.test:23004/dsh/ws');
+    electronStore.set('opencode.auth.dshBridgeToken.v1', 'stored-secret');
+
+    const credentials = await importFresh();
+    credentials.load();
+
+    expect(credentials.backendKind.value).toBe('dsh');
+    expect(credentials.dshBridgeUrl.value).toBe('ws://bridge.test:23004/dsh/ws');
+    expect(credentials.dshBridgeToken.value).toBe('stored-secret');
+    expect(credentials.isConfigured.value).toBe(true);
+  });
+
+  it('reacts to cross-window dsh credential updates and ignores unrelated keys', async () => {
+    const credentials = await importFresh();
+    credentials.saveDsh('ws://bridge.test:23004/dsh/ws', 'old-secret');
+
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.auth.kimiWebBridgeToken.v1',
+        newValue: 'kimi-secret',
+      } as StorageEvent);
+    }
+    expect(credentials.dshBridgeToken.value).toBe('old-secret');
+
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.auth.dshBridgeToken.v1',
+        newValue: 'new-secret',
+      } as StorageEvent);
+    }
+    expect(credentials.dshBridgeToken.value).toBe('new-secret');
+
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.auth.dshBridgeUrl.v1',
+        newValue: 'ws://other.test:23004/dsh/ws',
+      } as StorageEvent);
+    }
+    expect(credentials.dshBridgeUrl.value).toBe('ws://other.test:23004/dsh/ws');
+
+    for (const listener of storageListeners) {
+      listener({ key: 'opencode.auth.backendKind.v1', newValue: 'dsh' } as StorageEvent);
+    }
+    expect(credentials.backendKind.value).toBe('dsh');
+
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.auth.dshBridgeUrl.v1',
+        newValue: null,
+      } as StorageEvent);
+    }
+    expect(credentials.dshBridgeUrl.value).toBe('ws://localhost:23004/dsh/ws');
+
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.auth.dshBridgeToken.v1',
+        newValue: null,
+      } as StorageEvent);
+    }
+    expect(credentials.dshBridgeToken.value).toBe('');
+  });
+
+  it('writes the dsh token only inside the auth namespace', async () => {
+    const credentials = await importFresh();
+    const before = new Set(electronStore.keys());
+
+    credentials.saveDsh('ws://localhost:23004/dsh/ws', 'namespace-secret');
+
+    const written = [...electronStore.keys()].filter((key) => !before.has(key));
+    expect(written.sort()).toEqual([
+      'opencode.auth.backendKind.v1',
+      'opencode.auth.dshBridgeToken.v1',
+      'opencode.auth.dshBridgeUrl.v1',
+    ]);
+    expect(written.every((key) => key.startsWith('opencode.auth.'))).toBe(true);
+    expect(localStore.size).toBe(0);
+  });
 });
