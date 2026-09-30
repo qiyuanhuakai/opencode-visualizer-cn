@@ -629,17 +629,26 @@ export function createKimiWebClient(options: KimiWebClientOptions) {
     if (status === 204) return new Uint8Array();
     if (status === 206 || status === 304) return readBytes(response);
     if (status === 200 || status === 201) {
-      const contentType = response.headers.get('content-type') ?? '';
-      if (contentType.includes(JSON_CONTENT_TYPE)) {
-        const text = await response.text();
-        // A JSON error envelope on a download endpoint still throws KimiWebError.
-        if (text.trim()) unwrapEnvelope(text, spec.path);
-        throw new KimiWebTransportError(
-          `Kimi Web binary endpoint returned JSON for ${spec.path}.`,
-          { kind: 'malformed-response', path: spec.path },
-        );
+      const bytes = await readBytes(response);
+      const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+      if (contentType.includes(JSON_CONTENT_TYPE) && !response.headers.has('content-disposition')) {
+        const text = new TextDecoder().decode(bytes);
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(text);
+        } catch (cause) {
+          if (cause instanceof SyntaxError) return bytes;
+          throw cause;
+        }
+        if (isRecord(parsed) && typeof parsed.code === 'number' && typeof parsed.msg === 'string' && 'data' in parsed) {
+          unwrapEnvelope(text, spec.path);
+          throw new KimiWebTransportError(
+            `Kimi Web binary endpoint returned JSON for ${spec.path}.`,
+            { kind: 'malformed-response', path: spec.path },
+          );
+        }
       }
-      return readBytes(response);
+      return bytes;
     }
     return rejectHttp(response, spec.path);
   }

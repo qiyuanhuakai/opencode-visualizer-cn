@@ -1,4 +1,5 @@
 import { kimiWebMessagesToHistoryEntries } from '../backends/kimiWeb/historyEntries';
+import { restoreKimiWebSubagentLinks } from '../backends/kimiWeb/historySubagents';
 import type { KimiWebSnapshot } from '../utils/kimiWeb';
 import type { KimiWebWsFrame } from '../utils/kimiWebWs';
 import type { MessageInfo, MessagePart } from '../types/sse';
@@ -6,7 +7,7 @@ import type { MessageInfo, MessagePart } from '../types/sse';
 export type KimiWebReconcilePartKind = 'tool' | 'reasoning' | 'subagent';
 
 export function authoritativeEntries(snapshot: KimiWebSnapshot) {
-  return kimiWebMessagesToHistoryEntries(snapshot.messages.items);
+  return restoreKimiWebSubagentLinks(kimiWebMessagesToHistoryEntries(snapshot.messages.items), snapshot.subagents ?? []);
 }
 
 export function tailEntries(items: KimiWebSnapshot['messages']['items']) {

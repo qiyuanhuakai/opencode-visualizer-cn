@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createApp, defineComponent, h, nextTick } from 'vue';
+import { createApp, defineComponent, h, nextTick, reactive } from 'vue';
 import { createI18n } from 'vue-i18n';
 import { ref } from 'vue';
 
@@ -353,6 +353,31 @@ it('shows failed Codex child reads instead of claiming history is empty', async 
   });
   await flushRender();
   expect(root.querySelector('[role="alert"]')?.textContent).toContain('Child history unavailable');
+  unmount(app);
+  root.remove();
+});
+
+it('ignores a stale child response after the requested session changes', async () => {
+  let resolveOld: (entries: CodexCanonicalHistoryEntry[]) => void = () => {};
+  const oldHistory = new Promise<CodexCanonicalHistoryEntry[]>((resolve) => { resolveOld = resolve; });
+  const props = reactive({
+    parentThreadId: 'old-child',
+    loadHistory: (id: string) => id === 'old-child' ? oldHistory : Promise.resolve([{
+      info: makeAssistantMessage('new-child', 'new-answer', 'new-user', 3),
+      parts: [makeTextPart('new-answer', 'new-child', 'Current child answer')],
+    }]),
+  });
+  const { root, app } = mount(props);
+  props.parentThreadId = 'new-child';
+  await flushRender();
+  expect(root.textContent).toContain('Current child answer');
+  resolveOld([{
+    info: makeAssistantMessage('old-child', 'old-answer', 'old-user', 2),
+    parts: [makeTextPart('old-answer', 'old-child', 'Stale child answer')],
+  }]);
+  await flushRender();
+  expect(root.textContent).toContain('Current child answer');
+  expect(root.textContent).not.toContain('Stale child answer');
   unmount(app);
   root.remove();
 });

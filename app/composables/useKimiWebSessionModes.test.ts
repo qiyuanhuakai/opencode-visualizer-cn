@@ -27,6 +27,215 @@ function createController(
 }
 
 describe('useKimiWebSessionModes', () => {
+  it('does not apply a tower choice to another backend while loading metadata', async () => {
+    // Given
+    let scope = 'server-a';
+    const meta = deferred<unknown>();
+    const write = vi.fn().mockResolvedValue(undefined);
+    const controller = useKimiWebSessionModes({
+      writeMode: write,
+      loadMeta: () => meta.promise,
+      getScope: () => scope,
+    });
+    const pending = controller.changeMode('session-a', { field: 'towerMode', value: true });
+    scope = 'server-b';
+    // When
+    meta.resolve({ experimental_flags: { tower: true } });
+    // Then
+    await expect(pending).rejects.toThrow();
+    expect(write).not.toHaveBeenCalled();
+    expect(controller.towerEnabled).toBe(false);
+  });
+
+  it('isolates restored modes when the backend scope changes', async () => {
+    // Given
+    let scope = 'server-a';
+    const controller = useKimiWebSessionModes({
+      writeMode: async () => {},
+      loadMeta: async () => ({}),
+      getScope: () => scope,
+      readModes: () => (scope === 'server-a' ? { planMode: true } : { planMode: false }),
+    });
+    expect(controller.sessionState('session-a').planMode).toBe(true);
+    // When
+    scope = 'server-b';
+    // Then
+    expect(controller.sessionState('session-a').planMode).toBe(false);
+  });
+
+  it('does not persist an old backend write after changing scope', async () => {
+    // Given
+    let scope = 'server-a';
+    const write = deferred();
+    const save = vi.fn();
+    const controller = useKimiWebSessionModes({
+      writeMode: () => write.promise,
+      loadMeta: async () => ({}),
+      getScope: () => scope,
+      writeModePreference: save,
+    });
+    const pending = controller.changeMode('session-a', { field: 'planMode', value: true });
+    scope = 'server-b';
+    // When
+    write.resolve();
+    await pending;
+    // Then
+    expect(controller.sessionState('session-a')).toEqual({ confidence: 'unknown' });
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('ignores an old backend status response after changing scope', () => {
+    // Given
+    let scope = 'server-a';
+    const controller = useKimiWebSessionModes({
+      writeMode: async () => {},
+      loadMeta: async () => ({}),
+      getScope: () => scope,
+    });
+    const request = controller.captureStatusRequest('session-a');
+    scope = 'server-b';
+    // When
+    controller.applyStatus('session-a', { busy: false, plan_mode: true }, request);
+    // Then
+    expect(controller.sessionState('session-a')).toEqual({ confidence: 'unknown' });
+  });
+
+  it('restores successful choices when the controller is recreated', async () => {
+    // Given
+    const preferences: { planMode?: boolean; swarmMode?: boolean; towerMode?: boolean } = {};
+    const options = {
+      writeMode: async () => {},
+      loadMeta: async () => ({ experimental_flags: { tower: true } }),
+      readModes: () => preferences,
+      writeModePreference: (_sessionId: string, change: KimiWebSessionModeChange) => {
+        if (change.field !== 'permissionMode') preferences[change.field] = change.value;
+      },
+    };
+    const original = useKimiWebSessionModes(options);
+    await original.changeMode('session-a', { field: 'planMode', value: true });
+    await original.changeMode('session-a', { field: 'swarmMode', value: false });
+    await original.changeMode('session-a', { field: 'towerMode', value: true });
+    original.dispose();
+
+    // When
+    const restored = useKimiWebSessionModes(options);
+    restored.applyStatus('session-a', { busy: false });
+
+    // Then
+    expect(restored.sessionState('session-a')).toEqual({
+      planMode: true,
+      swarmMode: false,
+      towerMode: true,
+      confidence: 'stale',
+    });
+  });
+
+  it('hydrates explicit false values from REST status', () => {
+    // Given
+    const controller = useKimiWebSessionModes({
+      writeMode: async () => {},
+      loadMeta: async () => ({}),
+      readModes: () => ({ planMode: true, swarmMode: true, towerMode: true }),
+    });
+    // When
+    controller.applyStatus('session-a', {
+      busy: false,
+      plan_mode: false,
+      swarm_mode: false,
+      tower_mode: false,
+      permission: 'auto',
+    });
+    // Then
+    expect(controller.sessionState('session-a')).toEqual({
+      planMode: false,
+      swarmMode: false,
+      towerMode: false,
+      permissionMode: 'auto',
+      confidence: 'confirmed',
+    });
+  });
+
+  it('ignores a REST response requested before a local choice', async () => {
+    // Given
+    const controller = createController();
+    const request = controller.captureStatusRequest('session-a');
+    await controller.changeMode('session-a', { field: 'planMode', value: true });
+    // When
+    controller.applyStatus('session-a', { busy: false, plan_mode: false }, request);
+    // Then
+    expect(controller.sessionState('session-a').planMode).toBe(true);
+  });
+
+  it('ignores a REST response field updated by a newer live event', () => {
+    // Given
+    const controller = createController();
+    const request = controller.captureStatusRequest('session-a');
+    controller.applyEvent('session-a', { planMode: true }, { origin: 'live', sequence: 1 });
+    // When
+    controller.applyStatus(
+      'session-a',
+      { busy: false, plan_mode: false, swarm_mode: false },
+      request,
+    );
+    // Then
+    expect(controller.sessionState('session-a')).toMatchObject({
+      planMode: true,
+      swarmMode: false,
+    });
+  });
+
+  it('preserves a pending choice when status hydration arrives', async () => {
+    // Given
+    const write = deferred();
+    const controller = createController(() => write.promise);
+    const pending = controller.changeMode('session-a', { field: 'planMode', value: true });
+    // When
+    controller.applyStatus('session-a', { busy: false, plan_mode: false, swarm_mode: true });
+    // Then
+    expect(controller.sessionState('session-a')).toMatchObject({
+      planMode: true,
+      swarmMode: true,
+      pendingField: 'planMode',
+    });
+    write.resolve();
+    await pending;
+  });
+
+  it('ignores a REST field requested during a subsequently completed mutation', async () => {
+    // Given
+    const write = deferred();
+    const controller = createController(() => write.promise);
+    const pending = controller.changeMode('session-a', { field: 'planMode', value: true });
+    const request = controller.captureStatusRequest('session-a');
+    write.resolve();
+    await pending;
+    // When
+    controller.applyStatus('session-a', { busy: false, plan_mode: false }, request);
+    // Then
+    expect(controller.sessionState('session-a').planMode).toBe(true);
+  });
+
+  it.each([new KimiWebError(40001, 'rejected'), new Error('disconnected')])(
+    'does not persist a failed mutation: %s',
+    async (failure) => {
+      // Given
+      const save = vi.fn();
+      const controller = useKimiWebSessionModes({
+        writeMode: async () => {
+          throw failure;
+        },
+        loadMeta: async () => ({}),
+        writeModePreference: save,
+      });
+      // When
+      await expect(
+        controller.changeMode('session-a', { field: 'planMode', value: true }),
+      ).rejects.toBe(failure);
+      // Then
+      expect(save).not.toHaveBeenCalled();
+    },
+  );
+
   it('retains an accepted local mode when GET omits mode fields', async () => {
     const controller = createController();
 

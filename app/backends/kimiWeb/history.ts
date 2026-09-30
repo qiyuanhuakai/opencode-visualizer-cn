@@ -8,7 +8,8 @@
  * and hands the result to `historyEntries` for conversion. No live bridge or
  * popup callback is involved: history is pure replay.
  */
-import type { KimiWebMessage } from '../../utils/kimiWeb';
+import type { KimiWebMessage, KimiWebSnapshot } from '../../utils/kimiWeb';
+import { restoreKimiWebSubagentLinks } from './historySubagents';
 import { KimiWebTransportError } from '../../utils/kimiWeb';
 import {
   isInjectionMessage,
@@ -93,6 +94,7 @@ export async function collectKimiWebHistoryMessages(params: {
 export async function loadKimiWebHistoryEntries(params: {
   sessionId: string;
   getMessages: KimiWebMessagesFetcher;
+  getSnapshot?: (sessionId: string) => Promise<KimiWebSnapshot>;
   maxPages?: number;
   pageSize?: number;
   signal?: AbortSignal;
@@ -107,8 +109,13 @@ export async function loadKimiWebHistoryEntries(params: {
     signal: params.signal,
     shouldContinue: params.isCurrent,
   });
+  if (params.isCurrent && !params.isCurrent()) return { entries: [], pages: collection.pages, truncated: collection.truncated };
+  const snapshot = await params.getSnapshot?.(params.sessionId);
+  if (params.isCurrent && !params.isCurrent()) return { entries: [], pages: collection.pages, truncated: collection.truncated };
   return {
-    entries: kimiWebMessagesToHistoryEntries(collection.messages, params.profile),
+    entries: restoreKimiWebSubagentLinks(
+      kimiWebMessagesToHistoryEntries(collection.messages, params.profile), snapshot?.subagents ?? [],
+    ),
     pages: collection.pages,
     truncated: collection.truncated,
   };
