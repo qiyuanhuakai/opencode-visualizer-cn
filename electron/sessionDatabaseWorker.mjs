@@ -32,6 +32,9 @@ function requireId(value) {
   if (typeof value !== 'string' || !value || value.length > 4096) throw new TypeError('Invalid history identity');
   return value;
 }
+function requireNamespace(value) {
+  if (value !== 'legacy-thread-id' && (typeof value !== 'string' || !/^backend-history-v1:[a-f0-9]{32}$/u.test(value))) throw new TypeError('Invalid history namespace');
+}
 function isDatabaseKey(key) {
   return /^opencode\.(drafts\.|favorites\.|state\.(codexTurnEfforts|codexMessageModels|codexThreadActivity|acpMessageAttribution|acpArchivedSessions|kimiWebTurnPermissions)(\.|$))/u.test(key);
 }
@@ -67,17 +70,28 @@ const insertMessage = db.prepare(`INSERT INTO messages(namespace,thread_id,messa
 const insertPart = db.prepare(`INSERT INTO parts VALUES(?,?,?,?,?,?)
   ON CONFLICT(namespace,thread_id,message_id,part_id) DO UPDATE SET data=excluded.data,terminal=excluded.terminal
   WHERE NOT(parts.terminal=1 AND excluded.terminal=0) AND parts.data<>excluded.data`);
-function upsert(threadId, entries) {
+function upsert(threadId, entries, namespace = 'legacy-thread-id') {
+  requireNamespace(namespace);
   requireId(threadId);
   if (!Array.isArray(entries)) throw new TypeError('History entries must be an array');
   insertThread.run(namespace, threadId);
   for (const entry of entries) {
     if (!isRecord(entry) || !isRecord(entry.info) || !Array.isArray(entry.parts) || entry.info.sessionID !== threadId) throw new TypeError('Invalid history message');
     const messageId = requireId(entry.info.id);
-    insertMessage.run(namespace, threadId, messageId, JSON.stringify(entry.info));
+    const previousInfo = namespace === 'legacy-thread-id' ? null : db.prepare('SELECT info FROM messages WHERE namespace=? AND thread_id=? AND message_id=?').get(namespace, threadId, messageId);
+    const oldInfo = previousInfo ? JSON.parse(previousInfo.info) : null;
+    const info = oldInfo?.role === 'assistant' && oldInfo.time?.completed !== undefined ? oldInfo : entry.info;
+    insertMessage.run(namespace, threadId, messageId, JSON.stringify(info));
     for (const part of entry.parts) {
       if (!isRecord(part) || part.sessionID !== threadId || part.messageID !== messageId) throw new TypeError('Invalid history part');
       const partId = requireId(part.id);
+      if (namespace !== 'legacy-thread-id') {
+        const previous = db.prepare('SELECT data FROM parts WHERE namespace=? AND thread_id=? AND message_id=? AND part_id=?').get(namespace, threadId, messageId, partId);
+        const old = previous ? JSON.parse(previous.data) : null;
+        if (old?.type === 'tool' && ['completed', 'error'].includes(old.state?.status)) continue;
+        if (['text', 'reasoning'].includes(old?.type) && ['text', 'reasoning'].includes(part.type)
+          && (old.time?.end !== undefined || (typeof old.text === 'string' && typeof part.text === 'string' && old.text.length > part.text.length))) continue;
+      }
       const terminal = part.type === 'tool' && ['completed', 'error'].includes(part.state?.status) ? 1 : 0;
       insertPart.run(namespace, threadId, messageId, partId, JSON.stringify(part), terminal);
     }
@@ -120,7 +134,8 @@ function prepare() {
 }
 function cacheEntries() { return { ...settings, ...Object.fromEntries(db.prepare('SELECT key,value FROM kv').all().map((row) => [row.key, row.value])) }; }
 function requireReady() { if (!ready) throw new Error('Session database migration has not completed; mutation blocked'); }
-function readHistory({ threadId, cursor = null, limit = 100 }) {
+function readHistory({ threadId, cursor = null, limit = 100, namespace = 'legacy-thread-id' }) {
+  requireNamespace(namespace);
   requireReady(); requireId(threadId);
   if (cursor !== null && (typeof cursor !== 'string' || !/^\d+$/u.test(cursor) || !Number.isSafeInteger(Number(cursor)))) throw new TypeError('Invalid history cursor');
   if (!Number.isInteger(limit) || limit < 1) throw new TypeError('Invalid history page limit');
@@ -155,7 +170,8 @@ function mutate(key, value) {
   }
   return [{ key, oldValue, newValue: value }];
 }
-function clearHistory({ threadId }) {
+function clearHistory({ threadId, namespace = 'legacy-thread-id' }) {
+  requireNamespace(namespace);
   requireReady(); requireId(threadId);
   insertThread.run(namespace, threadId);
   db.prepare('DELETE FROM messages WHERE namespace=? AND thread_id=?').run(namespace, threadId);
@@ -203,7 +219,7 @@ function dispatch(method, payload) {
       } while (cursor !== null);
       return JSON.stringify({ version: 1, threadId, entries });
     }
-    case 'upsertHistory': requireReady(); return transaction(() => upsert(payload.threadId, payload.entries));
+    case 'upsertHistory': requireReady(); return transaction(() => upsert(payload.threadId, payload.entries, payload.namespace));
     case 'clearHistory': return transaction(() => clearHistory(payload));
     case 'mutate': return mutate(payload.key, payload.value);
     case 'migrate': return migrate(payload);

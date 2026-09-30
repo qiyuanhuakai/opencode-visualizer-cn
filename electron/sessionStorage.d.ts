@@ -1,5 +1,5 @@
 import type { PersistentStorageChange } from './persistentStorage.js';
-export type HistoryPageRequest = Readonly<{ threadId: string; cursor?: string | null; limit?: number }>;
+export type HistoryPageRequest = Readonly<{ threadId: string; namespace?: string; cursor?: string | null; limit?: number }>;
 export type HistoryPage = Readonly<{ entries: unknown[]; nextCursor: string | null }>;
 export interface SessionStorage {
   prepare(): Promise<void>;
@@ -10,8 +10,8 @@ export interface SessionStorage {
   migrate(entries: Readonly<Record<string, string>>): Promise<readonly PersistentStorageChange[]>;
   drainPendingChanges(): readonly PersistentStorageChange[];
   readHistory(payload: HistoryPageRequest): Promise<HistoryPage>;
-  upsertHistory(payload: Readonly<{ threadId: string; entries: readonly unknown[] }>): Promise<void>;
-  clearHistory(payload: Readonly<{ threadId: string }>): Promise<void>;
+  upsertHistory(payload: Readonly<{ threadId: string; namespace?: string; entries: readonly unknown[] }>): Promise<void>;
+  clearHistory(payload: Readonly<{ threadId: string; namespace?: string }>): Promise<void>;
   flush(): Promise<void>;
   close(): Promise<void>;
 }

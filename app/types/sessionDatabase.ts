@@ -4,9 +4,9 @@ export type SessionHistoryPage = {
 };
 
 export type SessionDatabaseApi = {
-  readonly readHistory: (request: { readonly threadId: string; readonly cursor?: string; readonly limit?: number }) => Promise<SessionHistoryPage>;
-  readonly upsertHistory: (request: { readonly threadId: string; readonly entries: readonly unknown[] }) => Promise<void>;
-  readonly clearHistory: (request: { readonly threadId: string }) => Promise<void>;
+  readonly readHistory: (request: { readonly threadId: string; readonly namespace?: string; readonly cursor?: string; readonly limit?: number }) => Promise<SessionHistoryPage>;
+  readonly upsertHistory: (request: { readonly threadId: string; readonly namespace?: string; readonly entries: readonly unknown[] }) => Promise<void>;
+  readonly clearHistory: (request: { readonly threadId: string; readonly namespace?: string }) => Promise<void>;
   readonly flush: () => Promise<void>;
   readonly onHistoryChanged: (listener: (threadId: string) => void) => () => void;
 };
