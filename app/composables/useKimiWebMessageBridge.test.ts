@@ -320,6 +320,8 @@ describe('useKimiWebMessageBridge', () => {
     } });
     source.emitFrame({ type: 'turn.started', seq: 2, epoch: EPOCH, session_id: SESSION_ID,
       payload: { agentId: 'main', turnId: 2, promptId: user.id, time: 1790083367903 } });
+    source.emitFrame({ type: 'turn.step.started', seq: 3, epoch: EPOCH, session_id: SESSION_ID,
+      payload: { agentId: 'main', turnId: 2, step: 1, stepId: 'step-2', time: 1790083367904 } });
     const assistant = [...messages.values()].find((message) => message.role === 'assistant');
     expect(messages.get(user.id)).toMatchObject({ role: 'user' });
     expect(assistant).toMatchObject({ parentID: user.id });
@@ -341,6 +343,30 @@ describe('useKimiWebMessageBridge', () => {
     expect([...parts.values()]).toEqual([
       expect.objectContaining({ type: 'text', text: 'Hi! What can I help' }),
     ]);
+  });
+
+  it('segments a live turn into one text part per utterance instead of one per-turn blob', async () => {
+    const { source, bridge, parts } = createHarness();
+    const subscribing = bridge.subscribe([SESSION_ID], { [SESSION_ID]: { seq: 4, epoch: EPOCH } });
+    for (const entry of liveFrames) source.emitFrame(entry);
+    source.ack(liveFrames.at(-1)?.seq ?? 0);
+    await subscribing;
+
+    const byMessage = new Map<string, string>();
+    for (const part of parts.values()) {
+      if (part.type === 'text' && part.messageID.startsWith(`${SESSION_ID}:main:2:`)) {
+        byMessage.set(part.messageID, part.text);
+      }
+    }
+    // turn 2's seq 36 and seq 51 utterances must stand as two separate messages.
+    expect([...byMessage.keys()]).toEqual([
+      `${SESSION_ID}:main:2:0`,
+      `${SESSION_ID}:main:2:1`,
+    ]);
+    expect(byMessage.get(`${SESSION_ID}:main:2:0`)).toContain('AgentSwarm');
+    expect(byMessage.get(`${SESSION_ID}:main:2:0`)).not.toContain("subagent's answer");
+    expect(byMessage.get(`${SESSION_ID}:main:2:1`)).toContain("subagent's answer");
+    bridge.stop();
   });
 
   it('suppresses replay callbacks and restores live semantics on the first post-ack frame', async () => {

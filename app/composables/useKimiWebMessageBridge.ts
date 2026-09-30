@@ -241,6 +241,20 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
         promptId: turn.current_prompt_id,
       },
     }, 'snapshot-rebuild');
+    // The snapshot exposes the whole in-flight turn as one string with no
+    // per-utterance watermark, so synthesize the opening step and let the seeded
+    // (and buffered same-seq suffix) deltas land in their own utterance group.
+    normalize({
+      ...base,
+      type: 'turn.step.started',
+      payload: {
+        sessionId: snapshot.session.id,
+        agentId: 'main',
+        turnId: turn.turn_id,
+        step: 1,
+        stepId: `snapshot:${snapshot.as_of_seq}`,
+      },
+    }, 'snapshot-rebuild');
     if (turn.thinking_text) {
       normalize({ ...base, type: 'thinking.delta', volatile: true, payload: {
         sessionId: snapshot.session.id, agentId: 'main', turnId: turn.turn_id, delta: turn.thinking_text,
