@@ -295,6 +295,7 @@ const BRANCHES: BranchEntry[] = [
   { file: "composables/useBackendSessionTrees.ts", fp: "params.activeBackendKind.value==='acp'", n: 2, kind: 'cmp', cls: 'ui-required', disp: 'todo-21', owner: 21, sym: "session tree routing" },
   { file: "composables/useBackendSessionTrees.ts", fp: "params.activeBackendKind.value==='codex'", n: 2, kind: 'cmp', cls: 'ui-required', disp: 'todo-21', owner: 21, sym: "session tree routing" },
   { file: "composables/useBackendSessionTrees.ts", fp: "params.activeBackendKind.value==='kimi-web'", n: 2, kind: 'cmp', cls: 'ui-required', disp: 'todo-21', owner: 21, sym: "session tree routing" },
+  { file: "composables/useBackendSessionTrees.ts", fp: "params.activeBackendKind.value==='dsh'", n: 2, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 21, sym: "session tree routing" },
   { file: "composables/useCodexApi.ts", fp: "agent: parent?.info.role === 'user' ? parent.info.agent : 'codex',", n: 1, kind: 'literal', cls: 'data-only', disp: 'not-applicable', sym: "codex API internals" },
   { file: "composables/useCodexApi.ts", fp: "configuredProvider !== 'openai' && configuredProvider !== 'codex') {", n: 1, kind: 'literal', cls: 'data-only', disp: 'not-applicable', sym: "codex API internals" },
   { file: "composables/useCodexApi.ts", fp: "const fallbackMetadata = { source: 'codex' };", n: 2, kind: 'literal', cls: 'data-only', disp: 'not-applicable', sym: "codex API internals" },

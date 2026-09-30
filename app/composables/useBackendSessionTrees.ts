@@ -11,6 +11,7 @@ import {
   buildOpenCodeSessionTreeData,
 } from './openCodeSessionTrees';
 import { buildKimiWebTopPanelTreeData } from './kimiWebSessionTrees';
+import { buildDshTopPanelTreeData } from './dshSessionTrees';
 
 const NAVIGABLE_MAX_SESSIONS = 5;
 
@@ -105,6 +106,16 @@ export function useBackendSessionTrees(params: {
             replaceHomePrefix: params.replaceHomePrefix,
             resolveProjectColor: params.resolveProjectColor,
           })
+        : params.activeBackendKind.value === 'dsh'
+          ? buildDshTopPanelTreeData({
+              projects: params.projects,
+              pinnedStore: params.pinnedStore.value,
+              deletedSandboxStore: params.deletedSandboxStore.value,
+              gitInfoByDirectory: params.gitInfoByDirectory?.value ?? {},
+              homePath: params.homePath.value,
+              replaceHomePrefix: params.replaceHomePrefix,
+              resolveProjectColor: params.resolveProjectColor,
+            })
         : params.activeBackendKind.value === 'acp'
           ? buildAcpTopPanelTreeData({
               projects: params.projects,
@@ -129,7 +140,8 @@ export function useBackendSessionTrees(params: {
   const sessionTreeData = computed<SessionTreeData>(() => {
     return params.activeBackendKind.value === 'codex' ||
       params.activeBackendKind.value === 'acp' ||
-      params.activeBackendKind.value === 'kimi-web'
+      params.activeBackendKind.value === 'kimi-web' ||
+      params.activeBackendKind.value === 'dsh'
       ? buildCodexSessionTreeData(topPanelTreeData.value)
       : buildOpenCodeSessionTreeData({
           projects: params.projects,
