@@ -855,6 +855,7 @@ import {
   createDshSessionEventHub,
   dshPromptRunningChange,
 } from './composables/dshSessionEvents';
+import { createDshPopupBridge } from './composables/dshPopupBridge';
 import { useKimiWebSessionModes } from './composables/useKimiWebSessionModes';
 import { bootstrapKimiWebWorkspace as runKimiWebBootstrap } from './backends/kimiWeb/bootstrap';
 import { kimiWebComposerProfile } from './backends/kimiWeb/modelSelection';
@@ -8092,6 +8093,62 @@ function reconcileKimiWebPopup(info: MessageInfo, part: MessagePart, kind: 'tool
   if (part.type === 'reasoning') void fw.close(siblingKey);
   else reasoning.scheduleReasoningClose(part.sessionID);
 }
+
+// ---------------------------------------------------------------------------
+// Todo 24: dsh auto-popup wiring (core visual feature).
+// dsh 的悬浮窗视觉/行为必须与 Kimi Web 完全同构：同一批既有悬浮窗组件
+// （openToolPartAsWindow / reasoning.handlePart / subagentWindows.handlePart /
+// fw.updateOptions / fw.has / fw.close）、同一套门控（选中会话后代闭包 +
+// suppressAutoWindows）、同一种抑制（replay/快照重建/历史加载只对账不开窗）。
+// 归一化栈、签名去重与三路 type split 集中在 dshPopupBridge.ts；本块按
+// Kimi Web 接法镜像，只绑定协作者，不为 dsh 另做一套悬浮窗视觉。
+//
+// 三路回调的订阅点：dsh 消息桥（Todo 19 useDshMessageBridge）由 Todo 33 的
+// bootstrap createBridge 构造，构造参数按 kimi-web 同构内联展开本桥对象：
+//   onToolPart: dshPopupBridge.onToolPart
+//   onLiveReasoning: dshPopupBridge.onLiveReasoning
+//   onLiveSubagent: dshPopupBridge.onLiveSubagent
+//   onReconcilePart: dshPopupBridge.onReconcilePart（replay/重建只对账）
+// ---------------------------------------------------------------------------
+
+// Only the selected session and its descendants may drive popups. dsh
+// subagents are real CHILD sessions (handlers-agent.ts — opaque childSessionId,
+// not a prefixed extension like kimi's session:agent:turn identity), so the
+// descendant set comes from the shared parent closure (allowedSessionIds) —
+// the Codex parent filter (useCodexMessageBridge.ts L197-209) without a
+// string-prefix test.
+function isDshPopupSession(sessionID: string): boolean {
+  if (activeBackendKind.value !== 'dsh') return false;
+  if (!sessionID) return false;
+  return allowedSessionIds.value.has(sessionID);
+}
+
+const dshPopupBridge = createDshPopupBridge({
+  isPopupSession: (sessionID) => isDshPopupSession(sessionID),
+  isSuppressed: () => suppressAutoWindows.value,
+  shouldOpenToolWindow: (tool) => shouldRenderToolWindow(tool),
+  openToolPartWindow: (part) => {
+    // The bridge only forwards tool parts here; the shared surface is typed
+    // ToolPart, so narrow at the seam.
+    if (part.type === 'tool') openToolPartAsWindow(part);
+  },
+  updateToolWindowStatus: (windowKey, status) => fw.updateOptions(windowKey, { status }),
+  handleReasoningPart: (part, info) => reasoning.handlePart(part, info),
+  handleSubagentPart: (part, info) => subagentWindows.handlePart(part, info),
+  hasWindow: (windowKey) => fw.has(windowKey),
+  closeWindow: (windowKey) => {
+    void fw.close(windowKey);
+  },
+  scheduleReasoningClose: (sessionId) => reasoning.scheduleReasoningClose(sessionId),
+});
+
+// Backend/session switch tears the normalized stack down together with the
+// windows themselves (the reload path closes auto windows and resets the
+// reasoning/subagent surfaces) — the Codex resetPublishedState watch precedent
+// (useCodexMessageBridge.ts L196). A disconnect→reconnect never fires this
+// watch, so the stack survives the rebuild and the signature dedup keeps a
+// re-delivered window from re-stacking.
+watch([activeBackendKind, selectedSessionId], () => dshPopupBridge.reset());
 
 function kimiWebRestClient() {
   if (!configuredKimiWebAdapter) throw new Error('Kimi Web backend is not configured.');

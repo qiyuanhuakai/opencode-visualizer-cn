@@ -129,6 +129,7 @@ const BRANCHES: BranchEntry[] = [
   { file: "App.vue", fp: "@click=\"loginBackendKind = 'opencode'\"", n: 1, kind: 'literal', cls: 'ui-required', disp: 'todo-32', owner: 32, sym: "login surface" },
   { file: "App.vue", fp: "activeBackendKind.value!=='acp'", n: 7, kind: 'cmp', cls: 'ui-required', disp: 'todo-33', owner: 33, sym: "active backend / composer / identity" },
   { file: "App.vue", fp: "activeBackendKind.value!=='codex'", n: 9, kind: 'cmp', cls: 'ui-required', disp: 'todo-33', owner: 33, sym: "active backend / composer / identity" },
+  { file: "App.vue", fp: "activeBackendKind.value!=='dsh'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 24, sym: "dsh popup session gate (Todo 24)" },
   { file: "App.vue", fp: "activeBackendKind.value!=='kimi-web'", n: 13, kind: 'cmp', cls: 'ui-required', disp: 'todo-33', owner: 33, sym: "active backend / composer / identity" },
   { file: "App.vue", fp: "activeBackendKind.value!=='opencode'", n: 2, kind: 'cmp', cls: 'ui-required', disp: 'todo-33', owner: 33, sym: "active backend / composer / identity" },
   { file: "App.vue", fp: "activeBackendKind.value==='acp'", n: 6, kind: 'cmp', cls: 'ui-required', disp: 'todo-33', owner: 33, sym: "active backend / composer / identity" },
