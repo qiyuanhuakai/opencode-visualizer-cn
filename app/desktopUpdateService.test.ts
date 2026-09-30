@@ -112,7 +112,7 @@ describe('desktop update service', () => {
     });
     fixture.runtime.downloadAppUpdate.mockImplementation(async () => {
       fixture.updater.emit('update-downloaded', { version: '1.2.3' });
-      return ['/private/update/Vis-1.2.3-x86_64-Linux.AppImage'];
+      return ['/private/update/Vis-1.2.3-x86_64.AppImage'];
     });
     await fixture.service.check('app');
     await fixture.service.download('app');
@@ -664,7 +664,7 @@ class SetterBackedUpdater extends AppUpdater {
 }
 
 function updateInfo(version: string): UpdateInfo {
-  const name = `Vis-${version}-x86_64-Linux.AppImage`;
+  const name = `Vis-${version}-x86_64.AppImage`;
   return {
     version,
     files: [

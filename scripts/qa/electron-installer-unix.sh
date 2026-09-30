@@ -243,8 +243,8 @@ if [[ "$PLATFORM" == "linux" ]]; then
   [[ -x "$INSTALLED_EXE" ]] || die "installed executable missing: $INSTALLED_EXE"
   run_smoke "deb" "$INSTALLED_EXE"
 
-  appimage="$(ls -t "$ARTIFACTS_DIR"/Vis-*-"$APPIMAGE_ARCH"-Linux.AppImage 2>/dev/null | head -1 || true)"
-  [[ -f "$appimage" ]] || die "no Vis-*-$APPIMAGE_ARCH-Linux.AppImage found in $ARTIFACTS_DIR"
+  appimage="$(ls -t "$ARTIFACTS_DIR"/Vis-*-"$APPIMAGE_ARCH".AppImage 2>/dev/null | head -1 || true)"
+  [[ -f "$appimage" ]] || die "no Vis-*-$APPIMAGE_ARCH.AppImage found in $ARTIFACTS_DIR"
   echo "== linux AppImage extract-and-run QA: $appimage =="
   chmod +x "$appimage"
   EXTRACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vis-appimage-qa-XXXXXX")"

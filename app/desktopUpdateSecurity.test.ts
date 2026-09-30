@@ -11,7 +11,7 @@ describe('automatic desktop update security', () => {
     const info = updateInfo('VisBridge-1.2.3-x64-Linux.deb');
     fixture.updater.checkForUpdates.mockImplementationOnce(async () => {
       fixture.updater.emit('update-available', info);
-      return { updateInfo: updateInfo('Vis-1.2.3-x86_64-Linux.AppImage') };
+      return { updateInfo: updateInfo('Vis-1.2.3-x86_64.AppImage') };
     });
 
     // When: the automatic app check completes.
@@ -25,13 +25,13 @@ describe('automatic desktop update security', () => {
   it('verifies the selected manifest size and SHA-512 immediately before updater installation', async () => {
     // Given: an exact Linux x64 AppImage offer and its real updater-returned path.
     const fixture = createFixture();
-    const info = updateInfo('Vis-1.2.3-x86_64-Linux.AppImage');
+    const info = updateInfo('Vis-1.2.3-x86_64.AppImage');
     fixture.updater.checkForUpdates.mockImplementationOnce(async () => {
       fixture.updater.emit('update-available', info);
       return { updateInfo: info };
     });
     fixture.runtime.downloadAppUpdate.mockResolvedValueOnce([
-      '/private/update/Vis-1.2.3-x86_64-Linux.AppImage',
+      '/private/update/Vis-1.2.3-x86_64.AppImage',
     ]);
     await fixture.service.check('app');
     await fixture.service.download('app');
@@ -41,12 +41,12 @@ describe('automatic desktop update security', () => {
 
     // Then: the returned path is checked against retained manifest evidence before quitAndInstall.
     expect(fixture.runtime.verifyAsset).toHaveBeenCalledWith(
-      '/private/update/Vis-1.2.3-x86_64-Linux.AppImage',
+      '/private/update/Vis-1.2.3-x86_64.AppImage',
       {
-        name: 'Vis-1.2.3-x86_64-Linux.AppImage',
+        name: 'Vis-1.2.3-x86_64.AppImage',
         size: 12,
         sha512: `${'A'.repeat(86)}==`,
-        url: 'Vis-1.2.3-x86_64-Linux.AppImage',
+        url: 'Vis-1.2.3-x86_64.AppImage',
       },
       `${'A'.repeat(86)}==`,
       'sha512',
@@ -59,10 +59,10 @@ describe('automatic desktop update security', () => {
   it('does not install when the updater returns no path for the selected artifact', async () => {
     // Given: an accepted offer whose download result points at a different architecture.
     const fixture = createFixture();
-    const info = updateInfo('Vis-1.2.3-x86_64-Linux.AppImage');
+    const info = updateInfo('Vis-1.2.3-x86_64.AppImage');
     fixture.updater.checkForUpdates.mockResolvedValueOnce({ updateInfo: info });
     fixture.runtime.downloadAppUpdate.mockResolvedValueOnce([
-      '/private/update/Vis-1.2.3-arm64-Linux.AppImage',
+      '/private/update/Vis-1.2.3-arm64.AppImage',
     ]);
     await fixture.service.check('app');
 
@@ -77,10 +77,10 @@ describe('automatic desktop update security', () => {
   it('does not quit or install when final integrity verification fails', async () => {
     // Given: a recorded automatic download whose bytes no longer match its manifest.
     const fixture = createFixture();
-    const info = updateInfo('Vis-1.2.3-x86_64-Linux.AppImage');
+    const info = updateInfo('Vis-1.2.3-x86_64.AppImage');
     fixture.updater.checkForUpdates.mockResolvedValueOnce({ updateInfo: info });
     fixture.runtime.downloadAppUpdate.mockResolvedValueOnce([
-      '/private/update/Vis-1.2.3-x86_64-Linux.AppImage',
+      '/private/update/Vis-1.2.3-x86_64.AppImage',
     ]);
     fixture.runtime.verifyAsset.mockRejectedValueOnce(new Error('SHA512 mismatch'));
     await fixture.service.check('app');

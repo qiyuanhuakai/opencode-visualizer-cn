@@ -390,7 +390,7 @@ jobs:
         with:
           name: electron-linux-x64-artifacts
           path: |
-            dist-electron/Vis-*-x86_64-Linux.AppImage
+            dist-electron/Vis-*-x86_64.AppImage
             dist-electron/Vis-*-amd64-Linux.deb
             dist-electron/latest-linux.yml
           retention-days: 7
