@@ -178,6 +178,7 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
   /** Which session a live follow stream delivers (learned from its snapshot). */
   const streamSessions = new Map<DshBridgeStreamHandle, string>();
   const approvals = new Map<string, DshApprovalRequest>();
+  const approvalListeners = new Set<(request: DshApprovalRequest) => void>();
   const answeredEventIds = new Set<string>();
   /** Terminal answers held back while no connection clientId is available. */
   const queuedResponses: Array<{ eventId: string; outcome: DshWaterfallOutcome }> = [];
@@ -667,6 +668,12 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     if (answeredEventIds.has(request.eventId) || approvals.has(request.eventId)) return;
     approvals.set(request.eventId, request);
     options.onApprovalRequest?.(request);
+    for (const listener of [...approvalListeners]) listener(request);
+  }
+
+  function subscribeApprovals(listener: (request: DshApprovalRequest) => void): () => void {
+    approvalListeners.add(listener);
+    return () => approvalListeners.delete(listener);
   }
 
   function cancelApproval(eventId: string): void {
@@ -800,6 +807,7 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     // Never leave a pending waterfall unanswered, even while disposing.
     const pending = [...approvals.keys()];
     for (const eventId of pending) void respond(eventId, safeRejection(STOP_REJECTION));
+    approvalListeners.clear();
     for (const unsubscribe of unsubscribers) unsubscribe();
     for (const handle of followHandles) handle.cancel();
     followHandles.length = 0;
@@ -833,6 +841,7 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     resolveApproval,
     rejectApproval,
     rejectAllApprovals,
+    subscribeApprovals,
     pendingApprovals: () => [...approvals.values()],
     clientId: () => clientId,
     sessionIds: () => [...normalizers.keys()],

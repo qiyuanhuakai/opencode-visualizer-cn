@@ -252,6 +252,14 @@ export type DshMessageBridge = {
   rejectApproval(eventId: string, message?: string): void;
   /** Answer every pending approval with the safe-rejection outcome (degraded close). */
   rejectAllApprovals(message?: string): void;
+  /**
+   * Subscribe to `approval/request` frames AFTER construction — the seam the
+   * real permission UI attaches to without a construction-order cycle
+   * (its reply path needs the bridge, the bridge does not need it). Listeners
+   * fire in addition to the construction-time `onApprovalRequest` option;
+   * the returned function unsubscribes.
+   */
+  subscribeApprovals(listener: (request: DshApprovalRequest) => void): () => void;
   pendingApprovals(): readonly DshApprovalRequest[];
   /** The current connection's clientId (void between a drop and the next ready). */
   clientId(): string | undefined;
