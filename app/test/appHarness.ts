@@ -383,6 +383,7 @@ harness.configureAcpBackend.mockImplementation(() => acpAdapter);
 vi.mock('../backends/registry', () => ({
   DEFAULT_ACP_BRIDGE_URL: 'ws://127.0.0.1:23004',
   DEFAULT_CODEX_BRIDGE_URL: 'ws://127.0.0.1:23004/codex',
+  DEFAULT_DSH_BRIDGE_URL: 'ws://localhost:23004/dsh/ws',
   DEFAULT_KIMI_WEB_BRIDGE_URL: 'ws://127.0.0.1:23004/kimi-web/ws',
   configureAcpBackend: harness.configureAcpBackend,
   configureCodexBackend: harness.configureCodexBackend,
