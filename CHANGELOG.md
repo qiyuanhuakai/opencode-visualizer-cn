@@ -14,8 +14,13 @@
 
 ### OpenCode 子代理历史与 Windows 进程清理
 
-- [x] 打开 OpenCode 子代理历史时直接读取子会话，不再依赖预加载缓存；修复历史空白，并区分加载失败与空历史。
+- [x] OpenCode 子代理历史按需加载，并区分加载失败与空历史。
 - [x] Windows 终端后代进程清理按实际退出状态判断，避免已退出进程被误判为仍在运行，并保留 PowerShell 错误输出（[#153](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/153)）。
+
+### OpenCode 子代理历史持久缓存
+
+- [x] 收到子代理消息即增量保存，刷新后点击历史优先读取本地缓存；上游清理子会话后，仍可查看已保存的内容，空响应和部分更新不会覆盖完整历史。
+- [x] 网页使用 IndexedDB，Electron 复用 Codex 会话 SQLite；按后端、服务地址、账号和目录隔离缓存，为后续多后端整合提供通用存储接口（[#154](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/154)）。
 
 ## [v0.8.9 released]
 
