@@ -126,14 +126,14 @@ describe('kimiWeb/normalize', () => {
     const message = messages.at(-1)!.message as AssistantMessageInfo;
     expect(message.role).toBe('assistant');
     expect(message.sessionID).toBe(SESSION_ID);
-    expect(message.id).toBe(`${SESSION_ID}:main:0`);
+    expect(message.id).toBe(`${SESSION_ID}:main:0:0`);
     expect(message.time.created).toBeGreaterThan(0);
     expect(message.time.completed).toBe(TURN_ENDED_TIME);
     expect(message.error).toBeUndefined();
 
     const textPart = lastPart(ops, 'text')!;
     expect(textPart.sessionID).toBe(SESSION_ID);
-    expect(textPart.messageID).toBe(`${SESSION_ID}:main:0`);
+    expect(textPart.messageID).toBe(`${SESSION_ID}:main:0:0`);
     expect(textPart.text).toBe('Hi! What can I help you with today?');
     expect(textPart.time?.end).toBe(TURN_ENDED_TIME);
 
@@ -162,9 +162,17 @@ describe('kimiWeb/normalize', () => {
     expect(normalizer.stats().staleDeltaCount).toBe(0);
   });
 
-  it('keeps text across a seq boundary for one turn and drops stale-seq deltas', () => {
+  it('segments one turn into an utterance per step and drops stale-seq deltas', () => {
     const turnStarted = liveFrames.find(
       (frame) => frame.type === 'turn.started' && payloadOf(frame).turnId === 2,
+    )!;
+    const step1 = liveFrames.find(
+      (frame) =>
+        frame.type === 'turn.step.started' && payloadOf(frame).turnId === 2 && payloadOf(frame).step === 1,
+    )!;
+    const step2 = liveFrames.find(
+      (frame) =>
+        frame.type === 'turn.step.started' && payloadOf(frame).turnId === 2 && payloadOf(frame).step === 2,
     )!;
     const first = liveOfType('assistant.delta').filter((frame) => frame.seq === 36);
     const second = liveOfType('assistant.delta').filter((frame) => frame.seq === 51);
@@ -175,11 +183,23 @@ describe('kimiWeb/normalize', () => {
         .sort((left, right) => (left.offset ?? 0) - (right.offset ?? 0))
         .map((frame) => String(payloadOf(frame).delta))
         .join('');
-    const expected = chunksOf(first) + chunksOf(second);
-    const { ops, normalizer } = ingest([turnStarted, ...first, ...second, first[0]]);
+    const { ops, normalizer } = ingest([turnStarted, step1, ...first, step2, ...second, first[0]]);
     expect(normalizer.stats().staleDeltaCount).toBe(1);
     expect(normalizer.stats().duplicateDeltaCount).toBe(0);
-    expect(lastPart(ops, 'text')!.text).toBe(expected);
+
+    const messages = opsOfKind(ops, 'message').filter((op) => op.message.sessionID === SESSION_ID);
+    expect(messages.map((op) => op.message.id)).toEqual([
+      `${SESSION_ID}:main:2:0`,
+      `${SESSION_ID}:main:2:1`,
+    ]);
+
+    const finalByMessage = new Map<string, string>();
+    for (const part of opsOfKind(ops, 'part').map((op) => op.part)) {
+      if (part.type === 'text') finalByMessage.set(part.messageID, part.text);
+    }
+    expect([...finalByMessage.keys()]).toEqual([`${SESSION_ID}:main:2:0`, `${SESSION_ID}:main:2:1`]);
+    expect(finalByMessage.get(`${SESSION_ID}:main:2:0`)).toBe(chunksOf(first));
+    expect(finalByMessage.get(`${SESSION_ID}:main:2:1`)).toBe(chunksOf(second));
   });
 
   it('appends offset-less subagent deltas in arrival order', () => {
@@ -204,7 +224,7 @@ describe('kimiWeb/normalize', () => {
       .map((op) => op.part)
       .filter((part): part is ToolPart => part.type === 'tool');
     expect(parts.map((part) => part.state.status)).toEqual(['pending', 'running', 'running', 'completed']);
-    expect(new Set(parts.map((part) => part.id))).toEqual(new Set([`${SESSION_ID}:main:1:tool:${TOOL_READ}`]));
+    expect(new Set(parts.map((part) => part.id))).toEqual(new Set([`${SESSION_ID}:main:1:0:tool:${TOOL_READ}`]));
     expect(new Set(parts.map((part) => part.callID))).toEqual(new Set([TOOL_READ]));
     expect(parts.at(-1)!.tool).toBe('read');
     const finalState = parts.at(-1)!.state;
@@ -252,6 +272,7 @@ describe('kimiWeb/normalize', () => {
     const normalizer = createKimiWebNormalizer();
     const base = { sessionId: 'session-ctx', agentId: 'main', turnId: 3 };
     normalizer.ingest({ type: 'turn.started', payload: { ...base, promptId: 'prompt-3' } });
+    normalizer.ingest({ type: 'turn.step.started', payload: { ...base, step: 1, stepId: 'step-3', time: 1 } });
     const first = normalizer.ingest({ type: 'agent.status.updated', payload: { ...base, contextTokens: 21109, maxContextTokens: 320000 } });
     const afterFirst = opsOfKind(first.ops, 'message');
     expect(afterFirst).toHaveLength(1);
@@ -269,6 +290,7 @@ describe('kimiWeb/normalize', () => {
   it('omits context fields from the message until a status reports them', () => {
     const { ops } = ingest([
       { type: 'turn.started', payload: { sessionId: 'session-ctx', agentId: 'main', turnId: 0, promptId: 'p' } },
+      { type: 'turn.step.started', payload: { sessionId: 'session-ctx', agentId: 'main', turnId: 0, step: 1, stepId: 'step-0', time: 1 } },
     ]);
     const message = opsOfKind(ops, 'message')[0].message as AssistantMessageInfo;
     expect(message.contextTokens).toBeUndefined();
@@ -279,6 +301,7 @@ describe('kimiWeb/normalize', () => {
     const normalizer = createKimiWebNormalizer();
     const base = { sessionId: 'session-ctx', agentId: 'main', turnId: 0 };
     normalizer.ingest({ type: 'turn.started', payload: { ...base, promptId: 'p' } });
+    normalizer.ingest({ type: 'turn.step.started', payload: { ...base, step: 1, stepId: 'step-0', time: 1 } });
     normalizer.ingest({ type: 'agent.status.updated', payload: { ...base, contextTokens: 100, maxContextTokens: 200 } });
     const statusOnly = normalizer.ingest({ type: 'agent.status.updated', payload: { ...base, planMode: true } });
     expect(opsOfKind(statusOnly.ops, 'message')).toHaveLength(0);
@@ -371,7 +394,7 @@ describe('kimiWeb/normalize', () => {
       .filter((message): message is AssistantMessageInfo => message.role === 'assistant')
       .filter((message) => message.sessionID === SUBAGENT_SESSION_ID)
       .at(-1);
-    expect(subagent?.parentID).toBe(`${SESSION_ID}:main:2`);
+    expect(subagent?.parentID).toBe(`${SESSION_ID}:main:2:0`);
 
     const orphanAssistants = messages
       .filter((message): message is AssistantMessageInfo => message.role === 'assistant')
@@ -516,5 +539,34 @@ describe('kimiWeb/normalize', () => {
     expect(resolveKimiWebToolName('lsp_hover')).toBe('lsp_hover');
     expect(resolveKimiWebToolName('CustomThing')).toBe('CustomThing');
     expect(resolveKimiWebToolName('')).toBe('other');
+  });
+
+  it('replays the live session into one message per step so each utterance stands alone', () => {
+    const { ops } = ingest(liveFrames);
+    const messages = opsOfKind(ops, 'message').map((op) => op.message);
+    const turn2 = messages.filter(
+      (message) => message.role === 'assistant' && message.id.startsWith(`${SESSION_ID}:main:2:`),
+    );
+    expect([...new Set(turn2.map((message) => message.id))]).toEqual([
+      `${SESSION_ID}:main:2:0`,
+      `${SESSION_ID}:main:2:1`,
+    ]);
+
+    const finalByMessage = new Map<string, string>();
+    for (const part of opsOfKind(ops, 'part').map((op) => op.part)) {
+      if (part.type === 'text') finalByMessage.set(part.messageID, part.text);
+    }
+    const chunksOf = (seq: number) =>
+      liveOfType('assistant.delta')
+        .filter((frame) => frame.seq === seq)
+        .sort((left, right) => (left.offset ?? 0) - (right.offset ?? 0))
+        .map((frame) => String(payloadOf(frame).delta))
+        .join('');
+    // seq 36 and seq 51 are two utterances of turn 2 — they must not concatenate.
+    expect(finalByMessage.get(`${SESSION_ID}:main:2:0`)).toBe(chunksOf(36));
+    expect(finalByMessage.get(`${SESSION_ID}:main:2:1`)).toBe(chunksOf(51));
+    // getFinalAnswer picks the turn's last utterance, matching REST restore.
+    expect(finalByMessage.get(turn2.at(-1)!.id)).toBe(chunksOf(51));
+    expect(finalByMessage.get(`${SESSION_ID}:main:2:0`)).not.toContain("subagent's answer");
   });
 });
