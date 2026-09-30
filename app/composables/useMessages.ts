@@ -347,6 +347,14 @@ function updatePart(part: MessagePart, notifyCollection = true) {
 }
 
 const unsubs: Array<() => void> = [];
+const historyListeners = new Set<(entry: { info: MessageInfo; parts: MessagePart[] }) => void>();
+
+function notifyHistoryEntry(messageId: string) {
+  const info = get(messageId);
+  if (!info) return;
+  const entry = { info, parts: getParts(messageId) };
+  for (const listener of historyListeners) listener(entry);
+}
 
 function bindScope(scope: SessionScope) {
   for (const unsub of unsubs) unsub();
@@ -355,6 +363,7 @@ function bindScope(scope: SessionScope) {
   unsubs.push(
     scope.on('message.part.updated', (packet: MessagePartUpdatedPacket) => {
       updatePart(packet.part);
+      notifyHistoryEntry(packet.part.messageID);
     }),
     scope.on('message.part.delta', (packet: MessagePartDeltaPacket) => {
       const accumulated = acc.getMessage(packet.messageID);
@@ -365,9 +374,11 @@ function bindScope(scope: SessionScope) {
       if (!partRef) return;
       partRef.value = accPart;
       triggerRef(partRef);
+      notifyHistoryEntry(packet.messageID);
     }),
     scope.on('message.updated', (packet: MessageUpdatedPacket) => {
       updateMessage(packet.info);
+      notifyHistoryEntry(packet.info.id);
     }),
   );
 }
@@ -575,6 +586,7 @@ function loadHistory(entries: unknown[]) {
       }
     }
     if (addedPart) triggerMessageRef(messageRef);
+    notifyHistoryEntry(info.id);
   }
   if (collectionChanged) triggerCollection();
 }
@@ -672,6 +684,10 @@ function clearSessionCache() {
 
 export function useMessages() {
   return {
+    onHistoryEntryChanged(listener: (entry: { info: MessageInfo; parts: MessagePart[] }) => void) {
+      historyListeners.add(listener);
+      return () => historyListeners.delete(listener);
+    },
     messages: readonly(messages),
     roots,
     streaming,
