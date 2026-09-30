@@ -9,11 +9,13 @@ export interface LocaleMessages {
       codexTitle: string;
       acpTitle: string;
       kimiWebTitle: string;
+      dshTitle: string;
       backendLabel: string;
       openCodeBackend: string;
       codexBackend: string;
       acpBackend: string;
       kimiWebBackend: string;
+      dshBackend: string;
       username: string;
       password: string;
       url: string;
@@ -27,6 +29,16 @@ export interface LocaleMessages {
       kimiWebBridgeUrl: string;
       kimiWebBridgeToken: string;
       kimiWebBridgeHint: string;
+      dshBridgeUrl: string;
+      dshBridgeToken: string;
+      dshBridgeHint: string;
+      dshErrors: {
+        bridgeUrlRequired: string;
+        missingCredential: string;
+        nativeServicesDisabled: string;
+        launchTokenMissing: string;
+        versionMismatch: string;
+      };
       authRequired: string;
       connect: string;
       retry: string;

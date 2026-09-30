@@ -10,11 +10,13 @@ const messages: LocaleMessages = {
       codexTitle: 'vis_bridge 経由で Codex に接続',
       acpTitle: 'vis_bridge 経由で ACP エージェントに接続',
       kimiWebTitle: 'vis_bridge 経由で Kimi Web に接続',
+      dshTitle: 'vis_bridge 経由で DSH に接続',
       backendLabel: 'バックエンド',
       openCodeBackend: 'OpenCode',
       codexBackend: 'Codex',
       acpBackend: 'ACP',
       kimiWebBackend: 'Kimi Web',
+      dshBackend: 'DSH',
       username: 'ユーザー名',
       password: 'パスワード',
       url: DEFAULT_OPENCODE_URL,
@@ -31,6 +33,22 @@ const messages: LocaleMessages = {
       kimiWebBridgeToken: 'Bridge token（任意）',
       kimiWebBridgeHint:
         'vis_bridge は、Vis/Electron とローカルの Kimi Web サーバーをリモート配置でもつなぐ必須の境界です。Kimi トークンは bridge 側で読み取られ、ブラウザには渡りません。',
+      dshBridgeUrl: 'ws://host:23004/dsh/ws',
+      dshBridgeToken: 'Bridge token（任意）',
+      dshBridgeHint:
+        'vis_bridge は、Vis/Electron とローカルの DSH サーバーをリモート配置でもつなぐ必須の境界です。DSH の資格情報は bridge がローカルプロセスに注入するため、ブラウザには渡りません。',
+      dshErrors: {
+        bridgeUrlRequired:
+          'DSH 用の vis_bridge WebSocket URL を入力してください。例: ws://localhost:23004/dsh/ws',
+        missingCredential:
+          'DSH の資格情報がありません。bridge 側のホストで DEEPSEEK_API_KEY を設定して vis_bridge を再起動し、再接続してください。',
+        nativeServicesDisabled:
+          'bridge 構成で dsh ネイティブサービスが無効です。`vis_bridge config` で nativeServices.dsh を true にし、vis_bridge を再起動してください。',
+        launchTokenMissing:
+          'dsh 起動トークンが利用できません。bridge が独自の dsh web プロセスを起動する必要があります。外部の dsh web プロセスを終了して再接続してください。',
+        versionMismatch:
+          "ローカルの dsh バージョンがサポート対象のプロトコル世代と一致しません。dsh{'@'}0.2.0-rc.2 をインストールして再接続してください。",
+      },
       authRequired: 'サーバーで認証が必要です',
       connect: '接続',
       retry: '再試行',

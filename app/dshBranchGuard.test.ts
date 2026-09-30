@@ -215,6 +215,7 @@ const BRANCHES: BranchEntry[] = [
   { file: "components/historyTestBuilders.ts", fp: "modelID: 'codex',", n: 1, kind: 'literal', cls: 'data-only', disp: 'not-applicable', sym: "test fixture builder" },
   { file: "components/historyTestBuilders.ts", fp: "providerID: 'codex',", n: 1, kind: 'literal', cls: 'data-only', disp: 'not-applicable', sym: "test fixture builder" },
   { file: "components/OutputPanel.vue", fp: "backendKind==='kimi-web'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'todo-35', owner: 35, sym: "checkpoint action readiness" },
+  { file: "components/DshLoginForm.vue", fp: "credentials.backendKind.value==='dsh'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 32, sym: "DSH login surface (bridge URL + bridge token only)" },
   { file: "components/ProjectPicker.vue", fp: "getActiveBackendKind()==='codex'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'todo-35', owner: 35, sym: "directory browse + .git detection" },
   { file: "components/ProjectPicker.vue", fp: "getActiveBackendKind()==='kimi-web'", n: 2, kind: 'cmp', cls: 'ui-required', disp: 'todo-35', owner: 35, sym: "directory browse + .git detection" },
   { file: "components/ProviderManagerModal.vue", fp: "active.kind==='codex'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'todo-34', owner: 34, sym: "provider management (dsh unsupported)" },

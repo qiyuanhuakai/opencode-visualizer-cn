@@ -10,11 +10,13 @@ const messages: LocaleMessages = {
       codexTitle: '透過 vis_bridge 連線 Codex',
       acpTitle: '透過 vis_bridge 連線 ACP Agent',
       kimiWebTitle: '透過 vis_bridge 連線 Kimi Web',
+      dshTitle: '透過 vis_bridge 連線 DSH',
       backendLabel: '後端',
       openCodeBackend: 'OpenCode',
       codexBackend: 'Codex',
       acpBackend: 'ACP',
       kimiWebBackend: 'Kimi Web',
+      dshBackend: 'DSH',
       username: '使用者名稱',
       password: '密碼',
       url: DEFAULT_OPENCODE_URL,
@@ -29,6 +31,22 @@ const messages: LocaleMessages = {
       kimiWebBridgeToken: 'Bridge token（選填）',
       kimiWebBridgeHint:
         'vis_bridge 始終是 Vis/Electron 與本機 Kimi Web 服務之間支援遠端部署的必要邊界；Kimi 令牌由 bridge 所在主機讀取，不會進入瀏覽器。',
+      dshBridgeUrl: 'ws://host:23004/dsh/ws',
+      dshBridgeToken: 'Bridge token（選填）',
+      dshBridgeHint:
+        'vis_bridge 始終是 Vis/Electron 與本機 DSH 服務之間支援遠端部署的必要邊界；DSH 憑證由 bridge 注入本機程序，不會進入瀏覽器。',
+      dshErrors: {
+        bridgeUrlRequired:
+          '請輸入 DSH 的 vis_bridge WebSocket 位址，例如 ws://localhost:23004/dsh/ws。',
+        missingCredential:
+          '缺少 DSH 憑證。請在 bridge 所在主機設定 DEEPSEEK_API_KEY 並重新啟動 vis_bridge，然後重新連線。',
+        nativeServicesDisabled:
+          'bridge 組態中的 dsh 原生服務已停用。請用 `vis_bridge config` 將 nativeServices.dsh 設為 true，然後重新啟動 vis_bridge。',
+        launchTokenMissing:
+          'dsh 啟動權杖不可用。bridge 必須自行啟動 dsh web 程序；請關閉外部 dsh web 程序後重新連線。',
+        versionMismatch:
+          "本機 dsh 版本與支援的通訊協定世代不符。請安裝 dsh{'@'}0.2.0-rc.2 後重新連線。",
+      },
       authRequired: '伺服器需要身分驗證',
       connect: '連線',
       retry: '重試',
@@ -365,7 +383,7 @@ const messages: LocaleMessages = {
       outputTokens: '輸出 Token',
       reasoningTokens: '推理 Token',
       cacheTokens: '快取 Token（讀/寫）',
-      contextOnlyNote: "上下文來自工作階段狀態；累計 Token 用量暫不可用",
+      contextOnlyNote: '上下文來自工作階段狀態；累計 Token 用量暫不可用',
       userMessages: '使用者訊息',
       assistantMessages: '助手訊息',
       totalCost: '總成本',
@@ -674,7 +692,19 @@ const messages: LocaleMessages = {
     },
   },
   kimiWeb: {
-    commands: { help: '顯示支援的 Kimi 命令', compact: '壓縮工作階段上下文', copyall: '複製完整對話為 Markdown', new: '建立對話', clear: '清除上下文並建立對話', btw: '在隔離的旁支對話中提問', fork: '複製為新對話', undo: '復原上一輪', status: '開啟狀態監控', subagent: '管理子智慧體', applied: '命令已執行。' },
+    commands: {
+      help: '顯示支援的 Kimi 命令',
+      compact: '壓縮工作階段上下文',
+      copyall: '複製完整對話為 Markdown',
+      new: '建立對話',
+      clear: '清除上下文並建立對話',
+      btw: '在隔離的旁支對話中提問',
+      fork: '複製為新對話',
+      undo: '復原上一輪',
+      status: '開啟狀態監控',
+      subagent: '管理子智慧體',
+      applied: '命令已執行。',
+    },
     composer: {
       manual: 'manual',
       auto: 'auto',

@@ -10,11 +10,13 @@ const messages: LocaleMessages = {
       codexTitle: 'Connect to Codex via vis_bridge',
       acpTitle: 'Connect to an ACP agent via vis_bridge',
       kimiWebTitle: 'Connect to Kimi Web via vis_bridge',
+      dshTitle: 'Connect to DSH via vis_bridge',
       backendLabel: 'Backend',
       openCodeBackend: 'OpenCode',
       codexBackend: 'Codex',
       acpBackend: 'ACP',
       kimiWebBackend: 'Kimi Web',
+      dshBackend: 'DSH',
       username: 'Username',
       password: 'Password',
       url: DEFAULT_OPENCODE_URL,
@@ -30,6 +32,18 @@ const messages: LocaleMessages = {
       kimiWebBridgeToken: 'Bridge token (optional)',
       kimiWebBridgeHint:
         'vis_bridge remains the required remote-safe boundary between Vis/Electron and the local Kimi Web server. The Kimi token is read on the bridge host and never reaches the browser.',
+      dshBridgeUrl: 'ws://host:23004/dsh/ws',
+      dshBridgeToken: 'Bridge token (optional)',
+      dshBridgeHint:
+        'vis_bridge remains the required remote-safe boundary between Vis/Electron and the local DSH server. DSH credentials are injected into the local process by the bridge and never reach the browser.',
+      dshErrors: {
+        bridgeUrlRequired: 'Enter the vis_bridge WebSocket URL for DSH, for example ws://localhost:23004/dsh/ws.',
+        missingCredential: 'Missing DSH credential. Set DEEPSEEK_API_KEY on the bridge host and restart vis_bridge, then reconnect.',
+        nativeServicesDisabled: 'The dsh native service is disabled in the bridge config. Set nativeServices.dsh to true with `vis_bridge config`, then restart vis_bridge.',
+        launchTokenMissing: 'The dsh launch token is unavailable. The bridge must spawn its own dsh web instance; close any external dsh web process and reconnect.',
+        versionMismatch:
+          "The local dsh version does not match the supported protocol generation. Install dsh{'@'}0.2.0-rc.2 and reconnect.",
+      },
       authRequired: 'The server requires authentication',
       connect: 'Connect',
       retry: 'Retry',

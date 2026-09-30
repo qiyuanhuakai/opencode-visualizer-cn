@@ -10,11 +10,13 @@ const messages: LocaleMessages = {
       codexTitle: 'Konekti al Codex per vis_bridge',
       acpTitle: 'Konekti al ACP-agento per vis_bridge',
       kimiWebTitle: 'Konekti al Kimi Web per vis_bridge',
+      dshTitle: 'Konekti al DSH per vis_bridge',
       backendLabel: 'Backend',
       openCodeBackend: 'OpenCode',
       codexBackend: 'Codex',
       acpBackend: 'ACP',
       kimiWebBackend: 'Kimi Web',
+      dshBackend: 'DSH',
       username: 'Uzantnomo',
       password: 'Pasvorto',
       url: DEFAULT_OPENCODE_URL,
@@ -30,6 +32,22 @@ const messages: LocaleMessages = {
       kimiWebBridgeToken: 'Bridge token (nedeviga)',
       kimiWebBridgeHint:
         'vis_bridge restas la bezonata fora-sekura limo inter Vis/Electron kaj la loka Kimi Web-servilo; la Kimi-ĵetono estas legata ĉe la bridge-gastigo kaj neniam atingas la retumilon.',
+      dshBridgeUrl: 'ws://host:23004/dsh/ws',
+      dshBridgeToken: 'Bridge token (nedeviga)',
+      dshBridgeHint:
+        'vis_bridge restas la bezonata fora-sekura limo inter Vis/Electron kaj la loka DSH-servilo; la DSH-akreditaĵoj estas injektitaj de la bridge en la loka proceso kaj neniam atingas la retumilon.',
+      dshErrors: {
+        bridgeUrlRequired:
+          'Enigu la vis_bridge-retan WebSocket-URL por DSH, ekzemple ws://localhost:23004/dsh/ws.',
+        missingCredential:
+          'Mankas DSH-akreditaĵo. Agordu DEEPSEEK_API_KEY ĉe la bridge-gastigo kaj rekomencu vis_bridge, poste rekonektu.',
+        nativeServicesDisabled:
+          'La denaska servo dsh estas malŝaltita en la bridge-agordo. Elektu `vis_bridge config`, agordu nativeServices.dsh al true kaj rekomencu vis_bridge.',
+        launchTokenMissing:
+          'La dsh-lanĉĵetono ne disponeblas. La bridge mem devas ekigi sian propran dsh web-proceson; fermi iun ajn eksteran dsh web-proceson kaj rekonektu.',
+        versionMismatch:
+          "La loka versio de dsh ne kongruas kun la subtenata protokola generacio. Instalu dsh{'@'}0.2.0-rc.2 kaj rekonektu.",
+      },
       authRequired: 'La servilo postulas aŭtentigon',
       connect: 'Konekti',
       retry: 'Reprovi',
