@@ -28,6 +28,19 @@ function resolveAuthorization(authorization) {
   return typeof authorization === 'function' ? authorization() : authorization;
 }
 
+// Legacy callers pass a plain value or provider for the Authorization header;
+// the object form separates `authorization` and `cookie`, each a static value
+// or a provider invoked once per dial.
+function resolveUpstreamCredentials(authorization) {
+  if (authorization !== null && typeof authorization === 'object') {
+    return {
+      authorization: resolveAuthorization(authorization.authorization),
+      cookie: resolveAuthorization(authorization.cookie),
+    };
+  }
+  return { authorization: resolveAuthorization(authorization) };
+}
+
 function buildUpstreamHandshake(targetUrl, authorization) {
   const path = `${targetUrl.pathname || '/'}${targetUrl.search || ''}`;
   const host = targetUrl.port ? `${targetUrl.hostname}:${targetUrl.port}` : targetUrl.hostname;
@@ -40,14 +53,17 @@ function buildUpstreamHandshake(targetUrl, authorization) {
     `Sec-WebSocket-Key: ${key}`,
     'Sec-WebSocket-Version: 13',
   ];
-  const resolvedAuthorization = resolveAuthorization(authorization);
-  if (resolvedAuthorization) headers.push(`Authorization: ${resolvedAuthorization}`);
+  const credentials = resolveUpstreamCredentials(authorization);
+  if (credentials.authorization) headers.push(`Authorization: ${credentials.authorization}`);
+  if (credentials.cookie) headers.push(`Cookie: ${credentials.cookie}`);
   headers.push('', '');
   return { text: headers.join('\r\n'), key };
 }
 
-// authorization: static header value, or a provider invoked once per dial
-// (kimi web rotates its bearer token without a bridge restart). A provider
+// authorization: `Authorization: <value>` as a static value or a provider
+// invoked once per dial (kimi web rotates its bearer token without a bridge
+// restart), or `{ authorization?, cookie? }` where each entry is a static value
+// or a provider (dsh exchanges a launch token for a session cookie). A provider
 // that throws rejects the promise before any upstream socket is opened.
 export function connectUpstreamWebSocket(target, authorization, options = {}) {
   const targetUrl = new URL(target);
