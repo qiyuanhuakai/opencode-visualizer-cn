@@ -5,7 +5,7 @@ import {
   type KimiWebPermissionMode,
   type KimiWebSessionModeChange,
 } from '../backends/kimiWeb/sessionModes';
-import { KimiWebError } from '../utils/kimiWeb';
+import { KimiWebError, type KimiWebSessionStatus } from '../utils/kimiWeb';
 import type { KimiWebFrameContext, KimiWebSessionModePatch } from './kimiWebMessageBridgeTypes';
 
 export type KimiWebModeConfidence = 'unknown' | 'accepted-locally' | 'confirmed' | 'stale';
@@ -25,9 +25,21 @@ export type KimiWebSessionModeState = {
 export type KimiWebSessionModesOptions = {
   readonly writeMode: (sessionId: string, change: KimiWebSessionModeChange) => Promise<void>;
   readonly loadMeta: () => Promise<unknown>;
+  readonly getScope?: () => string;
+  readonly readModes?: (sessionId: string) => KimiWebModePreferences | undefined;
+  readonly writeModePreference?: (sessionId: string, change: KimiWebSessionModeChange) => void;
 };
 
 type ModeField = KimiWebSessionModeChange['field'];
+export type KimiWebModePreferences = Pick<KimiWebSessionModeState, ModeField>;
+export type KimiWebStatusRequest = {
+  readonly sessionId: string;
+  readonly scope: string | undefined;
+  readonly scopeVersion: number;
+  readonly generation: number;
+  readonly fieldVersions: Readonly<Record<ModeField, number>>;
+  readonly pendingField?: ModeField;
+};
 
 type MutableSessionState = {
   permissionMode?: KimiWebPermissionMode;
@@ -47,9 +59,7 @@ function emptyFieldVersions(): Record<ModeField, number> {
 }
 
 function isBusinessRejection(error: unknown): boolean {
-  return (
-    error instanceof KimiWebError || error instanceof KimiWebTowerExperimentUnavailableError
-  );
+  return error instanceof KimiWebError || error instanceof KimiWebTowerExperimentUnavailableError;
 }
 
 function errorMessage(error: unknown): string {
@@ -140,12 +150,30 @@ export function useKimiWebSessionModes(options: KimiWebSessionModesOptions) {
   let disposed = false;
   let towerMetaLoaded = false;
   let towerEnabled = false;
+  let scope = options.getScope?.();
+  let scopeVersion = 0;
+  let generationCounter = 0;
+
+  function syncScope() {
+    const nextScope = options.getScope?.();
+    if (scope === nextScope) return;
+    scope = nextScope;
+    scopeVersion += 1;
+    sessions.clear();
+    inFlight.clear();
+    generations.clear();
+    towerMetaLoaded = false;
+    towerEnabled = false;
+  }
 
   function stateFor(sessionId: string): MutableSessionState {
+    syncScope();
     let state = sessions.get(sessionId);
     if (!state) {
+      const saved = options.readModes?.(sessionId);
       state = {
-        confidence: 'unknown',
+        ...saved,
+        confidence: saved ? 'stale' : 'unknown',
         supersededEpochs: new Set(),
         fieldVersions: emptyFieldVersions(),
       };
@@ -155,20 +183,25 @@ export function useKimiWebSessionModes(options: KimiWebSessionModesOptions) {
   }
 
   function bumpGeneration(sessionId: string): number {
-    const generation = (generations.get(sessionId) ?? 0) + 1;
+    const generation = ++generationCounter;
     generations.set(sessionId, generation);
     return generation;
   }
 
   function isCurrent(sessionId: string, generation: number): boolean {
+    syncScope();
     return !disposed && generations.get(sessionId) === generation;
   }
 
   async function allowTowerEnable(): Promise<boolean> {
     if (!towerMetaLoaded) {
       towerMetaLoaded = true;
+      const requestedScopeVersion = scopeVersion;
       try {
-        towerEnabled = isTowerExperimentEnabled(await options.loadMeta());
+        const metadata = await options.loadMeta();
+        syncScope();
+        if (scopeVersion !== requestedScopeVersion) return false;
+        towerEnabled = isTowerExperimentEnabled(metadata);
       } catch {
         towerEnabled = false;
       }
@@ -207,13 +240,56 @@ export function useKimiWebSessionModes(options: KimiWebSessionModesOptions) {
 
   return {
     sessionState(sessionId: string): KimiWebSessionModeState {
-      return publicState(sessions.get(sessionId));
+      return publicState(disposed ? undefined : stateFor(sessionId));
+    },
+    captureStatusRequest(sessionId: string): KimiWebStatusRequest {
+      const state = stateFor(sessionId);
+      return {
+        sessionId,
+        scope,
+        scopeVersion,
+        generation: generations.get(sessionId) ?? 0,
+        fieldVersions: { ...state.fieldVersions },
+        pendingField: state.pendingField,
+      };
+    },
+    applyStatus(sessionId: string, status: KimiWebSessionStatus, request?: KimiWebStatusRequest) {
+      if (disposed) return;
+      syncScope();
+      if (
+        request &&
+        (request.sessionId !== sessionId ||
+          request.scope !== scope ||
+          request.scopeVersion !== scopeVersion ||
+          request.generation !== (generations.get(sessionId) ?? 0))
+      )
+        return;
+      const state = stateFor(sessionId);
+      const canApply = (field: ModeField) =>
+        state.pendingField !== field &&
+        (!request ||
+          (request.pendingField !== field &&
+            request.fieldVersions[field] === state.fieldVersions[field]));
+      const patch: KimiWebSessionModePatch = {
+        permission: canApply('permissionMode') ? status.permission : undefined,
+        planMode: canApply('planMode') ? status.plan_mode : undefined,
+        swarmMode: canApply('swarmMode') ? status.swarm_mode : undefined,
+        towerMode: canApply('towerMode') ? status.tower_mode : undefined,
+      };
+      if (!hasModePatch(patch)) return;
+      applyPatch(state, patch);
+      if (!state.pendingField) {
+        state.confidence = 'confirmed';
+        state.error = undefined;
+      }
     },
     get towerEnabled() {
+      syncScope();
       return towerEnabled;
     },
     async changeMode(sessionId: string, change: KimiWebSessionModeChange): Promise<void> {
       if (disposed) throw new Error('Session mode controller is disposed');
+      syncScope();
       if (inFlight.has(sessionId)) throw new Error('Session mode change already in flight');
       if (change.field === 'towerMode' && change.value && !(await allowTowerEnable())) {
         throw new Error('Tower mode is not enabled');
@@ -234,6 +310,9 @@ export function useKimiWebSessionModes(options: KimiWebSessionModesOptions) {
         await options.writeMode(sessionId, change);
         if (!isCurrent(sessionId, generation)) return;
         state.pendingField = undefined;
+        if (state.fieldVersions[change.field] === fieldVersion) {
+          options.writeModePreference?.(sessionId, change);
+        }
       } catch (error) {
         if (isCurrent(sessionId, generation)) {
           state.pendingField = undefined;
