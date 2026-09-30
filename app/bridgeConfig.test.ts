@@ -27,6 +27,7 @@ describe('bridgeConfig', () => {
       opencode: true,
       codex: true,
       'kimi-web': true,
+      dsh: false,
     });
     expect(createDefaultBridgeConfig().acpAgents).toEqual([
       {
@@ -78,10 +79,11 @@ describe('bridgeConfig', () => {
       opencode: true,
       codex: true,
       'kimi-web': true,
+      dsh: false,
     });
     await store.save({
       version: 1,
-      nativeServices: { opencode: false, codex: true, 'kimi-web': false },
+      nativeServices: { opencode: false, codex: true, 'kimi-web': false, dsh: false },
       acpAgents: [],
     });
     await store.upsertAgent({
@@ -91,7 +93,36 @@ describe('bridgeConfig', () => {
       opencode: false,
       codex: true,
       'kimi-web': false,
+      dsh: false,
     });
+  });
+
+  it('keeps the dsh native service disabled for legacy configs and only enabled on explicit opt-in', () => {
+    expect(parseBridgeConfig({ version: 1, acpAgents: [] }).nativeServices).toEqual({
+      opencode: true,
+      codex: true,
+      'kimi-web': true,
+      dsh: false,
+    });
+    expect(
+      parseBridgeConfig({
+        version: 1,
+        nativeServices: { opencode: false, codex: true, 'kimi-web': false, dsh: true },
+        acpAgents: [],
+      }).nativeServices,
+    ).toEqual({
+      opencode: false,
+      codex: true,
+      'kimi-web': false,
+      dsh: true,
+    });
+    expect(() =>
+      parseBridgeConfig({
+        version: 1,
+        nativeServices: { opencode: true, codex: true, 'kimi-web': true, dsh: 'false' },
+        acpAgents: [],
+      }),
+    ).toThrow('nativeServices.dsh must be a boolean');
   });
 
   it('rejects non-boolean native service settings', () => {

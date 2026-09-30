@@ -20,6 +20,8 @@ import {
   readJsonBody,
 } from './bridgeHttpRoutes.js';
 import { proxyWebSocket } from './codexWebSocketProxy.js';
+import { proxyDshHttp } from './dshHttpProxy.js';
+import { handleDshUpgrade } from './dshWsProxy.js';
 import { proxyKimiWebHttp } from './kimiWebHttpProxy.js';
 import { createKimiWebTokenProvider } from './kimiWebToken.js';
 import { handleKimiWebUpgrade } from './kimiWebWsProxy.js';
@@ -56,6 +58,38 @@ export function createVisBridgeServer(options) {
     handshakeTimeoutMs: kimiWebOptions.handshakeTimeoutMs,
   };
   const ptyManager = createPtyManager(bridgeOptions);
+  // dsh (DeepSeek Harness web) forwards through the bridge's own `/dsh` prefix
+  // (distinct from the supervisor's `/api/v1/*`). The upstream session cookie
+  // is resolved lazily per request/dial: its launch token only exists on the
+  // stdout of the dsh child the supervisor spawned, so a disabled dsh service
+  // (the default) never has credentials and every dial fails closed as a typed
+  // 502 instead of reaching dsh unauthenticated.
+  const dshServiceOptions = options.dsh ?? {};
+  const getDshUpstreamCookie =
+    dshServiceOptions.getUpstreamCookie ??
+    (() => {
+      const authProvider = bridgeOptions.runtime?.getDshAuthProvider?.();
+      if (typeof authProvider?.getCookie !== 'function') {
+        return Promise.reject(
+          new Error('Dsh upstream auth cookie is unavailable: no dsh native service is supervised.'),
+        );
+      }
+      return authProvider.getCookie('127.0.0.1:3080');
+    });
+  const dshHttpOptions = {
+    getUpstreamCookie: getDshUpstreamCookie,
+    upstreamOrigin: dshServiceOptions.upstreamOrigin,
+    upstreamTimeoutMs: dshServiceOptions.upstreamTimeoutMs,
+  };
+  // Never reuse the Codex bridgeOptions target for dsh; only the bridge-level
+  // host/token are shared so requiresPtyToken/isAuthorized semantics match.
+  const dshUpgradeOptions = {
+    host: bridgeOptions.host,
+    bridgeToken: bridgeOptions.bridgeToken,
+    target: dshServiceOptions.target,
+    getUpstreamCookie: getDshUpstreamCookie,
+    handshakeTimeoutMs: dshServiceOptions.handshakeTimeoutMs,
+  };
   const fsManager = createWorkspaceFsManager();
   const commandRunner = createWorkspaceCommandRunner();
   const server = createServer((request, response) => {
@@ -143,6 +177,16 @@ export function createVisBridgeServer(options) {
       return;
     }
 
+    if (requestUrl.pathname === '/dsh' || requestUrl.pathname.startsWith('/dsh/')) {
+      if (requiresPtyToken(bridgeOptions)) {
+        rejectUnprotectedBridgeControlHttp(response);
+        return;
+      }
+      if (!authorizeHttpRequest(request, response, bridgeOptions.bridgeToken)) return;
+      proxyDshHttp(request, response, dshHttpOptions);
+      return;
+    }
+
     if (requestUrl.pathname.startsWith('/api/v1/')) {
       if (requiresPtyToken(bridgeOptions)) {
         rejectUnprotectedBridgeControlHttp(response);
@@ -184,6 +228,7 @@ export function createVisBridgeServer(options) {
     if (handlePtyUpgrade(request, socket, head, bridgeOptions, ptyManager)) return;
     if (handleAcpUpgrade(request, socket, head, bridgeOptions)) return;
     if (handleKimiWebUpgrade(request, socket, head, kimiWebUpgradeOptions)) return;
+    if (handleDshUpgrade(request, socket, head, dshUpgradeOptions)) return;
     if (requiresPtyToken(bridgeOptions)) {
       rejectUnprotectedBridgeControlUpgrade(socket);
       return;
