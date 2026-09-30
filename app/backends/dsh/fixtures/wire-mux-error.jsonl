@@ -1,0 +1,1 @@
+{"type":"error","streamId":"pg1","error":{"code":"gateway/input-invalid","message":"typert gateway: session/page: wire field \"request\" failed boundary validation","details":{"endpoint":"session/page","field":"request"}}}
