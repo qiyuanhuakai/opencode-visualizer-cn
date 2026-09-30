@@ -147,6 +147,9 @@ test('native IPC acknowledges committed KV and broadcasts only history identitie
   await handlers.get('session-database-upsertHistory')(event, { threadId: 'thread', entries: [entry('m', 'p')] });
   assert.deepEqual(invalidations, [['thread', 7]]);
   assert.equal(broadcasts.length, 1);
+  const namespace = `backend-history-v1:${'d'.repeat(32)}`;
+  await handlers.get('session-database-upsertHistory')(event, { threadId: 'thread', namespace, entries: [entry('scoped', 'part')] });
+  assert.deepEqual(invalidations[1], [JSON.stringify([namespace, 'thread']), 7]);
   await assert.rejects(handlers.get('session-database-readHistory')({ sender: { id: 8 } }, { threadId: 'thread' }), /untrusted/);
 });
 
@@ -187,4 +190,45 @@ test('stores growing KV in SQLite and small settings separately without rewritin
   await assert.rejects(store.migrate({ 'opencode.drafts.question.v1': 'partial', [historyKey]: '{malformed' }));
   await store.prepare();
   assert.equal(store.getItem('opencode.drafts.question.v1'), null);
+});
+
+test('isolates backend namespaces from Codex and each other across a real worker restart', async (t) => {
+  const { open } = await fixture(t);
+  const store = open();
+  const first = `backend-history-v1:${'a'.repeat(32)}`;
+  const second = `backend-history-v1:${'b'.repeat(32)}`;
+  await store.prepare();
+  await store.upsertHistory({ threadId: 'thread', entries: [entry('codex', 'legacy')] });
+  await store.upsertHistory({ threadId: 'thread', namespace: first, entries: [entry('first', 'one')] });
+  await store.upsertHistory({ threadId: 'thread', namespace: second, entries: [entry('second', 'two')] });
+  await store.flush();
+  await store.close();
+  const restarted = open();
+  await restarted.prepare();
+  assert.deepEqual((await restarted.readHistory({ threadId: 'thread' })).entries, [entry('codex', 'legacy')]);
+  assert.deepEqual((await restarted.readHistory({ threadId: 'thread', namespace: first })).entries, [entry('first', 'one')]);
+  assert.deepEqual((await restarted.readHistory({ threadId: 'thread', namespace: second })).entries, [entry('second', 'two')]);
+  await restarted.clearHistory({ threadId: 'thread', namespace: first });
+  assert.deepEqual((await restarted.readHistory({ threadId: 'thread', namespace: first })).entries, []);
+  assert.deepEqual((await restarted.readHistory({ threadId: 'thread', namespace: second })).entries, [entry('second', 'two')]);
+  await assert.rejects(restarted.readHistory({ threadId: 'thread', namespace: 'arbitrary-secret' }), /Invalid history namespace/);
+});
+
+test('keeps completed output and longer text when another renderer submits stale backend parts', async (t) => {
+  const { open } = await fixture(t);
+  const store = open();
+  await store.prepare();
+  const namespace = `backend-history-v1:${'c'.repeat(32)}`;
+  const text = { id: 'text', messageID: 'm', sessionID: 'thread', type: 'text', text: 'complete result' };
+  const completed = entry('m', 'tool');
+  completed.info.time.completed = 2;
+  completed.parts[0].state.output = 'complete tool output';
+  await store.upsertHistory({ threadId: 'thread', namespace, entries: [{ ...completed, parts: [...completed.parts, text] }] });
+  const stale = entry('m', 'tool');
+  stale.parts[0].state.output = '';
+  await store.upsertHistory({ threadId: 'thread', namespace, entries: [{ ...stale, parts: [...stale.parts, { ...text, text: 'complete' }] }] });
+  const page = await store.readHistory({ threadId: 'thread', namespace });
+  assert.equal(page.entries[0].info.time.completed, 2);
+  assert.equal(page.entries[0].parts[0].state.output, 'complete tool output');
+  assert.equal(page.entries[0].parts[1].text, 'complete result');
 });

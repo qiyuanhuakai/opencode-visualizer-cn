@@ -745,6 +745,7 @@ import {
 import { useGlobalEvents } from './composables/useGlobalEvents';
 import { useLiveDescendantHistoryHydration } from './composables/useLiveDescendantHistoryHydration';
 import { useMessages } from './composables/useMessages';
+import { createOpenCodeSubagentHistory } from './composables/openCodeSubagentHistory';
 import { useMessageCacheAuthInvalidation } from './composables/useMessageCacheAuthInvalidation';
 import { useProviderModelSync } from './composables/useProviderModelSync';
 import { usePtyWindowOwner } from './composables/usePtyWindowOwner';
@@ -7766,6 +7767,24 @@ const sessionScope = ge.session(selectedSessionId, sessionParentRecord);
 const msg = useMessages();
 const messageCacheAuthGeneration = ref(0);
 msg.bindScope(sessionScope);
+const openCodeSubagentHistoryScope = () => JSON.stringify([
+  credentials.url.value, credentials.username.value, activeDirectory.value,
+]);
+const openCodeSubagentHistory = createOpenCodeSubagentHistory({
+  getScope: openCodeSubagentHistoryScope,
+  isActive: () => activeBackendKind.value === 'opencode',
+  getRootSessionId: () => selectedSessionId.value,
+  getMemoryEntries: (sessionId) => Array.from(msg.messages.value.values()).flatMap((entry) => {
+    const info = entry.value.info && msg.get(entry.value.info.id);
+    return info?.sessionID === sessionId ? [{ info, parts: msg.getParts(info.id) }] : [];
+  }),
+});
+const stopRecordingOpenCodeHistory = msg.onHistoryEntryChanged(openCodeSubagentHistory.record);
+const flushOpenCodeSubagentHistory = () => {
+  void openCodeSubagentHistory.flush().catch((error: unknown) =>
+    console.error('[OpenCode] Unable to flush child history', error));
+};
+window.addEventListener('pagehide', flushOpenCodeSubagentHistory);
 reasoning.bindScope(sessionScope);
 subagentWindows.bindScope(sessionScope);
 
@@ -9955,12 +9974,10 @@ function handleShowSubagentHistory(payload: { sessionId: string; label: string }
   const y = Math.max(0, Math.round((height - winH) / 2));
   const historyBackend = backend();
   const historyDirectory = activeDirectory.value.trim();
-  const readOpenCodeSubagentHistory = async (childSessionId: string) => {
+  const readOpenCodeSubagentHistory = openCodeSubagentHistory.loader(openCodeSubagentHistoryScope(), async (childSessionId) => {
     const listMessages = requireBackendMethod(historyBackend.listSessionMessages, 'session history');
-    const entries = await listMessages(childSessionId, { directory: historyDirectory || undefined });
-    if (!Array.isArray(entries)) throw new Error('Invalid OpenCode session history response.');
-    return entries;
-  };
+    return listMessages(childSessionId, { directory: historyDirectory || undefined });
+  });
   fw.open(key, {
     component: SubagentHistoryContent,
     props: {
@@ -10787,6 +10804,9 @@ onMounted(() => {
   );
 });
 onBeforeUnmount(() => {
+  stopRecordingOpenCodeHistory();
+  window.removeEventListener('pagehide', flushOpenCodeSubagentHistory);
+  flushOpenCodeSubagentHistory();
   desktopNotifications?.dispose();
   kimiWebSessionModes.dispose();
   composerDraftPersistence.flush();

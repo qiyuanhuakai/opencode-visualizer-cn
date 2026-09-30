@@ -6,7 +6,7 @@ export function registerSessionDatabaseIpc({ ipcMain, assertTrustedRenderer, get
         throw new TypeError('Invalid session database request');
       }
       const result = await getStorage()[method](payload);
-      if (method === 'upsertHistory' || method === 'clearHistory') broadcastHistoryChange(payload.threadId, event.sender.id);
+      if (method === 'upsertHistory' || method === 'clearHistory') broadcastHistoryChange(payload.namespace && payload.namespace !== 'legacy-thread-id' ? JSON.stringify([payload.namespace, payload.threadId]) : payload.threadId, event.sender.id);
       return result;
     });
   }

@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { defineComponent, h } from 'vue';
 import { mountHistoryApp } from './test/appHarness';
 import { makeAssistantMessage, makeTextPart, makeToolPart, makeUserMessage } from './components/historyTestBuilders';
+import { useMessages } from './composables/useMessages';
 
 vi.mock('./components/MessageViewer.vue', () => ({
   default: defineComponent({ props: ['code'], setup: (props) => () => h('div', props.code) }),
@@ -10,13 +11,13 @@ vi.mock('./components/MessageViewer.vue', () => ({
 const fixtures: Awaited<ReturnType<typeof mountHistoryApp>>[] = [];
 afterEach(() => fixtures.splice(0).forEach((fixture) => fixture.unmount()));
 
-async function openChild(read: () => Promise<unknown>) {
+async function openChild(read: () => Promise<unknown>, childSessionId = 'child') {
   const task = makeToolPart('answer', 'session-a', 'task');
   const fixture = await mountHistoryApp([
     { info: makeUserMessage('session-a', 'question', 1), parts: [] },
     {
       info: makeAssistantMessage('session-a', 'answer', 'question', 2),
-      parts: [{ ...task, state: { ...task.state, status: 'completed', title: 'child', output: '', time: { start: 2, end: 3 }, metadata: { sessionId: 'child' } } }],
+      parts: [{ ...task, state: { ...task.state, status: 'completed', title: 'child', output: '', time: { start: 2, end: 3 }, metadata: { sessionId: childSessionId } } }],
     },
   ]);
   fixtures.push(fixture);
@@ -36,26 +37,37 @@ it('loads OpenCode child history on demand when background hydration has no chil
   const fixture = await openChild(async () => [{
     info: makeAssistantMessage('child', 'child-answer', 'child-question', 4),
     parts: [makeTextPart('child-answer', 'child', 'Recovered child answer')],
-  }]);
+  }], 'child');
   await vi.waitFor(() => expect(fixture.listSessionMessages).toHaveBeenCalledWith('child', { directory: '/repo' }));
   await vi.waitFor(() => expect(document.querySelector('.subagent-history .history-item')).not.toBeNull());
   expect(document.querySelector('.subagent-history')?.textContent).toContain('Recovered child answer');
   expect(fixture.host.querySelectorAll('.thread-block')).toHaveLength(1);
 }, 15000);
 
+it('keeps already observed child history when OpenCode has discarded its transcript', async () => {
+  await openChild(async () => {
+    useMessages().loadHistory([{
+      info: makeAssistantMessage('retained-child-session', 'retained-child', 'retained-question', 5),
+      parts: [makeTextPart('retained-child', 'retained-child-session', 'Previously observed child history')],
+    }]);
+    return [];
+  }, 'retained-child-session');
+  await vi.waitFor(() => expect(document.querySelector('.subagent-history')?.textContent).toContain('Previously observed child history'));
+}, 15000);
+
 it('shows failed OpenCode child reads instead of a misleading empty history', async () => {
-  await openChild(async () => { throw new Error('Child read failed'); });
+  await openChild(async () => { throw new Error('Child read failed'); }, 'failed-child-session');
   await vi.waitFor(() => expect(document.querySelector('.subagent-history [role="alert"]')?.textContent).toContain('Child read failed'));
 }, 15000);
 
 it('distinguishes an empty child transcript from a malformed response', async () => {
-  await openChild(async () => []);
+  await openChild(async () => [], 'empty-child-session');
   await vi.waitFor(() => expect(document.querySelector('.subagent-history .subagent-empty')?.textContent).toContain('No subagent history available yet.'));
   expect(document.querySelector('.subagent-history [role="alert"]')).toBeNull();
   expect(document.querySelector('.subagent-history .history-item')).toBeNull();
 }, 15000);
 
 it('reports malformed OpenCode history responses as an error', async () => {
-  await openChild(async () => ({ error: 'invalid response' }));
+  await openChild(async () => ({ error: 'invalid response' }), 'invalid-child-session');
   await vi.waitFor(() => expect(document.querySelector('.subagent-history [role="alert"]')?.textContent).toContain('Invalid OpenCode session history response.'));
 }, 15000);
