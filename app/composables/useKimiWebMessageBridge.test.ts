@@ -643,6 +643,33 @@ describe('useKimiWebMessageBridge', () => {
     );
   });
 
+  it('keeps appending the in-flight step live tail after a mid-step rebuild instead of dropping it as stale', async () => {
+    const snapshotRequest = deferred<KimiWebSnapshot>();
+    const { source, bridge, parts } = createHarness({ getSnapshot: () => snapshotRequest.promise });
+    await enterLive(source, bridge, 30);
+    source.emitResync();
+
+    // as_of_seq (30) is past the step opener (25) because durable frames landed
+    // mid-step, so the live tail carries seq 25 — smaller than the snapshot seq.
+    // The seeded group must not treat it as a stale earlier utterance.
+    snapshotRequest.resolve(snapshot({
+      as_of_seq: 30,
+      in_flight_turn: {
+        turn_id: 0,
+        assistant_text: 'Snapshot prefix',
+        current_prompt_id: 'prompt-1',
+      },
+    }));
+    await vi.waitFor(() => expect(bridge.syncState(SESSION_ID).kind).toBe('live'));
+
+    source.emitFrame(delta(25, ' + tail', 15));
+
+    expect([...parts.values()].filter((part) => part.type === 'text')).toContainEqual(
+      expect.objectContaining({ text: 'Snapshot prefix + tail' }),
+    );
+    expect(bridge.normalizerStats(SESSION_ID)?.staleDeltaCount).toBe(0);
+  });
+
   it('drops a stale-epoch snapshot and rebuilds from the new epoch', async () => {
     const oldRequest = deferred<KimiWebSnapshot>();
     const newRequest = deferred<KimiWebSnapshot>();

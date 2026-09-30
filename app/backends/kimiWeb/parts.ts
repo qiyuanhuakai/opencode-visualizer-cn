@@ -212,7 +212,11 @@ export function openUtteranceGroup(
     reasoning: newBucket(),
   };
   core.groups.set(key, group);
-  // Turn-level alias: handlers-agent resolves the active group by `${sessionID}|${turnId}`.
+  // Turn-level alias for out-of-scope handlers-agent.ts, which resolves the active
+  // group by `${sessionID}|${turnId}`. It tracks the latest utterance group, so an
+  // agent.status.updated lands context on the current card. Between a step.completed
+  // and the next step.started it points at the just-ended group; that is harmless
+  // because the next group is rebuilt with the latest context attached anyway.
   core.groups.set(`${sessionID}|${turnId}`, group);
   core.currentStep.set(counterKey, key);
   core.lastStepKey.set(counterKey, key);

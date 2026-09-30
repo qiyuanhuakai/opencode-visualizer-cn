@@ -232,6 +232,10 @@ function handleSubagentTerminal(core: KimiWebCore, frame: KimiWebWireFrame, payl
     group.endedAt = time;
     terminalParts(group, true, ops);
     subagentSessionID = group.sessionID;
+    // The spawn linkage has served its purpose (the group above was built with it);
+    // drop it so a later same-id group cannot inherit a stale parent. A resumed
+    // subagent re-spawns and re-records its parent. Suspended keeps it for resume.
+    core.subagentParents.delete(`${sessionId}|${subagentId}`);
   }
   ops.push({
     kind: 'subagent', phase, sessionId, agentId: asString(payload.agentId) || 'main', subagentId,

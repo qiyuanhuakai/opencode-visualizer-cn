@@ -230,7 +230,15 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
   function seedInFlight(snapshot: KimiWebSnapshot) {
     const turn = snapshot.in_flight_turn;
     if (!turn) return;
-    const base = { seq: snapshot.as_of_seq, epoch: snapshot.epoch, session_id: snapshot.session.id };
+    // Deliberately no seq on the synthesized frames: the snapshot exposes the whole
+    // in-flight turn as one string with no per-utterance watermark, so the seed must
+    // not claim a real opener seq. Stamping seq=as_of_seq would set openSeq on the
+    // seeded group AND advance its delta bucket's seq, so the step's live deltas —
+    // which carry their true opener seq, smaller than as_of_seq whenever durable
+    // frames landed between the opener and the snapshot — would be dropped as stale.
+    // With seq undefined both checks are skipped and the live tail keeps flowing
+    // into the seeded group; the next durable turn.step.started opens the next one.
+    const base = { epoch: snapshot.epoch, session_id: snapshot.session.id };
     normalize({
       ...base,
       type: 'turn.started',
