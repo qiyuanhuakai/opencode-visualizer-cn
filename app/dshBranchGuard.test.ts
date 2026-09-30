@@ -300,6 +300,7 @@ const BRANCHES: BranchEntry[] = [
   { file: "composables/useBackendSessionLifecycle.ts", fp: "params.activeBackendKind.value!=='dsh'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 22, sym: "shared-transport event subscription backend fence" },
   { file: "composables/useBackendSessionLifecycle.ts", fp: "params.activeBackendKind.value==='kimi-web'", n: 5, kind: 'cmp', cls: 'ui-required', disp: 'todo-22', owner: 22, sym: "session create/open/abort routing" },
   { file: "composables/useBackendSessionReload.ts", fp: "params.activeBackendKind.value==='codex'", n: 2, kind: 'cmp', cls: 'ui-required', disp: 'todo-26', owner: 26, sym: "history reload branching" },
+  { file: "composables/useBackendSessionReload.ts", fp: "params.activeBackendKind.value==='dsh'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 26, sym: "history reload branching (Todo 26: dsh session/page hydration branch)" },
   { file: "composables/useBackendSessionReload.ts", fp: "params.activeBackendKind.value==='kimi-web'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'todo-26', owner: 26, sym: "history reload branching" },
   { file: "composables/useBackendSessionReload.ts", fp: "previousCacheContext.backend!=='codex'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'todo-26', owner: 26, sym: "history reload branching" },
   { file: "composables/useBackendSessionStatus.ts", fp: "params.activeBackendKind.value==='codex'", n: 1, kind: 'cmp', cls: 'capability-optional', disp: 'todo-22', owner: 22, sym: "turn status semantics" },
