@@ -16,13 +16,18 @@ function createHarness() {
   const urls: string[] = [];
   const sent: Array<string | Uint8Array> = [];
   const listeners = new Map<string, (event: unknown) => void>();
+  // The double's readyState is mutable through a closure variable: the typed
+  // seam declares it readonly, so the cast cannot carry the write.
+  let readyState = DSH_TERMINAL_SOCKET_OPEN;
   const socket = {
-    readyState: DSH_TERMINAL_SOCKET_OPEN,
+    get readyState() {
+      return readyState;
+    },
     send: (data: string | Uint8Array) => {
       sent.push(data);
     },
     close: () => {
-      socket.readyState = 3;
+      readyState = 3;
     },
     addEventListener: (type: string, listener: (event: unknown) => void) => {
       listeners.set(type, listener);

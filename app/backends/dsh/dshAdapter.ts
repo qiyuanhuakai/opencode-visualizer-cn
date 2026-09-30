@@ -977,9 +977,11 @@ export class DshAdapter implements BackendAdapter {
     );
   }
 
-  async forkSession(sessionId: string, messageId: string): Promise<unknown> {
+  async forkSession(sessionId: string, messageId?: string): Promise<unknown> {
+    // The atSeq key is OMITTED (never null/NaN — the gateway rejects those) when the caller has no checkpoint to fork at.
+    const atSeq = messageId === undefined || messageId === '' ? undefined : Number(messageId);
     return this.rpcClient.call('session', 'fork', {
-      request: { sessionId, atSeq: Number(messageId) },
+      request: { sessionId, ...(atSeq !== undefined && Number.isFinite(atSeq) ? { atSeq } : {}) },
     });
   }
 

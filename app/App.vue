@@ -548,6 +548,7 @@
       :active-backend-kind="activeBackendKind"
       :magic-context-workers="magicContextWorkers"
       :kimi-web-bridge="kimiWebMessageBridge"
+      :dsh-status="dshStatusSnapshot"
       @close="isStatusMonitorOpen = false"
     />
     <ProjectSettingsDialog
@@ -819,6 +820,8 @@ import {
   configureCodexBackend,
   disconnectCodexBackend,
   configureKimiWebBackend,
+  configureDshBackend,
+  disconnectDshBackend as disconnectDshBackendAdapter,
   configureOpenCodeBackend,
   getActiveBackendAdapter,
   getBackendAdapter,
@@ -856,11 +859,41 @@ import {
   dshPromptRunningChange,
 } from './composables/dshSessionEvents';
 import { createDshPopupBridge } from './composables/dshPopupBridge';
+import type { DshStatusSnapshot } from './components/StatusMonitorModal.vue';
+import { useDshMessageBridge } from './composables/useDshMessageBridge';
+import {
+  createDshPermissions,
+  parseDshApprovalRequestId,
+} from './composables/dshPermissions';
+import type {
+  DshSessionActionApi,
+} from './composables/dshSessionActions';
+import { bootstrapDshWorkspace as runDshBootstrap } from './backends/dsh/bootstrap';
+import {
+  normalizeDshHistoryPage,
+  readDshHistoryPage,
+  type DshHistoryPageFetcher,
+} from './backends/dsh/history';
+import {
+  DshAdapter,
+  upsertDshSessionIntoProjects,
+} from './backends/dsh/dshAdapter';
+import { createDshMuxClient, type DshMuxClient, type DshMuxStreamHandle } from './utils/dshMux';
+import { createDshRpcClient, deriveDshBridgeHttpUrl, type DshRpcClient } from './utils/dshRpc';
+import type { DshBootstrapNormalizer } from './backends/dsh/bootstrap';
+import type {
+  DshJsonValue,
+  DshSessionAddress,
+  DshSessionPromptResult,
+  DshSessionRecord,
+} from './backends/dsh/types';
+import type { DshSendApi } from './backends/dsh/sessionSend';
+import type { DshHistoryChildAddress } from './backends/dsh/history';
+import type { DshMessageBridge } from './composables/dshMessageBridgeTypes';
 import { useKimiWebSessionModes } from './composables/useKimiWebSessionModes';
 import { bootstrapKimiWebWorkspace as runKimiWebBootstrap } from './backends/kimiWeb/bootstrap';
 import { kimiWebComposerProfile } from './backends/kimiWeb/modelSelection';
 import { KimiWebAdapter, mapKimiWebSession, upsertKimiWebSessionIntoProjects } from './backends/kimiWeb/kimiWebAdapter';
-import { upsertDshSessionIntoProjects } from './backends/dsh/dshAdapter';
 import { createKimiWebCapabilityRegistry, probeKimiWebSessionActions } from './backends/kimiWeb/capabilityRegistry';
 import {
   isKimiWebPermissionMode,
@@ -2350,9 +2383,11 @@ const loginBackendKind = ref<BackendKind>('opencode');
 const loginCodexBridgeUrl = ref(credentials.codexBridgeUrl.value);
 const loginAcpBridgeUrl = ref(credentials.acpBridgeUrl.value);
 const loginKimiWebBridgeUrl = ref(credentials.kimiWebBridgeUrl.value);
+const loginDshBridgeUrl = ref(credentials.dshBridgeUrl.value);
 const loginCodexBridgeToken = ref(credentials.codexBridgeToken.value);
 const loginAcpBridgeToken = ref(credentials.acpBridgeToken.value);
 const loginKimiWebBridgeToken = ref(credentials.kimiWebBridgeToken.value);
+const loginDshBridgeToken = ref(credentials.dshBridgeToken.value);
 const loginAcpAgentId = ref(credentials.acpAgentId.value);
 const loginAcpAgents = ref<AcpAgentStatus[]>([]);
 let loginAcpAgentsGeneration = 0;
@@ -2604,6 +2639,16 @@ const {
       const approvalId = parseKimiWebApprovalRequestId(requestId);
       if (approvalId) {
         await replyKimiWebApproval(approvalId, reply as PermissionReply);
+        return;
+      }
+    }
+    if (activeBackendKind.value === 'dsh') {
+      const approvalId = parseDshApprovalRequestId(requestId);
+      if (approvalId) {
+        // The dsh permission surface maps the reply onto dsh's exact outcome
+        // vocabulary and answers it over `POST /dsh/$events/result` through
+        // the bridge (never a new endpoint).
+        dshPermissions.replyToPermission(requestId, reply);
         return;
       }
     }
@@ -5986,6 +6031,8 @@ function currentBackendIdentity() {
       return `acp:${credentials.acpBridgeUrl.value}:${credentials.acpAgentId.value}`;
     case 'kimi-web':
       return `kimi-web:${credentials.kimiWebBridgeUrl.value}`;
+    case 'dsh':
+      return `dsh:${credentials.dshBridgeUrl.value}`;
     case 'opencode':
       return `opencode:${credentials.url.value}`;
   }
@@ -8150,6 +8197,515 @@ const dshPopupBridge = createDshPopupBridge({
 // re-delivered window from re-stacking.
 watch([activeBackendKind, selectedSessionId], () => dshPopupBridge.reset());
 
+// ---------------------------------------------------------------------------
+// Todo 33: dsh app aggregation — the ONE construction point of the dsh bridge
+// singleton (structural copy of the kimi-web cluster below: singleton
+// lifecycle, four water bodies, deterministic create/dispose ordering).
+//
+//   1. messages  — `useDshMessageBridge` (dual stream: `$events` + the
+//      `session/follow` the bootstrap opened; Todo 19 frames, Todo 23 sync
+//      state machine) publishing onto the shared `msg` facade.
+//   2. sessions  — `bootstrapDshWorkspace` (workspace follow baseline +
+//      `session/page` history backfill) plus the shared session-event hub.
+//   3. popup     — the three live callbacks (+ the reconcile-only callback)
+//      bound to the collaborators the Todo 24 popup bridge was built for.
+//   4. lifecycle — the four `useBackendActivation` dsh hooks, the login
+//      surface plumbing and `currentBackendIdentity`.
+//
+// Single-instance governance: ONE bridge instance owns ONE mux client. Every
+// re-activation disposes the previous pair first (kimi's
+// `disconnectKimiWebBackend` at the top of `bootstrapKimiWebWorkspace`), and
+// leaving the dsh backend disposes it too — the activation state machine only
+// tears the OTHER backends down (Todo 14's optional dsh hooks made dsh an
+// opt-in teardown; this block owns it).
+// ---------------------------------------------------------------------------
+
+const dshMessageBridge = shallowRef<DshMessageBridge>();
+const dshMuxClient = shallowRef<DshMuxClient>();
+/**
+ * Live `session/follow` handles this layer opened, keyed by session. The
+ * bridge keeps its own list for disposal; this map is the per-session identity
+ * the fork/switch paths need (R7: a fork never reuses a stale stream).
+ */
+const dshFollowStreams = new Map<string, DshMuxStreamHandle>();
+let dshGitInfoHydrationQueued = false;
+const dshGitInfoCheckedDirectories = new Set<string>();
+
+// The ONE shared dsh event transport (moved up from below so the bridge
+// construction can reference it without a TDZ hole — memory #808): the message
+// bridge feeds `emitSessionEvent` from its single event source, the send path
+// feeds `emitPromptRunning`, and every subscriber fans out per session id —
+// no per-session transport, no cross-session overwrite.
+const dshSessionEvents = createDshSessionEventHub();
+
+// Todo 28: the approval waterfall lands on the EXISTING permission window
+// surface (`usePermissions` — the same floating window OpenCode/Codex/ACP
+// use). `attach` subscribes through the bridge's post-construction
+// `subscribeApprovals` seam, so no construction-order cycle exists.
+const dshPermissions = createDshPermissions({
+  openPermissionWindow: (request) => upsertPermissionEntry(request),
+  closePermissionWindow: (requestId) => removePermissionEntry(requestId),
+});
+
+function dshRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function dshBackend(): DshAdapter {
+  const adapter = getActiveBackendAdapter();
+  if (!(adapter instanceof DshAdapter)) throw new Error('dsh backend is not configured.');
+  return adapter;
+}
+
+/** One RPC client per call: the bridge token can rotate between calls. */
+function dshRpcClient(): DshRpcClient {
+  return createDshRpcClient({
+    baseUrl: deriveDshBridgeHttpUrl(credentials.dshBridgeUrl.value),
+    getBridgeToken: () => credentials.dshBridgeToken.value,
+  });
+}
+
+/** The session id a `session/follow` snapshot header declares (R2 identity). */
+function dshSnapshotSessionId(snapshot: unknown): string {
+  const header = dshRecord(dshRecord(snapshot)?.header);
+  const id = header?.id;
+  return typeof id === 'string' ? id : '';
+}
+
+/**
+ * Production normalizer for the bootstrap seam: the snapshot records and the
+ * `session/page` records share the follow vocabulary (docs/dsh.md §8.2), so
+ * one `normalizeDshHistoryPage` per call yields the `loadHistory` entries.
+ * The session address is learned from the snapshot header — the bootstrap seam
+ * carries no session id, exactly like the message bridge learns it.
+ */
+function dshBootstrapNormalizer(): DshBootstrapNormalizer {
+  let sessionId = '';
+  const address = (): DshSessionAddress => ({ kind: 'session', sessionId });
+  return {
+    normalizeSnapshot(snapshot) {
+      sessionId = dshSnapshotSessionId(snapshot);
+      // The snapshot is also the preset/projection source for Todo 28.
+      dshPermissions.ingestSnapshot(snapshot);
+      const page = readDshHistoryPage(snapshot, address());
+      const normalized = normalizeDshHistoryPage({ records: page.records, address: address() });
+      return { cursor: page.cursor ?? -1, entries: normalized.entries ?? [] };
+    },
+    normalizeHistoryRecords(records) {
+      const normalized = normalizeDshHistoryPage({
+        records: records as readonly DshSessionRecord[],
+        address: address(),
+      });
+      return normalized.entries ?? [];
+    },
+  };
+}
+
+/** One `session/page` unary call (the reload walk and the bootstrap walk share it). */
+async function dshFetchSessionPage(request: {
+  address: DshSessionAddress;
+  throughSeq: number;
+  beforeSeq: number;
+  limit?: number;
+}) {
+  const raw = await dshRpcClient().call('session', 'page', {
+    request: {
+      address: request.address,
+      throughSeq: request.throughSeq,
+      beforeSeq: request.beforeSeq,
+      ...(request.limit !== undefined ? { maxMessages: request.limit } : {}),
+    },
+  });
+  return readDshHistoryPage(raw, request.address);
+}
+
+/** Bootstrap walk shape: open upper bound in, a `{records,hasMore}` window out. */
+const dshBootstrapFetchPage = async ({
+  sessionId,
+  beforeSeq,
+}: {
+  sessionId: string;
+  beforeSeq: number;
+}) => {
+  // No watermark (a blank session has seq < 0 only): no window can exist.
+  if (beforeSeq <= 0) return { records: [], hasMore: false };
+  const page = await dshFetchSessionPage({
+    address: { kind: 'session', sessionId },
+    throughSeq: beforeSeq - 1,
+    beforeSeq,
+  });
+  const seqs = page.records.map((record) => record.event.seq);
+  return {
+    records: page.records,
+    hasMore: page.hasMore === true,
+    ...(seqs.length > 0 ? { lowestSeq: Math.min(...seqs) } : {}),
+  };
+};
+
+/** Reload walk shape (`loadDshHistory`): the classified reply is fetched raw. */
+const dshHistoryFetchPage: DshHistoryPageFetcher = (request) =>
+  dshFetchSessionPage(request);
+
+/** Read the first frame of a follow stream WITHOUT consuming its lifecycle. */
+function dshReadFirstFollowFrame(
+  handle: DshMuxStreamHandle,
+): Promise<DshJsonValue | undefined> {
+  return new Promise<DshJsonValue | undefined>((resolve, reject) => {
+    let settled = false;
+    let unsubscribe: (() => void) | undefined;
+    const settle = (finish: () => void) => {
+      if (settled) return;
+      settled = true;
+      unsubscribe?.();
+      finish();
+    };
+    unsubscribe = handle.onItem((value) => settle(() => resolve(value)));
+    handle.promise?.then(
+      (values) => settle(() => resolve(values[0])),
+      (error: unknown) => settle(() => reject(error)),
+    );
+  });
+}
+
+/**
+ * Adopt a follow stream whose first (snapshot) frame was already read: attach
+ * it with the join-time session binding and publish the snapshot through the
+ * history path — the same composition the bootstrap pipeline uses.
+ */
+function dshAdoptFollow(
+  handle: DshMuxStreamHandle,
+  snapshot: DshJsonValue | undefined,
+  sessionId: string,
+) {
+  const bridge = dshMessageBridge.value;
+  if (!bridge) throw new Error('dsh message bridge is unavailable.');
+  bridge.attachFollow(handle, sessionId);
+  if (!snapshot) return;
+  dshPermissions.ingestSnapshot(snapshot);
+  const normalized = dshBootstrapNormalizer().normalizeSnapshot(snapshot);
+  if (normalized.entries.length > 0) bridge.applyHistory([...normalized.entries]);
+}
+
+function dshDisposeFollow(sessionId: string) {
+  const handle = dshFollowStreams.get(sessionId);
+  if (!handle) return;
+  dshFollowStreams.delete(sessionId);
+  // Follow streams are downlink-only: the half-close is `cancel` (R13).
+  handle.cancel();
+}
+
+/**
+ * Attach the selected session's follow stream. One live follow per tracked
+ * session: the superseded stream is cancelled first (R7 — never reused), and
+ * an existing stream short-circuits so a re-selection cannot double-open.
+ */
+function dshAttachFollow(sessionId: string) {
+  const mux = dshMuxClient.value;
+  const bridge = dshMessageBridge.value;
+  if (!mux || !bridge) return;
+  if (dshFollowStreams.has(sessionId)) return;
+  for (const [trackedId, handle] of [...dshFollowStreams]) {
+    if (trackedId === sessionId) continue;
+    dshFollowStreams.delete(trackedId);
+    handle.cancel();
+  }
+  const handle = mux.open('session/follow', {
+    args: { request: { address: { kind: 'session', sessionId } } },
+  });
+  dshFollowStreams.set(sessionId, handle);
+  bridge.attachFollow(handle, sessionId);
+}
+
+function dshCreateMessageBridge(mux: DshMuxClient): DshMessageBridge {
+  return useDshMessageBridge({
+    mux,
+    rpc: {
+      baseUrl: deriveDshBridgeHttpUrl(credentials.dshBridgeUrl.value),
+      getBridgeToken: () => credentials.dshBridgeToken.value,
+    },
+    msg,
+    // R5/R6 history-only window fill; reconnect recovery is the snapshot's job.
+    fetchPage: async ({ sessionId, throughSeq, beforeSeq }) => {
+      const page = await dshFetchSessionPage({
+        address: { kind: 'session', sessionId },
+        throughSeq,
+        beforeSeq,
+      });
+      return { records: page.records };
+    },
+    // The popup callbacks are the popup bridge's OWN functions (no wrapper):
+    // the signatures match the bridge options one-to-one, so the seam is the
+    // collaborator itself.
+    onToolPart: dshPopupBridge.onToolPart,
+    onLiveReasoning: dshPopupBridge.onLiveReasoning,
+    onLiveSubagent: dshPopupBridge.onLiveSubagent,
+    onReconcilePart: dshPopupBridge.onReconcilePart,
+    onSessionEvent: (op, context) => {
+      dshPermissions.handleSessionEvent(op);
+      dshSessionEvents.emitSessionEvent(op, context);
+    },
+  });
+}
+
+/** Dispose the dsh singleton: bridge first (rejects pending approvals), then transport. */
+function disconnectDshBackend() {
+  // Closes the open permission windows and answers their approvals safe-fail
+  // while the bridge can still deliver the answer.
+  dshPermissions.setApprovalUiEnabled(false);
+  dshMessageBridge.value?.stop();
+  dshMuxClient.value?.disconnect();
+  dshMessageBridge.value = undefined;
+  dshMuxClient.value = undefined;
+  for (const handle of dshFollowStreams.values()) handle.cancel();
+  dshFollowStreams.clear();
+  // The registry holds the adapter (its own mux client + model catalog).
+  disconnectDshBackendAdapter();
+}
+
+/**
+ * Workspace bootstrap (activation hook, mirrors `bootstrapKimiWebWorkspace`):
+ * create ONE bridge + ONE mux client, run the pipeline, then publish the pair
+ * only while the activation generation is still current.
+ */
+async function bootstrapDshWorkspace(isCurrent: () => boolean) {
+  const adapter = dshBackend();
+  // Single-instance governance: dispose the previous pair BEFORE constructing
+  // the new one (kimi precedent) so a re-activation can never leave a stale
+  // follow stream attached or two bridges answering one waterfall.
+  disconnectDshBackend();
+  const mux = createDshMuxClient({
+    url: credentials.dshBridgeUrl.value,
+    getBridgeToken: async () => credentials.dshBridgeToken.value || null,
+  });
+  const bridge = dshCreateMessageBridge(mux);
+  // The bootstrap opens the entry's follow itself; record the handle under its
+  // session so the selection watcher below cannot double-open it.
+  let bootstrapFollowHandle: DshMuxStreamHandle | undefined;
+  const bootstrapMux: DshMuxClient = {
+    ...mux,
+    open(endpoint, payload, options) {
+      const handle = mux.open(endpoint, payload, options);
+      if (endpoint === 'session/follow') bootstrapFollowHandle = handle;
+      return handle;
+    },
+  };
+  const result = await runDshBootstrap({
+    adapter,
+    mux: bootstrapMux,
+    createBridge: () => bridge,
+    normalize: dshBootstrapNormalizer(),
+    fetchPage: dshBootstrapFetchPage,
+    isCurrent,
+    commit: ({ projects, selectedProjectId: projectId, selectedSessionId: sessionId }) => {
+      if (bootstrapFollowHandle && sessionId) {
+        dshFollowStreams.set(sessionId, bootstrapFollowHandle);
+      }
+      Object.keys(serverState.projects).forEach((key) => delete serverState.projects[key]);
+      Object.assign(serverState.projects, projects);
+      selectedProjectId.value = projectId;
+      selectedSessionId.value = sessionId;
+      bootstrapReady.value = true;
+      scheduleDshTopPanelGitInfoHydration();
+    },
+  });
+  if (!isCurrent()) {
+    // The pipeline disposed its own transport; drop the handle bookkeeping.
+    if (bootstrapFollowHandle) {
+      for (const [sessionId, handle] of [...dshFollowStreams]) {
+        if (handle !== bootstrapFollowHandle) continue;
+        dshFollowStreams.delete(sessionId);
+      }
+    }
+    return;
+  }
+  dshMuxClient.value = mux;
+  dshMessageBridge.value = bridge;
+  dshPermissions.attach(bridge);
+  dshPermissions.setApprovalUiEnabled(true);
+  // An empty workspace keeps no follow handle; the transport stays up for the
+  // first session the user creates (kimi bootstrap precedent).
+  if (result.follow && !dshFollowStreams.has(selectedSessionId.value)) {
+    dshFollowStreams.set(selectedSessionId.value, result.follow);
+  }
+}
+
+// Leaving the dsh backend disposes the singleton (sync: the next backend's
+// activation must never race a live dsh stream). Re-activating dsh rebuilds it
+// through `bootstrapDshWorkspace`.
+watch(activeBackendKind, (kind) => {
+  if (kind === 'dsh') return;
+  disconnectDshBackend();
+}, { flush: 'sync' });
+
+// Session selection follows the selected session: attach its follow stream
+// (the reload path publishes the history window through the same bridge).
+watch(selectedSessionId, (sessionId) => {
+  if (activeBackendKind.value !== 'dsh') return;
+  if (!sessionId) return;
+  dshAttachFollow(sessionId);
+});
+
+// ---------------------------------------------------------------------------
+// Todo 25: the guarded send seam (mirror of `kimiWebApi` + `kimiWebAbortChannel`
+// further below — one object the composer's shared send path routes on).
+// ---------------------------------------------------------------------------
+
+function dshIsServerTerminal(): boolean {
+  const sync = dshMessageBridge.value?.syncState(selectedSessionId.value);
+  if (sync?.kind === 'detached') return true;
+  return !(dshMuxClient.value?.isConnected() ?? false);
+}
+
+/**
+ * Blank-session probe for the first user message's explicit model write.
+ * Derived from the loaded facade, and fail-safe: while the history load is
+ * unsettled the session is never claimed blank (a false blank would overwrite
+ * a session's stored model with the empty preset).
+ */
+function dshIsBlankSession(sessionId: string): boolean {
+  if (isLoadingHistory.value) return false;
+  for (const entry of msg.messages.value.values()) {
+    const info = entry.value.info;
+    if (!info || info.sessionID !== sessionId) continue;
+    if (info.role === 'user') return false;
+  }
+  return true;
+}
+
+const dshSendApi: DshSendApi = {
+  prompt: async (request) => {
+    // The builder already bound the inner requestId to the envelope rpcId
+    // (Todo 20); sending with the same rpcId reproduces that envelope exactly.
+    const result = await dshRpcClient().call('session', 'prompt', request.payload.args, {
+      rpcId: request.rpcId,
+    });
+    return result as DshSessionPromptResult;
+  },
+  abortSession: async (sessionId) => {
+    await dshBackend().abortSession(sessionId);
+  },
+  sessionIdForCwd: async (cwd) => {
+    const sessions = await dshBackend().listSessions({ directory: cwd });
+    const session = sessions.find((entry) => !entry.time?.archived) ?? sessions[0];
+    return session?.id ?? null;
+  },
+  isServerTerminal: () => dshIsServerTerminal(),
+  isBlankSession: (sessionId) => dshIsBlankSession(sessionId),
+};
+
+// ---------------------------------------------------------------------------
+// Todo 27: the session-action seam (rename / archive / pin / fork + the follow
+// lifecycle a fork owns). `useBackendSessionActions` orchestrates; this is the
+// dsh payload vocabulary in one place.
+// ---------------------------------------------------------------------------
+
+function dshDisposeSessionFollow(sessionId: string) {
+  dshDisposeFollow(sessionId);
+}
+
+async function dshFollowSession(sessionId: string): Promise<{ archived?: boolean }> {
+  const mux = dshMuxClient.value;
+  if (!mux) throw new Error('dsh message bridge is unavailable.');
+  // R7: dispose the superseded stream BEFORE opening the fork's own stream.
+  dshDisposeFollow(sessionId);
+  const handle = mux.open('session/follow', {
+    args: { request: { address: { kind: 'session', sessionId } } },
+  });
+  dshFollowStreams.set(sessionId, handle);
+  const snapshot = await dshReadFirstFollowFrame(handle);
+  dshAdoptFollow(handle, snapshot, sessionId);
+  // The follow snapshot carries no archive flag; the session list is the
+  // authoritative classification (the fork copies the source's flag).
+  const entry = (await dshBackend().listSessions()).find((session) => session.id === sessionId);
+  return entry?.time?.archived ? { archived: true } : {};
+}
+
+const dshSessionApi: DshSessionActionApi = {
+  renameSession: async (sessionId, title) => {
+    await dshBackend().updateSession(sessionId, { title });
+  },
+  forkSession: async (sessionId, atSeq) =>
+    atSeq === undefined
+      ? dshBackend().forkSession(sessionId)
+      : dshBackend().forkSession(sessionId, String(atSeq)),
+  archiveSession: async (sessionId) => {
+    await dshBackend().updateSession(sessionId, { time: { archived: Date.now() } });
+  },
+  unarchiveSession: async (sessionId) => {
+    await dshBackend().updateSession(sessionId, { time: { archived: 0 } });
+  },
+  pinSession: async (sessionId) => {
+    await dshBackend().updateSession(sessionId, { time: { pinned: Date.now() } });
+  },
+  unpinSession: async (sessionId) => {
+    await dshBackend().updateSession(sessionId, { time: { pinned: 0 } });
+  },
+  followSession: (sessionId) => dshFollowSession(sessionId),
+  disposeSessionFollow: (sessionId) => dshDisposeSessionFollow(sessionId),
+};
+
+// ---------------------------------------------------------------------------
+// Top-panel git hydration (mirror of the kimi block below): the dsh adapter
+// reads VCS info through the bridge command runner, so the shared per-directory
+// record is populated the same way.
+// ---------------------------------------------------------------------------
+
+function scheduleDshTopPanelGitInfoHydration() {
+  if (dshGitInfoHydrationQueued || activeBackendKind.value !== 'dsh') return;
+  dshGitInfoHydrationQueued = true;
+  queueMicrotask(() => {
+    dshGitInfoHydrationQueued = false;
+    void hydrateDshTopPanelGitInfo();
+  });
+}
+
+async function hydrateDshTopPanelGitInfo() {
+  if (activeBackendKind.value !== 'dsh') return;
+  const adapter = backend();
+  if (!adapter.getVcsInfo) return;
+  const getVcsInfo = adapter.getVcsInfo.bind(adapter);
+  const directories = Object.values(serverState.projects)
+    .flatMap((project) => Object.values(project.sandboxes).map((sandbox) => sandbox.directory))
+    .filter((directory) => !dshGitInfoCheckedDirectories.has(directory));
+  await Promise.all(directories.map(async (directory) => {
+    dshGitInfoCheckedDirectories.add(directory);
+    try {
+      const gitInfo = parseAcpGitInfo(await getVcsInfo(directory));
+      if (gitInfo && activeBackendKind.value === 'dsh') {
+        acpGitInfoByDirectory.value = { ...acpGitInfoByDirectory.value, [directory]: gitInfo };
+      }
+    } catch {
+      // dsh reports a conflict response for directories outside a Git repository.
+    }
+  }));
+}
+
+// Todo 34's status surface consumes a snapshot of the live dsh state bits,
+// mapped 1:1 onto the refs this block owns (never an invented state): the
+// connection state is the activation's own, busy/health/pending approvals come
+// from the bridge, the permission fields from the permissions surface. Absent
+// (another backend, or no bridge yet) → the modal renders no dsh rows at all.
+const dshStatusSnapshot = computed<DshStatusSnapshot | undefined>(() => {
+  if (activeBackendKind.value !== 'dsh') return undefined;
+  const bridge = dshMessageBridge.value;
+  if (!bridge) return undefined;
+  const sessionId = selectedSessionId.value;
+  const state = bridge.sessionState(sessionId);
+  return {
+    connectionState: connectionState.value,
+    busy: state?.busy,
+    followHealth: bridge.syncState(sessionId).kind,
+    pendingApprovals: bridge.pendingApprovals().length,
+    permissions: {
+      permissionPreset: dshPermissions.state.permissionPreset,
+      sandboxMode: dshPermissions.state.sandboxMode,
+      approvalPolicy: dshPermissions.state.approvalPolicy,
+    },
+  };
+});
+
 function kimiWebRestClient() {
   if (!configuredKimiWebAdapter) throw new Error('Kimi Web backend is not configured.');
   return configuredKimiWebAdapter.restClient;
@@ -8434,6 +8990,10 @@ watchEffect(() => {
   configuredKimiWebAdapter = configureKimiWebBackend({
     bridgeUrl: credentials.kimiWebBridgeUrl.value,
     bridgeToken: credentials.kimiWebBridgeToken.value,
+  });
+  configureDshBackend({
+    bridgeUrl: credentials.dshBridgeUrl.value,
+    bridgeToken: credentials.dshBridgeToken.value,
   });
   codexApi.url.value = credentials.codexBridgeUrl.value;
   codexApi.bridgeToken.value = credentials.codexBridgeToken.value;
@@ -8775,6 +9335,7 @@ const backendSessionActions = useBackendSessionActions({
   backendUpdateSession: (sessionId, payload, directory) =>
     backend().updateSession(sessionId, payload, directory),
   kimiWebApi,
+  dshSessionApi,
 });
 
 const backendSessionLifecycle = useBackendSessionLifecycle({
@@ -8829,7 +9390,9 @@ const backendSessionLifecycle = useBackendSessionLifecycle({
     // dsh is active only when the registry holds the dsh adapter; the
     // closures resolve the live backend at call time, like the abort seam.
     createSession: (directory) => backend().createSession(directory),
-    abortSession: (sessionId) => backend().abortSession?.(sessionId),
+    abortSession: async (sessionId) => {
+      await backend().abortSession?.(sessionId);
+    },
   },
   onDshSessionCreated: (session) => {
     const workspaceId = (session.projectID ?? '').trim();
@@ -8843,17 +9406,12 @@ const backendSessionLifecycle = useBackendSessionLifecycle({
 });
 
 // ---------------------------------------------------------------------------
-// dsh session events (plan Todo 22) — the mirror of the two kimi-web call
-// sites above (`onSessionEvent` inside the kimi bridge wiring, and
-// `onKimiWebPromptRunning` in the send params further down).
-//
-// ONE shared transport fans out to every session: the dsh message bridge
-// (plan Todo 33) feeds `dshSessionEvents.emitSessionEvent(op, context)` from
-// its single event source; the lifecycle normalizes each inbox/thread event
-// onto the shared change record and applies it to `serverState.projects`
-// per session id — no per-session transport, no cross-session overwrite.
+// dsh session events — the hub itself is declared with the dsh bridge cluster
+// above (Todo 33); this is the single subscription onto the shared lifecycle
+// applier: ONE shared transport fans out to every session, so the bridge (from
+// its event source) and the send path (from the accept marker) never open a
+// per-session transport and never overwrite each other across sessions.
 // ---------------------------------------------------------------------------
-const dshSessionEvents = createDshSessionEventHub();
 backendSessionLifecycle.subscribeSessionEvents({
   source: dshSessionEvents,
   projects: () => serverState.projects,
@@ -8896,6 +9454,42 @@ const backendSessionReload = useBackendSessionReload({
   codexReapplyBackfill: codexMessageBridge.reapplyCodexSharedBackfill,
   kimiWebApi,
   kimiWebBridge: kimiWebBridgeLifecycle,
+  dshApi: {
+    fetchPage: dshHistoryFetchPage,
+  },
+  // The applied-seq watermark of the session being loaded: the follow snapshot
+  // cursor (R2). Negative means the session has no history yet — the only
+  // state where the pager must not be called at all.
+  dshWatermark: () => dshMessageBridge.value?.cursor(selectedSessionId.value) ?? -1,
+  dshChildAddresses: (sessionId) => {
+    const children: DshHistoryChildAddress[] = [];
+    sessionParentById.value.forEach((parentId, childId) => {
+      if (!parentId || parentId !== sessionId || childId === sessionId) return;
+      children.push({
+        address: {
+          kind: 'subagent',
+          parentSessionId: sessionId,
+          childSessionId: childId,
+          mode: 'unknown',
+        },
+        source: 'session/list',
+        matched: 'parent',
+        // A child is its own message space: its watermark comes from its own
+        // follow snapshot (a fork adopts one). Without it the child is not
+        // paged at all — the walk would be unbounded in an unmeasured space.
+        throughSeq: dshMessageBridge.value?.cursor(childId) ?? -1,
+      });
+    });
+    return children;
+  },
+  dshBridge: {
+    applyHistory: (entries) => {
+      dshMessageBridge.value?.applyHistory(entries);
+    },
+  },
+  onDshHistoryTruncated: ({ sessionId, pages }) => {
+    log('dsh history paging hit the page cap', { sessionId, pages });
+  },
   fetchRootSessionHistory,
   waitForPendingRenders,
   reserveRootHistoryRequestId,
@@ -9122,6 +9716,7 @@ const backendMessageSend = useBackendMessageSend({
   codexApi,
   kimiWebApi,
   kimiWebAbortChannel,
+  dshSendApi,
   isKimiWebSessionModeReady: (sessionId) =>
     kimiWebSessionModes.sessionState(sessionId).pendingField === undefined,
   recordKimiWebTurnPermission: kimiTurnPermissions.record,
@@ -9131,6 +9726,12 @@ const backendMessageSend = useBackendMessageSend({
     applyKimiWebSessionEvent(serverState.projects, {
       kind: 'session', phase: 'status-changed', sessionId, status: 'busy',
     });
+  },
+  onDshPromptRunning: (sessionId) => {
+    // `{accepted:true}` is fire-and-forget: the accept marker goes through the
+    // shared hub, whose listener marks the session busy before the socket's
+    // turn/start frame can arrive.
+    dshSessionEvents.emitPromptRunning(sessionId);
   },
   ensureConnectionReady,
   translate: t,
@@ -10577,11 +11178,14 @@ const { startInitialization, abortInitialization } = useBackendActivation({
   configureCodexBackend,
   configureAcpBackend,
   configureKimiWebBackend,
+  configureDshBackend,
   disconnectAcpBackend,
   disconnectCodexBackend,
   disconnectKimiWebBackend,
+  disconnectDshBackend,
   bootstrapAcpWorkspace,
   bootstrapKimiWebWorkspace,
+  bootstrapDshWorkspace,
   fetchGlobalProviderConfig,
   fetchProviders,
   fetchAgents,
@@ -10627,6 +11231,17 @@ function handleLogin() {
     void startInitialization();
     return;
   }
+  if (loginBackendKind.value === 'dsh') {
+    // saveDsh rejects an empty bridge URL (same contract as kimi-web).
+    try {
+      credentials.saveDsh(loginDshBridgeUrl.value, loginDshBridgeToken.value);
+    } catch (error) {
+      initErrorMessage.value = toErrorMessage(error);
+      return;
+    }
+    void startInitialization();
+    return;
+  }
   const u = loginRequiresAuth.value ? loginUsername.value : '';
   const p = loginRequiresAuth.value ? loginPassword.value : '';
   credentials.save(loginUrl.value, u, p);
@@ -10657,9 +11272,11 @@ function handleLogout() {
   loginCodexBridgeUrl.value = credentials.codexBridgeUrl.value;
   loginAcpBridgeUrl.value = credentials.acpBridgeUrl.value;
   loginKimiWebBridgeUrl.value = credentials.kimiWebBridgeUrl.value;
+  loginDshBridgeUrl.value = credentials.dshBridgeUrl.value;
   loginCodexBridgeToken.value = credentials.codexBridgeToken.value;
   loginAcpBridgeToken.value = credentials.acpBridgeToken.value;
   loginKimiWebBridgeToken.value = credentials.kimiWebBridgeToken.value;
+  loginDshBridgeToken.value = credentials.dshBridgeToken.value;
   loginAcpAgentId.value = credentials.acpAgentId.value;
   disposeShellWindows();
   initErrorMessage.value = '';
@@ -10686,9 +11303,11 @@ onMounted(() => {
   loginCodexBridgeUrl.value = credentials.codexBridgeUrl.value;
   loginAcpBridgeUrl.value = credentials.acpBridgeUrl.value;
   loginKimiWebBridgeUrl.value = credentials.kimiWebBridgeUrl.value;
+  loginDshBridgeUrl.value = credentials.dshBridgeUrl.value;
   loginCodexBridgeToken.value = credentials.codexBridgeToken.value;
   loginAcpBridgeToken.value = credentials.acpBridgeToken.value;
   loginKimiWebBridgeToken.value = credentials.kimiWebBridgeToken.value;
+  loginDshBridgeToken.value = credentials.dshBridgeToken.value;
   loginAcpAgentId.value = credentials.acpAgentId.value;
 
   if (credentials.isConfigured.value) {

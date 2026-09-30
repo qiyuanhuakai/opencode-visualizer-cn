@@ -29,7 +29,7 @@
  *   shape (fail-closed `unavailable`), which is exactly what a safe degradation
  *   must send.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { loadDshWireFixture } from '../backends/dsh/fixtures';
 import type {
@@ -233,18 +233,6 @@ function argsOf(call: CapturedResultCall): {
   outcome?: unknown;
 } {
   return call.body.payload.args as { clientId?: unknown; eventId?: unknown; outcome?: unknown };
-}
-
-/** Serialize the permission-window request the way `usePermissions` would. */
-function serialize(request: PermissionRequest): Record<string, unknown> {
-  return {
-    id: request.id,
-    sessionID: request.sessionID,
-    permission: request.permission,
-    patterns: request.patterns,
-    always: request.always,
-    metadata: request.metadata,
-  };
 }
 
 function createHarness(permsOptions: Parameters<typeof createDshPermissions>[0] = {}) {
