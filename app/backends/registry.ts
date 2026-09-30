@@ -3,10 +3,8 @@ import { createCodexAdapter } from './codex/codexAdapter';
 import { appendCodexBridgeToken } from './codex/bridgeUrl';
 import { createAcpAdapter } from './acp/acpAdapter';
 import { acpBridgeWebSocketUrl, normalizeAcpBridgeUrl } from './acp/bridgeUrl';
-import {
-  createKimiWebAdapter,
-  KIMI_WEB_CAPABILITIES,
-} from './kimiWeb/kimiWebAdapter';
+import { createKimiWebAdapter, KIMI_WEB_CAPABILITIES } from './kimiWeb/kimiWebAdapter';
+import { createDshAdapter } from './dsh/dshAdapter';
 import type { BackendAdapter, BackendKind } from './types';
 import { StorageKeys, storageGet } from '../utils/storageKeys';
 import { deriveDshBridgeHttpUrl } from '../utils/dshRpc';
@@ -61,10 +59,12 @@ let dshAdapter: BackendAdapter | undefined;
 let dshAdapterKey = '';
 
 /**
- * Factory seam for the dsh adapter. Todo 15 supplies the real
- * `createDshAdapter`; until then callers (and tests) inject a factory here so
- * the registry contract can be exercised without the concrete adapter.
- * Registering a factory invalidates any adapter built by a previous one.
+ * Factory seam for the dsh adapter.
+ *
+ * The real `createDshAdapter` is registered at module load below; the seam
+ * stays exported so tests can inject their own factory and exercise the
+ * registry contract without building a live adapter. Registering a factory
+ * invalidates any adapter built by a previous one.
  */
 export type DshAdapterFactory = (options: {
   bridgeUrl: string;
@@ -95,6 +95,9 @@ let adapters: Record<BackendKind, BackendAdapter | undefined> = {
   'kimi-web': undefined,
   dsh: undefined,
 };
+
+// Registered after `adapters` exists (TDZ) so the seam reset can write the slot.
+registerDshAdapterFactory((options) => createDshAdapter(options));
 
 let activeBackendKind: BackendKind = 'opencode';
 
