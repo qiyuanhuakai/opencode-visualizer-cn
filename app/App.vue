@@ -9953,12 +9953,21 @@ function handleShowSubagentHistory(payload: { sessionId: string; label: string }
   const winH = 520;
   const x = Math.max(0, Math.round((width - winW) / 2));
   const y = Math.max(0, Math.round((height - winH) / 2));
+  const historyBackend = backend();
+  const historyDirectory = activeDirectory.value.trim();
+  const readOpenCodeSubagentHistory = async (childSessionId: string) => {
+    const listMessages = requireBackendMethod(historyBackend.listSessionMessages, 'session history');
+    const entries = await listMessages(childSessionId, { directory: historyDirectory || undefined });
+    if (!Array.isArray(entries)) throw new Error('Invalid OpenCode session history response.');
+    return entries;
+  };
   fw.open(key, {
     component: SubagentHistoryContent,
     props: {
       parentThreadId: sessionId,
       loadHistory: activeBackendKind.value === 'codex' ? codexApi.readSubagentHistory
-        : activeBackendKind.value === 'kimi-web' ? readKimiWebSubagentHistory : undefined,
+        : activeBackendKind.value === 'kimi-web' ? readKimiWebSubagentHistory
+          : activeBackendKind.value === 'opencode' ? readOpenCodeSubagentHistory : undefined,
       sessionLabel: label,
       onToolClick: (part: ToolPart) => handleOpenHistoryTool({ part }),
       onReasoningClick: (part: ReasoningPart) => handleOpenHistoryReasoning({ part }),
