@@ -44,9 +44,10 @@ import ThreadHistoryContent from './ThreadHistoryContent.vue';
 import { useMessages } from '../composables/useMessages';
 import { useFloatingWindow } from '../composables/useFloatingWindow';
 import type { HistoryEntry, HistoryWindowEntry } from '../types/message';
-import type { ReasoningPart, ToolPart } from '../types/sse';
+import type { ReasoningPart, TextPart, ToolPart } from '../types/sse';
 import {
   buildHistoryEntries,
+  getHistoryEntryKey,
   selectSubagentMessages,
   toHistoryWindowEntry,
 } from '../utils/historyEntries';
@@ -104,8 +105,8 @@ function hasTextContent(message: { id: string }): boolean {
   return getParts(message.id).some((part) => part.type === 'text' && !!part.text.trim());
 }
 
-function getMessageContent(message: { id: string }): string {
-  return getParts(message.id).filter((part) => part.type === 'text').map((part) => part.text).join('\n');
+function getTextParts(message: { id: string }): TextPart[] {
+  return getParts(message.id).filter((part): part is TextPart => part.type === 'text');
 }
 
 const subagentMessages = computed(() =>
@@ -123,14 +124,17 @@ const internalEntries = computed<HistoryEntry[]>(() =>
 );
 
 const entries = computed<HistoryWindowEntry[]>(() =>
-  internalEntries.value.map((entry) =>
-    toHistoryWindowEntry(
-      entry,
-      entry.kind === 'message'
-        ? { content: getMessageContent(entry.message), isSubagent: true }
-        : undefined,
-    ),
-  ),
+  internalEntries.value.flatMap((entry): HistoryWindowEntry[] => {
+    if (entry.kind !== 'message') {
+      return [toHistoryWindowEntry(entry)];
+    }
+    // Each text part is one utterance: render it as its own history cell
+    // instead of joining a message's text parts into a single block.
+    return getTextParts(entry.message).map((part) => ({
+      ...toHistoryWindowEntry(entry, { content: part.text, isSubagent: true }),
+      key: `${getHistoryEntryKey(entry)}:${part.id}`,
+    }));
+  }),
 );
 
 function handleClose() {
