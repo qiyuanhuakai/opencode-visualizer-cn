@@ -237,6 +237,7 @@ const BRANCHES: BranchEntry[] = [
   { file: "components/StatusMonitorModal.vue", fp: "props.activeBackendKind==='kimi-web'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'todo-34', owner: 34, sym: "status monitor sections" },
   { file: "components/StatusMonitorModal.vue", fp: "props.activeBackendKind==='opencode'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'todo-34', owner: 34, sym: "status monitor sections" },
   { file: "components/StatusMonitorModal.vue", fp: "type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills' | 'token' | 'mc' | 'acp';", n: 1, kind: 'literal', cls: 'ui-required', disp: 'todo-34', owner: 34, sym: "status monitor sections" },
+  { file: "components/StatusMonitorModal.vue", fp: "props.activeBackendKind==='dsh'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 34, sym: "dsh status section gate (Todo 34: connection/session/follow/approvals/preset/model)" },
   { file: "components/ThreadBlock.vue", fp: "backendKind!=='kimi-web'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'todo-35', owner: 35, sym: "message card actions/diff gates" },
   { file: "components/ThreadBlock.vue", fp: "props.backendKind!=='kimi-web'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'todo-35', owner: 35, sym: "message card actions/diff gates" },
   { file: "components/ThreadBlock.vue", fp: "props.backendKind==='acp'", n: 2, kind: 'cmp', cls: 'ui-required', disp: 'todo-35', owner: 35, sym: "message card actions/diff gates" },

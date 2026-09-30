@@ -417,6 +417,31 @@ export interface LocaleMessages {
       rateLimitUsed: string;
       rateLimitFiveHourUsed: string;
     };
+    dsh: {
+      connection: string;
+      session: string;
+      followStream: string;
+      approvals: string;
+      permissionPreset: string;
+      sandbox: string;
+      approvalPolicy: string;
+      model: string;
+      capabilities: string;
+      states: {
+        connecting: string;
+        bootstrapping: string;
+        ready: string;
+        reconnecting: string;
+        error: string;
+        busy: string;
+        idle: string;
+        live: string;
+        degraded: string;
+        rebuilding: string;
+        detached: string;
+        replaying: string;
+      };
+    };
   };
   providerManager: {
     discovery: {

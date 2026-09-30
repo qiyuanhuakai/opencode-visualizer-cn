@@ -1,3 +1,50 @@
+<script lang="ts">
+/**
+ * dsh status section contracts (Todo 34).
+ *
+ * A reactive snapshot of the state bits the landed dsh surface actually
+ * exposes — never an invented state. Each optional field maps 1:1 to a real
+ * source:
+ *   - `connectionState` → `useBackendActivation.ts` `ConnectionState`
+ *     (`'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'error'`).
+ *   - `busy` → `DshBridgeSessionState.busy` (`useDshMessageBridge` mergeSession).
+ *   - `followHealth` → `DshSyncState.kind` / `DshSyncPhase`
+ *     (`dshSyncStateMachine.ts`).
+ *   - `pendingApprovals` → `DshMessageBridge.pendingApprovals()`.
+ *   - `permissions` → `DshPermissionPresetState` (`dshPermissions.ts`).
+ *   - `model` → the `DshModelSelection` read-back (`modelCatalog.ts`).
+ * The static `DSH_CAPABILITY_REGISTRY` matrix is rendered separately, true keys only.
+ */
+export type DshConnectionState =
+  | 'connecting'
+  | 'bootstrapping'
+  | 'ready'
+  | 'reconnecting'
+  | 'error';
+
+export type DshFollowHealth = 'live' | 'degraded' | 'rebuilding' | 'detached' | 'replaying';
+
+export type DshStatusSnapshot = {
+  connectionState?: DshConnectionState;
+  /** Turn running (`turn/start` without its `turn/end`). */
+  busy?: boolean;
+  /** Follow-stream sync phase. */
+  followHealth?: DshFollowHealth;
+  /** Pending `approval/request` waterfall frames awaiting an answer. */
+  pendingApprovals?: number;
+  permissions?: {
+    permissionPreset?: string;
+    sandboxMode?: string;
+    approvalPolicy?: string;
+  };
+  model?: {
+    provider: string;
+    model: string;
+    reasoningEffort?: string;
+  } | null;
+};
+</script>
+
 <script setup lang="ts">
 import { ref, watch, computed, nextTick, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
@@ -6,6 +53,7 @@ import {
   getCodexWeeklyRateLimitWindow,
   type CodexPlugin,
 } from '../backends/codex/codexAdapter';
+import { DSH_CAPABILITY_REGISTRY } from '../backends/dsh/capabilities';
 import type { BackendKind } from '../backends/types';
 import {
   DEFAULT_KIMI_WEB_BRIDGE_URL,
@@ -56,6 +104,12 @@ const props = defineProps<{
   activeBackendKind: BackendKind;
   magicContextWorkers?: readonly MagicContextWorker[];
   kimiWebBridge?: KimiWebSessionStateReader;
+  /**
+   * dsh state-bit snapshot (Todo 34). The dsh bridge/permissions/model surfaces
+   * are owned by App.vue's serial chain (Todo 33); the modal only consumes the
+   * snapshot it is handed. Absent → no dsh rows, never a guessed status.
+   */
+  dshStatus?: DshStatusSnapshot;
 }>();
 const emit = defineEmits<{ close: [] }>();
 
@@ -136,6 +190,7 @@ const lspUnsupported = ref(false);
 const pluginUnsupported = ref(false);
 const isAcpBackend = computed(() => props.activeBackendKind === 'acp');
 const isKimiWebBackend = computed(() => props.activeBackendKind === 'kimi-web');
+const isDshBackend = computed(() => props.activeBackendKind === 'dsh');
 const mcpUnsupportedText = computed(() => {
   if (isKimiWebBackend.value) return t('statusMonitor.mcp.unsupportedKimiWeb');
   return t(isAcpBackend.value ? 'statusMonitor.mcp.unsupportedAcp' : 'statusMonitor.mcp.unsupported');
@@ -1170,6 +1225,120 @@ const kimiModelsReadyDotClass = computed(() => {
   return 'status-dot-muted';
 });
 
+/**
+ * dsh status section (Todo 34). Every row is gated on a value the reader
+ * actually supplied; an unknown enum value is dropped rather than rendered as
+ * a success, so a fabricated state can never appear. No row exists for a state
+ * dsh does not expose (worktrees/todos/questions are matrix-false).
+ */
+const DSH_CONNECTION_STATES: readonly DshConnectionState[] = [
+  'connecting',
+  'bootstrapping',
+  'ready',
+  'reconnecting',
+  'error',
+];
+const DSH_FOLLOW_STATES: readonly DshFollowHealth[] = [
+  'live',
+  'degraded',
+  'rebuilding',
+  'detached',
+  'replaying',
+];
+
+function dshKnownState<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+  return typeof value === 'string' && (allowed as readonly string[]).includes(value)
+    ? (value as T)
+    : undefined;
+}
+
+function dshNonEmpty(value: unknown): string {
+  return typeof value === 'string' && value.trim().length > 0 ? value : '';
+}
+
+const dshStatusLoaded = computed(() => isDshBackend.value && props.dshStatus !== undefined);
+
+const dshConnectionState = computed(() =>
+  dshKnownState(props.dshStatus?.connectionState, DSH_CONNECTION_STATES),
+);
+const dshConnectionText = computed(() =>
+  dshConnectionState.value ? t(`statusMonitor.dsh.states.${dshConnectionState.value}`) : '',
+);
+const dshConnectionDot = computed(() => {
+  switch (dshConnectionState.value) {
+    case 'ready':
+      return 'status-dot-success';
+    case 'error':
+      return 'status-dot-error';
+    case 'connecting':
+    case 'bootstrapping':
+    case 'reconnecting':
+      return 'status-dot-warning';
+    default:
+      return 'status-dot-muted';
+  }
+});
+
+const dshSessionText = computed(() => {
+  if (props.dshStatus?.busy === true) return t('statusMonitor.dsh.states.busy');
+  if (props.dshStatus?.busy === false) return t('statusMonitor.dsh.states.idle');
+  return '';
+});
+const dshSessionDot = computed(() =>
+  props.dshStatus?.busy === true ? 'status-dot-success' : 'status-dot-muted',
+);
+
+const dshFollowState = computed(() =>
+  dshKnownState(props.dshStatus?.followHealth, DSH_FOLLOW_STATES),
+);
+const dshFollowText = computed(() =>
+  dshFollowState.value ? t(`statusMonitor.dsh.states.${dshFollowState.value}`) : '',
+);
+const dshFollowDot = computed(() => {
+  switch (dshFollowState.value) {
+    case 'live':
+      return 'status-dot-success';
+    case 'degraded':
+      return 'status-dot-error';
+    case 'rebuilding':
+    case 'replaying':
+      return 'status-dot-warning';
+    default:
+      return 'status-dot-muted';
+  }
+});
+
+const dshPendingApprovals = computed(() => {
+  const count = props.dshStatus?.pendingApprovals;
+  return typeof count === 'number' && Number.isFinite(count) && count >= 0
+    ? Math.floor(count)
+    : null;
+});
+const dshApprovalsDot = computed(() =>
+  (dshPendingApprovals.value ?? 0) > 0 ? 'status-dot-warning' : 'status-dot-success',
+);
+
+const dshPermissionPreset = computed(() =>
+  dshNonEmpty(props.dshStatus?.permissions?.permissionPreset),
+);
+const dshSandboxMode = computed(() => dshNonEmpty(props.dshStatus?.permissions?.sandboxMode));
+const dshApprovalPolicy = computed(() => dshNonEmpty(props.dshStatus?.permissions?.approvalPolicy));
+const dshModelText = computed(() => {
+  const model = props.dshStatus?.model;
+  if (!model) return '';
+  const provider = dshNonEmpty(model.provider);
+  const name = dshNonEmpty(model.model);
+  return provider && name ? `${provider}/${name}` : '';
+});
+
+/** True capability names only, from the landed static `DSH_CAPABILITY_REGISTRY` matrix. */
+const dshCapabilitiesText = computed(() =>
+  Object.entries(DSH_CAPABILITY_REGISTRY)
+    .filter(([, enabled]) => enabled === true)
+    .map(([name]) => name)
+    .join(', '),
+);
+
 </script>
 
 <template>
@@ -1232,10 +1401,10 @@ const kimiModelsReadyDotClass = computed(() => {
 
         <!-- Server Tab -->
         <div v-if="activeTab === 'server'" class="status-monitor-content">
-          <div v-if="loading && !serverHealth && !kimiStatusLoaded" class="status-monitor-empty">
+          <div v-if="loading && !serverHealth && !kimiStatusLoaded && !dshStatusLoaded" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
-          <div v-else-if="!serverHealth && !kimiStatusLoaded" class="status-monitor-empty">
+          <div v-else-if="!serverHealth && !kimiStatusLoaded && !dshStatusLoaded" class="status-monitor-empty">
             {{ $t('statusMonitor.server.noData') }}
           </div>
           <div v-else class="status-monitor-list">
@@ -1269,6 +1438,67 @@ const kimiModelsReadyDotClass = computed(() => {
                   <span class="status-monitor-name">{{ $t('statusMonitor.server.modelsReady') }}</span>
                 </div>
                 <span class="status-monitor-meta">{{ kimiModelsReadyText }}</span>
+              </div>
+            </template>
+            <!-- dsh status bits (Todo 34): only state dsh actually exposes. -->
+            <template v-if="isDshBackend && dshStatus">
+              <div v-if="dshConnectionText" class="status-monitor-row is-dsh">
+                <div class="status-monitor-row-main">
+                  <span class="status-dot" :class="dshConnectionDot" />
+                  <span class="status-monitor-name">{{ $t('statusMonitor.dsh.connection') }}</span>
+                </div>
+                <span class="status-monitor-meta">{{ dshConnectionText }}</span>
+              </div>
+              <div v-if="dshSessionText" class="status-monitor-row is-dsh">
+                <div class="status-monitor-row-main">
+                  <span class="status-dot" :class="dshSessionDot" />
+                  <span class="status-monitor-name">{{ $t('statusMonitor.dsh.session') }}</span>
+                </div>
+                <span class="status-monitor-meta">{{ dshSessionText }}</span>
+              </div>
+              <div v-if="dshFollowText" class="status-monitor-row is-dsh">
+                <div class="status-monitor-row-main">
+                  <span class="status-dot" :class="dshFollowDot" />
+                  <span class="status-monitor-name">{{ $t('statusMonitor.dsh.followStream') }}</span>
+                </div>
+                <span class="status-monitor-meta">{{ dshFollowText }}</span>
+              </div>
+              <div v-if="dshPendingApprovals !== null" class="status-monitor-row is-dsh">
+                <div class="status-monitor-row-main">
+                  <span class="status-dot" :class="dshApprovalsDot" />
+                  <span class="status-monitor-name">{{ $t('statusMonitor.dsh.approvals') }}</span>
+                </div>
+                <span class="status-monitor-meta">{{ dshPendingApprovals }}</span>
+              </div>
+              <div v-if="dshPermissionPreset" class="status-monitor-row is-dsh">
+                <div class="status-monitor-row-main">
+                  <span class="status-monitor-name">{{ $t('statusMonitor.dsh.permissionPreset') }}</span>
+                </div>
+                <span class="status-monitor-meta">{{ dshPermissionPreset }}</span>
+              </div>
+              <div v-if="dshSandboxMode" class="status-monitor-row is-dsh">
+                <div class="status-monitor-row-main">
+                  <span class="status-monitor-name">{{ $t('statusMonitor.dsh.sandbox') }}</span>
+                </div>
+                <span class="status-monitor-meta">{{ dshSandboxMode }}</span>
+              </div>
+              <div v-if="dshApprovalPolicy" class="status-monitor-row is-dsh">
+                <div class="status-monitor-row-main">
+                  <span class="status-monitor-name">{{ $t('statusMonitor.dsh.approvalPolicy') }}</span>
+                </div>
+                <span class="status-monitor-meta">{{ dshApprovalPolicy }}</span>
+              </div>
+              <div v-if="dshModelText" class="status-monitor-row is-dsh">
+                <div class="status-monitor-row-main">
+                  <span class="status-monitor-name">{{ $t('statusMonitor.dsh.model') }}</span>
+                </div>
+                <span class="status-monitor-meta">{{ dshModelText }}</span>
+              </div>
+              <div class="status-monitor-row is-dsh">
+                <div class="status-monitor-row-main">
+                  <span class="status-monitor-name">{{ $t('statusMonitor.dsh.capabilities') }}</span>
+                </div>
+                <span class="status-monitor-meta">{{ dshCapabilitiesText }}</span>
               </div>
             </template>
           </div>
