@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ref } from 'vue';
+import { reactive, ref } from 'vue';
+import type { ProjectState } from '../types/worker-state';
 import type { OpenCodeApiLike } from './useBackendSessionActions';
+import type { DshSessionActionApi } from './dshSessionActions';
 import { createSessionActionsFixture } from './useBackendSessionActions.test-helpers';
 
 type SessionActionsFixture = ReturnType<typeof createSessionActionsFixture>;
@@ -364,6 +366,239 @@ describe('useBackendSessionActions', () => {
     expect(openCodeDelete).not.toHaveBeenCalled();
   });
 
+  it('does not route a pending rename through a different backend', async () => {
+    const activeBackendKind = ref<'opencode' | 'codex' | 'acp'>('codex');
+    let resolvePrompt: ((value: string | null) => void) | undefined;
+    const setThreadName = vi.fn();
+    const renameSession = vi.fn();
+    const { actions } = createSessionActionsFixture({
+      activeBackendKindRef: activeBackendKind,
+      selectedProjectId: ref('codex'),
+      selectedSessionId: ref('thread-1'),
+      openCodeApi: { renameSession },
+      codexApi: { activeThreadId: ref('thread-1'), setThreadName },
+      showPrompt: () =>
+        new Promise((resolve) => {
+          resolvePrompt = resolve;
+        }),
+      resolveProjectIdForSession: () => 'codex',
+      resolveSessionOperationPayload: () => ({ projectId: 'codex', directory: '/repo' }),
+      getSessionPinnedOverride: () => undefined,
+    });
+
+    const pending = actions.renameSession('thread-1');
+    activeBackendKind.value = 'opencode';
+    resolvePrompt?.('renamed');
+    await pending;
+
+    expect(setThreadName).not.toHaveBeenCalled();
+    expect(renameSession).not.toHaveBeenCalled();
+  });
+});
+
+function createDshProjects(): Record<string, ProjectState> {
+  return reactive({
+    workspace: {
+      id: 'workspace',
+      name: 'Workspace',
+      worktree: '/repo',
+      sandboxes: {
+        '/repo': {
+          directory: '/repo',
+          name: 'repo',
+          rootSessions: ['session-1'],
+          sessions: {
+            'session-1': { id: 'session-1', title: 'Original', directory: '/repo', timeUpdated: 1 },
+          },
+        },
+      },
+    },
+  });
+}
+
+function createDshApi(overrides: Partial<DshSessionActionApi> = {}) {
+  const order: string[] = [];
+  const api: DshSessionActionApi = {
+    renameSession: vi.fn(async (sessionId: string, title: string) => {
+      order.push(`rename:${sessionId}:${title}`);
+      return {};
+    }),
+    forkSession: vi.fn(async (sessionId: string, atSeq?: number) => {
+      order.push(`fork:${sessionId}:${atSeq ?? ''}`);
+      return { sessionId: 'fork-1' };
+    }),
+    archiveSession: vi.fn(async (sessionId: string) => {
+      order.push(`archive:${sessionId}`);
+      return {};
+    }),
+    unarchiveSession: vi.fn(async (sessionId: string) => {
+      order.push(`unarchive:${sessionId}`);
+      return {};
+    }),
+    pinSession: vi.fn(async (sessionId: string) => {
+      order.push(`pin:${sessionId}`);
+      return {};
+    }),
+    unpinSession: vi.fn(async (sessionId: string) => {
+      order.push(`unpin:${sessionId}`);
+      return {};
+    }),
+    followSession: vi.fn(async (sessionId: string) => {
+      order.push(`follow:${sessionId}`);
+      return { archived: false };
+    }),
+    disposeSessionFollow: vi.fn((sessionId: string) => {
+      order.push(`dispose:${sessionId}`);
+    }),
+    ...overrides,
+  };
+  return { api, order };
+}
+
+describe('useBackendSessionActions dsh', () => {
+  it('Given a dsh session, When renameSession runs, Then it writes the title through the dsh seam and not OpenCode', async () => {
+    const projects = createDshProjects();
+    const { api } = createDshApi();
+    const openCodeRename = vi.fn();
+    const { actions } = createSessionActionsFixture({
+      activeBackendKind: 'dsh',
+      serverProjects: projects,
+      dshSessionApi: api,
+      openCodeApi: { renameSession: openCodeRename },
+      showPrompt: vi.fn().mockResolvedValue('Renamed'),
+    });
+
+    await actions.renameSession('session-1');
+
+    expect(api.renameSession).toHaveBeenCalledWith('session-1', 'Renamed');
+    expect(openCodeRename).not.toHaveBeenCalled();
+    expect(projects.workspace.sandboxes['/repo'].sessions['session-1'].title).toBe('Renamed');
+  });
+
+  it('Given a dsh session, When archiveSession runs, Then it calls the dsh archive seam and not OpenCode', async () => {
+    const projects = createDshProjects();
+    const { api } = createDshApi();
+    const openCodeArchive = vi.fn();
+    const { actions, mocks } = createSessionActionsFixture({
+      activeBackendKind: 'dsh',
+      serverProjects: projects,
+      dshSessionApi: api,
+      openCodeApi: { archiveSession: openCodeArchive },
+    });
+
+    await actions.archiveSession('session-1');
+
+    expect(api.archiveSession).toHaveBeenCalledWith('session-1');
+    expect(openCodeArchive).not.toHaveBeenCalled();
+    expect(projects.workspace.sandboxes['/repo'].sessions['session-1'].timeArchived).toBeGreaterThan(0);
+    expect(mocks.setSendStatusKey).toHaveBeenLastCalledWith('app.status.archived');
+  });
+
+  it('Given a dsh session, When unarchiveSession runs, Then it calls the dsh unarchive seam and not OpenCode', async () => {
+    const projects = createDshProjects();
+    projects.workspace.sandboxes['/repo'].sessions['session-1'].timeArchived = 5;
+    const { api } = createDshApi();
+    const openCodeUnarchive = vi.fn();
+    const { actions } = createSessionActionsFixture({
+      activeBackendKind: 'dsh',
+      serverProjects: projects,
+      dshSessionApi: api,
+      openCodeApi: { unarchiveSession: openCodeUnarchive },
+    });
+
+    await actions.unarchiveSession('session-1');
+
+    expect(api.unarchiveSession).toHaveBeenCalledWith('session-1');
+    expect(openCodeUnarchive).not.toHaveBeenCalled();
+    expect(projects.workspace.sandboxes['/repo'].sessions['session-1'].timeArchived).toBeUndefined();
+  });
+
+  it('Given a dsh session, When pin/unpin run, Then they call the dsh pin seams and not OpenCode', async () => {
+    const { api } = createDshApi();
+    const openCodePin = vi.fn();
+    const openCodeUnpin = vi.fn();
+    const { actions, mocks } = createSessionActionsFixture({
+      activeBackendKind: 'dsh',
+      dshSessionApi: api,
+      openCodeApi: { pinSession: openCodePin, unpinSession: openCodeUnpin },
+    });
+
+    await actions.pinSession('session-1');
+    await actions.unpinSession('session-1');
+
+    expect(api.pinSession).toHaveBeenCalledWith('session-1');
+    expect(api.unpinSession).toHaveBeenCalledWith('session-1');
+    expect(openCodePin).not.toHaveBeenCalled();
+    expect(openCodeUnpin).not.toHaveBeenCalled();
+    expect(mocks.setLocalPinnedSession).toHaveBeenCalledWith('proj-1', 'session-1', expect.any(Number));
+    expect(mocks.setLocalUnpinnedSession).toHaveBeenCalledWith('proj-1', 'session-1');
+  });
+
+  it('Given a dsh session, When deleteSession runs, Then it hides locally and refuses the server delete with a documented reason', async () => {
+    const projects = createDshProjects();
+    const { api } = createDshApi();
+    const backendDeleteSession = vi.fn();
+    const openCodeDelete = vi.fn();
+    const { actions, mocks, params } = createSessionActionsFixture({
+      activeBackendKind: 'dsh',
+      serverProjects: projects,
+      dshSessionApi: api,
+      backendDeleteSession,
+      openCodeApi: { deleteSession: openCodeDelete },
+    });
+
+    await actions.deleteSession('session-1');
+
+    expect(projects.workspace.sandboxes['/repo'].sessions['session-1']).toBeUndefined();
+    expect(projects.workspace.sandboxes['/repo'].rootSessions).toEqual([]);
+    expect(params.selectedSessionId.value).toBe('');
+    expect(backendDeleteSession).not.toHaveBeenCalled();
+    expect(openCodeDelete).not.toHaveBeenCalled();
+    expect(mocks.setSessionError).toHaveBeenCalledWith('app.error.sessionDeleteFailed');
+  });
+
+  it('Given a dsh session, When handleForkSession runs, Then it forks, restores the archive state, and re-subscribes the follow stream', async () => {
+    const { api, order } = createDshApi({
+      followSession: vi.fn(async (sessionId: string) => {
+        order.push(`follow:${sessionId}`);
+        return { archived: true };
+      }),
+    });
+    const openCodeFork = vi.fn();
+    const { actions, params } = createSessionActionsFixture({
+      activeBackendKind: 'dsh',
+      dshSessionApi: api,
+      openCodeApi: { forkSession: openCodeFork },
+    });
+
+    await actions.handleForkSession('session-1');
+
+    expect(openCodeFork).not.toHaveBeenCalled();
+    // fork ack -> dispose stale stream -> fresh follow -> archive restoration.
+    expect(order).toEqual([
+      'fork:session-1:',
+      'dispose:session-1',
+      'follow:fork-1',
+      'unarchive:fork-1',
+    ]);
+    expect(params.switchSessionSelection).toHaveBeenCalledWith('proj-1', 'fork-1');
+  });
+
+  it('Given the dsh seam is not injected, When archiveSession runs, Then it fails closed instead of routing to OpenCode', async () => {
+    const openCodeArchive = vi.fn();
+    const { actions, mocks } = createSessionActionsFixture({
+      activeBackendKind: 'dsh',
+      openCodeApi: { archiveSession: openCodeArchive },
+    });
+
+    await actions.archiveSession('session-1');
+
+    expect(openCodeArchive).not.toHaveBeenCalled();
+    expect(mocks.setSessionError).toHaveBeenCalledWith('app.error.sessionArchiveFailed');
+  });
+});
+
+describe('useBackendSessionActions legacy rename guard', () => {
   it('does not route a pending rename through a different backend', async () => {
     const activeBackendKind = ref<'opencode' | 'codex' | 'acp'>('codex');
     let resolvePrompt: ((value: string | null) => void) | undefined;

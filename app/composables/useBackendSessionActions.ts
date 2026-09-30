@@ -12,6 +12,16 @@ import { isBatchSessionAction, normalizeBatchSessionTargets } from '../utils/bat
 import type { KimiWebSessionApiLike } from './useBackendSessionLifecycle';
 import type { KimiWebSession } from '../utils/kimiWeb';
 import { mapKimiWebSession, upsertKimiWebSessionIntoProjects } from '../backends/kimiWeb/kimiWebAdapter';
+import {
+  archiveDshSession,
+  deleteDshSession,
+  forkDshSession,
+  pinDshSession,
+  renameDshSession,
+  unarchiveDshSession,
+  unpinDshSession,
+  type DshSessionActionApi,
+} from './dshSessionActions';
 
 export type OpenCodeApiLike = {
   deleteSession: (payload: {
@@ -129,6 +139,7 @@ export function useBackendSessionActions(params: {
     forkSessionAtMessage?: (sessionId: string, messageId: string) => Promise<KimiWebSession>;
     undoSessionFromMessage?: (sessionId: string, messageId: string) => Promise<void>;
   };
+  dshSessionApi?: DshSessionActionApi;
 }) {
   type MutationRollback = () => void;
   type SessionOperationHints = { projectId?: string; directory?: string };
@@ -180,6 +191,28 @@ export function useBackendSessionActions(params: {
 
   function updateKimiWebSession(sessionId: string, patch: Partial<SessionState>) {
     if (params.activeBackendKind.value !== 'kimi-web') return;
+    for (const project of Object.values(params.serverProjects)) {
+      for (const sandbox of Object.values(project.sandboxes)) {
+        const session = sandbox.sessions[sessionId];
+        if (session) Object.assign(session, patch);
+      }
+    }
+  }
+
+  function removeDshSession(sessionId: string) {
+    for (const project of Object.values(params.serverProjects)) {
+      for (const sandbox of Object.values(project.sandboxes)) {
+        if (!sandbox.sessions[sessionId]) continue;
+        delete sandbox.sessions[sessionId];
+        sandbox.rootSessions = sandbox.rootSessions.filter((id) => id !== sessionId);
+      }
+    }
+    if (params.selectedSessionId.value === sessionId) {
+      params.selectedSessionId.value = '';
+    }
+  }
+
+  function updateDshSession(sessionId: string, patch: Partial<SessionState>) {
     for (const project of Object.values(params.serverProjects)) {
       for (const sandbox of Object.values(project.sandboxes)) {
         const session = sandbox.sessions[sessionId];
@@ -257,6 +290,10 @@ export function useBackendSessionActions(params: {
           removeKimiWebSession(sessionId);
           return;
         }
+        if (backendKind === 'dsh') {
+          removeDshSession(sessionId);
+          deleteDshSession();
+        }
         await runOpenCodeSessionMutation(
           sessionId,
           hints,
@@ -311,6 +348,15 @@ export function useBackendSessionActions(params: {
           params.setSendStatusKey('app.status.archiving');
           await api.archiveSession(sessionId);
           updateKimiWebSession(sessionId, { timeArchived: Date.now() });
+          params.setSendStatusKey('app.status.archived');
+          return;
+        }
+        if (backendKind === 'dsh') {
+          const api = params.dshSessionApi;
+          if (!api?.archiveSession) throw new Error('dsh session archive is unavailable.');
+          params.setSendStatusKey('app.status.archiving');
+          await archiveDshSession(api, sessionId);
+          updateDshSession(sessionId, { timeArchived: Date.now() });
           params.setSendStatusKey('app.status.archived');
           return;
         }
@@ -370,6 +416,15 @@ export function useBackendSessionActions(params: {
           params.setSendStatusKey('app.status.unarchived');
           return;
         }
+        if (backendKind === 'dsh') {
+          const api = params.dshSessionApi;
+          if (!api?.unarchiveSession) throw new Error('dsh session restore is unavailable.');
+          params.setSendStatusKey('app.status.unarchiving');
+          await unarchiveDshSession(api, sessionId);
+          updateDshSession(sessionId, { timeArchived: undefined });
+          params.setSendStatusKey('app.status.unarchived');
+          return;
+        }
         await runOpenCodeSessionMutation(
           sessionId,
           hints,
@@ -414,6 +469,13 @@ export function useBackendSessionActions(params: {
         updateKimiWebSession(sessionId, { title: trimmedTitle });
         return;
       }
+      if (backendKind === 'dsh') {
+        const api = params.dshSessionApi;
+        if (!api?.renameSession) throw new Error('dsh session rename is unavailable.');
+        await renameDshSession(api, sessionId, trimmedTitle);
+        updateDshSession(sessionId, { title: trimmedTitle });
+        return;
+      }
       const { projectId, directory } = params.resolveSessionOperationPayload(
         sessionId,
         hints?.projectId,
@@ -442,6 +504,12 @@ export function useBackendSessionActions(params: {
     const payload = prepareOpenCodeSessionMutation(sessionId, hints, registerRollback);
     const pinnedAt = Date.now();
     params.setLocalPinnedSession(payload.projectId, payload.sessionId, pinnedAt);
+    if (params.activeBackendKind.value === 'dsh') {
+      const api = params.dshSessionApi;
+      if (!api?.pinSession) throw new Error('dsh session pin is unavailable.');
+      await pinDshSession(api, payload.sessionId);
+      return;
+    }
     if (params.activeBackendKind.value !== 'opencode') return;
     await params.openCodeApi.pinSession({ ...payload, pinnedAt });
   }
@@ -470,6 +538,12 @@ export function useBackendSessionActions(params: {
     try {
       previousOverride = params.getSessionPinnedOverride(projectId, sessionId);
       params.setLocalUnpinnedSession(projectId, sessionId);
+      if (params.activeBackendKind.value === 'dsh') {
+        const api = params.dshSessionApi;
+        if (!api?.unpinSession) throw new Error('dsh session unpin is unavailable.');
+        await unpinDshSession(api, sessionId);
+        return;
+      }
       if (params.activeBackendKind.value !== 'opencode') {
         return;
       }
@@ -566,6 +640,18 @@ export function useBackendSessionActions(params: {
       actionLabel: 'app.actions.fork',
       errorKey: 'app.error.sessionForkFailed',
       apply: async () => {
+        if (params.activeBackendKind.value === 'dsh') {
+          const api = params.dshSessionApi;
+          if (!api?.forkSession) {
+            throw new Error('Whole-session fork is unavailable for this backend.');
+          }
+          const outcome = await forkDshSession(api, sessionId);
+          await params.switchSessionSelection(
+            params.resolveProjectIdForSession(sessionId),
+            outcome.sessionId,
+          );
+          return;
+        }
         const api = params.kimiWebApi;
         if (params.activeBackendKind.value !== 'kimi-web' || !api?.forkSession) {
           throw new Error('Whole-session fork is unavailable for this backend.');
