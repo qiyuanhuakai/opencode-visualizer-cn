@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { AssistantMessageInfo } from '../../types/sse';
 import type { KimiWebMessage, KimiWebSnapshot } from '../../utils/kimiWeb';
 import { loadKimiWebHistoryEntries } from './history';
 import { authoritativeEntries } from '../../composables/kimiWebMessageReconcile';
@@ -31,6 +32,26 @@ const expectedCards = [
 describe('Kimi unfinished subagent restoration', () => {
   it('restores pending child cards from the authoritative snapshot before tool results exist', () => {
     const entries = authoritativeEntries({ ...snapshot, messages: { items: messages } });
+    expect(resolveThreadSubagentSessions(entries.flatMap((entry) => entry.parts), sessionId)).toEqual(expectedCards);
+  });
+
+  it('parents the main-agent continuation to the last user message without orphan roots', () => {
+    const withContinuation: KimiWebMessage[] = [
+      ...messages,
+      { id: 'continuation', session_id: sessionId, role: 'assistant', content: [{ type: 'text', text: 'All done' }] },
+    ];
+    const entries = authoritativeEntries({ ...snapshot, messages: { items: withContinuation } });
+    const continuation = entries.find((entry) => entry.info.id === 'continuation')?.info;
+    expect(continuation?.role).toBe('assistant');
+    if (continuation?.role !== 'assistant') throw new Error('expected assistant continuation');
+    expect(continuation.parentID).toBe('user');
+    const ids = new Set(entries.map((entry) => entry.info.id));
+    const assistantParents = entries
+      .map((entry) => entry.info)
+      .filter((info): info is AssistantMessageInfo => info.role === 'assistant')
+      .map((info) => info.parentID);
+    expect(assistantParents.length).toBeGreaterThan(0);
+    expect(assistantParents.every((parentId) => ids.has(parentId))).toBe(true);
     expect(resolveThreadSubagentSessions(entries.flatMap((entry) => entry.parts), sessionId)).toEqual(expectedCards);
   });
 

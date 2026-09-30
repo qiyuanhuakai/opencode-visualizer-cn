@@ -12,6 +12,7 @@ import {
   type KimiWebWireFrame,
 } from './wire';
 import {
+  buildMessage,
   ensureGroup,
   sessionOf,
   terminalParts,
@@ -121,7 +122,12 @@ function handlePrompt(core: KimiWebCore, frame: KimiWebWireFrame, payload: KimiW
   const userMessageId = asString(payload.userMessageId);
   if (promptId && userMessageId) core.promptUserMessageIds.set(`${sessionId}|${promptId}`, userMessageId);
   if (frame.type === 'prompt.submitted') {
-    ops.push(...submittedPromptOps(payload, core.subagentIdentity(sessionId, agentId), core.now));
+    ops.push(...submittedPromptOps(
+      payload,
+      core.subagentIdentity(sessionId, agentId),
+      core.now,
+      (userMessageId) => core.lastUserMessageIds.set(sessionId, userMessageId),
+    ));
   }
   if (promptId && (frame.type === 'prompt.submitted' || frame.type === 'prompt.started')) {
     core.promptIds.set(`${sessionId}|${agentId}`, promptId);
@@ -167,6 +173,14 @@ function handleSubagentSpawned(core: KimiWebCore, frame: KimiWebWireFrame, paylo
       } };
       core.toolParts.set(key, updated);
       ops.push({ kind: 'part', part: updated });
+      // Nest the subagent turn under the main-agent message that issued the task
+      // call, so it is a child of that turn instead of a phantom root in the parent
+      // session view. Falls back to the session's last user message (set when the
+      // group was created) when the spawning tool call cannot be resolved.
+      if (group.parentId !== part.messageID) {
+        group.parentId = part.messageID;
+        ops.push({ kind: 'message', message: buildMessage(core, group) });
+      }
       break;
     }
   }

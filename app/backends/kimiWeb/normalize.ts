@@ -51,6 +51,7 @@ export function createKimiWebNormalizer(options: { now?: () => number } = {}): K
     agentContexts: new Map(),
     promptIds: new Map(),
     promptUserMessageIds: new Map(),
+    lastUserMessageIds: new Map(),
     subagentIdentity(sessionId: string, agentId: string, turnId?: number) {
       if (!agentId || agentId === 'main') return sessionId;
       const key = `${sessionId}|${agentId}`;
@@ -110,6 +111,7 @@ export function createKimiWebNormalizer(options: { now?: () => number } = {}): K
       core.agentContexts.clear();
       core.promptIds.clear();
       core.promptUserMessageIds.clear();
+      core.lastUserMessageIds.clear();
     },
     subagentSessionId(sessionId: string, agentId: string, turnId?: number) {
       return core.subagentIdentity(sessionId, agentId, turnId);

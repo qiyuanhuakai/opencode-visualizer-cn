@@ -50,6 +50,7 @@ export type KimiWebCore = {
   agentContexts: Map<string, { contextTokens?: number; maxContextTokens?: number }>;
   promptIds: Map<string, string>;
   promptUserMessageIds: Map<string, string>;
+  lastUserMessageIds: Map<string, string>;
   subagentIdentity: (sessionId: string, agentId: string, turnId?: number) => string;
 };
 
@@ -147,6 +148,11 @@ export function ensureGroup(
   let group = core.groups.get(key);
   if (!group) {
     const promptId = asString(payload.promptId) || core.promptIds.get(`${sessionId}|${agentId}`) || '';
+    // A prompt id is not a message id: when no prompt→user-message mapping exists
+    // (system-trigger prompts, main-agent continuation turns), falling back to the
+    // raw promptId manufactures an orphan root in the message store. Fall back to
+    // the session's last user message so every assistant parent resolves to a real
+    // message; only a session with no user message at all keeps the raw promptId.
     group = {
       sessionId,
       agentId,
@@ -154,7 +160,10 @@ export function ensureGroup(
       sessionID,
       messageID: `${sessionID}:${agentId}:${turnId}`,
       startedAt: asNumber(payload.time) ?? core.now(),
-      parentId: core.promptUserMessageIds.get(`${sessionId}|${promptId}`) || promptId,
+      parentId:
+        core.promptUserMessageIds.get(`${sessionId}|${promptId}`) ||
+        core.lastUserMessageIds.get(sessionId) ||
+        promptId,
       usageStepIds: new Set(),
       text: newBucket(),
       reasoning: newBucket(),

@@ -362,6 +362,23 @@ describe('kimiWeb/normalize', () => {
     expect(kimiWebSubagentSessionId('session_x', 'agent-1', 2)).toBe('session_x:agent-1:2');
   });
 
+  it('parents the live subagent turn under the spawning main-agent message with no orphan assistants', () => {
+    const { ops } = ingest(liveFrames);
+    const messages = opsOfKind(ops, 'message').map((op) => op.message);
+    const messageIds = new Set(messages.map((message) => message.id));
+
+    const subagent = messages
+      .filter((message): message is AssistantMessageInfo => message.role === 'assistant')
+      .filter((message) => message.sessionID === SUBAGENT_SESSION_ID)
+      .at(-1);
+    expect(subagent?.parentID).toBe(`${SESSION_ID}:main:2`);
+
+    const orphanAssistants = messages
+      .filter((message): message is AssistantMessageInfo => message.role === 'assistant')
+      .filter((message) => !messageIds.has(message.parentID));
+    expect(orphanAssistants.map((message) => message.id)).toEqual([]);
+  });
+
   it('emits a terminal subagent part even when a failed subagent produced no deltas', () => {
     const failed = derivedOfType('subagent.failed')[0];
     const { ops } = ingest([failed]);
