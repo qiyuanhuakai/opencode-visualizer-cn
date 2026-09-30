@@ -1,6 +1,7 @@
 import { nextTick } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mountCodexApp, mountLoginApp } from './test/appHarness';
+import { StorageKeys, storageKey } from './utils/storageKeys';
 
 const mountedApps: Array<{ readonly unmount: () => void }> = [];
 
@@ -215,5 +216,107 @@ describe('App backend login isolation', () => {
 
     expect(kimiFixture.configureKimiWebBackend).not.toHaveBeenCalled();
     expect(kimiFixture.readSetupBinding('uiInitState')).toBe('login');
+  });
+});
+
+describe('App DSH login surface (Todo 35)', () => {
+  it('renders a DSH button in the login backend group beside Kimi Web', async () => {
+    const dshFixture = await mountLoginApp();
+    mountedApps.push(dshFixture);
+
+    const dshButton = Array.from(
+      dshFixture.host.querySelectorAll<HTMLButtonElement>('.app-login-backend'),
+    ).find((candidate) => candidate.textContent?.includes('DSH'));
+
+    expect(dshButton).toBeInstanceOf(HTMLButtonElement);
+  });
+
+  it('Given the DSH login button selected, When the fields block renders, Then exactly the two DSH bridge fields appear and no other backend fields leak in', async () => {
+    const dshFixture = await mountLoginApp();
+    mountedApps.push(dshFixture);
+
+    clickBackend(dshFixture.host, 'DSH');
+    await nextTick();
+
+    expect(dshFixture.host.querySelector('input[name="dshBridgeUrl"]')).toBeInstanceOf(
+      HTMLInputElement,
+    );
+    expect(dshFixture.host.querySelector('input[name="dshBridgeToken"]')).toBeInstanceOf(
+      HTMLInputElement,
+    );
+    expect(dshFixture.host.querySelector('input[name="kimiWebBridgeUrl"]')).toBeNull();
+    expect(dshFixture.host.querySelector('input[name="kimiWebBridgeToken"]')).toBeNull();
+    expect(dshFixture.host.querySelector('input[name="codexBridgeUrl"]')).toBeNull();
+    expect(dshFixture.host.querySelector('input[name="codexBridgeToken"]')).toBeNull();
+    expect(dshFixture.host.querySelector('input[name="acpBridgeUrl"]')).toBeNull();
+    expect(dshFixture.host.querySelector('input[name="acpBridgeToken"]')).toBeNull();
+
+    // The "must NOT error" half of the absence contract: selecting dsh is a
+    // real supported surface, so no error state may appear.
+    expect(dshFixture.host.querySelector('.app-error-message')).toBeNull();
+    expect(dshFixture.readSetupBinding('uiInitState')).toBe('login');
+  });
+
+  it('shows the DSH login title and hint once DSH is selected', async () => {
+    const dshFixture = await mountLoginApp();
+    mountedApps.push(dshFixture);
+
+    clickBackend(dshFixture.host, 'DSH');
+    await nextTick();
+
+    expect(String(dshFixture.readSetupBinding('loginTitle'))).toBe(
+      "Connect to DSH via vis_bridge",
+    );
+    expect(dshFixture.host.querySelector('.app-login-hint')?.textContent).toContain(
+      'DSH',
+    );
+  });
+
+  it('preserves DSH bridge credentials across backend tab switches (stale-state guard)', async () => {
+    const dshFixture = await mountLoginApp();
+    mountedApps.push(dshFixture);
+
+    clickBackend(dshFixture.host, 'DSH');
+    await nextTick();
+    await fillInput(dshFixture.host, 'dshBridgeUrl', 'ws://127.0.0.1:23004/dsh/ws');
+    await fillInput(dshFixture.host, 'dshBridgeToken', 'dsh-bridge-token');
+
+    clickBackend(dshFixture.host, 'Codex');
+    await nextTick();
+    await fillInput(dshFixture.host, 'codexBridgeToken', 'codex-token-only');
+    clickBackend(dshFixture.host, 'DSH');
+    await nextTick();
+
+    expect(
+      dshFixture.host.querySelector<HTMLInputElement>('input[name="dshBridgeUrl"]')?.value,
+    ).toBe('ws://127.0.0.1:23004/dsh/ws');
+    expect(
+      dshFixture.host.querySelector<HTMLInputElement>('input[name="dshBridgeToken"]')?.value,
+    ).toBe('dsh-bridge-token');
+    expect(dshFixture.readSetupBinding('loginDshBridgeUrl')).toBe('ws://127.0.0.1:23004/dsh/ws');
+    expect(dshFixture.readSetupBinding('loginDshBridgeToken')).toBe('dsh-bridge-token');
+  });
+
+  it('Given DSH credentials entered through the real login form, When submitted, Then the dsh credentials are persisted for the dsh branch (not another backend)', async () => {
+    const dshFixture = await mountLoginApp();
+    mountedApps.push(dshFixture);
+
+    clickBackend(dshFixture.host, 'DSH');
+    await nextTick();
+    await fillInput(dshFixture.host, 'dshBridgeUrl', 'ws://127.0.0.1:23004/dsh/ws');
+    await fillInput(dshFixture.host, 'dshBridgeToken', 'dsh-token-only');
+
+    const credentials = dshFixture.readSetupBinding('credentials') as {
+      saveDsh: (bridgeUrl: string, bridgeToken: string) => void;
+    };
+    const saveDsh = vi.spyOn(credentials, 'saveDsh');
+
+    dshFixture.host.querySelector<HTMLButtonElement>('.app-loading-connect')?.click();
+    await nextTick();
+
+    expect(saveDsh).toHaveBeenCalledWith('ws://127.0.0.1:23004/dsh/ws', 'dsh-token-only');
+    // saveDsh persists StorageKeys.auth.backendKind, so this assertion proves
+    // the dsh login branch ran instead of another backend's credentials sink.
+    expect(window.localStorage.getItem(storageKey(StorageKeys.auth.backendKind))).toBe('dsh');
   });
 });

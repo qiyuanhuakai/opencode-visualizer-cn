@@ -368,6 +368,15 @@
             >
               {{ t('app.login.kimiWebBackend') }}
             </button>
+            <button
+              type="button"
+              class="app-login-backend"
+              :class="{ active: loginBackendKind === 'dsh' }"
+              :aria-pressed="loginBackendKind === 'dsh'"
+              @click="loginBackendKind = 'dsh'"
+            >
+              {{ t('app.login.dshBackend') }}
+            </button>
           </div>
           <div class="app-login-fields">
             <template v-if="loginBackendKind === 'opencode'">
@@ -438,6 +447,25 @@
                 @keydown.enter="handleLogin"
               />
               <p class="app-login-hint">{{ t('app.login.kimiWebBridgeHint') }}</p>
+            </template>
+            <template v-else-if="loginBackendKind === 'dsh'">
+              <input
+                v-model="loginDshBridgeUrl"
+                type="text"
+                class="app-login-input"
+                :placeholder="t('app.login.dshBridgeUrl')"
+                name="dshBridgeUrl"
+                @keydown.enter="handleLogin"
+              />
+              <input
+                v-model="loginDshBridgeToken"
+                type="password"
+                class="app-login-input"
+                :placeholder="t('app.login.dshBridgeToken')"
+                name="dshBridgeToken"
+                @keydown.enter="handleLogin"
+              />
+              <p class="app-login-hint">{{ t('app.login.dshBridgeHint') }}</p>
             </template>
             <template v-else>
               <input
@@ -2452,7 +2480,9 @@ const loginTitle = computed(() =>
       ? t('app.login.acpTitle')
       : loginBackendKind.value === 'kimi-web'
         ? t('app.login.kimiWebTitle')
-        : t('app.login.title'),
+        : loginBackendKind.value === 'dsh'
+          ? t('app.login.dshTitle')
+          : t('app.login.title'),
 );
 
 function setSendStatusKey(key: string, params?: Record<string, unknown>) {
