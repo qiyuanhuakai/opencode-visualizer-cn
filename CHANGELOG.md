@@ -4,6 +4,19 @@
 
 ---
 
+## [Unreleased]
+
+### Kimi Web 文件与会话状态修复
+
+- [x] 修复 `package.json` 等 JSON 文件打开空白的问题，保留下载内容并正确区分 API 错误响应。
+- [x] 历史会话卡片的权限模式不再随输入区权限选择变化；模式选择按后端与会话保存，刷新后恢复，并避免过期状态覆盖新选择。
+- [x] 从会话快照恢复运行中子代理与父工具调用的关联，修复刷新后子代理卡片消失的问题。
+
+### OpenCode 子代理历史与 Windows 进程清理
+
+- [x] 打开 OpenCode 子代理历史时直接读取子会话，不再依赖预加载缓存；修复历史空白，并区分加载失败与空历史。
+- [x] Windows 终端后代进程清理按实际退出状态判断，避免已退出进程被误判为仍在运行，并保留 PowerShell 错误输出（[#153](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/153)）。
+
 ## [v0.8.9 released]
 
 ### 编辑器与 Codex 主题适配
