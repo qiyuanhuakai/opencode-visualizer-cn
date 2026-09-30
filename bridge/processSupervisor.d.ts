@@ -1,5 +1,5 @@
 export type NativeServiceDefinition = {
-  id: 'opencode' | 'codex' | 'kimi-web';
+  id: 'opencode' | 'codex' | 'kimi-web' | 'dsh';
   name: string;
   command: string;
   args: string[];
@@ -18,12 +18,24 @@ export type ProcessStatus = {
   owned: boolean;
   pid?: number;
   error?: string;
+  /** Detected `dsh --version` value, recorded for display once known (dsh only). */
+  version?: string;
 };
 
 export type ProcessSupervisor = {
-  start(enabledServices?: { opencode: boolean; codex: boolean; 'kimi-web': boolean }): Promise<ProcessStatus[]>;
+  start(enabledServices?: {
+    opencode: boolean;
+    codex: boolean;
+    'kimi-web': boolean;
+    dsh?: boolean;
+  }): Promise<ProcessStatus[]>;
   stop(): Promise<void>;
   getStatus(): ProcessStatus[];
+  /** Cookie provider for the bridge dsh proxies; the launch token lives here. */
+  getDshAuthProvider?(): {
+    getCookie(authority: string): Promise<string>;
+    invalidate(authority: string): boolean;
+  };
 };
 
 export type SpawnedProcessLike = {
@@ -38,6 +50,16 @@ export type SpawnedProcessLike = {
   ): unknown;
   kill(signal: NodeJS.Signals): boolean;
 };
+
+/** dsh port occupancy classification (spawn-only: `fence` and `mismatch` are errors). */
+export type DshWebFenceState =
+  | { readonly state: 'idle' }
+  | { readonly state: 'fence' }
+  | { readonly state: 'mismatch'; readonly reason: string };
+
+export type DshWebAuthProbeResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string };
 
 export function createNativeServiceDefinitions(): NativeServiceDefinition[];
 export function probeNativeService(service: NativeServiceDefinition): Promise<boolean>;
@@ -56,6 +78,14 @@ export function createProcessSupervisor(options?: {
     authorization: string,
   ) => Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }>;
   kimiWebTokenProvider?: { getAuthorization(): string };
+  probeDshWebFence?: (service: NativeServiceDefinition) => Promise<DshWebFenceState>;
+  probeDshWebAuth?: (cookie: string) => Promise<DshWebAuthProbeResult>;
+  /** Injected into the default dsh cookie exchange for deterministic tests. */
+  dshExchange?: (request: {
+    readonly authority: string;
+    readonly launchToken: string;
+  }) => Promise<unknown>;
+  dshVersionProbe?: () => Promise<string>;
   readinessAttempts?: number;
   readinessIntervalMs?: number;
 }): ProcessSupervisor;
