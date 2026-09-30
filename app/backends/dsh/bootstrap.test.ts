@@ -43,7 +43,6 @@ const SESSION_FOLLOW_SNAPSHOT: DshJsonValue = {
 
 function mappedSession(overrides: Partial<DshMappedSession> & Pick<DshMappedSession, 'id'>): DshMappedSession {
   return {
-    id: overrides.id,
     projectID: 'ws-git',
     projectId: 'ws-git',
     workspaceId: 'ws-git',
