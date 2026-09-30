@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
 import type { KimiWebMessage } from '../utils/kimiWeb';
 import { KimiWebError } from '../utils/kimiWeb';
-import { createSessionReloadFixture } from './useBackendSessionReload.test-helpers';
+import type { DshSessionRecord } from '../backends/dsh/types';
+import { createSessionReloadFixture, type ReloadOptions } from './useBackendSessionReload.test-helpers';
 import { useMessages } from './useMessages';
 
 const KIMI_FIXTURES_DIR = [
@@ -378,6 +379,234 @@ describe('useBackendSessionReload kimi-web history', () => {
     await expect(reload.reloadSelectedSessionState('kimi-session')).rejects.toBeInstanceOf(
       KimiWebError,
     );
+    expect(mocks.msg.loadHistory).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dsh `session/page` history branch (plan Todo 26)
+// ---------------------------------------------------------------------------
+
+const DSH_SESSION_ID = 'session-06ee930d-7d74-42b1-928d-ac8fdd4376bf';
+const DSH_CHILD_SESSION_ID = 'session-4d0e6409-6de0-4cb5-a6b0-de3c6d54b7c1';
+const DSH_CURSOR = 17;
+
+function dshPageRequests(normalized: Record<string, unknown>) {
+  return normalized as { address: Record<string, unknown>; beforeSeq: number; throughSeq: number };
+}
+
+function createDshReloadFixture(
+  fetchPage: NonNullable<ReloadOptions['dshApi']>['fetchPage'],
+  overrides: Partial<ReloadOptions> = {},
+) {
+  const refreshAuth = vi.fn<() => Promise<void>>(async () => {});
+  const onDshHistoryTruncated =
+    vi.fn<NonNullable<ReloadOptions['onDshHistoryTruncated']>>();
+  const fixture = createSessionReloadFixture({
+    activeBackendKind: ref<'dsh'>('dsh'),
+    dshApi: { fetchPage, refreshAuth },
+    dshWatermark: () => DSH_CURSOR,
+    onDshHistoryTruncated,
+    ...overrides,
+  });
+  return { ...fixture, refreshAuth, onDshHistoryTruncated };
+}
+
+function dshRecord(seq: number, type: string, time: number): DshSessionRecord {
+  return {
+    type: 'event',
+    event: { type, seq, time, data: { turn: 1, reason: { kind: 'completed' } } } as DshSessionRecord['event'],
+  };
+}
+
+describe('useBackendSessionReload dsh history', () => {
+  it('pages session/page backwards and publishes chronological entries', async () => {
+    const windows: DshSessionRecord[][] = [
+      [dshRecord(14, 'turn/start', 1), dshRecord(15, 'assistant/message', 2)],
+      [dshRecord(11, 'user/message', 3), dshRecord(12, 'assistant/message', 4)],
+      [],
+    ];
+    let call = 0;
+    const fetchPage = vi.fn(async (request) => {
+      dshPageRequests(request);
+      const window = windows[call] ?? [];
+      call += 1;
+      return { type: 'server-response', rpcId: 'rpc-1', result: { ok: true, value: { records: window, hasMore: false } } };
+    });
+    const { reload, mocks } = createDshReloadFixture(fetchPage);
+
+    await reload.reloadSelectedSessionState(DSH_SESSION_ID);
+
+    expect(fetchPage).toHaveBeenCalledTimes(3);
+    const requests = fetchPage.mock.calls.map(([request]) => dshPageRequests(request));
+    expect(requests[0]).toMatchObject({ beforeSeq: DSH_CURSOR + 1, throughSeq: DSH_CURSOR });
+    expect(requests[0]?.address).toEqual({ kind: 'session', sessionId: DSH_SESSION_ID });
+    expect(requests[1]?.beforeSeq).toBe(14);
+    expect(requests[2]?.beforeSeq).toBe(11);
+    expect(mocks.msg.loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it('never pages a dsh session that has no history yet', async () => {
+    const fetchPage = vi.fn(async () => ({ records: [] }));
+    const { reload, mocks, onDshHistoryTruncated } = createDshReloadFixture(fetchPage, {
+      dshWatermark: () => -1,
+    });
+
+    await reload.reloadSelectedSessionState(DSH_SESSION_ID);
+
+    expect(fetchPage).not.toHaveBeenCalled();
+    expect(mocks.msg.loadHistory).toHaveBeenCalledWith([]);
+    expect(onDshHistoryTruncated).not.toHaveBeenCalled();
+  });
+
+  it('does not issue loadHistory while another history load still owns the session', async () => {
+    const fetchPage = vi.fn(async () => ({ records: [dshRecord(1, 'user/message', 1)] }));
+    const { reload, options } = createDshReloadFixture(fetchPage, {
+      isLoadingHistory: ref(true),
+    });
+
+    const pending = reload.reloadSelectedSessionState(DSH_SESSION_ID);
+    expect(fetchPage).not.toHaveBeenCalled();
+
+    options.isLoadingHistory.value = false;
+    await pending;
+
+    expect(fetchPage).toHaveBeenCalled();
+    expect(options.isLoadingHistory.value).toBe(false);
+  });
+
+  it('surfaces a mid-pagination page error without publishing a truncated view', async () => {
+    let call = 0;
+    const fetchPage = vi.fn(async () => {
+      call += 1;
+      if (call === 1) return { records: [dshRecord(3, 'user/message', 1)] };
+      throw new Error('gateway unavailable');
+    });
+    const { reload, mocks } = createDshReloadFixture(fetchPage);
+
+    await expect(reload.reloadSelectedSessionState(DSH_SESSION_ID)).rejects.toThrow('gateway unavailable');
+    expect(mocks.msg.loadHistory).not.toHaveBeenCalled();
+  });
+
+  it('refreshes authorization once before retrying a rejected page', async () => {
+    let unauthorized = true;
+    const fetchPage = vi.fn(async () => {
+      if (unauthorized) {
+        unauthorized = false;
+        return { status: 401 };
+      }
+      return { records: [] };
+    });
+    const { reload, refreshAuth, options } = createDshReloadFixture(fetchPage);
+
+    await reload.reloadSelectedSessionState(DSH_SESSION_ID);
+
+    expect(refreshAuth).toHaveBeenCalledTimes(1);
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+    expect(options.isLoadingHistory.value).toBe(false);
+  });
+
+  it('reports a bounded dsh history when the page cap is reached', async () => {
+    const fetchPage = vi.fn(async (rawRequest) => {
+      const { beforeSeq } = dshPageRequests(rawRequest);
+      return { records: [dshRecord(beforeSeq - 1, 'user/message', beforeSeq)], hasMore: true };
+    });
+    const { reload, onDshHistoryTruncated } = createDshReloadFixture(fetchPage, {
+      dshHistoryMaxPages: 3,
+    });
+
+    await reload.reloadSelectedSessionState(DSH_SESSION_ID);
+
+    expect(fetchPage).toHaveBeenCalledTimes(3);
+    expect(onDshHistoryTruncated).toHaveBeenCalledWith({
+      sessionId: DSH_SESSION_ID,
+      pages: 3,
+    });
+  });
+
+  it('pages a subagent child through its own address, never interleaved', async () => {
+    const fetchPage = vi.fn(async (rawRequest) => {
+      const request = dshPageRequests(rawRequest);
+      if (request.address.kind === 'subagent') {
+        return { records: [], hasMore: false };
+      }
+      return { records: [dshRecord(4, 'user/message', 1)], hasMore: false };
+    });
+    const dshChildAddresses = vi.fn(() => [
+      {
+        address: {
+          kind: 'subagent' as const,
+          parentSessionId: DSH_SESSION_ID,
+          childSessionId: DSH_CHILD_SESSION_ID,
+          mode: 'one-shot' as const,
+        },
+        source: 'session/list' as const,
+        matched: 'parent' as const,
+        throughSeq: 3,
+      },
+    ]);
+    const { reload, mocks } = createDshReloadFixture(fetchPage, { dshChildAddresses });
+
+    await reload.reloadSelectedSessionState(DSH_SESSION_ID);
+
+    const addresses = fetchPage.mock.calls.map(([request]) => dshPageRequests(request).address);
+    expect(addresses[0]).toEqual({ kind: 'session', sessionId: DSH_SESSION_ID });
+    expect(addresses).toContainEqual({
+      kind: 'subagent',
+      parentSessionId: DSH_SESSION_ID,
+      childSessionId: DSH_CHILD_SESSION_ID,
+      mode: 'one-shot',
+    });
+    expect(mocks.msg.loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it('never invokes popup or descendant callbacks during a dsh history load', async () => {
+    const hydrateReferencedSubagents = vi.fn();
+    const fetchPage = vi.fn(async () => ({ records: [dshRecord(2, 'user/message', 1)] }));
+    const { reload, mocks } = createDshReloadFixture(fetchPage, { hydrateReferencedSubagents });
+
+    await reload.reloadSelectedSessionState(DSH_SESSION_ID);
+
+    expect(mocks.msg.loadHistory).toHaveBeenCalledTimes(1);
+    expect(hydrateReferencedSubagents).not.toHaveBeenCalled();
+    expect(mocks.scheduleDescendantSessionHistoryHydration).not.toHaveBeenCalled();
+    expect(mocks.codexReapplyBackfill).not.toHaveBeenCalled();
+    expect(mocks.msg.tryLoadFromCache).not.toHaveBeenCalled();
+  });
+
+  it('hands normalized entries to the dsh bridge when one is wired', async () => {
+    const applyHistory = vi.fn();
+    const fetchPage = vi.fn(async () => ({ records: [dshRecord(2, 'user/message', 1)] }));
+    const { reload, mocks } = createDshReloadFixture(fetchPage, {
+      dshBridge: { applyHistory },
+    });
+
+    await reload.reloadSelectedSessionState(DSH_SESSION_ID);
+
+    expect(applyHistory).toHaveBeenCalledTimes(1);
+    expect(mocks.msg.loadHistory).not.toHaveBeenCalled();
+  });
+
+  it('discards dsh pages that resolve after a session switch', async () => {
+    let resolveSlow: (value: unknown) => void = () => {};
+    const fetchPage = vi.fn(
+      (rawRequest) =>
+        dshPageRequests(rawRequest).address.sessionId === 'slow'
+          ? new Promise((resolve) => {
+              resolveSlow = resolve;
+            })
+          : Promise.resolve({ records: [] }),
+    );
+    const { reload, mocks } = createDshReloadFixture(fetchPage);
+
+    const pending = reload.reloadSelectedSessionState('slow');
+    await vi.waitFor(() => expect(fetchPage).toHaveBeenCalled());
+    await reload.reloadSelectedSessionState('current', 'slow');
+    mocks.msg.loadHistory.mockClear();
+
+    resolveSlow({ records: [dshRecord(9, 'user/message', 1)] });
+    await pending;
+
     expect(mocks.msg.loadHistory).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,6 @@
 import { nextTick, type Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
+import { loadDshHistory, type DshHistoryChildAddress, type DshHistoryPageFetcher } from '../backends/dsh/history';
 import { loadKimiWebHistoryEntries } from '../backends/kimiWeb/history';
 import type { KimiWebClient } from '../utils/kimiWeb';
 import type { MessageCacheIdentity } from './useMessages';
@@ -51,6 +52,25 @@ export function useBackendSessionReload(params: {
   kimiWebHistoryPageSize?: number;
   /** Fires when the page cap bounded a history load (never silent). */
   onKimiWebHistoryTruncated?: (info: { sessionId: string; pages: number }) => void;
+  /** dsh `session/page` history pager (plan Todo 26); absent until Todo 33 wires it. */
+  dshApi?: {
+    fetchPage: DshHistoryPageFetcher;
+    refreshAuth?: () => Promise<void> | void;
+  };
+  /**
+   * Applied-seq watermark of the dsh session being loaded (the `session/follow`
+   * snapshot cursor, R2). Negative means the session has no history yet, which
+   * is the only state where the pager must not be called at all.
+   */
+  dshWatermark?: () => number;
+  /** Resolves the selected session's subagent children (Metis #7/#10). */
+  dshChildAddresses?: (sessionId: string) => readonly DshHistoryChildAddress[];
+  dshBridge?: {
+    applyHistory(entries: unknown[]): void;
+  };
+  dshHistoryMaxPages?: number;
+  /** Fires when the page cap bounded a dsh history load (never silent). */
+  onDshHistoryTruncated?: (info: { sessionId: string; pages: number }) => void;
   fetchRootSessionHistory: (
     rootSessionId: string,
   ) => Promise<{ requestId: number; loaded: boolean }>;
@@ -207,6 +227,48 @@ export function useBackendSessionReload(params: {
               await params.kimiWebBridge.subscribe([sessionId]);
             } else {
               params.msg.loadHistory(result.entries);
+            }
+            await params.anchorOutputToBottom();
+          } finally {
+            if (reloadRequestId === params.sessionReloadRequestId.value) {
+              params.isLoadingHistory.value = false;
+            }
+          }
+        }
+        if (reloadRequestId !== params.sessionReloadRequestId.value) return;
+        params.focusInput();
+        return;
+      }
+
+      if (params.activeBackendKind.value === 'dsh') {
+        if (params.dshApi) {
+          let settled = false;
+          try {
+            const result = await loadDshHistory({
+              sessionId,
+              throughSeq: params.dshWatermark?.() ?? -1,
+              fetchPage: params.dshApi.fetchPage,
+              refreshAuth: params.dshApi.refreshAuth,
+              maxPages: params.dshHistoryMaxPages,
+              isCurrent: () => reloadRequestId === params.sessionReloadRequestId.value,
+              // A load already in flight owns the session: the pager waits for
+              // it instead of racing, and only then claims the flag.
+              isBusy: () => params.isLoadingHistory.value && !settled,
+              onSettled: () => {
+                settled = true;
+                params.isLoadingHistory.value = true;
+              },
+              childAddresses: params.dshChildAddresses?.(sessionId),
+              pageChildren: true,
+            });
+            if (reloadRequestId !== params.sessionReloadRequestId.value) return;
+            if (result.truncated) {
+              params.onDshHistoryTruncated?.({ sessionId, pages: result.pages });
+            }
+            if (params.dshBridge) {
+              params.dshBridge.applyHistory([...result.entries]);
+            } else {
+              params.msg.loadHistory([...result.entries]);
             }
             await params.anchorOutputToBottom();
           } finally {
