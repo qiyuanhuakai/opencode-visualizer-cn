@@ -38,6 +38,12 @@ export function prepareSendPreflight(params: BackendMessageSendParams): SendPref
   if ((!hasText && !hasAttachments) || !params.selectedSessionId.value) return null;
   const sessionId = resolveSessionId(params, params.selectedSessionId.value);
   if (!sessionId) return null;
+  if (backend === 'dsh' && hasAttachments) {
+    // dsh prompts are text-only (Metis #13): attachments are explicitly OUT,
+    // so a dsh send refuses before dispatch instead of dropping bytes.
+    params.setSendStatusText('dsh supports text prompts only; attachments are not supported.');
+    return null;
+  }
   const selectedModel = params.selectedModel.value;
   const slash = hasText ? params.parseSlashCommand(text) : null;
   const commandMatch = slash ? params.findCommandByName(slash.name) : null;
@@ -56,11 +62,14 @@ export function prepareSendPreflight(params: BackendMessageSendParams): SendPref
   if (
     backend !== 'codex' &&
     backend !== 'kimi-web' &&
+    backend !== 'dsh' &&
     (!model.providerID ||
       !model.modelID ||
       !params.isProviderEnabled(model.providerID) ||
       !params.isModelAvailable(selectedModel))
   ) {
+    // dsh models come from the dsh catalog (`session/modelCatalog`), not from
+    // the OpenCode provider/model registry, so the same gate must not fire.
     params.ensureSelectedModelAvailable();
     params.setSendStatusText('Select an enabled provider/model before sending.');
     return null;
