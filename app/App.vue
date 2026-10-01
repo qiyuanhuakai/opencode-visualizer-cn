@@ -11984,15 +11984,20 @@ body {
 }
 
 .app-login-backends {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 1fr);
+  /* flex-wrap (not equal `1fr` grid columns): with five backends the widest
+   * label ("Kimi Web") cannot fit a 1/5 column at the 420px-max login card,
+   * so a label would wrap mid-word. nowrap pins every label to one line and
+   * the row itself reflows to a second button line on narrow viewports. */
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
 .app-login-backend {
   appearance: none;
   -webkit-appearance: none;
+  flex: 1 1 auto;
+  white-space: nowrap;
   border: 1px solid var(--theme-login-border, var(--theme-border-default, #334155));
   border-radius: 8px;
   background: var(--theme-login-control-bg, var(--theme-surface-panel-muted, #1e293b));
