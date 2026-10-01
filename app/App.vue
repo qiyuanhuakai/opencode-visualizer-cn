@@ -262,6 +262,34 @@
                     @open="openKimiThreadGoal(selectedSessionId)"
                   />
                 </template>
+                <template v-else-if="activeBackendKind === 'dsh'">
+                  <div v-if="dshComposerPresetControl" class="dsh-composer-preset">
+                    <Dropdown
+                      v-if="dshComposerPresetControl.writable"
+                      class="dsh-composer-preset-dropdown"
+                      :model-value="dshComposerPresetControl.current"
+                      :label="t('statusMonitor.dsh.permissionPreset')"
+                      :disabled="connectionState !== 'ready'"
+                      menu-icon="lucide:chevron-up"
+                      button-class="dsh-composer-preset-trigger"
+                      :popup-style="{ top: 'auto', bottom: 'anchor(top)', left: 'clamp(8px, anchor(left), calc(100vw - 248px))', right: 'auto', marginTop: '0', marginBottom: '6px', minWidth: '200px' }"
+                      @select="selectDshComposerPreset"
+                    >
+                      <DropdownItem
+                        v-for="preset in dshComposerPresetControl.options"
+                        :key="preset"
+                        :value="preset"
+                        :active="preset === dshComposerPresetControl.current"
+                      >
+                        {{ preset }}
+                      </DropdownItem>
+                    </Dropdown>
+                    <span v-else class="dsh-composer-preset-badge">
+                      <span class="dsh-composer-preset-badge-label">{{ t('statusMonitor.dsh.permissionPreset') }}</span>
+                      <span class="dsh-composer-preset-badge-value">{{ dshComposerPresetControl.current }}</span>
+                    </span>
+                  </div>
+                </template>
               </template>
             </InputPanel>
           </footer>
@@ -8277,6 +8305,55 @@ const dshPermissions = createDshPermissions({
   closePermissionWindow: (requestId) => removePermissionEntry(requestId),
 });
 
+// ---------------------------------------------------------------------------
+// Todo 33: the composer's dsh preset control — one computed, one handler.
+//
+// The two branches are driven by the REAL probed write capability
+// (`dshPermissions.selector.writable`), never by a hardcoded flag:
+//
+//   writable   → the composer renders a preset dropdown over the
+//               protocol-native preset names (`selector.options`); a choice
+//               routes through `selectDshComposerPreset` (the write) and the
+//               displayed value reads back from the very state the write lands
+//               in (`state.permissionPreset`), so write→read-back is one source
+//               of truth.
+//   read-only  → the composer renders the current preset as a badge carrying
+//               the protocol's own preset string. NO writable dropdown renders
+//               and NO mutation request is ever emitted.
+//
+// The 0.2.0-rc.2 probe found NO preset write endpoint (Todo 6; review blocker
+// #6; Todo 28 evidence: writable:false, selectPreset refuses, zero mutations),
+// so read-only is the live branch — while the writable branch stays wired for
+// the day a write endpoint is probed (review blocker #2: the composer must
+// never unconditionally require write capability).
+//
+// agentPreset stays a default value only: no selector is exposed for it
+// (Metis #19 — Beta ships no preset-selection UI).
+//
+// Stale-state fencing: the control exists only while a bridge is PUBLISHED.
+// `bootstrapDshWorkspace` publishes the pair solely after its isCurrent-fenced
+// commit, so an expired bootstrap (orphaned by a backend switch) can never
+// surface a preset; leaving dsh disposes the singleton through the sync
+// activeBackendKind watch, so no other backend holds dsh preset UI.
+// ---------------------------------------------------------------------------
+
+const dshComposerPresetControl = computed(() => {
+  if (!dshMessageBridge.value) return undefined;
+  const selector = dshPermissions.selector.value;
+  return {
+    writable: selector.writable,
+    current: dshPermissions.state.permissionPreset,
+    options: selector.options,
+  };
+});
+
+/** Write path of the writable branch; the read-only surface never reaches it. */
+function selectDshComposerPreset(preset: unknown): boolean {
+  if (!dshComposerPresetControl.value?.writable) return false;
+  if (typeof preset !== 'string' || preset.length === 0) return false;
+  return dshPermissions.selectPreset(preset);
+}
+
 function dshRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -12303,5 +12380,41 @@ body {
 .confirm-dialog-btn-confirm:hover {
   background: var(--theme-modal-active-bg, var(--theme-surface-panel-hover, #1e293b));
   color: var(--theme-accent-primary, #60a5fa);
+}
+
+.dsh-composer-preset {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  min-width: 0;
+}
+
+.dsh-composer-preset :deep(.ui-dropdown-button) {
+  height: 28px;
+  padding: 4px 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
+  font-size: var(--type-sm, 12px);
+}
+
+.dsh-composer-preset-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
+  font-size: var(--type-sm, 12px);
+  white-space: nowrap;
+}
+
+.dsh-composer-preset-badge-label {
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
+}
+
+.dsh-composer-preset-badge-value {
+  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
 }
 </style>
