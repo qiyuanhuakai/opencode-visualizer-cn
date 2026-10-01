@@ -354,6 +354,56 @@ describe('dsh message bridge — dual attach ($events + session/follow)', () => 
 });
 
 // ---------------------------------------------------------------------------
+
+describe('dsh message bridge — bootstrap join binding (defect D2)', () => {
+  it('creates the sync machine for a follow bound at attach time', () => {
+    // The bootstrap consumed this stream's snapshot, so the bridge is the only
+    // place the machine can come from: without it `syncState` reports
+    // `detached` and the composer refuses the very first send.
+    const { bridge } = createHarness();
+    const follow = new FakeStream('sf-bootstrap');
+
+    bridge.attachFollow(follow, SESSION_ID);
+
+    expect(bridge.syncState(SESSION_ID)).toEqual({ kind: 'live', cursor: -1 });
+    expect(bridge.syncState()).toEqual({ kind: 'live', cursor: -1 });
+  });
+
+  it('does not clobber a published phase when re-binding an existing session', () => {
+    const { bridge } = createHarness();
+    const first = new FakeStream('sf-live');
+    bridge.attachFollow(first, SESSION_ID);
+    first.emit(followSnapshot);
+    expect(bridge.syncState(SESSION_ID).kind).toBe('live');
+
+    const reopened = new FakeStream('sf-reopened');
+    bridge.attachFollow(reopened, SESSION_ID);
+
+    expect(bridge.syncState(SESSION_ID).kind).toBe('live');
+    expect(bridge.cursor(SESSION_ID)).toBe(17);
+  });
+
+  it('applies live frames of a bootstrap-adopted stream without a re-taught snapshot', () => {
+    const { bridge, store } = createHarness();
+    const follow = new FakeStream('sf-bootstrap-live');
+    bridge.attachFollow(follow, SESSION_ID);
+
+    follow.emit(
+      record('assistant/message', 18, {
+        turn: 1,
+        step: 1,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Live after bootstrap' }] },
+      }),
+    );
+
+    expect(bridge.sessionIds()).toEqual([SESSION_ID]);
+    expect(store.messages.size).toBeGreaterThan(0);
+    const texts = [...store.parts.values()].map((part) => (part as { text?: string }).text);
+    expect(texts).toContain('Live after bootstrap');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 2. approval/request → permission UI surface → terminal answer
 // ---------------------------------------------------------------------------
 

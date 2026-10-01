@@ -95,7 +95,7 @@ export type DshHistoryPageFetcher = (request: DshHistoryPageRequest) => Promise<
  * so the bridge ATTACHES to that live stream instead of opening a second one.
  */
 export type DshBootstrapBridge = {
-  attachFollow(handle: DshMuxStreamHandle): void;
+  attachFollow(handle: DshMuxStreamHandle, sessionId?: string): void;
   applyHistory(entries: unknown[]): void;
   stop(): void;
 };
@@ -266,7 +266,10 @@ export async function bootstrapDshWorkspace(options: {
         dispose();
         return { tree };
       }
-      bridge.attachFollow(follow);
+      // The join-time binding: this stream's snapshot was consumed above, so
+      // the bridge cannot learn the session from it (handleFollowFrame resolves
+      // later frames through streamSessions / primarySessionId).
+      bridge.attachFollow(follow, entry.id);
       bridge.applyHistory([...entries, ...history.entries]);
       if (!options.isCurrent()) {
         dispose();

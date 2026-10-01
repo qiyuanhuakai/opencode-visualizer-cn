@@ -22,7 +22,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createContext, runInContext, runInNewContext } from 'node:vm';
 import ts from 'typescript';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { type Mock, afterEach, describe, expect, it, vi } from 'vitest';
 import { computed } from 'vue';
 
 import { createDshRpcClient, deriveDshBridgeHttpUrl } from './utils/dshRpc';
@@ -301,28 +301,30 @@ describe('currentBackendIdentity (Todo 33 dsh case)', () => {
 // 2. bootstrapDshWorkspace — singleton construction, four bodies, stale state
 // ---------------------------------------------------------------------------
 
+const DSH_BOOTSTRAP_DECLARATIONS = [
+  appVariableDeclaration('dshMessageBridge'),
+  appVariableDeclaration('dshMuxClient'),
+  appVariableDeclaration('dshFollowStreams'),
+  appVariableDeclaration('dshSessionEvents'),
+  appVariableDeclaration('dshPermissions'),
+  appFunctionDeclaration('dshRecord'),
+  appFunctionDeclaration('dshBackend'),
+  appFunctionDeclaration('dshRpcClient'),
+  appFunctionDeclaration('dshSnapshotSessionId'),
+  appFunctionDeclaration('dshBootstrapNormalizer'),
+  appFunctionDeclaration('dshFetchSessionPage'),
+  appVariableDeclaration('dshBootstrapFetchPage'),
+  appFunctionDeclaration('dshReadFirstFollowFrame'),
+  appFunctionDeclaration('dshAdoptFollow'),
+  appFunctionDeclaration('dshDisposeFollow'),
+  appFunctionDeclaration('dshAttachFollow'),
+  appFunctionDeclaration('dshCreateMessageBridge'),
+  appFunctionDeclaration('disconnectDshBackend'),
+  appFunctionDeclaration('bootstrapDshWorkspace'),
+].join('\n');
+
 describe('bootstrapDshWorkspace (Todo 33 dsh bridge construction)', () => {
-  const DECLARATIONS = [
-    appVariableDeclaration('dshMessageBridge'),
-    appVariableDeclaration('dshMuxClient'),
-    appVariableDeclaration('dshFollowStreams'),
-    appVariableDeclaration('dshSessionEvents'),
-    appVariableDeclaration('dshPermissions'),
-    appFunctionDeclaration('dshRecord'),
-    appFunctionDeclaration('dshBackend'),
-    appFunctionDeclaration('dshRpcClient'),
-    appFunctionDeclaration('dshSnapshotSessionId'),
-    appFunctionDeclaration('dshBootstrapNormalizer'),
-    appFunctionDeclaration('dshFetchSessionPage'),
-    appVariableDeclaration('dshBootstrapFetchPage'),
-    appFunctionDeclaration('dshReadFirstFollowFrame'),
-    appFunctionDeclaration('dshAdoptFollow'),
-    appFunctionDeclaration('dshDisposeFollow'),
-    appFunctionDeclaration('dshAttachFollow'),
-    appFunctionDeclaration('dshCreateMessageBridge'),
-    appFunctionDeclaration('disconnectDshBackend'),
-    appFunctionDeclaration('bootstrapDshWorkspace'),
-  ].join('\n');
+  const DECLARATIONS = DSH_BOOTSTRAP_DECLARATIONS;
 
   type BootstrapSandbox = {
     bootstrapDshWorkspace: (isCurrent: () => boolean) => Promise<void>;
@@ -413,6 +415,7 @@ describe('bootstrapDshWorkspace (Todo 33 dsh bridge construction)', () => {
         removePermissionEntry,
         getActiveBackendAdapter: () => adapter,
         DshAdapter: DshAdapterDouble,
+        configureDshBackend: vi.fn(() => adapter),
         createDshMuxClient: vi.fn(() => {
           order.push('mux:create');
           return mux.client;
@@ -573,6 +576,169 @@ describe('bootstrapDshWorkspace (Todo 33 dsh bridge construction)', () => {
       id: 'dsh-approval:evt-1',
       sessionID: 'session-entry',
     });
+  });
+});
+
+type AdapterDouble = {
+  kind: string;
+  disposed: boolean;
+  listSessions: Mock<() => Promise<unknown[]>>;
+  disconnect: () => void;
+};
+
+function registryDouble(order: string[], DshAdapter: new () => unknown) {
+  let current: AdapterDouble | undefined;
+  const built: AdapterDouble[] = [];
+  const configureDshBackend = vi.fn((_options: { bridgeUrl: string; bridgeToken?: string }) => {
+    order.push('registry:configure');
+    const adapter: AdapterDouble = {
+      kind: 'dsh',
+      disposed: false,
+      listSessions: vi.fn(async () => {
+        if (adapter.disposed) throw new Error('dsh mux: client disconnected');
+        return [];
+      }),
+      disconnect() {
+        adapter.disposed = true;
+        order.push('registry:adapter-dispose');
+      },
+    };
+    Object.setPrototypeOf(adapter, DshAdapter.prototype);
+    built.push(adapter);
+    current = adapter;
+    return adapter;
+  });
+  return {
+    built,
+    configureDshBackend,
+    getActiveBackendAdapter: vi.fn((): AdapterDouble => {
+      if (!current) throw new Error('Backend adapter is not registered: dsh');
+      return current;
+    }),
+    disconnectDshBackend: vi.fn(() => {
+      order.push('registry:disconnect');
+      current?.disconnect();
+      current = undefined;
+    }),
+  };
+}
+
+describe('bootstrapDshWorkspace — adapter identity across the disposal (defect D1)', () => {
+  function createSandbox() {
+    const order: string[] = [];
+    const mux = muxDouble(order);
+    const bridge = bridgeDouble(order);
+    const DshAdapterDouble = class DshAdapter {};
+    const registry = registryDouble(order, DshAdapterDouble);
+    const bootstrapCalls: Array<Record<string, any>> = [];
+    const runDshBootstrap = vi.fn(async (bootstrapOptions: Record<string, any>) => {
+      bootstrapCalls.push(bootstrapOptions);
+      // The real pipeline's first statement (bootstrap.ts:223): it walks the
+      // sessions through the adapter, whose mux the disposal may have poisoned.
+      const sessions = await bootstrapOptions.adapter.listSessions();
+      const createBridge = bootstrapOptions.createBridge as () => unknown;
+      const commit = bootstrapOptions.commit as (state: {
+        projects: Record<string, unknown>;
+        selectedProjectId: string;
+        selectedSessionId: string;
+      }) => void;
+      const normalize = bootstrapOptions.normalize as {
+        normalizeSnapshot: (value: unknown) => { cursor: number; entries: unknown[] };
+      };
+      const handle = (bootstrapOptions.mux as { open: (e: string, p: unknown) => unknown }).open(
+        'session/follow',
+        { args: { request: { address: { kind: 'session', sessionId: 'session-entry' } } } },
+      );
+      normalize.normalizeSnapshot(SNAPSHOT);
+      commit({ projects: {}, selectedProjectId: 'workspace-1', selectedSessionId: 'session-entry' });
+      createBridge();
+      return { follow: handle, tree: { sessions } };
+    });
+
+    const sandbox = runInNewContext(
+      transpile(
+        `${DSH_BOOTSTRAP_DECLARATIONS}\n;({ bootstrapDshWorkspace, dshMessageBridge, dshMuxClient, dshFollowStreams });`,
+      ),
+      {
+        shallowRef: shallowRefDouble(),
+        createDshSessionEventHub,
+        createDshPermissions,
+        upsertPermissionEntry: vi.fn(),
+        removePermissionEntry: vi.fn(),
+        getActiveBackendAdapter: registry.getActiveBackendAdapter,
+        DshAdapter: DshAdapterDouble,
+        configureDshBackend: registry.configureDshBackend,
+        createDshMuxClient: vi.fn(() => {
+          order.push('mux:create');
+          return mux.client;
+        }),
+        useDshMessageBridge: vi.fn(() => {
+          order.push('bridge:construct');
+          return bridge;
+        }),
+        runDshBootstrap,
+        deriveDshBridgeHttpUrl,
+        readDshHistoryPage,
+        normalizeDshHistoryPage,
+        createDshRpcClient: vi.fn(() => ({ call: vi.fn(async () => ({})) })),
+        msg: messageStoreDouble(),
+        credentials: credentialsDouble(),
+        serverState: { projects: {} as Record<string, unknown> },
+        selectedProjectId: box(''),
+        selectedSessionId: box(''),
+        bootstrapReady: box(false),
+        scheduleDshTopPanelGitInfoHydration: vi.fn(),
+        dshPopupBridge: dshPopupBridgeDouble(),
+        disconnectDshBackendAdapter: registry.disconnectDshBackend,
+      },
+    ) as { bootstrapDshWorkspace: (isCurrent: () => boolean) => Promise<void> };
+
+    return { sandbox, order, registry, mux, bridge, bootstrapCalls };
+  }
+
+  it('bootstraps against a FRESH adapter, not the one its disposal just poisoned', async () => {
+    const harness = createSandbox();
+    // useBackendActivation.activateDsh configures the backend before bootstrap.
+    harness.registry.configureDshBackend({
+      bridgeUrl: DSH_BRIDGE_URL,
+      bridgeToken: DSH_BRIDGE_TOKEN,
+    });
+
+    await harness.sandbox.bootstrapDshWorkspace(() => true);
+
+    const used = harness.bootstrapCalls[0]!.adapter as unknown as AdapterDouble;
+    expect(used).toBeDefined();
+    // RED at HEAD: the captured adapter was disposed above, so its mux is
+    // permanently poisoned and this rejects with `client disconnected`.
+    await expect(used.listSessions()).resolves.toEqual([]);
+    expect(used.disposed).toBe(false);
+  });
+
+  it('re-activates against a newly built adapter and still disposes first', async () => {
+    const harness = createSandbox();
+    const configure = () =>
+      harness.registry.configureDshBackend({
+        bridgeUrl: DSH_BRIDGE_URL,
+        bridgeToken: DSH_BRIDGE_TOKEN,
+      });
+
+    configure();
+    await harness.sandbox.bootstrapDshWorkspace(() => true);
+    const first = harness.bootstrapCalls[0]!.adapter as unknown as AdapterDouble;
+
+    configure();
+    harness.order.length = 0;
+    await harness.sandbox.bootstrapDshWorkspace(() => true);
+
+    const second = harness.bootstrapCalls[1]!.adapter as unknown as AdapterDouble;
+    expect(second).not.toBe(first);
+    expect(second.disposed).toBe(false);
+    await expect(second.listSessions()).resolves.toEqual([]);
+    // Single-instance governance survives: the disposal still precedes the
+    // fresh construction, so no stale bridge answers the new waterfall.
+    expect(harness.order.indexOf('registry:disconnect')).toBeLessThan(
+      harness.order.indexOf('registry:configure'),
+    );
   });
 });
 

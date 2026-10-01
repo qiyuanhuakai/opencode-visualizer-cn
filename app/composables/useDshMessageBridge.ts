@@ -536,6 +536,15 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
       // without it the no-argument accessors would stay blind until a
       // reconnect re-taught the session from a snapshot.
       if (primarySessionId === undefined) primarySessionId = sessionId;
+      // The bootstrap consumed this stream's snapshot, so the machine must be
+      // created here: an absent publication reads as `detached` (the fallback
+      // below) and `dshIsServerTerminal` refuses the first send with
+      // `server-terminal`. A published phase is never clobbered — a re-opened
+      // stream must stay in `rebuilding`/`degraded`.
+      if (sessionStates.get(sessionId) === undefined) {
+        syncFor(sessionId);
+        publishSync(sessionId);
+      }
     }
     watchFollowStream(handle, sessionId);
     unsubscribers.push(handle.onItem((value) => handleFollowFrame(handle, value)));

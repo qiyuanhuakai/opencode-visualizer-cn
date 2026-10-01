@@ -8628,11 +8628,19 @@ function disconnectDshBackend() {
  * only while the activation generation is still current.
  */
 async function bootstrapDshWorkspace(isCurrent: () => boolean) {
-  const adapter = dshBackend();
   // Single-instance governance: dispose the previous pair BEFORE constructing
   // the new one (kimi precedent) so a re-activation can never leave a stale
-  // follow stream attached or two bridges answering one waterfall.
+  // follow stream attached or two bridges answering one waterfall. The disposal
+  // also unregisters the adapter (`disconnectDshBackend` clears the registry
+  // slot and disposes its mux permanently), so a FRESH one is configured after
+  // it — capturing the adapter before the disposal is what handed the
+  // bootstrap the poisoned mux and ended every connect on the login screen.
   disconnectDshBackend();
+  configureDshBackend({
+    bridgeUrl: credentials.dshBridgeUrl.value,
+    bridgeToken: credentials.dshBridgeToken.value,
+  });
+  const adapter = dshBackend();
   const mux = createDshMuxClient({
     url: credentials.dshBridgeUrl.value,
     getBridgeToken: async () => credentials.dshBridgeToken.value || null,

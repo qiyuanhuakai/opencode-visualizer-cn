@@ -4,6 +4,7 @@ import type { ProjectState } from '../../types/worker-state';
 import type { DshMuxClient, DshMuxStreamHandle } from '../../utils/dshMux';
 import type { DshMappedSession } from './dshAdapter';
 import type { DshJsonValue } from './types';
+import { useDshMessageBridge } from '../../composables/useDshMessageBridge';
 import {
   bootstrapDshWorkspace,
   type DshBootstrapBridge,
@@ -191,6 +192,76 @@ function messageBridge() {
   } satisfies DshBootstrapBridge;
 }
 
+/**
+ * A mux whose follow handle keeps delivering after the first frame, so a test
+ * can drive the frames the bootstrap did NOT consume itself.
+ */
+function liveMux(firstFrames: Record<string, unknown> = {}) {
+  const opened: Array<{ endpoint: string; args: Record<string, unknown> }> = [];
+  const handles: Array<{ streamId: string; listeners: Set<(value: DshJsonValue | undefined) => void> }> =
+    [];
+  let counter = 0;
+  const client = {
+    connect: vi.fn(async () => undefined),
+    open: vi.fn((endpoint: string, payload: { args: Record<string, unknown> }) => {
+      opened.push({ endpoint, args: payload.args });
+      const itemListeners = new Set<(value: DshJsonValue | undefined) => void>();
+      const promise = new Promise<readonly (DshJsonValue | undefined)[]>(() => undefined);
+      void promise.catch(() => undefined);
+      const handle = {
+        streamId: `stream-${(counter += 1)}`,
+        listeners: itemListeners,
+        promise,
+        onItem(listener: (value: DshJsonValue | undefined) => void) {
+          itemListeners.add(listener);
+          return () => {
+            itemListeners.delete(listener);
+          };
+        },
+        cancel: () => undefined,
+      };
+      handles.push(handle);
+      const first = firstFrames[endpoint];
+      if (first !== undefined) {
+        // Real mux frames arrive on a later task, after the caller attached
+        // its `onItem` listener synchronously below `open()`.
+        queueMicrotask(() => {
+          for (const listener of [...handle.listeners]) listener(first as DshJsonValue);
+        });
+      }
+      return handle;
+    }),
+    cancel: vi.fn(),
+    disconnect: vi.fn(),
+    isConnected: vi.fn(() => true),
+  };
+  return {
+    client: client as unknown as DshMuxClient,
+    opened,
+    deliver(value: DshJsonValue | undefined) {
+      for (const handle of handles) {
+        for (const listener of [...handle.listeners]) listener(value);
+      }
+    },
+  };
+}
+
+class RecordingMessageStore {
+  readonly history: unknown[] = [];
+  readonly messages = new Map<string, unknown>();
+  readonly parts = new Map<string, unknown>();
+  updateMessage = vi.fn((info: unknown) => {
+    this.messages.set((info as { id: string }).id, info);
+  });
+  updatePart = vi.fn((part: unknown) => {
+    this.parts.set((part as { id: string }).id, part);
+  });
+  loadHistory(entries: unknown[]) {
+    this.history.push(...entries);
+  }
+}
+
+
 function normalizer(cursor = 4) {
   return {
     normalizeSnapshot: vi.fn((_snapshot: DshJsonValue | undefined) => ({
@@ -306,8 +377,12 @@ describe('bootstrapDshWorkspace', () => {
       'record:{"type":"event","event":{"type":"session/title","seq":3,"time":5,"data":{"title":"older"}}}',
     ]);
     // Stage 6: the live follow stream is attached to the bridge exactly once,
-    // after the snapshot + history have been applied to it.
-    expect(bridge.attachFollow).toHaveBeenCalledWith(expect.objectContaining({ streamId: 'stream-1' }));
+    // after the snapshot + history have been applied to it — bound to the
+    // entry session the pipeline itself opened it for.
+    expect(bridge.attachFollow).toHaveBeenCalledWith(
+      expect.objectContaining({ streamId: 'stream-1' }),
+      'session-root',
+    );
 
     // Tree data source for Todo 21 + the live follow handle for Todo 19.
     expect(result.follow?.streamId).toBe('stream-1');
@@ -514,6 +589,56 @@ describe('bootstrapDshWorkspace', () => {
     expect(bridge.stop).toHaveBeenCalledOnce();
     expect(mux.cancelled).toEqual(['stream-1']);
     expect(mux.client.disconnect).toHaveBeenCalledOnce();
+  });
+
+  it('binds the adopted follow to the entry session so live frames reach the store', async () => {
+    // Defect D3: the pipeline consumed the snapshot itself and then handed the
+    // handle over with NO session id, so `handleFollowFrame` could not resolve
+    // one and every later live frame returned early (empty message list, zero
+    // popup windows). Runs the REAL message bridge as the injected one.
+    const mux = liveMux({ 'session/follow': SESSION_FOLLOW_SNAPSHOT });
+    const store = new RecordingMessageStore();
+    const bridge = useDshMessageBridge({
+      mux: mux.client,
+      rpc: { baseUrl: 'http://localhost:23004/dsh' },
+      msg: store,
+    });
+    const commit = vi.fn();
+
+    await bootstrapDshWorkspace({
+      adapter: sessionSource(sessionsFixture()),
+      mux: mux.client,
+      createBridge: () => bridge,
+      normalize: normalizer(),
+      fetchPage: () => Promise.resolve(emptyWindow()),
+      isCurrent: () => true,
+      commit,
+    });
+
+    expect(commit).toHaveBeenCalledWith(
+      expect.objectContaining({ selectedSessionId: 'session-root' }),
+    );
+    const appliedBefore = store.messages.size;
+
+    mux.deliver({
+      type: 'event',
+      event: {
+        type: 'assistant/message',
+        seq: 9,
+        time: 7,
+        data: {
+          turn: 1,
+          step: 1,
+          message: { role: 'assistant', content: [{ type: 'text', text: 'Live after bootstrap' }] },
+        },
+      },
+    } as DshJsonValue);
+
+    expect(store.messages.size).toBeGreaterThan(appliedBefore);
+    expect(bridge.sessionIds()).toContain('session-root');
+    const texts = [...store.parts.values()].map((part) => (part as { text?: string }).text);
+    expect(texts).toContain('Live after bootstrap');
+    expect(bridge.syncState('session-root')).toEqual({ kind: 'live', cursor: 9 });
   });
 });
 
