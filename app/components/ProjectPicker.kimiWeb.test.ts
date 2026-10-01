@@ -63,7 +63,7 @@ afterEach(() => {
   fake.backendKind = 'kimi-web';
 });
 
-it.each(['kimi-web', 'opencode', 'codex'])('lets %s browse below home but stops at a project with .git', async (backendKind) => {
+it.each(['kimi-web', 'opencode', 'codex', 'dsh'])('lets %s browse below home but stops at a project with .git', async (backendKind) => {
   fake.backendKind = backendKind;
   const host = document.createElement('div');
   document.body.append(host);
@@ -92,7 +92,7 @@ it.each(['kimi-web', 'opencode', 'codex'])('lets %s browse below home but stops 
   expect(src?.getAttribute('aria-disabled')).toBe('true');
 });
 
-it.each(['kimi-web', 'opencode', 'codex'])('lets %s browse below filesystem root even when root contains .git', async (backendKind) => {
+it.each(['kimi-web', 'opencode', 'codex', 'dsh'])('lets %s browse below filesystem root even when root contains .git', async (backendKind) => {
   fake.backendKind = backendKind;
   const host = document.createElement('div');
   document.body.append(host);

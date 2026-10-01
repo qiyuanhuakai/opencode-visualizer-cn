@@ -118,4 +118,29 @@ describe('useBackendSelectionBootstrap', () => {
     expect(selectedProjectId.value).toBe('codex');
     expect(selectedSessionId.value).toBe('thread-1');
   });
+
+  it('skips the OpenCode-oriented scan entirely on the dsh backend', async () => {
+    const bootstrapOpenCodeSelection = vi.fn();
+    const switchSessionSelection = vi.fn();
+    const initializeSessionSelection = vi.fn();
+    const runtime = useBackendSelectionBootstrap({
+      activeBackendKind: ref('dsh'),
+      codexProjectId: 'codex',
+      selectedProjectId: ref(''),
+      selectedSessionId: ref(''),
+      codexActiveSessionId: ref(''),
+      initialProjectId: () => 'proj-1',
+      initialSessionId: () => 'session-1',
+      sessionExistsInProjects: () => true,
+      switchSessionSelection,
+      initializeSessionSelection,
+      bootstrapOpenCodeSelection,
+    });
+
+    await runtime.bootstrapSelection();
+
+    expect(bootstrapOpenCodeSelection).not.toHaveBeenCalled();
+    expect(switchSessionSelection).not.toHaveBeenCalled();
+    expect(initializeSessionSelection).not.toHaveBeenCalled();
+  });
 });

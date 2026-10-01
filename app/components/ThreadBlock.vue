@@ -412,6 +412,7 @@ async function showThreadDiff(root: MessageInfo) {
 
 function canRevertThread(root: MessageInfo): boolean {
   if (props.backendKind === 'acp') return false;
+  if (props.backendKind === 'dsh') return false;
   if (props.backendKind === 'kimi-web' && !props.kimiCardActionsReady) return false;
   if (props.backendKind === 'kimi-web' && !props.kimiUndoAvailable) return false;
   if (props.sessionRevert) return false;

@@ -14,6 +14,14 @@ export type SessionHistoryMeta = {
   status?: SessionState['status'];
 };
 
+function dshSubagentChildId(metadata: unknown): string | undefined {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined;
+  const subagent = (metadata as Record<string, unknown>).subagent;
+  if (!subagent || typeof subagent !== 'object' || Array.isArray(subagent)) return undefined;
+  const childSessionId = (subagent as Record<string, unknown>).childSessionId;
+  return typeof childSessionId === 'string' && childSessionId.trim() ? childSessionId.trim() : undefined;
+}
+
 /**
  * Resolve the subagent sessions that were spawned by `task` tool calls inside
  * a single conversation thread. OpenCode's task tool records the child session
@@ -31,13 +39,18 @@ export function resolveThreadSubagentSessions(
   for (const part of threadParts) {
     if (part.type !== 'tool' || part.tool !== 'task') continue;
     const state = part.state;
-    if (state.status === 'pending' && part.metadata?.source !== 'kimi-web') continue;
-    const metadata = part.metadata?.source === 'kimi-web'
+    if (
+      state.status === 'pending' &&
+      part.metadata?.source !== 'kimi-web' &&
+      part.metadata?.source !== 'dsh-web'
+    ) continue;
+    const metadata = part.metadata?.source === 'kimi-web' || part.metadata?.source === 'dsh-web'
       ? part.metadata
       : state.status === 'pending' ? undefined : state.metadata;
+    const dshChildId = dshSubagentChildId(metadata);
     const childIds = Array.isArray(metadata?.sessionIds)
       ? metadata.sessionIds
-      : [metadata?.sessionId];
+      : metadata?.sessionId ? [metadata.sessionId] : dshChildId ? [dshChildId] : [];
     for (const rawChildId of childIds) {
       if (typeof rawChildId !== 'string') continue;
       const childId = rawChildId.trim();

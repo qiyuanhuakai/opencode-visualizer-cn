@@ -35,6 +35,12 @@ export function useBackendSelectionBootstrap(params: {
       return;
     }
 
+    if (params.activeBackendKind.value === 'dsh') {
+      // dsh bootstraps through its own Todo 16 pipeline
+      // (bootstrapDshWorkspace), never this OpenCode-oriented scan.
+      return;
+    }
+
     if (params.bootstrapOpenCodeSelection) {
       await params.bootstrapOpenCodeSelection();
       return;
