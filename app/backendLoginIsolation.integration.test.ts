@@ -319,4 +319,97 @@ describe('App DSH login surface (Todo 35)', () => {
     // the dsh login branch ran instead of another backend's credentials sink.
     expect(window.localStorage.getItem(storageKey(StorageKeys.auth.backendKind))).toBe('dsh');
   });
+
+  it('Given distinct Codex and DSH bridge credentials entered through one real login form, When DSH is selected and submitted, Then DSH receives only its own credentials', async () => {
+    const dshFixture = await mountLoginApp();
+    mountedApps.push(dshFixture);
+    dshFixture.configureCodexBackend.mockClear();
+    dshFixture.configureDshBackend.mockClear();
+
+    clickBackend(dshFixture.host, 'Codex');
+    await nextTick();
+    await fillInput(dshFixture.host, 'codexBridgeToken', 'codex-token-only');
+    clickBackend(dshFixture.host, 'DSH');
+    await nextTick();
+    await fillInput(dshFixture.host, 'dshBridgeUrl', 'ws://127.0.0.1:23004/dsh/ws');
+    await fillInput(dshFixture.host, 'dshBridgeToken', 'dsh-token-only');
+    clickBackend(dshFixture.host, 'Codex');
+    await nextTick();
+
+    expect(
+      dshFixture.host.querySelector<HTMLInputElement>('input[name="codexBridgeToken"]')?.value,
+    ).toBe('codex-token-only');
+    clickBackend(dshFixture.host, 'DSH');
+    await nextTick();
+
+    expect(
+      dshFixture.host.querySelector<HTMLInputElement>('input[name="dshBridgeUrl"]')?.value,
+    ).toBe('ws://127.0.0.1:23004/dsh/ws');
+    expect(
+      dshFixture.host.querySelector<HTMLInputElement>('input[name="dshBridgeToken"]')?.value,
+    ).toBe('dsh-token-only');
+
+    const dshConnect = dshFixture.host.querySelector<HTMLButtonElement>('.app-loading-connect');
+    expect(dshConnect).toBeInstanceOf(HTMLButtonElement);
+    dshConnect?.click();
+    await nextTick();
+
+    expect(dshFixture.configureDshBackend).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        bridgeUrl: 'ws://127.0.0.1:23004/dsh/ws',
+        bridgeToken: 'dsh-token-only',
+      }),
+    );
+    expect(dshFixture.configureDshBackend).not.toHaveBeenCalledWith(
+      expect.objectContaining({ bridgeToken: 'codex-token-only' }),
+    );
+    expect(dshFixture.configureCodexBackend).not.toHaveBeenCalledWith(
+      expect.objectContaining({ bridgeToken: 'dsh-token-only' }),
+    );
+  });
+
+  it('Given the DSH login button selected, When the DSH fields block renders, Then the bridge URL field pre-fills the shared default value', async () => {
+    const dshFixture = await mountLoginApp();
+    mountedApps.push(dshFixture);
+
+    clickBackend(dshFixture.host, 'DSH');
+    await nextTick();
+
+    const urlInput = dshFixture.host.querySelector<HTMLInputElement>('input[name="dshBridgeUrl"]');
+    expect(urlInput).toBeInstanceOf(HTMLInputElement);
+    // Assert the rendered VALUE, not the placeholder: the locale placeholder is
+    // `ws://host:23004/dsh/ws`, which differs from the real default host.
+    expect(urlInput?.value).toBe('ws://localhost:23004/dsh/ws');
+    expect(urlInput?.value).not.toBe(urlInput?.placeholder);
+    expect(dshFixture.readSetupBinding('loginDshBridgeUrl')).toBe('ws://localhost:23004/dsh/ws');
+  });
+
+  it('Given a DSH bridge URL entered on the login form, When the bridge precheck answers 401, Then the app falls back to login with the URL preserved', async () => {
+    const dshFixture = await mountLoginApp();
+    mountedApps.push(dshFixture);
+    dshFixture.configureDshBackend.mockClear();
+
+    clickBackend(dshFixture.host, 'DSH');
+    await nextTick();
+    await fillInput(dshFixture.host, 'dshBridgeUrl', 'ws://127.0.0.1:23004/dsh/ws');
+    await fillInput(dshFixture.host, 'dshBridgeToken', 'stale-bridge-token');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('', { status: 401 })),
+    );
+
+    dshFixture.host.querySelector<HTMLButtonElement>('.app-loading-connect')?.click();
+
+    await vi.waitFor(() => {
+      expect(dshFixture.readSetupBinding('uiInitState')).toBe('login');
+    });
+    expect(dshFixture.readSetupBinding('connectionState')).toBe('error');
+    expect(String(dshFixture.readSetupBinding('initErrorMessage'))).toContain('401');
+    expect(
+      dshFixture.host.querySelector<HTMLInputElement>('input[name="dshBridgeUrl"]')?.value,
+    ).toBe('ws://127.0.0.1:23004/dsh/ws');
+    expect(
+      dshFixture.host.querySelector<HTMLInputElement>('input[name="dshBridgeToken"]')?.value,
+    ).toBe('stale-bridge-token');
+  });
 });
