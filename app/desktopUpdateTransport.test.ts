@@ -53,7 +53,7 @@ it('filters the dedicated electron-updater session to HTTPS GitHub hosts', () =>
 it('verifies automatic artifacts with manifest size and SHA-512', async () => {
   // Given: a downloaded file and its selected updater manifest evidence.
   const directory = await mkdtemp(path.join(os.tmpdir(), 'vis-update-test-'));
-  const filePath = path.join(directory, 'Vis-1.2.3-x86_64-Linux.AppImage');
+  const filePath = path.join(directory, 'Vis-1.2.3-x86_64.AppImage');
   const contents = Buffer.from('verified updater payload');
   await writeFile(filePath, contents);
   const runtime = createUpdateRuntime();

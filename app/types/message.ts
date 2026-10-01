@@ -17,6 +17,8 @@ export type MessageUsage = {
   providerId?: string;
   modelId?: string;
   contextPercent?: number | null;
+  contextTokens?: number;
+  maxContextTokens?: number;
 };
 
 export type MessageAttachment = {

@@ -202,7 +202,7 @@ function automaticAppNames(version, platform, arch, target) {
   if (platform === 'linux') {
     const appImageArch = arch === 'x64' ? 'x86_64' : arch;
     const debArch = arch === 'x64' ? 'amd64' : arch;
-    const appImage = `Vis-${version}-${appImageArch}-Linux.AppImage`;
+    const appImage = `Vis-${version}-${appImageArch}.AppImage`;
     const deb = `Vis-${version}-${debArch}-Linux.deb`;
     if (target !== 'appimage' && target !== 'deb') {
       throw new DesktopUpdatePolicyError(

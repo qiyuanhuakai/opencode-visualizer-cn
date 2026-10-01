@@ -109,9 +109,9 @@ describe('desktop update release policy', () => {
   it.each([
     ['win32', 'x64', 'nsis', 'Vis-1.2.3-x64-Windows.exe'],
     ['win32', 'arm64', 'nsis', 'Vis-1.2.3-arm64-Windows.exe'],
-    ['linux', 'x64', 'appimage', 'Vis-1.2.3-x86_64-Linux.AppImage'],
+    ['linux', 'x64', 'appimage', 'Vis-1.2.3-x86_64.AppImage'],
     ['linux', 'x64', 'deb', 'Vis-1.2.3-amd64-Linux.deb'],
-    ['linux', 'arm64', 'appimage', 'Vis-1.2.3-arm64-Linux.AppImage'],
+    ['linux', 'arm64', 'appimage', 'Vis-1.2.3-arm64.AppImage'],
     ['linux', 'arm64', 'deb', 'Vis-1.2.3-arm64-Linux.deb'],
   ] as const)(
     'selects the generated automatic artifact for %s %s %s',
@@ -130,7 +130,7 @@ describe('desktop update release policy', () => {
   it.each([
     'VisBridge-1.2.3-x64-Windows.exe',
     'Vis-1.2.3-arm64-Windows.exe',
-    'Vis-1.2.3-x64-Linux.AppImage',
+    'Vis-1.2.3-x64.AppImage',
     'Vis-1.2.3-x86_64-Linux.deb',
   ])('rejects a mismatched automatic artifact before download: %s', (name) => {
     // Given: stable-looking metadata for a different component, architecture, or generated Linux name.
@@ -179,6 +179,6 @@ function automaticInfo(names: readonly string[]) {
 
 function linuxNames(arch: 'arm64' | 'x64') {
   return arch === 'x64'
-    ? ['Vis-1.2.3-x86_64-Linux.AppImage', 'Vis-1.2.3-amd64-Linux.deb']
-    : ['Vis-1.2.3-arm64-Linux.AppImage', 'Vis-1.2.3-arm64-Linux.deb'];
+    ? ['Vis-1.2.3-x86_64.AppImage', 'Vis-1.2.3-amd64-Linux.deb']
+    : ['Vis-1.2.3-arm64.AppImage', 'Vis-1.2.3-arm64-Linux.deb'];
 }

@@ -501,3 +501,20 @@ describe('Kimi plugin management with a registered adapter', () => {
     app.unmount();
   });
 });
+
+describe('R5 token tab summary chip', () => {
+  it('shows the current-context chip from session status when the bridge reports no usage', async () => {
+    // Fresh page: the bridge replays no usage and the snapshot endpoint is
+    // absent, so the session status is the only context source.
+    const { root, app } = await mountKimiWebModal();
+    await waitForKimiStatusFetches();
+
+    clickTab(root, 'Token');
+    await vi.waitFor(() => expect(root.textContent).toContain('1,048,576'));
+
+    const chip = root.querySelector('.status-monitor-actions');
+    expect(chip?.querySelector('.status-monitor-summary-label')?.textContent).toBe('Current context');
+    expect(chip?.querySelector('.status-monitor-summary-value')?.textContent).toBe('20787');
+    app.unmount();
+  });
+});

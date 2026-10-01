@@ -69,6 +69,10 @@ linux:
   description: "An alternative web UI for OpenCode, designed for daily use."
   artifactName: "Vis-${version}-${arch}-Linux.${ext}"
 
+# AppImage 命名遵循 AppImageHub 规范：文件名不含平台名（AppImage 仅用于 Linux）
+appImage:
+  artifactName: "Vis-${version}-${arch}.${ext}"
+
 # NSIS 安装器配置（Windows）
 nsis:
   oneClick: false

@@ -320,6 +320,8 @@ describe('useKimiWebMessageBridge', () => {
     } });
     source.emitFrame({ type: 'turn.started', seq: 2, epoch: EPOCH, session_id: SESSION_ID,
       payload: { agentId: 'main', turnId: 2, promptId: user.id, time: 1790083367903 } });
+    source.emitFrame({ type: 'turn.step.started', seq: 3, epoch: EPOCH, session_id: SESSION_ID,
+      payload: { agentId: 'main', turnId: 2, step: 1, stepId: 'step-2', time: 1790083367904 } });
     const assistant = [...messages.values()].find((message) => message.role === 'assistant');
     expect(messages.get(user.id)).toMatchObject({ role: 'user' });
     expect(assistant).toMatchObject({ parentID: user.id });
@@ -341,6 +343,30 @@ describe('useKimiWebMessageBridge', () => {
     expect([...parts.values()]).toEqual([
       expect.objectContaining({ type: 'text', text: 'Hi! What can I help' }),
     ]);
+  });
+
+  it('segments a live turn into one text part per utterance instead of one per-turn blob', async () => {
+    const { source, bridge, parts } = createHarness();
+    const subscribing = bridge.subscribe([SESSION_ID], { [SESSION_ID]: { seq: 4, epoch: EPOCH } });
+    for (const entry of liveFrames) source.emitFrame(entry);
+    source.ack(liveFrames.at(-1)?.seq ?? 0);
+    await subscribing;
+
+    const byMessage = new Map<string, string>();
+    for (const part of parts.values()) {
+      if (part.type === 'text' && part.messageID.startsWith(`${SESSION_ID}:main:2:`)) {
+        byMessage.set(part.messageID, part.text);
+      }
+    }
+    // turn 2's seq 36 and seq 51 utterances must stand as two separate messages.
+    expect([...byMessage.keys()]).toEqual([
+      `${SESSION_ID}:main:2:0`,
+      `${SESSION_ID}:main:2:1`,
+    ]);
+    expect(byMessage.get(`${SESSION_ID}:main:2:0`)).toContain('AgentSwarm');
+    expect(byMessage.get(`${SESSION_ID}:main:2:0`)).not.toContain("subagent's answer");
+    expect(byMessage.get(`${SESSION_ID}:main:2:1`)).toContain("subagent's answer");
+    bridge.stop();
   });
 
   it('suppresses replay callbacks and restores live semantics on the first post-ack frame', async () => {
@@ -509,6 +535,55 @@ describe('useKimiWebMessageBridge', () => {
     expect(onToolPart).toHaveBeenCalledOnce();
   });
 
+  it('hydrates usage and context from the snapshot during rebuild', async () => {
+    const snapshotRequest = deferred<KimiWebSnapshot>();
+    const { source, bridge } = createHarness({ getSnapshot: () => snapshotRequest.promise });
+    await enterLive(source, bridge, 21);
+    source.emitResync();
+    snapshotRequest.resolve(snapshot({
+      session: {
+        id: SESSION_ID,
+        workspace_id: 'workspace-1',
+        title: 'Fixture',
+        busy: true,
+        main_turn_active: true,
+        pending_interaction: 'none',
+        archived: false,
+        usage: {
+          input_tokens: 128,
+          output_tokens: 64,
+          cache_read_tokens: 32,
+          cache_creation_tokens: 16,
+          total_cost_usd: 0.01,
+          context_tokens: 21109,
+          context_limit: 320000,
+          turn_count: 3,
+        },
+      },
+    }));
+    await vi.waitFor(() => expect(bridge.syncState(SESSION_ID).kind).toBe('live'));
+    expect(bridge.sessionState(SESSION_ID)).toMatchObject({
+      contextTokens: 21109,
+      maxContextTokens: 320000,
+      usage: { total: { inputOther: 128, output: 64, inputCacheRead: 32, inputCacheCreation: 16 } },
+    });
+    bridge.stop();
+  });
+
+  it('keeps live context when the rebuild snapshot carries no usage', async () => {
+    const snapshotRequest = deferred<KimiWebSnapshot>();
+    const { source, bridge } = createHarness({ getSnapshot: () => snapshotRequest.promise });
+    await enterLive(source, bridge, 9);
+    source.emitFrame(statusFrame(10, { contextTokens: 20379, maxContextTokens: 320000 }));
+    expect(bridge.sessionState(SESSION_ID)).toMatchObject({ contextTokens: 20379, maxContextTokens: 320000 });
+
+    source.emitResync();
+    snapshotRequest.resolve(snapshot());
+    await vi.waitFor(() => expect(bridge.syncState(SESSION_ID).kind).toBe('live'));
+    expect(bridge.sessionState(SESSION_ID)).toMatchObject({ contextTokens: 20379, maxContextTokens: 320000 });
+    bridge.stop();
+  });
+
   it('loads history through the replay-suppressed path', () => {
     const { bridge, loadHistory, onToolPart, onLiveReasoning, onLiveSubagent } = createHarness();
     const entries = [{ fixture: 'Todo 15 normalized history' }];
@@ -566,6 +641,33 @@ describe('useKimiWebMessageBridge', () => {
     expect([...parts.values()].filter((part) => part.type === 'text')).toContainEqual(
       expect.objectContaining({ text: 'Snapshot prefix + later' }),
     );
+  });
+
+  it('keeps appending the in-flight step live tail after a mid-step rebuild instead of dropping it as stale', async () => {
+    const snapshotRequest = deferred<KimiWebSnapshot>();
+    const { source, bridge, parts } = createHarness({ getSnapshot: () => snapshotRequest.promise });
+    await enterLive(source, bridge, 30);
+    source.emitResync();
+
+    // as_of_seq (30) is past the step opener (25) because durable frames landed
+    // mid-step, so the live tail carries seq 25 — smaller than the snapshot seq.
+    // The seeded group must not treat it as a stale earlier utterance.
+    snapshotRequest.resolve(snapshot({
+      as_of_seq: 30,
+      in_flight_turn: {
+        turn_id: 0,
+        assistant_text: 'Snapshot prefix',
+        current_prompt_id: 'prompt-1',
+      },
+    }));
+    await vi.waitFor(() => expect(bridge.syncState(SESSION_ID).kind).toBe('live'));
+
+    source.emitFrame(delta(25, ' + tail', 15));
+
+    expect([...parts.values()].filter((part) => part.type === 'text')).toContainEqual(
+      expect.objectContaining({ text: 'Snapshot prefix + tail' }),
+    );
+    expect(bridge.normalizerStats(SESSION_ID)?.staleDeltaCount).toBe(0);
   });
 
   it('drops a stale-epoch snapshot and rebuilds from the new epoch', async () => {

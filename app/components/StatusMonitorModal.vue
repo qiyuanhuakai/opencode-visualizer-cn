@@ -1086,8 +1086,25 @@ const currentTotalInfo = computed(() => {
         : null;
     case 'token':
       if (props.activeBackendKind === 'codex') return null;
-      return tokenUsage.value && !tokenUsageContextOnly.value
-        ? { label: t('statusMonitor.token.totalTokens'), count: tokenUsage.value.tokens.total ?? (tokenUsage.value.tokens.input + tokenUsage.value.tokens.output + tokenUsage.value.tokens.reasoning) }
+      if (isKimiWebBackend.value) {
+        // Kimi Web reports context occupancy directly; the chip shows the
+        // current context even when only the session-status context is known
+        // (the refresh-after case), and stays hidden without context data.
+        return tokenContextAvailable.value || tokenContextUsed.value > 0
+          ? { label: t('statusMonitor.token.currentContext'), count: tokenContextUsed.value }
+          : null;
+      }
+      // Other backends report per-request usage on the last assistant message;
+      // the current context is that request's input + output + cache tokens.
+      return tokenUsage.value
+        ? {
+            label: t('statusMonitor.token.currentContext'),
+            count:
+              tokenUsage.value.tokens.input +
+              tokenUsage.value.tokens.output +
+              (tokenUsage.value.tokens.cache?.read ?? 0) +
+              (tokenUsage.value.tokens.cache?.write ?? 0),
+          }
         : null;
     case 'mc':
       return props.magicContextWorkers?.length

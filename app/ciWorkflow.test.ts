@@ -208,14 +208,14 @@ describe('complete CI workflow', () => {
       // Explicit platform/arch flags — no fat/universal builds allowed on any lane.
       expect(block).toContain(`electron-builder --publish never --${lane.platform} --${lane.arch}`);
       // Artifact upload must be scoped to this lane's arch only. dmg/zip/exe keep
-      // x64/arm64 in the name; deb and AppImage use format-native tokens
-      // (amd64 / x86_64).
+      // x64/arm64 in the name; deb uses its format-native amd64 token, and the
+      // AppImage drops the platform suffix per AppImageHub naming rules (x86_64).
       const expectedGlobs = (() => {
         if (lane.platform === 'mac') {
           return [`dist-electron/Vis-*-${lane.arch}-MacOS.dmg`, `dist-electron/Vis-*-${lane.arch}-MacOS.zip`];
         }
         if (lane.platform === 'win') return [`dist-electron/Vis-*-${lane.arch}-Windows.exe`];
-        return ['dist-electron/Vis-*-amd64-Linux.deb', 'dist-electron/Vis-*-x86_64-Linux.AppImage'];
+        return ['dist-electron/Vis-*-amd64-Linux.deb', 'dist-electron/Vis-*-x86_64.AppImage'];
       })();
       for (const glob of expectedGlobs) {
         expect(block, `lane ${lane.job} must upload ${glob}`).toContain(glob);

@@ -50,6 +50,15 @@ vi.mock('../backends/registry', async (importOriginal) => {
 vi.mock('../composables/useDesktopBridgeVersion', () => ({
   resolveDesktopBridgeHealthUrl: (target: unknown) => healthUrlMock(target),
 }));
+const messagesMock = vi.hoisted(() => ({
+  tokens: { input: 0, output: 0, reasoning: 0 } as {
+    input: number;
+    output: number;
+    reasoning: number;
+    cache?: { read: number; write: number };
+  },
+}));
+
 vi.mock('../composables/useMessages', () => ({
   useMessages: () => ({
     roots: { value: [{ id: 'assistant-1', sessionID: 'session-1' }] },
@@ -59,7 +68,7 @@ vi.mock('../composables/useMessages', () => ({
     getUsage: () => ({
       providerId: 'kimi-code',
       modelId: 'kimi-code/k3',
-      tokens: { input: 0, output: 0, reasoning: 0 },
+      tokens: messagesMock.tokens,
     }),
     loadHistory: () => undefined,
   }),
@@ -152,6 +161,9 @@ function defaultKimiWire(): {
 
 let kimiWire: ReturnType<typeof defaultKimiWire> = defaultKimiWire();
 
+/** Per-test mutable: the context-only chip test flips this so /snapshot returns no usage. */
+let snapshotHasUsage = true;
+
 const fetchMock = vi.fn<(input: unknown, init?: { headers?: Record<string, string> }) => Promise<FakeResponse>>(
   async (input) => {
     const url = String(input);
@@ -169,6 +181,7 @@ const fetchMock = vi.fn<(input: unknown, init?: { headers?: Record<string, strin
     }
     if (url.endsWith('/snapshot')) {
       if (!kimiWire.status) return { ok: false, status: 500 };
+      if (!snapshotHasUsage) return { ok: true, status: 200, text: async () => JSON.stringify({ code: 0, data: { session: {} } }) };
       return { ok: true, status: 200, text: async () => JSON.stringify({ code: 0, data: { session: { usage: { input_tokens: 450, output_tokens: 120, cache_read_tokens: 80, cache_creation_tokens: 20 } } } }) };
     }
     if (url.endsWith('/api/v1/plugins')) {
@@ -245,6 +258,8 @@ async function mountKimiWebModal(options: {
 
 beforeEach(() => {
   kimiWire = defaultKimiWire();
+  snapshotHasUsage = true;
+  messagesMock.tokens = { input: 0, output: 0, reasoning: 0 };
   localStorage.setItem(storageKey(StorageKeys.auth.kimiWebBridgeUrl), BRIDGE_URL);
   localStorage.setItem(storageKey(StorageKeys.auth.kimiWebBridgeToken), BRIDGE_TOKEN);
   vi.stubGlobal('fetch', fetchMock);
@@ -388,6 +403,54 @@ describe('StatusMonitorModal kimi-web token tab', () => {
     clickTab(root, 'Token');
     await nextTick();
     await vi.waitFor(() => expect(root.textContent).toContain('No token data available'));
+    app.unmount();
+  });
+});
+
+describe('StatusMonitorModal kimi-web token tab summary chip', () => {
+  it('shows the current-context chip from the authoritative session status', async () => {
+    const bridge = bridgeStub(
+      bridgeState({ total: { inputOther: 1200, output: 340, inputCacheRead: 800, inputCacheCreation: 200 } }, 1280, 2560),
+    );
+    const { root, app } = await mountKimiWebModal({ bridge });
+    await vi.waitFor(() => expect(root.textContent).toContain('0.43.0'));
+
+    clickTab(root, 'Token');
+    await nextTick();
+    await vi.waitFor(() => expect(root.textContent).toContain('1,200'));
+
+    // The chip reports the session-status context (20,787) — not the bridge's
+    // stale 1,280 and not the cumulative usage total.
+    const chip = root.querySelector('.status-monitor-actions');
+    expect(chip?.querySelector('.status-monitor-summary-label')?.textContent).toBe('Current context');
+    expect(chip?.querySelector('.status-monitor-summary-value')?.textContent).toBe('20787');
+    app.unmount();
+  });
+
+  it('shows the current-context chip when only the session-status context is available', async () => {
+    // Refresh-after case: the bridge replays no usage and the persisted
+    // snapshot is empty, so the session status is the only context source.
+    snapshotHasUsage = false;
+    const { root, app } = await mountKimiWebModal({ bridge: bridgeStub(undefined) });
+    await vi.waitFor(() => expect(root.textContent).toContain('0.43.0'));
+
+    clickTab(root, 'Token');
+    await vi.waitFor(() => expect(root.textContent).toContain('1,048,576'));
+
+    const chip = root.querySelector('.status-monitor-actions');
+    expect(chip?.querySelector('.status-monitor-summary-label')?.textContent).toBe('Current context');
+    expect(chip?.querySelector('.status-monitor-summary-value')?.textContent).toBe('20787');
+    app.unmount();
+  });
+
+  it('hides the current-context chip when no context data is available', async () => {
+    kimiWire.status = null;
+    const { root, app } = await mountKimiWebModal({ bridge: bridgeStub(undefined) });
+    await vi.waitFor(() => expect(root.textContent).toContain('0.43.0'));
+
+    clickTab(root, 'Token');
+    await vi.waitFor(() => expect(root.textContent).toContain('No token data available'));
+    expect(root.querySelector('.status-monitor-actions')).toBeNull();
     app.unmount();
   });
 });
@@ -626,6 +689,44 @@ describe('StatusMonitorModal kimi-web capability-gated unsupported copy', () => 
       expect(root.textContent).toContain('The current OpenCode version does not support viewing skill status.'),
     );
     expect(root.textContent).not.toContain('not exposed by Kimi Web');
+    app.unmount();
+  });
+});
+
+describe('StatusMonitorModal generic (opencode) token tab summary chip', () => {
+  it('shows the current context as the last request input + output + cache tokens', async () => {
+    messagesMock.tokens = { input: 321, output: 45, reasoning: 12, cache: { read: 80, write: 20 } };
+    adapterMock.getAdapter.mockReturnValue(openCodeAdapter());
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const open = ref(false);
+    const app = createApp(
+      defineComponent({
+        setup() {
+          return () =>
+            h(StatusMonitorModal, {
+              open: open.value,
+              preload: false,
+              activeBackendKind: 'opencode',
+              sessionId: SESSION_ID,
+              codexApi: useCodexApi(),
+            });
+        },
+      }),
+    );
+    app.use(createI18n({ legacy: false, locale: 'en', messages: { en } }));
+    app.mount(root);
+    open.value = true;
+    await nextTick();
+
+    clickTab(root, 'Token');
+    await vi.waitFor(() => expect(root.textContent).toContain('321'));
+
+    // 321 input + 45 output + 80 cache read + 20 cache write; reasoning tokens
+    // are not part of the context sum.
+    const chip = root.querySelector('.status-monitor-actions');
+    expect(chip?.querySelector('.status-monitor-summary-label')?.textContent).toBe('Current context');
+    expect(chip?.querySelector('.status-monitor-summary-value')?.textContent).toBe('466');
     app.unmount();
   });
 });

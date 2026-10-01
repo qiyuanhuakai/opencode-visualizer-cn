@@ -359,7 +359,7 @@ const messages: LocaleMessages = {
       noData: '暂无 Token 数据',
       model: '模型',
       contextLimit: '上下文限制',
-      totalTokens: '总 Token',
+      currentContext: '当前上下文',
       usagePercent: '使用率',
       inputTokens: '输入 Token',
       outputTokens: '输出 Token',

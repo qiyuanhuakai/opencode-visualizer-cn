@@ -7,7 +7,7 @@ import type { CodexCanonicalHistoryEntry } from '../backends/codex/normalize';
 import SubagentHistoryContent from './SubagentHistoryContent.vue';
 import { FLOATING_WINDOW_KEY } from '../composables/useFloatingWindow';
 import { useMessages } from '../composables/useMessages';
-import type { ReasoningPart, ToolPart } from '../types/sse';
+import type { ReasoningPart, TextPart, ToolPart } from '../types/sse';
 import {
   makeAssistantMessage,
   makeTextPart,
@@ -323,6 +323,47 @@ describe('SubagentHistoryContent', () => {
     });
     expect(targetMessageItems.length).toBe(1);
 
+    unmount(app);
+    root.remove();
+  });
+
+  it('renders each text part of a message as its own history cell', async () => {
+    const sessionId = 'multi-session';
+    const textPart = (id: string, text: string): TextPart => ({
+      id, sessionID: sessionId, messageID: 'a1', type: 'text', text,
+    });
+    useMessages().loadHistory([
+      {
+        info: makeUserMessage(sessionId, 'u1', 1),
+        parts: [textPart('u1-t', 'Prompt')],
+      },
+      {
+        info: makeAssistantMessage(sessionId, 'a1', 'u1', 2),
+        parts: [
+          textPart('a1-t1', 'First utterance.'),
+          textPart('a1-t2', 'Second utterance.'),
+          textPart('a1-t3', 'Third utterance.'),
+        ],
+      },
+    ]);
+    await flushRender();
+    const { root, app } = mount({ parentThreadId: sessionId });
+    await flushRender();
+    const messageItems = Array.from(root.querySelectorAll('.history-item')).filter((el) => {
+      const html = el as HTMLElement;
+      return (
+        !html.classList.contains('history-item-reasoning') &&
+        !html.classList.contains('history-item-question') &&
+        !html.classList.contains('history-item-subtask') &&
+        !html.classList.contains('history-item-tool')
+      );
+    });
+    expect(messageItems.length).toBe(3);
+    expect(messageItems.map((el) => el.textContent)).toEqual([
+      expect.stringContaining('First utterance.'),
+      expect.stringContaining('Second utterance.'),
+      expect.stringContaining('Third utterance.'),
+    ]);
     unmount(app);
     root.remove();
   });
