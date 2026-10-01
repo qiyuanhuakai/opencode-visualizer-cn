@@ -61,6 +61,7 @@
 | **ACP Agent 集成 (Alpha)** | ACP v1 作为第三后端复用主会话界面；状态监控中管理 Pi、Oh My Pi、Kimi Code 等 ACP Agent | 🅰️ Alpha |
 | **Kimi Web 集成 (Beta)** | 第四个独立后端；通过 vis_bridge 连接 Kimi Code 的 Web 服务，复用会话、文件、审批、思考与子代理界面；详情见下文 | 🅱️ Beta |
 | **Forge 集成 (Beta)** | 基于 zsh PTY 的 Forge 悬浮终端；命令菜单、结构化会话侧栏、状态读取与刷新恢复 | 🅱️ Beta |
+| **DSH 集成 (Beta)** | 第五个后端：经 vis_bridge 连接 DeepSeek Harness 的 `dsh web` 服务，复用会话、模型目录、文件树、审批与状态监控界面；只支持协议代 `0.2.0-rc.2`，bridge 侧默认不托管（opt-in）。适配范围与未实测项见 [DSH 说明](docs/dsh.md) | 🅱️ Beta |
 
 > 📋 **详细变更日志**：请参阅 [CHANGELOG.md](./CHANGELOG.md)  
 > 🗺️ **路线图与计划**：请参阅 [RoadMap.md](./RoadMap.md)
@@ -181,6 +182,7 @@ forge setup
 | [pnpm](https://pnpm.io/) | 11.21.0 (推荐) | 包管理器，本项目使用 `packageManager` 锁定 |
 | [OpenCode Server](https://github.com/sst/opencode) | 可选 | 使用 OpenCode 后端时需要 |
 | Kimi Code CLI（`@moonshot-ai/kimi-code`） | 可选 | 使用 Kimi Web 后端时需要，`kimi` 命令须在 bridge 所在主机的 PATH 中 |
+| DSH CLI（`@deepseek-ai/dsh`） | `0.2.0-rc.2`（钉版本） | 使用 DSH 后端时需要：`npm i -g @deepseek-ai/dsh@0.2.0-rc.2`，`dsh` 命令须在 bridge 所在主机的 PATH 中；协议代不符时 bridge 拒绝托管该服务并给出同一条安装命令 |
 | ACP Agent CLI | 可选 | 如 `pi-acp`、`omp --mode acp`、`kimi acp`；在状态监控中按需启用 |
 | 系统 `$EDITOR` | 可选 | 用于"用编辑器打开"功能（如 VS Code、Neovim 等） |
 
@@ -262,17 +264,20 @@ vis_bridge config
 vis_bridge config --config /path/to/bridge.json
 ```
 
-若运行中的 bridge 使用了自定义配置路径，`vis_bridge config` 会打开该文件；`--config` 或 `VIS_BRIDGE_CONFIG` 可覆盖路径。否则默认路径为 `~/.config/vis/bridge.json`。配置根对象中的 `nativeServices` 控制 bridge 是否自动探测/启动 OpenCode、Codex 和 Kimi Web；将不需要的服务改为 `false`，保留现有 `acpAgents`，保存后运行 `vis_bridge restart` 生效：
+若运行中的 bridge 使用了自定义配置路径，`vis_bridge config` 会打开该文件；`--config` 或 `VIS_BRIDGE_CONFIG` 可覆盖路径。否则默认路径为 `~/.config/vis/bridge.json`。配置根对象中的 `nativeServices` 控制 bridge 是否自动探测/启动 OpenCode、Codex、Kimi Web 与 DSH；将不需要的服务改为 `false`，保留现有 `acpAgents`，保存后运行 `vis_bridge restart` 生效：
 
 ```text
 "nativeServices": {
   "opencode": true,
   "codex": true,
-  "kimi-web": false
+  "kimi-web": false,
+  "dsh": false
 }
 ```
 
-旧配置若缺少 `nativeServices`，三个服务仍默认启用。此开关只控制 bridge 的进程托管，不会关闭已由其他程序启动的服务或阻止直接连接。
+旧配置若缺少 `nativeServices`，原有三个服务仍默认启用。此开关只控制 bridge 的进程托管，不会关闭已由其他程序启动的服务或阻止直接连接。
+
+**DSH 托管默认 `false`（opt-in）**：dsh 仍处 rc 阶段，bridge 只支持协议代 `0.2.0-rc.2`，版本不符时拒绝启动该服务并提示 `npm i -g @deepseek-ai/dsh@0.2.0-rc.2`。开启前先在 bridge 所在主机安装该版本并确认 `dsh --version` 输出一致，再把 `dsh` 改为 `true`。bridge 只按名派生 `dsh web --no-open --port 3080`，不会接管外部已启动的 dsh（其 launch token 只在自身 stdout 上，无法完成 cookie 交换）；真实对话还需要 DeepSeek 凭据（账号登录或 `DEEPSEEK_API_KEY`）。适配范围、已实测与未实测清单见 [DSH 说明](docs/dsh.md)。
 
 在 bridge 所在主机的外部终端中手动更新：
 
@@ -455,6 +460,7 @@ All upstream [Vis](https://github.com/xenodrive/vis) core features are fully pre
 | **ACP Agent Integration (Alpha)** | ACP v1 as a third backend using the shared main chat UI; manage Pi, Oh My Pi, Kimi Code, and other ACP agents in Status Monitor | 🅰️ Alpha |
 | **Kimi Web Integration (Beta)** | Fourth independent backend; connects to Kimi Code's Web service through vis_bridge and reuses the session, file, approval, thinking, and subagent UI; details below | 🅱️ Beta |
 | **Forge Integration (Beta)** | zsh PTY-based Forge floating terminal with command menus, structured conversation sidebar, status reads, and refresh restoration | 🅱️ Beta |
+| **DSH Integration (Beta)** | Fifth backend: connects to DeepSeek Harness's `dsh web` service through vis_bridge and reuses the session, model catalog, file tree, approval, and status monitoring UI; only protocol generation `0.2.0-rc.2` is supported and bridge-side supervision is opt-in (off by default). Coverage and untested items: [DSH notes](docs/dsh.md) | 🅱️ Beta |
 
 > 📋 **Detailed changelog**: [CHANGELOG.md](./CHANGELOG.md)  
 > 🗺️ **Roadmap & Plans**: [RoadMap.md](./RoadMap.md)
@@ -526,6 +532,7 @@ Before getting started, ensure your environment meets the following criteria:
 | [pnpm](https://pnpm.io/) | 11.21.0 (recommended) | Package manager, locked via `packageManager` |
 | [OpenCode Server](https://github.com/sst/opencode) | Optional | Required for the OpenCode backend |
 | Kimi Code CLI (`@moonshot-ai/kimi-code`) | Optional | Required for the Kimi Web backend; `kimi` must be on the bridge host’s PATH |
+| DSH CLI (`@deepseek-ai/dsh`) | `0.2.0-rc.2` (pinned) | Required for the DSH backend: `npm i -g @deepseek-ai/dsh@0.2.0-rc.2`; `dsh` must be on the bridge host’s PATH. When the protocol generation does not match, the bridge refuses to supervise the service and prints the same install command |
 | ACP Agent CLI | Optional | For example `pi-acp`, `omp --mode acp`, or `kimi acp`; enable agents as needed in Status Monitor |
 | System `$EDITOR` | Optional | For "Open in Editor" feature (e.g., VS Code, Neovim) |
 
@@ -607,17 +614,20 @@ vis_bridge config
 vis_bridge config --config /path/to/bridge.json
 ```
 
-If the running bridge uses a custom config path, `vis_bridge config` opens that file; `--config` or `VIS_BRIDGE_CONFIG` overrides the path. Otherwise the default is `~/.config/vis/bridge.json`. The root-level `nativeServices` field controls whether the bridge probes or starts OpenCode, Codex, and Kimi Web. Set an unwanted service to `false`, keep the existing `acpAgents`, save the file, then run `vis_bridge restart`:
+If the running bridge uses a custom config path, `vis_bridge config` opens that file; `--config` or `VIS_BRIDGE_CONFIG` overrides the path. Otherwise the default is `~/.config/vis/bridge.json`. The root-level `nativeServices` field controls whether the bridge probes or starts OpenCode, Codex, Kimi Web, and DSH. Set an unwanted service to `false`, keep the existing `acpAgents`, save the file, then run `vis_bridge restart`:
 
 ```text
 "nativeServices": {
   "opencode": true,
   "codex": true,
-  "kimi-web": false
+  "kimi-web": false,
+  "dsh": false
 }
 ```
 
-Older configs without `nativeServices` keep all three services enabled. These switches control bridge process supervision; they do not stop a service started by another program or block direct connections.
+Older configs without `nativeServices` keep the original three services enabled. These switches control bridge process supervision; they do not stop a service started by another program or block direct connections.
+
+**DSH supervision defaults to `false` (opt-in).** dsh is still rc-stage and the bridge supports only protocol generation `0.2.0-rc.2`; on a mismatch it refuses to start the service and prints `npm i -g @deepseek-ai/dsh@0.2.0-rc.2`. Install that version on the bridge host and confirm `dsh --version` reports it before flipping `dsh` to `true`. The bridge only spawns `dsh web --no-open --port 3080` by name and never adopts an externally started dsh (its launch token exists only on its own stdout, so the cookie exchange cannot complete). Real conversations also need a DeepSeek credential (account sign-in or `DEEPSEEK_API_KEY`). Coverage plus the tested/untested register: [DSH notes](docs/dsh.md).
 
 `start` waits until the bridge is listening and the initial service probe has completed. If OpenCode, Codex, or an ACP agent fails to start, the CLI prints the component name and error while keeping the usable bridge online; the full error also appears under **Status Monitor → ACP**. Bridge-level failures such as an invalid config or occupied listen port make `start` fail instead of publishing a superficially healthy service.
 

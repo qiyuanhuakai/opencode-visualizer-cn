@@ -3,6 +3,7 @@
 > 调研日期：2026-09-29 · 实测版本：**`@deepseek-ai/dsh@0.2.0-rc.2`**（`dsh --version`）· 实测环境：Linux x64 / Node v24.14.1
 > 实机探测证据：`.omo/evidence/dsh-adapt/`（启动日志、认证序列、WS mux 探针、完整 session/follow 帧、探测记录）
 > 本文所有"实测"结论均来自对本地真实 `dsh web` 进程的 HTTP/WS 探测；标注【源码】的结论来自随包发布的服务端代码（`node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-*/lib/`），未经实机触发。
+> vis 侧适配的落地与实测状态集中在 **§0.1**（以 Todo 36 真机冒烟为准），§15 是逐行裁定过的未验证项清单；两节之外的协议结论仍是探测期原样记录，凡改写处均在正文标注来源。
 
 ---
 
@@ -15,6 +16,69 @@
 | 能否作为 vis 新后端 | **可以**。协议是标准 JSON 信封 + WS mux，与 kimi web 同构（HTTP REST/JSON-RPC + WS 事件），可完全照 kimi-web 模式经 vis_bridge 转发适配 |
 | 最大风险 | ① 仍处 rc 阶段，**协议随版本漂移**（rc.6 → 0.2.0-rc.2 已发生 WS 路径与信封变更，见 §11）；② 真实对话需要 DeepSeek 账号登录或 `DEEPSEEK_API_KEY`（未签名时 turn 以 `MISSING_CREDENTIAL` 失败，失败路径完整可观测） |
 | 默认端口 | **3080**（host 默认 `127.0.0.1`）。社区客户端常见 8765 是其自选端口，非默认值 |
+
+### 0.1 适配状态（vis 侧落地情况，以 Todo 36 真机冒烟为准）
+
+事实来源只有两个：`.omo/evidence/dsh-web-adapt/task-36/00-smoke-run.log`（**41/41 断言 PASS，退出码 0**，运行模式 `degraded`）与同目录 `degraded-items.md`（未实测清单，一行一条理由）。本节每一行都能在该目录里指到证据，可逐行对账；未进入清单的表面一律不写成已支持。
+
+落地代码：bridge 侧 `bridge/processSupervisor.js`（dsh 托管）、`bridge/dshAuth.js`（launch token → cookie）、`bridge/dshHttpProxy.js`（`/dsh/*` → `/api/*`）、`bridge/dshWsProxy.js`（`/dsh/ws` → `/api/remote.mux`）、`bridge/bridgeConfig.js`（`nativeServices.dsh`）；前端侧 `app/backends/dsh/`、`app/utils/dshRpc.ts`、`app/utils/dshMux.ts`、`app/composables/useDshMessageBridge.ts`、`app/composables/dshPermissions.ts`。
+
+**版本钉死**：只支持协议代 `0.2.0-rc.2`。版本闸门在 `bridge/processSupervisor.js`（`DSH_SUPPORTED_VERSION`）：不符即停掉该子进程并提示安装。唯一受支持的安装命令（与 `DSH_INSTALL_GUIDANCE` 逐字一致）：
+
+```bash
+npm i -g @deepseek-ai/dsh@0.2.0-rc.2
+```
+
+| 状态 | 判定标准 | 表面 |
+|---|---|---|
+| **已接面** | 已落地，且 Todo 36 有 PASS 断言 | 见下方已接面清单 |
+| **已接面但未实测** | 已落地并有单测覆盖；真机因缺 `DEEPSEEK_API_KEY`（或未构造触发条件）未跑通 | 流式 text/thinking 增量渲染、真实 bash 审批 waterfall 闭环、waterfall 应答闭环、PTY 真实命令、multipart 大结果 |
+| **未接面** | 本次适配范围外，vis 不发也不收 | DeepSeek 账号登录（`account/startSignIn`）、`credentials/set`、`session/updateQueue`、`session/control` 上行控制帧、dsh 自有 `terminal/*` PTY 端点、SSE |
+| **已知限制** | 平台或降级固有限制 | 平台矩阵、降级错误路径、`sessionDelete` 无端点、presets 只读 |
+
+**已接面清单**（断言 ID 与 `00-smoke-run.log` 一一对应；证据路径相对 `task-36/`）：
+
+| 表面 | 断言 | 证据 |
+|---|---|---|
+| supervisor spawn-only 托管（dsh 由 bridge 派生，绝不 adopt 外部实例） | S01、L01、E01 | `supervised/07-supervised-spawn.txt`、`live/10-supervisor-status.txt`、`gates/07-sea-live.txt` |
+| 启动行解析 + launch token → cookie 交换 + 认证就绪后 `state=running` | S02、S03 | `supervised/07-supervised-spawn.txt` |
+| 版本闸门 0.2.0-rc.2（CLI 与运行态双重） | V01、L16、E01 | `gates/01-version-gate.txt`、`live/23-monitor-state.txt` |
+| 端口 3080 被外人占用 → `state=error, owned=false`，0 个 bridge 派生的 dsh | F01、F01b | `injections/port-3080-occupied.txt` |
+| HTTP 转发 `/dsh/*` → `/api/*`（`sec-fetch-*`/Origin/Host 剥离、cookie 桥侧注入） | L02、L03、L04、L15、L16、X01、X02、X03、B04、B06、B07 | `live/*`、`injections/cross-origin.txt`、`browser/30-browser.txt` |
+| WS mux 转发 `/dsh/ws` → `/api/remote.mux` + 心跳断链重连续传 | L07、F02 | `live/15-follow-snapshot.txt`、`injections/mux-heartbeat-cut.txt` |
+| 登录连接（`account/getState` 经 bridge，cookie 由桥注入） | L02 | `live/11-login-connect-getState.txt` |
+| 会话创建 + `selectModel` 写模型 | L05、L06 | `live/14-session-create.txt` |
+| `session/follow` snapshot + 增量帧 | L07 | `live/15-follow-snapshot.txt`、`live/16-follow-frames.jsonl` |
+| prompt 受理 + `MISSING_CREDENTIAL` 错误路径 + `requestId`/`rpcId` 绑定 | L08、L09、L10、L11 | `live/17-prompt-request.txt`、`live/18-missing-credential.txt` |
+| 历史重载（`session/page`） | L12 | `live/19-history-page.txt` |
+| 模型目录 + 切换 | L04、L06 | `live/13-model-catalog.txt` |
+| 文件树（`workspaceFiles/list`） | L15 | `live/22-workspace-files.txt` |
+| 会话动作（rename/archive/unarchive/pin/unpin） | L14 | `live/21-session-actions.txt` |
+| Shell：bridge PTY 目录可达 | L13 | `live/20-terminal-shell.txt` |
+| 状态监控（`/healthz` + supervisor `state@version` + `account/getState`） | L16 | `live/23-monitor-state.txt` |
+| cookie 失效 → 带新 launch token 重交换；无 token → `DSH_COOKIE_MISSING` | F03、F04 | `injections/cookie-invalidation.txt` |
+| 真实 Chromium 跨源读取、明暗主题、380px 窄屏 | B01、B02、B03、B03b、B04、B05、B06、B07 | `browser/30-browser.txt` |
+| 后端切换清理、分支守卫（vitest 门） | 门 06、08 | `gates/06-dsh-branch-guard.txt`（9/9）、`gates/08-backend-switch-cleanup.txt`（55/55） |
+
+**已接面但未实测**（成因与补救路径见 `degraded-items.md` 对应行）：
+
+| 表面 | 状态 | 原因 |
+|---|---|---|
+| 流式 text/thinking 增量渲染 | 未实测 | 需已签名 key；降级模式下 turn 在任何 assistant 文本产生前就以 `MISSING_CREDENTIAL` 结束（`degraded-items.md` 行 4） |
+| 真实 bash 审批（通过与驳回各一） | 未实测 | 审批由运行中的 agent 在 turn 内触发，无 turn 即无审批（行 7） |
+| waterfall 应答闭环（`approval/request` → `$events/result`） | 已接面但未实测 | Todo 28 已实现并以单测 settle 断言钉死应答词汇；真机未执行（行 8），词汇见 §7.8 |
+| Shell：PTY 真实命令 | 部分 | PTY 目录可达（L13）；真实命令需要一次 live turn（行 12） |
+| multipart 大结果响应 | 已接面但未实测 | `app/utils/dshRpc.ts` 的 multipart 解析已用合成 fixture 单测覆盖，未做 live 探测（未读二进制文件） |
+
+**未接面**（范围外，vis 不发也不收）：DeepSeek 账号登录（`account/startSignIn` 未触发，避免真实账号流程）、`credentials/set`（vis 不代用户写 DeepSeek key，凭据由 dsh 所在环境提供）、`session/updateQueue`（wire 为 `gateway/input-invalid`，参数结构未补探测；前端 `updateSessionMode` 抛 typed unsupported）、`session/control` 上行控制帧、dsh 自有 `terminal/create` + `terminal/follow`（Shell 走 bridge PTY，见 §14.1）、SSE（见 §15）。
+
+**已知限制**：
+
+1. **平台矩阵**：live QA 平台是 **Linux x64 / Node 24**。Windows 与 macOS 的 spawn 继承 kimi-web 先例（Metis #16）：bridge 按命令名派生 dsh，前提是 `dsh` 在 bridge 主机的 PATH 中；协议按 loopback `127.0.0.1:3080` 进行，与平台无关，但**未在 Windows/macOS 实机验证**。
+2. **降级模式**：`DEEPSEEK_API_KEY` 缺席时，真实 LLM 对话以 `turn/end.reason.error.code=MISSING_CREDENTIAL` 失败。该错误路径完整可观测（L09/L10 双表面断言），vis 的错误展示直接消费这两个字段，但**不能据此宣称对话能力已实测**。
+3. **`sessionDelete` 不存在**：§7 无 `session/delete` 端点；vis 的"删除"是本地隐藏 + 明确拒绝（`DshSessionDeleteUnsupportedError`），不是远端删除。
+4. **presets 只读**：未探测到 0.2.0-rc.2 的 preset 写入端点，权限 preset 选择器为只读（`writable:false`）。
+5. **协议代漂移**：rc 阶段协议随版本变化（§11），升级必须重新探测，不支持未钉版本的安装。
 
 ---
 
@@ -101,7 +165,7 @@ dsh web 的控制平面由三条传输组成，全部挂在同一个 node:http �
 
 1. **所有 stream 型 Remote 方法（`session/follow`、`session/control`、`workspace/follow`、`job/follow`、`job/list`、`terminal/follow`、`account/watch`、`account/watchExpiry` 等）必须经 `/api/remote.mux` 打开**；经 HTTP 调用会返回 `gateway/signature-invalid`（实测 `job/list`）。
 2. **所有 unary 方法必须经 HTTP POST**；在 mux 上打开 unary 方法同样报 `signature-invalid`。
-3. mux 上每条逻辑流用客户端分配的 `streamId` 标识；重复 `open` 同一 streamId 是唯一会关闭 socket 的协议违规。
+3. mux 上每条逻辑流用客户端分配的 `streamId` 标识；**服务端不存在跨连接的 streamId 记忆**，同 streamId 在新连接可直接重开（Todo 7 实测 R8）。会关闭 socket 的违规是三类：同 socket 内重复 `open`、二进制帧、非法 JSON（见 §6.2，原文"重复 open 是唯一"已订正）。
 
 ---
 
@@ -242,9 +306,10 @@ Host → 客户端：
 { "type": "error", "streamId": "sf1", "error": { "code": "gateway/arguments-invalid", "message": "...", "details": {...} } }
 ```
 
-- 流结束后迟到帧（item/end/cancel）静默丢弃；重复 `open` 同 streamId → 关闭 socket。
+- 迟到帧分两种，别一概当静默（Todo 7 实测订正，`.omo/evidence/dsh-web-adapt/task-7/replay-boundary-contract.md` §4）：发向**从未打开过**的 streamId 的 item 与 **cancel 之后**到达的 item **静默丢弃**（零响应帧、socket 存活）；而对某条 follow 流发过 uplink `end` 之后再发 item，会收到 `{"code":"gateway/protocol","message":"api gateway: Remote stream uplink item after end"}` error 帧，**该流被服务端判死，此后零帧送达且无其它通知**。因此客户端对 follow 流只发 `cancel`，永不发 `end`（R13）；收到 `error` 帧的流按失败处理并换新 streamId 重建（R16）。
+- 会关闭 socket 的违规共三类（Todo 7 实测订正，原文"重复 open 是唯一"不成立）：同 socket 内重复 `open` 同 streamId → `close(1008)`；二进制帧 → `close(1003)`；非法 JSON 文本 → `close(1008)`。流级违规（error 帧、静默丢弃）从不关闭 socket，三类关 socket 属客户端 bug，不重连（R14/R15）。
 - 上行缓冲上限 256 KiB/流（`streamInboxBytes`），溢出以 `gateway/uplink-overflow` 失败该流。
-- **心跳**：服务端每 **2s** 发 ping；客户端连续 **2 次**未回 pong 即 `terminate()`。vis 客户端必须用能自动回 pong 的 WS 实现（`ws` 库默认行为即够）。
+- **心跳**：服务端每 **2s** 发 ping；客户端连续 **2 次**未回 pong 即 `terminate()`。vis 客户端必须用能自动回 pong 的 WS 实现（`ws` 库默认行为即够）。此条已真机实测：Todo 36 用裸 WS 客户端（吞 pong）观察到 8 秒内 4 次服务端 ping，回 pong 的客户端存活、吞 pong 的被终止（`task-36/injections/mux-heartbeat-cut.txt`，F02）。
 
 ---
 
@@ -293,8 +358,8 @@ Host → 客户端：
 | `workspace/insertBefore` / `insertSessionBefore` | unary | `{request:{...}}` | ➖（排序） |
 | `workspace/pinSession` / `unpinSession` | unary | `{request:{...}}` | ➖ |
 | `workspace/archiveSession` / `unarchiveSession` | unary | `{request:{...}}` | ➖ |
-| `workspace/initializeDefault` | unary | 无参 | ❌ `gateway/internal: system Documents directory is unavailable`（无桌面目录环境） |
-| `workspace/directoryPicker/list` | unary | `{request:{...}}` | ➖ |
+| `workspace/initializeDefault` | unary | 无参 | ⚠️ 环境相关：无系统 Documents 目录时报 `gateway/internal: system Documents directory is unavailable`；Task 6 在 Linux 桌面环境实测 **200 ok**（与初版结论分歧，属环境差异） |
+| `workspace/directoryPicker/list` | unary | `{request:{...}}` | ❌ http-404（Task 6 实测，此前未探测） |
 | `workspace/directoryPicker/pick` | unary | `{request:{...}}` | ➖ |
 | `workspace/directoryPicker/createDirectory` | unary | `{request:{...}}` | ➖ |
 
@@ -334,7 +399,7 @@ Host → 客户端：
 
 | 端点 | 形态 | 参数 | 实测 |
 |---|---|---|---|
-| `job/list` | **stream** | `{request:{sessionId}}` | ❌ 经 HTTP → `signature-invalid`（必须走 mux） |
+| `job/list` | **stream** | `{request:{sessionId}}` | ❌ 经 HTTP → `signature-invalid`（必须走 mux）；✅ 经 mux 实测返回行（Task 6 复测） |
 | `job/follow` | **stream** | `{request:{...}}` | ➖ |
 | `job/kill` | unary | `{request:{...}}` | ➖ |
 
@@ -346,13 +411,15 @@ Host → 客户端：
 | `workspaceFiles/stat` | unary | `{workspaceFileScopeId, path}` | ✅ `{absolutePath, version, bytes}` |
 | `workspaceFiles/read` | unary | `{workspaceFileScopeId, path, range:{offset?,limit?}}` | ✅ `{absolutePath, version, bytes, offset, text, lines, eof}` |
 | `workspaceFiles/readBytes` | unary | `{workspaceFileScopeId, path, options:{baseFile?, range?}}` | ➖ |
-| `workspaceFiles/changes` | unary | `{workspaceFileScopeId, ...}` | ➖ |
+| `workspaceFiles/changes` | **stream** | `{workspaceFileScopeId, ...}` | ⚠️ 形态订正（Task 6 实测）：经 HTTP 报 `signature-invalid`、经 mux 正常出帧，**是 stream 不是 unary**（初版未标形态） |
 
 ### 7.8 特殊端点
 
 | 端点 | 说明 |
 |---|---|
 | `POST /api/$events/result` | 应答 `$events` 流里的 `waterfall` 帧：`payload:{args:{clientId, eventId, outcome}}`，outcome = `{kind:"next"}` / `{kind:"result", value?}` / `{kind:"rejected", error:{name,message,code?,details?}}`（【源码】api-gateway） |
+
+**应答词汇（Todo 28 钉死，来源为 dsh 0.2.0-rc.2 随包源码而非猜测）**：`@deepseek-ai/dsh-client-ui-approval/lib/client.js` 用字符串 `"allowed-once"` / `"rejected"` 应答；`@deepseek-ai/dsh-api-gateway/lib/client.js#dispatchWaterfall` 把监听器返回值包成 `{kind:"result", value:<value>}`，只有 `kind:"rejected"` 会被当作监听器失败从而取消事件、让 approval 服务 fail-closed 到 `"unavailable"`。因此：放行（once/always）→ `{kind:"result", value:"allowed-once"}`；驳回 → `{kind:"result", value:"rejected"}`；降级/未知应答/畸形应答 → `{kind:"rejected", error:{...}}`（终态，绝不静默丢弃）。URL 细节：`$events` 段**不可百分号编码**（`%24events` 会 404，实测，见 Task 19 记录）。
 
 ---
 
@@ -366,6 +433,8 @@ Host → 客户端：
 2. 之后两类帧：
    - `{"type":"emit","event":"<name>","args":[...]}`——广播事件，只读。
    - `{"type":"waterfall","event":"<name>","eventId":"<uuid>","agentId":"<id>","request":{...}}`——需要客户端处理并**经 `POST /api/$events/result` 应答**（如 `approval/request`、`user-questions/request`）；其他客户端应答前该事件挂起，被取消时收到 `{"type":"cancel","eventId"}`。
+3. **`clientId` 每连接一新**（Todo 7 实测 R10：单次 run 内 4 个连接拿到 4 个互不相同的 id）。任何 waterfall 应答都必须用**当前连接** ready 帧里的 clientId，重连后缓存的旧 clientId 一律作废。
+4. **`$events` 是每连接 at-most-once 广播，断线期事件不补送**（Todo 7 实测 R11，带 positive control：在线 create 当即收到 emit，断线期 create 后重连只收到 `ready`）。没有 cursor、没有重放，所以待决审批/提问状态**不能等重连补帧**，必须从 session 权威状态（follow snapshot 的 records + `projections.values.userQuestions.active`）重新推导。
 
 **转发事件允许列表**（【源码】`dsh-api-remotes/lib/index.js`，31 个，未列出的事件不会推给浏览器客户端）：
 
@@ -385,7 +454,9 @@ user-questions/request
 ### 8.2 `session/follow` 流帧（实测）
 
 - 首帧 `{"type":"snapshot","header":{version:4,id,createdAt,cwd,isSeeded,agentPreset},"cursor":<seq>,"records":[{"type":"event","event":{type,seq,time,data}}],"hasMore":false,"projections":{asOfSeq,values:{...}}}`
-- 之后为增量 `{"type":"item","streamId":"sf1","value":{...}}`（更新帧；断线重连以新 snapshot 的 cursor 续传，`session/page` 可按 `beforeSeq/throughSeq` 补历史）。
+- 之后为增量 `{"type":"item","streamId":"sf1","value":{...}}`（更新帧）。
+- **重连语义（Todo 7 实测订正，原文"以新 snapshot 的 cursor 续传"不成立）**：`session/follow` 没有 cursor/resume 参数（typert schema 与实测一致），重连时首帧仍是从 seq 0 起的**全量 snapshot**，断线期事件全部在内（无缺口）。语义是"全量重放 + 客户端按 `event.seq` 去重合并"，不是续传；旧连接已收到的事件会被 snapshot 二次投递。因此**重连不需要用 `session/page` 补洞**（R1/R2/R4）。
+- 完整回放边界契约（R1–R16：snapshot 水位、`session/page` 窗口参数语义、多流重订阅时序、迟到帧与协议违规）见 `.omo/evidence/dsh-web-adapt/task-7/replay-boundary-contract.md`，是实现 `app/composables/dshSyncStateMachine.ts` 与 `useDshMessageBridge.ts` 重连路径的依据，本文不重复其内容。
 
 **projections.values 字段**（来自 list/snapshot 实测）：`title`、`goal`、`tokenUsage{uncachedInputTokens,outputTokens,cacheReadTokens,cacheWriteTokens}`、`contextPressure`、`contextBreakdown{systemTokens,toolsTokens,messageTokens}`、`inbox{next-turn,next-step}`、`sessionStats{turns,steps,llmMs,toolMs,ttftMs,ttftSteps,decodeMs,decodeTokens}`、`turnOutline`、`modelSelection{lastUsed,next}`、`permissions{currentValue}`、`subagentCatalog`、`todos`、`sessionListMetadata{blank,lastPromptAt}`、`imageLimits`、`agentPreset`。
 
@@ -450,20 +521,24 @@ follow 流 records（seq 3→17）：
 
 ## 10. 可用性矩阵（实机小结）
 
+初版为探测期小结；Task 6 对 §7 全部端点复测、Todo 36 经 bridge 全链路复测，两轮差异已合并进来（分歧行标注来源）。
+
 | 表面 | 状态 | 说明 |
 |---|---|---|
-| HTTP unary RPC（session/workspace/settings/account/terminal/workspaceFiles） | ✅ 可用 | 见 §7 实测列 |
-| WS mux + `$events` + `session/follow` + `workspace/follow` | ✅ 可用 | ready/emit 帧、快照+增量均验证 |
-| stream 方法经 HTTP 调用 | ❌ 不支持 | 必须走 mux |
-| 平铺 payload | ❌ 不支持（0.2.0-rc.2） | 必须 `{args:{…}}` |
-| `session/skills/list`、`session/fileReferences/list` | ❌ 404 | agent 作用域服务未激活（无活跃 agent 时端点不存在） |
-| `workspace/initializeDefault` | ❌ internal | 无系统 Documents 目录的环境 |
-| 真实 LLM 对话 | ⚠️ 需凭证 | 未登录/无 key 时 turn 以 `MISSING_CREDENTIAL` 失败（路径完整可观测） |
-| 模型目录 | ✅ | `session/modelCatalog`：provider `deepseek-official`；`deepseek-flash`(DeepSeek-V41-Flash)、`deepseek-v4-pro`；推理档位 `off/low/high/max`（默认 high） |
+| HTTP unary RPC（session/workspace/settings/account/terminal/workspaceFiles） | ✅ 可用 | 见 §7 实测列；Task 6 复测通过，Todo 36 经 bridge 全链路复测（L02–L16） |
+| WS mux + `$events` + `session/follow` + `workspace/follow` | ✅ 可用 | ready/emit/waterfall 帧、快照+增量均验证；跨连接 streamId 可复用、clientId 每连接一新、`$events` 不补送（Todo 7，R8–R11） |
+| stream 方法经 HTTP 调用 | ❌ 不支持 | 必须走 mux；Task 6 对 `job/list`、`workspaceFiles/changes` 双向确认 |
+| 平铺 payload | ❌ 不支持（0.2.0-rc.2） | 必须 `{args:{...}}`；Task 6 全 `{args:{…}}` 复测通过，Todo 25 实测平铺直接 `gateway/arguments-invalid` |
+| `session/skills/list`、`session/fileReferences/list` | ❌ 404 | agent 作用域服务未激活（无活跃 agent 时端点不存在）；Task 6 复现 http-404 |
+| `workspace/initializeDefault` | ⚠️ 环境相关 | 无系统 Documents 目录时报 `gateway/internal`；Task 6 在 Linux 桌面环境实测 **200 ok**（初版结论分歧，属环境差异） |
+| `workspace/directoryPicker/list` | ❌ http-404 | Task 6 实测（初版未探测） |
+| `workspaceFiles/changes` | ⚠️ stream | 经 HTTP 报 `signature-invalid`、经 mux 出帧（Task 6 实测订正形态） |
+| 真实 LLM 对话 | ⚠️ 需凭证 | 未登录/无 key 时 turn 以 `MISSING_CREDENTIAL` 失败；该错误路径已双表面实测（`turn/end.reason.error.code` + attempt finish chunk，L09/L10），**完整对话（含 assistant 全文）仍未实测** |
+| 模型目录 | ✅ | `session/modelCatalog`：provider `deepseek-official`；`deepseek-flash`(DeepSeek-V41-Flash)、`deepseek-v4-pro`；推理档位 `off/low/high/max`（默认 high）。信封形状为 `{default, routableProviders, groups:[{id,name,models:[{id,name,reasoning:{efforts,defaultEffort}}]}], failures}`（Todo 36 实测：1 provider / 2 models，L04） |
 | 终端 | ✅ | environment/shells/list 可用；PTY 上限 `maxInputBytes:65536, maxCols:500, maxRows:200, scrollback:1000` |
 | 工作区文件 | ✅ | list/stat/read 可用；scope = SessionId → 解析 cwd 为根；`read` 必须带 `range` |
-| 裸 fetch 路由 | ✅ | `/api/file`（文件字节）、`/api/session.export`（ZIP 日志，实测 11.8 KB）、`/api/present.host`（桌面元数据）可用；`changes.*`/`present.open` 需 session 坐标参数，路由可达（见 §5.5） |
-| 登录 | ➖ 未实测 | `account/getState` 正常；`startSignIn` 未触发（避免真实流程） |
+| 裸 fetch 路由 | ⚠️ 部分 | `/api/file`、`/api/session.export`（ZIP 日志，实测 11.8 KB）、`/api/present.host`（桌面元数据）可用；`changes.*`/`present.open` 需 session 坐标参数，路由可达（见 §5.5）。Task 6 复测：6 条中 2 条返回 200（其余需坐标参数或桌面能力） |
+| 登录 | ➖ 连接已实测 / 账号流程范围外 | `account/getState` 经 bridge 实测 `ok:true`（L02，cookie 由桥侧注入）；`startSignIn` 未触发（账号 OAuth 属范围外，见 §15） |
 
 ---
 
@@ -495,8 +570,8 @@ dsh 仍在 rc 阶段，**协议随版本漂移**。本次调研交叉比对出�
 | 传输 | REST（`{code,msg,data}` 信封）+ WS 事件 | JSON-RPC 信封 HTTP + WS mux |
 | 事件 | WS 单通道事件帧 | `$events`（广播/waterfall）+ 每会话 `session/follow` 流 |
 | 应答关联 | 事件 seq/offset 去重 | prompt rpcId → `user/message.source.rpcId` |
-| 认证 | 文件 token（Bearer / subprotocol） | launch token → cookie（30 天，跨重启有效） |
-| 回放 | WS 重连 + resync + snapshot | 重连 snapshot（cursor）+ `session/page` 补历史 |
+| 认证 | 文件 token（Bearer / subprotocol） | launch token → cookie（`Max-Age` 30 天；**跨重启有效属源码推断，未实测**，见 §15） |
+| 回放 | WS 重连 + resync + snapshot | **无 resync 实物**（Todo 7 订正）：重连 = 按序重开全部 in-flight 流 + 从 seq 0 的全量 snapshot + 客户端按 `event.seq` 去重；`session/page` 只用于历史分页与子代理寻址，**不用于重连补洞**（R1/R4） |
 | 转发约束 | loopback Origin 白名单 | Host loopback + Origin 同源 + cookie |
 | 审批 | REST 应答 | `approval/request`（waterfall 帧）→ `POST /api/$events/result` |
 | 模式 | 3 许可模式 + plan/swarm/tower 布尔 | permission preset（`workspace-write` 等，settings/commands 可改）+ agent preset（`standard` 等） |
@@ -529,14 +604,11 @@ dsh web                                        # 或 web-mount：GUI 与 /acp �
 
 ### 14.1 bridge 侧
 
-1. **进程托管**（`bridge/processSupervisor.js`）：新增 native service 定义，仿 kimi-web：
-   - command `dsh`，args `['web','--no-open','--port','<port>']`（端口建议沿用 3080 或自选）；
-   - 健康探针：`GET /` 期待 401/303（无 cookie 时 401 即"进程就绪"），或带 cookie 探 `POST /api/account/getState` 期待 `ok:true`；
-   - 启动行解析：`dsh web: http://127.0.0.1:<port>/?token=<launchToken>`（同时拿端口与 token）。
+1. **进程托管**（`bridge/processSupervisor.js`，已落地）：新增 native service 定义（`{id:'dsh', name:'DSH', command:'dsh', args:['web','--no-open','--port','3080'], probe:{type:'http', url:'http://127.0.0.1:3080/'}}`），**spawn-only，无 adopt 状态**：外部实例的 launch token 只在它自己的 stdout 上，bridge 无法认证，因此端口被占直接报错而非接管（Task 8 决策，真机见 `task-36/injections/port-3080-occupied.txt` F01）。启动时序（Todo 8 + Todo 36 S01–S03 实测）：版本闸门（`dsh --version`，不符即停子进程并提示 `npm i -g @deepseek-ai/dsh@0.2.0-rc.2`）→ 按名 spawn 子进程并接管 stdout → 解析启动行 `dsh web: http://127.0.0.1:<port>/?token=<launchToken>`（同时拿端口与 token）→ 端口漂移校验 → cookie 交换 → **认证就绪**（带 cookie 打 `POST /api/account/getState`，期待 `result.ok===true`）→ `state=running`。任一步失败只停**那一个**子进程并把状态置 `error`，不留半可用服务；状态三态即 `stopped`（未托管）/ `running` / `error`。
 2. **凭据交换**（新模块，仿 `bridge/kimiWebToken.js`）：launch token → `GET /?token=` 捕获 `Set-Cookie` → 缓存 `dsh-auth-*` cookie（authority 维度）；dsh 重启后 cookie 仍有效（签名 secret 持久），失效时用新 launch token 重换。
 3. **HTTP 转发**（仿 `bridge/kimiWebHttpProxy.js`）：`/dsh/*` → `http://127.0.0.1:<port>/api/*`（注意路径映射：bridge 前缀剥掉后要拼回 `/api/`）；剥掉浏览器带的 `origin`/`host`/hop-by-hop，注入 cookie；**绝不向上游泄露 bridge token**。
 4. **WS 转发**（仿 `bridge/kimiWebWsProxy.js`）：`/dsh/ws` → `ws://127.0.0.1:<port>/api/remote.mux`；upgrade 时带 cookie；`connectUpstreamWebSocket` 风格裸握手、不带上行 Origin。
-5. **路由注册**（`bridge/visBridgeServer.js`）：HTTP 链加 `/dsh` 分支；upgrade 链加 `/dsh/ws` 分支；`bridge/bridgeConfig.js` 加 native service 默认开；`bridge/visBridgeCli.js` 如需独立端口则加默认值（复用 23004 即可）。
+5. **路由注册**（`bridge/visBridgeServer.js`）：HTTP 链加 `/dsh` 分支；upgrade 链加 `/dsh/ws` 分支；`bridge/bridgeConfig.js` 加 native service 默认**关**（opt-in，dsh 仍处 rc 阶段，与三个真 sibling 的默认开不同）；`bridge/visBridgeCli.js` 如需独立端口则加默认值（复用 23004 即可）。
 
 ### 14.2 前端侧
 
@@ -545,34 +617,42 @@ dsh web                                        # 或 web-mount：GUI 与 /acp �
    - `app/utils/dshRpc.ts`：信封构造/校验（`client-request`/`server-response`）、`{args}` 包装、错误码归类、multipart 结果解析；
    - `app/utils/dshMux.ts`：mux 帧编解码、streamId 管理、ping/pong（依赖 `ws` 自动行为）、断线重连 + snapshot 续传。
 3. **适配器**（`app/backends/dsh/`）：`normalize.ts`（follow 记录 → `MessageInfo`/`MessagePart`）、`handlers-*.ts`、`history.ts`（`session/page` 分页）、`bootstrap.ts`（`workspace/follow` → projects、`session/list` → sessions、首个 session follow + history）、`sessionModes.ts`（permission preset 读写）、`backendMessageSend.dsh.ts`（`session/prompt`，mode queue/steer）。
-4. **事件桥**（`app/composables/useDshMessageBridge.ts`）：同时挂 `$events`（审批/账号/设置变更）与目标 session 的 `session/follow`；`approval/request` waterfall 帧经 `POST /api/$events/result` 应答（映射到现有 permission UI）。
+4. **事件桥**（`app/composables/useDshMessageBridge.ts`）：同时挂 `$events`（审批/账号/设置变更）与目标 session 的 `session/follow`；`approval/request` waterfall 帧经 `POST /api/$events/result` 应答（映射到现有 permission UI）。应答词汇按 §7.8 钉死的三态映射（放行 `allowed-once` / 驳回 `rejected` / 降级与未知 `kind:"rejected"` fail-closed），`user-questions/request` 与未知 waterfall 立即安全拒绝；一个 `eventId` 只答一次，host `cancel` 帧抑制迟到应答，无连接 clientId 时应答入队、ready 后flush。（Todo 28/19 落地。）
 5. **注册与激活**：`app/backends/registry.ts` 加 `configureDshBackend` + `DEFAULT_DSH_BRIDGE_URL='ws://localhost:23004/dsh/ws'`；`useCredentials` 加 backendKind/URL/token 存储键；`useBackendActivation.activateDsh`；`App.vue` 登录按钮/字段/watchEffect/bootstrap。
 6. **构造器绑定纪律**：照 `codexAdapter.ts` `bindBackendMethods()`（:1460）或 kimiWebAdapter 构造器逐方法 `bind(this)`——调用方会把方法当回调传出。
 7. **类型契约**：JSON-RPC 响应用**实机探测的真实形状**定义 TS 类型（本项目 memory #798 的教训），mock fixture 必须来自真实 wire 数据（`.omo/evidence/dsh-adapt/`）。
 
 ### 14.3 测试与验收（照 kimi-web）
 
-- 单测：信封编解码、normalize、history、mux 帧状态机、registry pin、bridge 边界（`app/dshHttpProxy.boundaries.test.ts` 等）。
-- Fixtures：`.omo/evidence/dsh-adapt/04-session-follow-full.txt` 的真实 records → `app/backends/dsh/fixtures/*.jsonl`。
-- Live QA：`dsh web` + 真实登录后的端到端（发送 prompt → follow 流渲染 → 审批 waterfall 应答 → 取消/steer）。
-- 最终门（按 memory #1090/#1763 惯例）：pnpm lint + Vitest 全量 + Vite build + SEA 重建。
+- 单测：信封编解码、normalize、history、mux 帧状态机、registry pin、bridge 边界（`app/dshHttpProxy.boundaries.test.ts`、`app/dshWsProxy.boundaries.test.ts` 等）。
+- Fixtures：`.omo/evidence/dsh-adapt/04-session-follow-full.txt` 的真实 records → `app/backends/dsh/fixtures/*.jsonl`。**注意**：该 capture 与 Task 6 都是降级采集（`DEEPSEEK_API_KEY` 缺席、零 prompt），其中唯一的 `assistant/attempt` 是 `MISSING_CREDENTIAL` 错误记录；成功流、思考增量、工具调用、审批 waterfall、子代理 child、正常完成序列**无真实 fixture**，凭据版补测清单见 §15 末尾。
+- Live QA（已执行，模式 `degraded`）：`.omo/evidence/dsh-web-adapt/task-36/`，41/41 断言 PASS、退出码 0。dsh 从不由测试脚本启动，全部经 `node vis_bridge.js start`（或重建的 SEA）由 supervisor 派生；本机真实 bridge 配置未被动过（test-owned `bridge.json` + `VIS_BRIDGE_STATE_DIR`）。降级路径只跑错误路径 QA（prompt → `MISSING_CREDENTIAL` 完整可观测）加全部与凭据无关的协议面，覆盖范围逐行见 §0.1 与 §15。
+- 最终门（已执行，全部退出码 0）：`pnpm lint`（oxlint + vue-tsc）、`pnpm test`（Vitest 全量 4169 passed / 6 skipped，472 files）、`pnpm build`、`pnpm bridge:build`（SEA 重建，`--version` 0.8.9）。
 
 ---
 
-## 15. 未验证项与后续探测计划
+## 15. 未验证项与裁定（逐行对账）
 
-| 项 | 状态 | 下一步 |
-|---|---|---|
-| DeepSeek 账号登录全流程（`account/startSignIn` → 事件 → 对话） | 未实测 | 用户提供账号/环境后实机走一遍；或设 `DEEPSEEK_API_KEY` 走 `credentials/set` |
-| `credentials/set` 写入 API key 后重放 prompt | 未实测 | 同上；预期 turn 正常完成，可验证 assistant/message 全文 |
-| `terminal/create` + `terminal/follow`（PTY 全链路） | 部分 | 补 `request` 结构探测（`terminal/create` 错误消息已提示 `agentId`+`request`） |
-| `session/control` 流语义 | 未探测 | mux 打开后观察帧类型 |
-| `session/updateQueue` 参数 | 失败待补 | 读 `typert.host.js` schema 后重放 |
-| waterfall 事件（`approval/request`、`user-questions/request`）应答闭环 | 未实测 | 需要一个会触发审批的 turn（登录后让模型执行 bash） |
-| 多客户端 / 多 observe 同时 follow 同一 session | 未实测 | 双开 mux 验证事件广播 |
-| cookie 跨重启有效性 | 源码推断 | 重启 dsh 后用旧 cookie 打 `/api/account/getState` 验证 |
-| 大结果 multipart 响应 | 源码推断 | 读一个二进制文件（`workspaceFiles/readBytes`）验证 |
-| SSE 传输 | 实机不存在 | 0.2.0-rc.2 的 `cordis.patch.yml` 注释仍写 "browser half is the fetch/SSE client"，但实测服务端只注册 `/api/remote.mux` 一条 upgrade 路由、无 `text/event-stream` 端点；适配只需 HTTP + mux，无需 SSE |
+本表替代初版"未验证项"清单。裁定口径三选一，与 §0.1 一致：
+
+- **已实测**：Todo 36（或 Todo 6/7 探针）有 PASS 断言，证据指到文件与断言 ID。
+- **已排除（范围外）**：vis 适配明确不做，vis 不发也不收；记录在此以免后来者误以为漏做。
+- **已知限制（降级/平台）**：面已落地但因缺凭据、缺触发条件或平台未覆盖而未跑通，公开文档必须标注。
+
+| 项 | 裁定 | 依据 / 证据 | 若要补测 |
+|---|---|---|---|
+| DeepSeek 账号登录全流程（`account/startSignIn` → 事件 → 对话） | 已排除（范围外） | 写入型账号 OAuth 流程，vis 不接管；登录连接面（`account/getState`，只读）已实测：`task-36/live/11-login-connect-getState.txt`（L02） | 提供真实账号后由人手工走一遍；产品面另行立项 |
+| `credentials/set` 写入 API key 后重放 prompt | 已知限制（降级） | `DEEPSEEK_API_KEY` 缺席（`task-36/00-run-context.txt`、`degraded-items.md` 表头）；vis 不代用户写 DeepSeek 凭据，凭据由 dsh 运行环境提供；缺 key 的错误路径已实测：`live/18-missing-credential.txt`（L09/L10） | 在带 key 的环境发 1 条 prompt，断言 `turn/end.reason.kind="completed"` + `assistant/message` 全文 |
+| `terminal/create` + `terminal/follow`（dsh 自有 PTY 全链路） | 已排除（范围外） | Shell 走 bridge PTY（Metis #15），dsh `terminal/*` 端点不接；PTY 目录可达已实测：`live/20-terminal-shell.txt`（L13） | 若改为消费 dsh PTY，先补 `request` 结构探测 |
+| `session/control` 流语义 | 已实测（开流与 baseline）+ 已排除（上行控制帧） | Todo 6 探针打开 `session/control` 并捕获 baseline 帧（`.omo/evidence/dsh-web-adapt/task-6/degraded-capture-record.md` "What WAS verified"）；上行控制帧 vis 不发 | 需要远端控制会话时再补帧类型测量 |
+| `session/updateQueue` 参数 | 已排除（范围外） | wire 为 `gateway/input-invalid`，参数结构未补探测（§7.1）；前端 `updateSessionMode` / `listCommands` 抛 typed unsupported，不猜参数（Task 15 决策） | 读 `typert.host.js` schema 后重放 |
+| waterfall 应答闭环（`approval/request`、`user-questions/request`） | 已知限制（降级） | Todo 28 已实现并以单测 settle 断言钉死（`dshPermissions.test.ts` 19 例，`.omo/evidence/dsh-web-adapt/task-28.txt`）；真机未执行：审批由运行中的 agent 在 turn 内触发，无 turn 即无审批（`degraded-items.md` 行 8） | 凭据版 + bash 类工具调用触发审批，走通过与驳回各一次；应答词汇已钉死，见 §7.8 |
+| 多客户端 / 多 observe 同时 follow 同一 session | 已实测（受限） | Todo 7 探针以 2–3 条并发 mux 连接 follow 同一 session，snapshot 与增量均正常（`.omo/evidence/dsh-web-adapt/task-7/replay-boundary-contract.md` §3.1 第 6 条）；另测：同 streamId 跨连接可复用（R8）、`$events` clientId 每连接一新（R10） | 限制：单进程多连接，非独立第三方客户端的严格证明；跨连接广播另有 R11（`$events` 不补送） |
+| cookie 跨重启有效性 | 已知限制（未实测） | `degraded-items.md` 行 15：重启须由 supervisor 发起并重建 launch-token 交换，降级 run 观察不到端到端过程。已实测的是失效重交换：`injections/cookie-invalidation.txt`（F03/F04）。§4.1 的"跨重启有效"仍是源码推断（30 天 Max-Age + authority 键） | supervisor 重启 dsh 后用旧 cookie 打 `/api/account/getState` |
+| 大结果 multipart 响应 | 已知限制（未实测） | 解析逻辑已接面但只用合成 fixture 单测覆盖（`app/utils/dshRpc.ts` 模块注释明示 synthetic-fixture only），未做 live 探测 | 读一个二进制文件（`workspaceFiles/readBytes`）触发 multipart，比对 metadata + 字节 |
+| SSE 传输 | 已排除（范围外） | 0.2.0-rc.2 只注册 `/api/remote.mux` 一条 upgrade 路由、无 `text/event-stream` 端点（本版实测）；`cordis.patch.yml` 里 "fetch/SSE client" 注释已过时 | 无需动作；若未来版本注册 SSE 路由再评估 |
+
+**仍欠的 live fixture**（Task 6 记录，需凭据版补测，缺一项就不写一项）：成功的 assistant 文本增量流、思考增量帧、工具调用/结果、审批 waterfall 帧（含 `sessionId`/`eventId` 身份与 resolve/cancel 生命周期）、子代理 child 的 `session/page` 记录、`turn/end.reason.kind="completed"` 的正常完成序列、`user-questions/request` waterfall 帧与安全拒绝应答。清单见 `.omo/evidence/dsh-web-adapt/task-6/degraded-capture-record.md`。
 
 ---
 
