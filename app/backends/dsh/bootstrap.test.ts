@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ProjectState } from '../../types/worker-state';
 import type { DshMuxClient, DshMuxStreamHandle } from '../../utils/dshMux';
 import type { DshMappedSession } from './dshAdapter';
+import { mapDshSessionItem } from './dshAdapter';
 import type { DshJsonValue } from './types';
 import { useDshMessageBridge } from '../../composables/useDshMessageBridge';
 import {
@@ -428,6 +429,45 @@ describe('bootstrapDshWorkspace', () => {
     expect(bridge.attachFollow).not.toHaveBeenCalled();
     expect(bridge.applyHistory).not.toHaveBeenCalled();
     expect(pages.calls).toEqual([]);
+  });
+
+  it('opens the follow for the root session when the live wire lists a child first (D5)', async () => {
+    // Live order (task-44 wire-shape.json): the NEWEST session is a subagent
+    // child. The entry filter can only exclude it if the production mapper
+    // reads the wire's `parentSessionId`; a child selected as the entry is
+    // addressed `{kind:'session'}` and dsh rejects it with "subagent Sessions
+    // require their durable parent address" (reproduced live in ui-recon.json).
+    const child = mapDshSessionItem({
+      sessionId: 'session-child',
+      parentSessionId: 'session-root',
+      cwd: REPO_DIR,
+      updatedAt: 2,
+    });
+    const root = mapDshSessionItem({ sessionId: 'session-root', cwd: REPO_DIR, updatedAt: 1 });
+    const { mux, bridge, pages, normalize, commit } = harness({ sessions: [child, root] });
+
+    await bootstrapDshWorkspace({
+      adapter: sessionSource([child, root]),
+      mux: mux.client,
+      createBridge: () => bridge,
+      normalize,
+      fetchPage: pages.fetcher,
+      isCurrent: () => true,
+      commit,
+    });
+
+    expect(child.parentID).toBe('session-root');
+    expect(commit.mock.calls[0][0].selectedSessionId).toBe('session-root');
+    expect(mux.opened).toEqual([
+      {
+        endpoint: 'session/follow',
+        args: { request: { address: { kind: 'session', sessionId: 'session-root' } } },
+      },
+    ]);
+    expect(bridge.attachFollow).toHaveBeenCalledWith(
+      expect.objectContaining({ streamId: 'stream-1' }),
+      'session-root',
+    );
   });
 
   it('classifies archived and pinned sessions without dropping them from the tree', async () => {

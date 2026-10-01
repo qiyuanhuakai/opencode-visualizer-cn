@@ -338,7 +338,8 @@ export type DshSessionItem = {
   workspaceId?: string;
   cwd?: string;
   title?: string;
-  parentSession?: string;
+  /** The live wire field (`session/list`), NOT the follow header's `parentSession`. */
+  parentSessionId?: string;
   busy?: boolean;
   createdAt?: string | number;
   updatedAt?: string | number;
@@ -385,7 +386,7 @@ export function mapDshSessionItem(
   );
   const projectId = workspaceId || orphanProjectId(directory);
   if (!projectId) throw new Error(`dsh session ${sessionId} has no workspace id.`);
-  const parentID = item.parentSession?.trim() || undefined;
+  const parentID = item.parentSessionId?.trim() || undefined;
   return {
     id: sessionId,
     projectID: projectId,

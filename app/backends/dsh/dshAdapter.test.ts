@@ -81,7 +81,7 @@ const SESSION_LIST_ITEMS = [
     workspaceId: 'ws-git',
     cwd: '/tmp/dsh/repo',
     title: 'Forked session',
-    parentSession: 'session-1',
+    parentSessionId: 'session-1',
   },
   {
     sessionId: 'session-archived',
@@ -519,6 +519,92 @@ describe('DshAdapter session and project mapping', () => {
     const sandbox = projects['ws-git']!.sandboxes['/tmp/dsh/repo']!;
     expect(sandbox.sessions['session-new']!.parentID).toBe('session-1');
     expect(sandbox.rootSessions).toEqual(['session-1']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Live wire shape (captured 2026-10-01 from a real `dsh web` 0.2.0-rc.2 —
+// .omo/evidence/dsh-web-adapt/task-44/wire-shape.json): `session/list` items
+// carry the parent link as `parentSessionId`; `parentSession` is the
+// `session/follow` snapshot HEADER field and never appears on a list item.
+// ---------------------------------------------------------------------------
+
+const LIVE_SESSION_LIST_ITEMS = [
+  {
+    sessionId: '426e19e7-aa90-4f48-92a5-76445227d360',
+    parentSessionId: 'session-73734c5c-8a2d-4848-80fa-0e742cdaa379',
+    origin: 'subagent',
+    cwd: '/tmp/opencode/task41-ws',
+    updatedAt: 1790842423211,
+  },
+  {
+    sessionId: 'session-73734c5c-8a2d-4848-80fa-0e742cdaa379',
+    cwd: '/tmp/opencode/task41-ws',
+    updatedAt: 1790842417763,
+  },
+  {
+    sessionId: '426e19e8-0000-4000-8000-000000000000',
+    cwd: '/tmp/opencode/task41-ws',
+    updatedAt: 1790842400000,
+  },
+];
+
+const LIVE_WORKSPACE_BASELINE = {
+  type: 'baseline',
+  value: {
+    items: [
+      {
+        workspaceId: '391a6bfc-44f6-4f81-bc1d-723499f9e3ca',
+        path: '/tmp/opencode/dsh-probe/wsroot',
+        title: 'wsroot',
+        sessionIds: ['session-fe0c482c-7c50-43ae-803a-75668a743271'],
+      },
+    ],
+    archivedSessionIds: [],
+    pinnedSessionIds: [],
+  },
+};
+
+describe('DshAdapter live session/list wire shape (task-44 D5)', () => {
+  const LIVE_CHILD_ID = LIVE_SESSION_LIST_ITEMS[0].sessionId;
+  const LIVE_PARENT_ID = LIVE_SESSION_LIST_ITEMS[1].sessionId;
+
+  it('reads the parent link from the wire field parentSessionId, not parentSession', async () => {
+    const rpc = fakeRpcClient({ 'session/list': { items: LIVE_SESSION_LIST_ITEMS } });
+    const mux = fakeMuxClient({ 'workspace/follow': LIVE_WORKSPACE_BASELINE });
+    const adapter = createDshAdapter({
+      bridgeUrl: DSH_BRIDGE_URL,
+      bridgeToken: 'bridge-token',
+      rpcClient: rpc.client,
+      muxClient: mux.client,
+      fetcher: bridgeFetcher(),
+    });
+    const sessions = (await adapter.listSessions()) as Array<Record<string, unknown>>;
+
+    const child = sessions.find((session) => session.id === LIVE_CHILD_ID);
+    const parent = sessions.find((session) => session.id === LIVE_PARENT_ID);
+    expect(child?.parentID).toBe(LIVE_SESSION_LIST_ITEMS[0].parentSessionId);
+    expect(parent?.parentID).toBeUndefined();
+  });
+
+  it('keeps live child sessions out of rootSessions so they cannot become the default entry', async () => {
+    const rpc = fakeRpcClient({ 'session/list': { items: LIVE_SESSION_LIST_ITEMS } });
+    const mux = fakeMuxClient({ 'workspace/follow': LIVE_WORKSPACE_BASELINE });
+    const adapter = createDshAdapter({
+      bridgeUrl: DSH_BRIDGE_URL,
+      bridgeToken: 'bridge-token',
+      rpcClient: rpc.client,
+      muxClient: mux.client,
+      fetcher: bridgeFetcher(),
+    });
+    const projects = mapDshSessionsToProjects((await adapter.listSessions()) as never);
+
+    const sandboxes = Object.values(projects).flatMap((project) => Object.values(project.sandboxes));
+    const sandbox = sandboxes.find((entry) => entry.sessions[LIVE_CHILD_ID]);
+    expect(sandbox).toBeDefined();
+    expect(sandbox!.rootSessions).not.toContain(LIVE_CHILD_ID);
+    expect(sandbox!.rootSessions).toContain(LIVE_PARENT_ID);
+    expect(sandbox!.sessions[LIVE_CHILD_ID]!.parentID).toBe(LIVE_SESSION_LIST_ITEMS[0].parentSessionId);
   });
 });
 
