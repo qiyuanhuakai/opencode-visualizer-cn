@@ -101,17 +101,19 @@ describe('dsh normalizer — real captured snapshot (04 fixture)', () => {
     expect(meta?.rpcId).toBe('probe-r1');
   });
 
-  it('marks the injected runtime-context / skill-catalog user messages distinctly', () => {
+  it('does not render the injected runtime-context / skill-catalog user records', () => {
     const { ops } = ingestSnapshot();
     const userMessages = opsOfKind(ops, 'message').filter((op) => op.message.role === 'user');
-    // seq 3 (inbox) + seq 9 (runtime context) + seq 10 (skills) — seq 8 is the
-    // durable twin of seq 3 and must not duplicate it.
-    expect(userMessages).toHaveLength(3);
-    const userParts = opsOfKind(ops, 'part').filter((op) => metaOf(op.part)?.sourceKind !== undefined);
-    const sourceKinds = userParts.map((op) => metaOf(op.part)?.sourceKind);
-    expect(sourceKinds).toContain('runtime-context');
-    expect(sourceKinds).toContain('skill-catalog');
-    expect(sourceKinds).toContain('user');
+    // Only the real inbox prompt (seq 3) renders. seq 8 is its durable twin
+    // (deduped by appliedMessages) and seq 9 / seq 10 are the injected
+    // runtime-context / skill-catalog records, which must stay out of the
+    // message list (defect D4: bare user cards).
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0]?.message.id).toBe('ec747195-c21f-4de7-9df6-fcbf4ff4e75b');
+    const sourceKinds = opsOfKind(ops, 'part')
+      .filter((op) => metaOf(op.part)?.sourceKind !== undefined)
+      .map((op) => metaOf(op.part)?.sourceKind);
+    expect(sourceKinds).toEqual(['user']);
   });
 
   it('maps turn/start, step/start and step/end with turn+step identity', () => {
@@ -182,6 +184,86 @@ describe('dsh normalizer — real captured snapshot (04 fixture)', () => {
   it('reports the applied high-water mark equal to the snapshot cursor', () => {
     const { normalizer } = ingestSnapshot();
     expect(normalizer.cursor()).toBe(17);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 1b. Injected user/message records (defect D4: bare user cards)
+//     Reproduces the exact live sequence of task-41 session
+//     session-69646610-2075-4730-8da8-feea86f354bd (seq 9/10/11).
+// ---------------------------------------------------------------------------
+
+describe('dsh normalizer — injected user/message records never become cards', () => {
+  const USER_MESSAGE_ID = '7a3ed08f-7483-469d-a8a7-88b41366ac0c';
+  const RUNTIME_CONTEXT_ID = '650d7631-b59a-423f-98fd-286744d81701';
+  const SKILL_CATALOG_ID = 'f0a766e8-7822-49b4-9a13-0611a8e3696b';
+  const RPC_ID = 'probe-tool-fallback-1790835079009';
+
+  /** The three user/message records dsh emits for one real turn, in wire order. */
+  function liveTurnRecords(): DshSessionRecord[] {
+    return [
+      record('user/message', 9, {
+        content: [{ type: 'text', text: 'Run the shell command `ls -la` in the current directory.' }],
+        source: { kind: 'user', rpcId: RPC_ID },
+        role: 'user',
+        id: USER_MESSAGE_ID,
+      }),
+      record('user/message', 10, {
+        content: [{ type: 'text', text: 'Current runtime context. This snapshot supersedes earlier ones.' }],
+        source: {
+          kind: 'runtime-context',
+          form: 'snapshot',
+          sections: [{ name: 'sandbox:policy', text: 'Current DSH file policy: workspace-write.' }],
+        },
+        role: 'user',
+        id: RUNTIME_CONTEXT_ID,
+      }),
+      record('user/message', 11, {
+        content: [{ type: 'text', text: '<system-reminder>skill catalog</system-reminder>' }],
+        source: { kind: 'skill-catalog', form: 'catalog', entries: [{ name: 'zread' }] },
+        role: 'user',
+        id: SKILL_CATALOG_ID,
+      }),
+    ];
+  }
+
+  function ingestLiveTurn() {
+    const normalizer = createDshNormalizer({ now: () => 1790835079000 });
+    const ops: DshNormalizeOp[] = [];
+    for (const entry of liveTurnRecords()) ops.push(...normalizer.ingest(entry).ops);
+    return { normalizer, ops };
+  }
+
+  it('renders only the genuine user/message record and preserves its binding lineage', () => {
+    const { ops } = ingestLiveTurn();
+
+    const userMessages = opsOfKind(ops, 'message').filter((op) => op.message.role === 'user');
+    expect(userMessages.map((op) => op.message.id)).toEqual([USER_MESSAGE_ID]);
+
+    const parts = opsOfKind(ops, 'part');
+    expect(parts).toHaveLength(1);
+    expect(metaOf(parts[0]?.part)?.sourceKind).toBe('user');
+    expect(metaOf(parts[0]?.part)?.rpcId).toBe(RPC_ID);
+
+    const userOps = opsOfKind(ops, 'user-message');
+    expect(userOps).toHaveLength(1);
+    expect(userOps[0]).toMatchObject({
+      messageId: USER_MESSAGE_ID, sourceKind: 'user', rpcId: RPC_ID, role: 'user',
+    });
+  });
+
+  it('keeps every injected message id in appliedMessages so a replay stays silent', () => {
+    const { normalizer } = ingestLiveTurn();
+    // Re-issue the same message ids at fresh seqs (a reconnect replay with a
+    // new cursor): all three ids were applied and must dedupe, injected ones
+    // included, so nothing re-renders.
+    const replay: DshNormalizeOp[] = [];
+    for (const [index, entry] of liveTurnRecords().entries()) {
+      replay.push(...normalizer.ingest(
+        record('user/message', 50 + index, entry.event.data as Record<string, unknown>),
+      ).ops);
+    }
+    expect(replay).toEqual([]);
   });
 });
 

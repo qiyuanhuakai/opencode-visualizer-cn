@@ -120,6 +120,11 @@ function handleUserMessage(core: DshCore, event: DshSessionWireEvent, ops: DshNo
   if (!messageId || core.appliedMessages.has(messageId)) return;
   core.appliedMessages.add(messageId);
   const source = isRecord(data.source) ? data.source : {};
+  const sourceKind = asString(source.kind) || 'user';
+  // dsh injects non-prompt `user/message` records (source.kind "runtime-context",
+  // "skill-catalog") between the real prompt records. Only a genuine user
+  // submission renders; the id stays recorded above so replay dedup is kept.
+  if (sourceKind !== 'user') return;
   const content = asArray(data.content);
   const time = event.time;
   ops.push({ kind: 'message', message: userMessageOf(core, core.sessionId, messageId, time) });
@@ -131,7 +136,7 @@ function handleUserMessage(core: DshCore, event: DshSessionWireEvent, ops: DshNo
     text: textOfContent(content, 'text'),
     time: { start: time },
     metadata: partMeta(core, {
-      sourceKind: asString(source.kind) || 'user',
+      sourceKind,
       ...(asString(source.rpcId) ? { rpcId: asString(source.rpcId) } : {}),
     }),
   };
@@ -140,7 +145,7 @@ function handleUserMessage(core: DshCore, event: DshSessionWireEvent, ops: DshNo
     kind: 'user-message',
     sessionId: core.sessionId,
     messageId,
-    sourceKind: asString(source.kind) || 'user',
+    sourceKind,
     rpcId: asString(source.rpcId) || undefined,
     role: asString(data.role) || 'user',
     time,
