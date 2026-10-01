@@ -4,6 +4,28 @@
 
 ---
 
+## [Unreleased]
+
+### DSH 后端与文件树修复
+
+- [x] 按真实模型目录恢复提供商、模型和推理强度选项；隐藏不支持的状态页与输入控件，提供商凭据操作保持只读，状态标签本地化并改善窄屏换行。
+- [x] 恢复实况 assistant stream 与子代理跟随、重连和解绑，保留同一 turn 内各 step 的回答；过滤注入上下文，历史重放保留最终错误状态，取消或出错时结束残留工具。
+- [x] 文件树遇到越界子目录时显示局部错误并保留其他文件及搜索；自动扫描跳过 Git 忽略目录（[#157](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/157)）。
+
+### Kimi Web 消息与 token 持久化
+
+- [x] 修复任务完成通知与 system reminder 混合时的消息归属：注入记录不再生成裸卡片，历史加载或重连后的继续回答仍绑定真实用户消息。
+- [x] 从持久化 transcript 恢复卡片每步 token 与缓存读写用量，刷新及快照重建后保留；阻止迟到进度将已完成工具恢复为运行中（[#157](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/157)）。
+
+### 悬浮窗生命周期与渲染
+
+- [x] 默认悬浮窗容量为 30（包含待打开窗口），超限立即关闭最早创建的非关键窗口；权限、提问与 MCP elicitation 交互受保护，全为关键交互时允许超过上限。
+- [x] 页面隐藏或启用抑制时丢弃自动弹窗及待处理打开操作，恢复界面后不集中补弹；保留手动查看与关键交互，并取消可取消的渲染任务。
+- [x] 修复 Codex 子代理 shell 终态补拉后不关闭、ACP 缺省状态回退及取消未收尾；重复终态不再延后关闭，旧片段不再干扰新消息或重新弹出已过期窗口。
+- [x] Markdown 渲染失败时显示安全转义的原文，过时失败回调不覆盖新内容（[#157](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/157)）。
+
+---
+
 ## [v0.8.10 released]
 
 ### DSH (Beta) 后端接入
