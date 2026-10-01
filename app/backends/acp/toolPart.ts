@@ -25,6 +25,16 @@ function createToolState(
   now: number,
 ): ToolPart['state'] {
   const input = toRecord(update.rawInput) ?? (existing?.state.input ?? {});
+  if (status == null && existing) {
+    const state = existing.state;
+    if (state.status === 'completed') {
+      return { ...state, input, output: update.rawOutput === undefined ? state.output : stringify(update.rawOutput) };
+    }
+    if (state.status === 'error') {
+      return { ...state, input, error: update.rawOutput === undefined ? state.error : stringify(update.rawOutput) };
+    }
+    return { ...state, input };
+  }
   if (status === 'completed') {
     return {
       status,

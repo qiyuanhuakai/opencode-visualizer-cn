@@ -1,6 +1,6 @@
 import type { BackendKind } from '../backends/types';
 import type { BackendSessionInfo } from '../types/backend-domain';
-import type { MessageInfo, MessagePart } from '../types/sse';
+import type { MessageInfo, MessagePart, ToolPart } from '../types/sse';
 import type { AcpClientEvent, AcpPermissionRequest } from '../backends/acp/acpClient';
 
 type AcpEventSource = {
@@ -33,12 +33,15 @@ export function useAcpMessageBridge(options: {
   onCommandsUpdated?(commands: Array<Record<string, unknown>>): void;
   onConfigUpdated?(options: unknown[]): void;
   onToolPart?(part: MessagePart): void;
+  onReconcileToolPart?(part: ToolPart): void;
 }) {
   let unsubscribe: (() => void) | undefined;
+  const toolSignatures = new Map<string, string>();
 
   function stop() {
     unsubscribe?.();
     unsubscribe = undefined;
+    toolSignatures.clear();
   }
 
   function bind(source: AcpEventSource) {
@@ -48,7 +51,15 @@ export function useAcpMessageBridge(options: {
         options.msg.updateMessage(event.info);
       } else if (event.type === 'message.part.updated') {
         options.msg.updatePart(event.part);
-        if (!event.replay && event.part.type === 'tool') options.onToolPart?.(event.part);
+        if (event.part.type === 'tool') {
+          const signature = JSON.stringify(event.part);
+          if (toolSignatures.get(event.part.id) !== signature) {
+            if (event.replay && event.part.state.status !== 'completed' && event.part.state.status !== 'error') return;
+            toolSignatures.set(event.part.id, signature);
+            if (event.replay) options.onReconcileToolPart?.(event.part);
+            else options.onToolPart?.(event.part);
+          }
+        }
       } else if (event.type === 'permission.asked') {
         options.upsertPermissionEntry(event.request);
       } else if (event.type === 'session.updated') {

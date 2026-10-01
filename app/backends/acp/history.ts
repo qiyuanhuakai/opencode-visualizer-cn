@@ -454,6 +454,19 @@ export function completeAcpPrompt(
   if (entry?.info.role === 'assistant') {
     entry.info.time.completed = tickTime(state, now);
     entry.info.finish = stopReason;
+    if (stopReason === 'cancelled' || stopReason === 'error') {
+      entry.parts = entry.parts.map((part): MessagePart => {
+        if (part.type !== 'tool' || (part.state.status !== 'pending' && part.state.status !== 'running')) return part;
+        return {
+          ...part,
+          state: {
+            status: 'error', input: part.state.input, error: `ACP prompt ${stopReason}.`,
+            metadata: part.state.status === 'running' ? part.state.metadata ?? {} : {},
+            time: { start: part.state.status === 'running' ? part.state.time.start : now, end: now },
+          },
+        };
+      });
+    }
     if (usage) {
       entry.info.tokens.input = usage.inputTokens;
       entry.info.tokens.output = usage.outputTokens;

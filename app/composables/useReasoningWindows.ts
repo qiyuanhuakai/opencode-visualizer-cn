@@ -121,6 +121,7 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
 
   function handleReasoningPart(part: MessagePart, info?: MessageInfo) {
     if (part.type !== 'reasoning') return;
+    if (suppressAutoWindows?.value) return;
 
     const resolvedSessionId = part.sessionID || selectedSessionId.value;
     const reasoningKey = getReasoningKey(resolvedSessionId);
@@ -128,17 +129,28 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
     const partId = part.id;
     const messageText = part.text || '';
 
-    clearReasoningCloseTimerForSession(resolvedSessionId);
-    if (finishedReasoningByKey.has(reasoningKey)) {
+    const messageInfo = info ?? manager.acc.getMessage(messageId)?.info;
+    const previous = manager.entriesBySession.get(resolvedSessionId)?.find(entry => entry.id === partId);
+    const activeId = activeReasoningMessageIdByKey.get(reasoningKey);
+    const knownCompleted = manager.hasCompletion(resolvedSessionId, messageId, partId);
+    if (knownCompleted && (!previous || activeId !== messageId)) return;
+    if (previous && activeId && activeId !== messageId) return;
+    const completed = knownCompleted || part.time?.end !== undefined || previous?.completed === true
+      || (messageInfo?.role === 'assistant' && (messageInfo.time.completed !== undefined || !!messageInfo.error));
+    if (completed) manager.rememberCompletion(resolvedSessionId, messageId, partId);
+    if (messageInfo?.role === 'assistant' && (messageInfo.time.completed !== undefined || messageInfo.error)) {
+      manager.rememberCompletion(resolvedSessionId, messageId);
+    }
+    if (!completed) {
+      clearReasoningCloseTimerForSession(resolvedSessionId);
       finishedReasoningByKey.delete(reasoningKey);
     }
 
     activeReasoningMessageIdByKey.set(reasoningKey, messageId);
     lastReasoningMessageIdByKey.set(reasoningKey, messageId);
 
-    manager.upsertEntry(resolvedSessionId, partId, messageText, !!part.time?.end);
+    manager.upsertEntry(resolvedSessionId, partId, messageText, completed);
 
-    const messageInfo = info ?? manager.acc.getMessage(messageId)?.info;
     const isSubagent = resolvedSessionId !== selectedSessionId.value;
     let modelLabel: string | undefined;
     if (messageInfo?.role === 'assistant') {
@@ -158,7 +170,7 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
 
     manager.openWindow(resolvedSessionId, title);
 
-    if (part.time?.end) {
+    if (completed) {
       markReasoningFinished(resolvedSessionId, messageId);
       scheduleReasoningClose(resolvedSessionId);
     }
@@ -183,7 +195,10 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
         const resolvedSessionId = packet.info.sessionID || selectedSessionId.value;
         const messageId = packet.info.id;
 
-        if (packet.info.time.completed || packet.info.error) {
+        if (packet.info.time.completed !== undefined || packet.info.error) {
+          manager.rememberCompletion(resolvedSessionId, packet.info.id);
+          const activeId = activeReasoningMessageIdByKey.get(getReasoningKey(resolvedSessionId));
+          if (activeId && activeId !== messageId) return;
           manager.markSessionCompleted(resolvedSessionId);
           markReasoningFinished(resolvedSessionId, messageId);
           scheduleReasoningClose(resolvedSessionId);

@@ -345,7 +345,9 @@ export function createDshPopupBridge(
       // part on the replay path is the ONLY chance to close the sibling
       // reasoning window (kimi reconcile parity; minimized windows included).
       const siblingKey = reasoningWindowKeyOf(part);
-      if (collaborators.hasWindow(siblingKey)) collaborators.scheduleReasoningClose(part.sessionID);
+      if (isTerminalPart(part) && collaborators.hasWindow(siblingKey)) {
+        collaborators.scheduleReasoningClose(part.sessionID);
+      }
     },
 
     stack(): readonly DshPopupStackEntry[] {

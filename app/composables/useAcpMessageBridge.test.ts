@@ -97,7 +97,7 @@ describe('useAcpMessageBridge', () => {
     expect(bridge.stop).toHaveBeenCalledOnce();
   });
 
-  it('forwards live tool parts to onToolPart but suppresses replay-flagged events', () => {
+  it('forwards live tool parts once and suppresses unchanged entry republishes and replay', () => {
     let handler: ((event: AcpClientEvent) => void) | undefined;
     const adapter = {
       onEvent: vi.fn((next: (event: AcpClientEvent) => void) => {
@@ -142,10 +142,19 @@ describe('useAcpMessageBridge', () => {
 
     handler?.({ type: 'message.part.updated', part: toolPart });
     handler?.({ type: 'message.part.updated', part: textPart });
+    handler?.({ type: 'message.part.updated', part: structuredClone(toolPart) });
     handler?.({ type: 'message.part.updated', part: { ...toolPart, id: 'part-tool-replay' }, replay: true });
 
     expect(onToolPart).toHaveBeenCalledTimes(1);
     expect(onToolPart).toHaveBeenCalledWith(toolPart);
+    const changed = { ...toolPart, state: { ...toolPart.state, output: 'updated output' } };
+    handler?.({ type: 'message.part.updated', part: changed });
+    expect(onToolPart).toHaveBeenCalledTimes(2);
+    expect(onToolPart).toHaveBeenLastCalledWith(changed);
+    bridge.stop();
+    bridge.bind(adapter);
+    handler?.({ type: 'message.part.updated', part: changed });
+    expect(onToolPart).toHaveBeenCalledTimes(3);
     bridge.stop();
   });
 });

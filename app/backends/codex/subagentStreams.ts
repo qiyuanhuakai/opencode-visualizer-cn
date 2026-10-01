@@ -108,8 +108,10 @@ export function createCodexSubagentStreams(options: {
         if (child && itemId && turnId) {
           const key = `${turnId}:${itemId}`;
           const previous = child.items.get(key);
-          if (!previous || (catchUp && !previous.signature)) {
-            remember(child, key, { wire: item, turnId, created: previous?.created ?? Date.now(), done: turn.status !== 'inProgress' && turn.status !== 'running' });
+          const done = ['completed', 'failed', 'declined', 'error'].includes(text(item.status))
+            || (turn.status !== 'inProgress' && turn.status !== 'running');
+          if (!previous || (catchUp && (!previous.signature || (!previous.done && done)))) {
+            remember(child, key, { wire: item, turnId, created: previous?.created ?? Date.now(), done });
           }
           const current = child.items.get(key);
           if (catchUp && rawTurn === turns.at(-1) && current) emit(id, child, current);

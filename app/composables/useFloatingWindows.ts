@@ -1,11 +1,12 @@
 import { reactive, shallowRef, markRaw, onUnmounted, nextTick, watch, type Component } from 'vue';
-import { renderWorkerHtml } from '../utils/workerRenderer';
+import { startRenderWorkerHtml, RenderCancelledError, type RenderRequest } from '../utils/workerRenderer';
 import { resolveSyntaxTheme } from '../utils/themeTokens';
 import { useSettings } from './useSettings';
 import { useI18n } from '../i18n/useI18n';
 
 export interface FloatingWindowEntry {
   key: string;
+  autoOpen?: boolean;
   themeType?: 'shell';
   component?: Component;
   props?: Record<string, unknown>;
@@ -76,7 +77,7 @@ let zIndexCounter = 100;
 
 function isManualTier(key: string, closable?: boolean): boolean {
   if (closable) return true;
-  return key.startsWith('permission:') || key.startsWith('question:');
+  return key.startsWith('permission:') || key.startsWith('question:') || key.startsWith('elicitation:');
 }
 
 function nextZIndex(manualTier: boolean): number {
@@ -156,7 +157,10 @@ function resolveExpiresAt(
   }
   // Status-based: completed/error always gets short TTL (even if existing had longer)
   const status = opts.status;
-  if (status === 'completed' || status === 'error') return Date.now() + TOOL_COMPLETED_TTL_MS;
+  if (status === 'completed' || status === 'error') {
+    if (existing?.status === 'completed' || existing?.status === 'error') return existing.expiresAt;
+    return Date.now() + TOOL_COMPLETED_TTL_MS;
+  }
   // For non-terminal status, keep existing expiry if set
   if (existing && typeof existing.expiresAt === 'number') return existing.expiresAt;
   return Date.now() + TOOL_RUNNING_TTL_MS;
@@ -167,6 +171,8 @@ export function useFloatingWindows() {
   const { themeStorage } = useSettings();
   const entriesMap = reactive(new Map<string, FloatingWindowEntry>());
   const pendingInitialLayoutKeys = new Set<string>();
+  const admissions = new Map<string, boolean>();
+  let automaticOpenAllowed = true;
   const activeOpenTokens = new Map<string, symbol>();
   const entries = shallowRef<FloatingWindowEntry[]>([]);
 
@@ -213,21 +219,37 @@ export function useFloatingWindows() {
 
   const renderVersionMap = new Map<string, number>();
 
+  const renderTasks = new Map<string, ReturnType<typeof startRenderWorkerHtml>>();
+
+  async function renderContent(key: string, request: RenderRequest): Promise<string> {
+    const task = startRenderWorkerHtml(request);
+    renderTasks.set(key, task);
+    try {
+      return await task.promise;
+    } catch (error) {
+      if (error instanceof RenderCancelledError) return '';
+      throw error;
+    } finally {
+      if (renderTasks.get(key) === task) renderTasks.delete(key);
+    }
+  }
+
   function bumpRenderVersion(key: string): number {
+    renderTasks.get(key)?.cancel();
+    renderTasks.delete(key);
     const next = (renderVersionMap.get(key) || 0) + 1;
     renderVersionMap.set(key, next);
     return next;
   }
 
   function scheduleExpiry(key: string, expiresAt: number): void {
-    // Skip scheduling for permanent windows
-    if (expiresAt >= Number.MAX_SAFE_INTEGER) return;
-
     // Clear existing timer if present
     const existingTimer = timerMap.get(key);
     if (existingTimer !== undefined) {
       clearTimeout(existingTimer);
+      timerMap.delete(key);
     }
+    if (expiresAt >= Number.MAX_SAFE_INTEGER) return;
 
     const delay = Math.max(0, expiresAt - Date.now());
     const timerId = setTimeout(() => {
@@ -237,7 +259,59 @@ export function useFloatingWindows() {
     timerMap.set(key, timerId);
   }
 
+  function isCritical(key: string): boolean {
+    return key.startsWith('permission:') || key.startsWith('question:') || key.startsWith('elicitation:');
+  }
+
+  function entryIsCurrent(entry: FloatingWindowEntry, version: number): boolean {
+    if (entry.autoOpen && !isCritical(entry.key) && !automaticAllowed()) {
+      if (entriesMap.get(entry.key) === entry) discard(entry.key);
+      return false;
+    }
+    return entriesMap.get(entry.key) === entry && renderVersionMap.get(entry.key) === version;
+  }
+
+  function automaticAllowed(): boolean {
+    return automaticOpenAllowed && (typeof document === 'undefined' || !document.hidden);
+  }
+
+  // Capacity and visibility disposal cannot await animation hooks before freeing a slot.
+  function discard(key: string): void {
+    activeOpenTokens.delete(key);
+    admissions.delete(key);
+    pendingInitialLayoutKeys.delete(key);
+    renderVersionMap.delete(key);
+    renderTasks.get(key)?.cancel();
+    renderTasks.delete(key);
+    const timer = timerMap.get(key);
+    if (timer !== undefined) clearTimeout(timer);
+    timerMap.delete(key);
+    const entry = entriesMap.get(key);
+    entriesMap.delete(key);
+    rebuildEntries();
+    entry?.afterClose?.();
+  }
+
+  function setAutomaticOpenAllowed(allowed: boolean): void {
+    automaticOpenAllowed = allowed;
+    if (automaticAllowed()) return;
+    for (const [key, automatic] of admissions) {
+      if (automatic && !isCritical(key)) discard(key);
+    }
+  }
+
+  function onVisibilityChange(): void {
+    if (document.hidden) setAutomaticOpenAllowed(automaticOpenAllowed);
+  }
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibilityChange);
+
   onUnmounted(() => {
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibilityChange);
+    admissions.clear();
+    entriesMap.clear();
+    rebuildEntries();
+    for (const task of renderTasks.values()) task.cancel();
+    renderTasks.clear();
     activeOpenTokens.clear();
     pendingInitialLayoutKeys.clear();
     for (const timerId of timerMap.values()) {
@@ -258,6 +332,19 @@ export function useFloatingWindows() {
   }
 
   async function open(key: string, opts: Partial<FloatingWindowEntry>): Promise<void> {
+    const automatic = opts.autoOpen ?? entriesMap.get(key)?.autoOpen ?? false;
+    if (automatic && !isCritical(key) && !automaticAllowed()) return;
+    if (!admissions.has(key)) {
+      while (admissions.size >= 30) {
+        const oldest = [...admissions.keys()].find(candidate => !isCritical(candidate));
+        if (oldest === undefined) {
+          if (!isCritical(key)) return;
+          break;
+        }
+        discard(oldest);
+      }
+    }
+    admissions.set(key, automatic);
     const openToken = Symbol(key);
     activeOpenTokens.set(key, openToken);
     const existing = entriesMap.get(key);
@@ -268,7 +355,7 @@ export function useFloatingWindows() {
       ...existing,
       ...opts,
       key,
-      time: Date.now(),
+      time: existing?.time ?? Date.now(),
       zIndex: existing
         ? existing.zIndex
         : nextZIndex(isManualTier(key, resolveEntryClosable(opts, existing))),
@@ -290,12 +377,19 @@ export function useFloatingWindows() {
       try {
         await merged.beforeOpen();
       } catch (error) {
-        if (activeOpenTokens.get(key) === openToken) activeOpenTokens.delete(key);
+        if (activeOpenTokens.get(key) === openToken) {
+          activeOpenTokens.delete(key);
+          if (!existing) admissions.delete(key);
+        }
         throw error;
       }
     }
 
     if (activeOpenTokens.get(key) !== openToken) return;
+    if (automatic && !isCritical(key) && !automaticAllowed()) {
+      discard(key);
+      return;
+    }
     const liveEntry = entriesMap.get(key);
     if (liveEntry) {
       merged.x = liveEntry.x;
@@ -313,8 +407,7 @@ export function useFloatingWindows() {
     const resolveContent = async () => {
       const entry = entriesMap.get(key);
       if (!entry) return;
-      const isCurrent = () =>
-        entriesMap.get(key) === entry && renderVersionMap.get(key) === contentVersion;
+      const isCurrent = () => entryIsCurrent(entry, contentVersion);
       if (!isCurrent()) return;
 
       if (typeof merged.content === 'function') {
@@ -328,7 +421,7 @@ export function useFloatingWindows() {
         }
       } else if (merged.content && merged.lang) {
         try {
-          const resolved = await renderWorkerHtml({
+          const resolved = await renderContent(key, {
             id: nextRenderId(),
             code: merged.content,
             lang: merged.lang,
@@ -367,6 +460,7 @@ export function useFloatingWindows() {
 
     if (merged.afterOpen) {
       nextTick(() => {
+        if (renderVersionMap.get(key) !== contentVersion || !entriesMap.has(key)) return;
         const el = document.querySelector(`[data-floating-key="${key}"]`);
         if (el) merged.afterOpen!(el as HTMLElement);
       });
@@ -395,7 +489,7 @@ export function useFloatingWindows() {
      // Status-based expiry
      if (partialOpts.status && !partialOpts.expiresAt) {
        if (partialOpts.status === 'completed' || partialOpts.status === 'error') {
-         merged.expiresAt = Date.now() + TOOL_COMPLETED_TTL_MS;
+         merged.expiresAt = resolveExpiresAt(partialOpts, existing);
        }
      }
 
@@ -412,11 +506,12 @@ export function useFloatingWindows() {
     if (!entry) return;
 
     const contentVersion = bumpRenderVersion(key);
+    if (!entryIsCurrent(entry, contentVersion)) return;
     entry.content = text;
     entry.lang = lang;
 
     if (lang) {
-      const resolved = await renderWorkerHtml({
+      const resolved = await renderContent(key, {
         id: nextRenderId(),
         code: text,
         lang,
@@ -429,7 +524,7 @@ export function useFloatingWindows() {
         copyCodeAriaLabel: t('render.copyCodeAria'),
         copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
       });
-      if (renderVersionMap.get(key) !== contentVersion) return;
+      if (!entryIsCurrent(entry, contentVersion)) return;
       entry.resolvedHtml = resolved;
     } else {
       entry.resolvedHtml = text;
@@ -445,13 +540,14 @@ export function useFloatingWindows() {
           void setContent(entry.key, entry.content, entry.lang);
         } else if (typeof entry.content === 'function') {
           const contentVersion = bumpRenderVersion(entry.key);
+          if (!entryIsCurrent(entry, contentVersion)) continue;
           const content = entry.content;
           void content().then((html) => {
-            if (entriesMap.get(entry.key) === entry && renderVersionMap.get(entry.key) === contentVersion) {
+            if (entryIsCurrent(entry, contentVersion)) {
               entry.resolvedHtml = html;
             }
           }).catch((error) => {
-            if (entriesMap.get(entry.key) === entry && renderVersionMap.get(entry.key) === contentVersion) {
+            if (entryIsCurrent(entry, contentVersion)) {
               entry.resolvedHtml = String(error);
             }
           });
@@ -465,11 +561,12 @@ export function useFloatingWindows() {
     if (!entry) return;
 
     const contentVersion = bumpRenderVersion(key);
+    if (!entryIsCurrent(entry, contentVersion)) return;
     const newContent = (entry.content || '') + text;
     entry.content = newContent;
 
     if (lang || entry.lang) {
-      const resolved = await renderWorkerHtml({
+      const resolved = await renderContent(key, {
         id: nextRenderId(),
         code: newContent,
         lang: lang || entry.lang!,
@@ -480,7 +577,7 @@ export function useFloatingWindows() {
         copyCodeAriaLabel: t('render.copyCodeAria'),
         copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
       });
-      if (renderVersionMap.get(key) !== contentVersion) return;
+      if (!entryIsCurrent(entry, contentVersion)) return;
       entry.resolvedHtml = resolved;
     } else {
       entry.resolvedHtml = newContent;
@@ -495,9 +592,10 @@ export function useFloatingWindows() {
   function setStatus(key: string, status: 'running' | 'completed' | 'error'): void {
     const entry = entriesMap.get(key);
     if (entry) {
+      const expiresAt = resolveExpiresAt({ status }, entry);
       entry.status = status;
       if (status === 'completed' || status === 'error') {
-        entry.expiresAt = Date.now() + TOOL_COMPLETED_TTL_MS;
+        entry.expiresAt = expiresAt;
         scheduleExpiry(key, entry.expiresAt);
       }
     }
@@ -543,6 +641,7 @@ export function useFloatingWindows() {
 
   async function close(key: string, skipRebuild = false): Promise<void> {
     activeOpenTokens.delete(key);
+    if (!entriesMap.has(key)) admissions.delete(key);
     const entry = entriesMap.get(key);
     if (!entry) return;
 
@@ -558,6 +657,9 @@ export function useFloatingWindows() {
     }
 
     if (entriesMap.get(key) !== entry) return;
+    admissions.delete(key);
+    renderTasks.get(key)?.cancel();
+    renderTasks.delete(key);
     pendingInitialLayoutKeys.delete(key);
     entriesMap.delete(key);
     renderVersionMap.delete(key);
@@ -571,7 +673,10 @@ export function useFloatingWindows() {
   async function closeAll(options?: { exclude?: (key: string) => boolean }): Promise<void> {
     const exclude = options?.exclude;
     for (const key of activeOpenTokens.keys()) {
-      if (!exclude?.(key)) activeOpenTokens.delete(key);
+      if (!exclude?.(key)) {
+        activeOpenTokens.delete(key);
+        if (!entriesMap.has(key)) admissions.delete(key);
+      }
     }
     for (const [key, timerId] of timerMap.entries()) {
       if (exclude?.(key)) continue;
@@ -608,6 +713,7 @@ export function useFloatingWindows() {
     closeAll,
     has,
     get,
+    setAutomaticOpenAllowed,
     setExtent,
     getExtent,
   };
