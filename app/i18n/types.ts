@@ -328,6 +328,7 @@ export interface LocaleMessages {
       unsupported: string;
       unsupportedAcp: string;
       unsupportedKimiWeb: string;
+      unsupportedDsh: string;
       enable: string;
       disable: string;
       toggleFailed: string;
@@ -340,6 +341,7 @@ export interface LocaleMessages {
       unsupported: string;
       unsupportedAcp: string;
       unsupportedKimiWeb: string;
+      unsupportedDsh: string;
     };
     plugins: {
       marketplaces: string;
@@ -352,6 +354,7 @@ export interface LocaleMessages {
       unsupported: string;
       unsupportedAcp: string;
       unsupportedKimiWeb: string;
+      unsupportedDsh: string;
     };
     skills: {
       total: string;
@@ -359,6 +362,8 @@ export interface LocaleMessages {
       unsupported: string;
       unsupportedAcp: string;
       unsupportedKimiWeb: string;
+      unsupportedDsh: string;
+      unsupportedDshUnknown: string;
       enable: string;
       disable: string;
       toggleFailed: string;
@@ -368,6 +373,7 @@ export interface LocaleMessages {
       noData: string;
       model: string;
       contextLimit: string;
+      contextUsed: string;
       totalTokens: string;
       usagePercent: string;
       inputTokens: string;
@@ -439,6 +445,18 @@ export interface LocaleMessages {
       approvalPolicy: string;
       model: string;
       capabilities: string;
+      health: string;
+      healthOk: string;
+      healthError: string;
+      account: string;
+      accountSignedOut: string;
+      accountSignedIn: string;
+      accountGuidanceLabel: string;
+      accountGuidance: string;
+      version: string;
+      versionUnsupported: string;
+      versionUnavailable: string;
+      versionNotRunning: string;
       states: {
         connecting: string;
         bootstrapping: string;
@@ -471,6 +489,10 @@ export interface LocaleMessages {
       unavailable: string;
       failed: string;
       completed: string;
+    };
+    dsh: {
+      title: string;
+      description: string;
     };
     tabs: {
       providers: string;

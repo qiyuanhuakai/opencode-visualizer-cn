@@ -720,7 +720,11 @@ import TopPanel, { type TopPanelCodexSubpanel } from './components/TopPanel.vue'
 import ProviderManagerModal from './components/ProviderManagerModal.vue';
 import SettingsModal from './components/SettingsModal.vue';
 import { createDesktopNotificationRouter } from './utils/desktopNotifications';
-import StatusMonitorModal from './components/StatusMonitorModal.vue';
+import StatusMonitorModal, {
+  mapDshUsageFrame,
+  type DshStatusSnapshot,
+  type DshVersionSnapshot,
+} from './components/StatusMonitorModal.vue';
 import { listCodexSlashCommands } from './utils/codexSlashCommands';
 import { useCodexSlashActions } from './composables/useCodexSlashActions';
 import { fitCodexCommandWindow } from './utils/codexCommandWindow';
@@ -915,7 +919,6 @@ import {
   dshPromptRunningChange,
 } from './composables/dshSessionEvents';
 import { createDshPopupBridge } from './composables/dshPopupBridge';
-import type { DshStatusSnapshot } from './components/StatusMonitorModal.vue';
 import { useDshMessageBridge } from './composables/useDshMessageBridge';
 import {
   createDshPermissions,
@@ -8792,14 +8795,105 @@ async function hydrateDshTopPanelGitInfo() {
 // Todo 34's status surface consumes a snapshot of the live dsh state bits,
 // mapped 1:1 onto the refs this block owns (never an invented state): the
 // connection state is the activation's own, busy/health/pending approvals come
-// from the bridge, the permission fields from the permissions surface. Absent
-// (another backend, or no bridge yet) → the modal renders no dsh rows at all.
+// from the bridge, the permission fields from the permissions surface, the
+// gateway/account verdict from `account/getState`, the version from the
+// supervisor-captured `dsh --version`, and usage from the follow projections.
+// Absent (another backend, or no bridge yet) → the modal renders no dsh rows.
+const dshStatusDiagnostic = ref<{
+  health: 'ok' | 'error';
+  healthError?: string;
+  account: { status: string; usageUrl?: string; topUpUrl?: string } | null;
+} | null>(null);
+const dshStatusVersion = ref<DshVersionSnapshot | null>(null);
+let dshStatusDiagnosticGeneration = 0;
+
+function dshAccountSnapshot(value: unknown): { status: string; usageUrl?: string; topUpUrl?: string } | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const status = typeof record.status === 'string' && record.status.trim() ? record.status : null;
+  if (!status) return null;
+  const links =
+    typeof record.links === 'object' && record.links !== null && !Array.isArray(record.links)
+      ? (record.links as Record<string, unknown>)
+      : {};
+  return {
+    status,
+    ...(typeof links.usageUrl === 'string' ? { usageUrl: links.usageUrl } : {}),
+    ...(typeof links.topUpUrl === 'string' ? { topUpUrl: links.topUpUrl } : {}),
+  };
+}
+
+async function refreshDshStatusDiagnostics() {
+  const generation = ++dshStatusDiagnosticGeneration;
+  try {
+    // Health is `POST /dsh/account/getState` judged by `result.ok`: the bridge
+    // maps `/dsh/*` to `/api/*`, and `GET /dsh/` would hit a route dsh does
+    // not serve. A signed-out account is still a healthy gateway.
+    const value = await dshRpcClient().call('account', 'getState', {});
+    if (generation !== dshStatusDiagnosticGeneration) return;
+    dshStatusDiagnostic.value = { health: 'ok', account: dshAccountSnapshot(value) };
+  } catch (error) {
+    if (generation !== dshStatusDiagnosticGeneration) return;
+    dshStatusDiagnostic.value = {
+      health: 'error',
+      healthError: error instanceof Error ? error.message : String(error),
+      account: null,
+    };
+  }
+  try {
+    // The dsh version is the supervisor-captured `dsh --version` (the value
+    // the bridge version gate compares), never the bridge build version.
+    const url = appendCodexBridgeToken(
+      codexBridgeHttpUrl(credentials.codexBridgeUrl.value, '/api/v1/supervisor'),
+      credentials.codexBridgeToken.value,
+    );
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const body: unknown = await response.json();
+    if (generation !== dshStatusDiagnosticGeneration) return;
+    const services =
+      typeof body === 'object' && body !== null && Array.isArray((body as { services?: unknown }).services)
+        ? (body as { services: unknown[] }).services
+        : [];
+    const service = services.find(
+      (entry): entry is Record<string, unknown> =>
+        typeof entry === 'object' && entry !== null && (entry as { id?: unknown }).id === 'dsh',
+    );
+    if (!service) {
+      dshStatusVersion.value = null;
+      return;
+    }
+    const state = typeof service.state === 'string' ? service.state : undefined;
+    const version = typeof service.version === 'string' ? service.version : undefined;
+    dshStatusVersion.value = {
+      ...(version !== undefined ? { value: version } : {}),
+      ...(state !== undefined ? { state } : {}),
+      supported: state !== 'error',
+      ...(typeof service.error === 'string' ? { error: service.error } : {}),
+    };
+  } catch {
+    if (generation !== dshStatusDiagnosticGeneration) return;
+    dshStatusVersion.value = null;
+  }
+}
+
+watch(dshMessageBridge, (bridge) => {
+  if (!bridge) {
+    dshStatusDiagnosticGeneration += 1;
+    dshStatusDiagnostic.value = null;
+    dshStatusVersion.value = null;
+    return;
+  }
+  void refreshDshStatusDiagnostics();
+});
+
 const dshStatusSnapshot = computed<DshStatusSnapshot | undefined>(() => {
   if (activeBackendKind.value !== 'dsh') return undefined;
   const bridge = dshMessageBridge.value;
   if (!bridge) return undefined;
   const sessionId = selectedSessionId.value;
   const state = bridge.sessionState(sessionId);
+  const usage = state?.usage;
   return {
     connectionState: connectionState.value,
     busy: state?.busy,
@@ -8810,6 +8904,17 @@ const dshStatusSnapshot = computed<DshStatusSnapshot | undefined>(() => {
       sandboxMode: dshPermissions.state.sandboxMode,
       approvalPolicy: dshPermissions.state.approvalPolicy,
     },
+    ...(dshStatusDiagnostic.value?.health ? { health: dshStatusDiagnostic.value.health } : {}),
+    ...(dshStatusDiagnostic.value?.healthError ? { healthError: dshStatusDiagnostic.value.healthError } : {}),
+    account: dshStatusDiagnostic.value?.account ?? null,
+    version: dshStatusVersion.value,
+    usage: usage
+      ? mapDshUsageFrame(
+          { type: 'usage', usage, model: usage.model },
+          undefined,
+          usage.contextWindow,
+        )
+      : null,
   };
 });
 

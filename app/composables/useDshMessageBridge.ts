@@ -89,6 +89,7 @@ import type {
   DshHistoryFillResult,
   DshMessageBridge,
   DshMessageBridgeOptions,
+  DshSessionUsage,
   DshSyncState,
   DshWaterfallOutcome,
 } from './dshMessageBridgeTypes';
@@ -163,6 +164,50 @@ function snapshotVersionOf(value: Record<string, unknown>): number | undefined {
   const header = isRecord(value.header) ? value.header : {};
   const version = header.version;
   return typeof version === 'number' && Number.isFinite(version) ? version : undefined;
+}
+
+function dshTokenCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function dshModelLabel(provider: unknown, model: unknown): string | undefined {
+  const providerName = typeof provider === 'string' ? provider.trim() : '';
+  const modelName = typeof model === 'string' ? model.trim() : '';
+  if (providerName && modelName) return `${providerName}/${modelName}`;
+  return modelName || undefined;
+}
+
+/**
+ * Token usage the follow snapshot's `projections.values` carries. The model
+ * comes from `modelSelection.next` (falling back to `lastUsed`); a malformed
+ * projection yields no usage at all rather than a fabricated zero state.
+ */
+function dshUsageFromSnapshot(value: Record<string, unknown>): DshSessionUsage | undefined {
+  const projections = isRecord(value.projections) ? value.projections : undefined;
+  const values = isRecord(projections?.values) ? projections.values : undefined;
+  if (!values) return undefined;
+  const tokenUsage = isRecord(values.tokenUsage) ? values.tokenUsage : undefined;
+  const modelSelection = isRecord(values.modelSelection) ? values.modelSelection : undefined;
+  const next = isRecord(modelSelection?.next) ? modelSelection.next : undefined;
+  const lastUsed = isRecord(modelSelection?.lastUsed) ? modelSelection.lastUsed : undefined;
+  const model =
+    dshModelLabel(next?.provider, next?.model) ?? dshModelLabel(lastUsed?.provider, lastUsed?.model);
+  const usage: DshSessionUsage = {
+    ...(dshTokenCount(tokenUsage?.uncachedInputTokens) !== undefined
+      ? { uncachedInputTokens: dshTokenCount(tokenUsage?.uncachedInputTokens) }
+      : {}),
+    ...(dshTokenCount(tokenUsage?.outputTokens) !== undefined
+      ? { outputTokens: dshTokenCount(tokenUsage?.outputTokens) }
+      : {}),
+    ...(dshTokenCount(tokenUsage?.cacheReadTokens) !== undefined
+      ? { cacheReadTokens: dshTokenCount(tokenUsage?.cacheReadTokens) }
+      : {}),
+    ...(dshTokenCount(tokenUsage?.cacheWriteTokens) !== undefined
+      ? { cacheWriteTokens: dshTokenCount(tokenUsage?.cacheWriteTokens) }
+      : {}),
+    ...(model !== undefined ? { model } : {}),
+  };
+  return Object.keys(usage).length > 0 ? usage : undefined;
 }
 
 export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessageBridge {
@@ -342,6 +387,17 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
           });
         }
       }
+      if (op.kind === 'request' && op.phase === 'context' && authoritative) {
+        const previous = sessionStates.get(sessionId)?.usage;
+        const model = dshModelLabel(op.provider, op.model);
+        mergeSession(sessionId, {
+          usage: {
+            ...previous,
+            ...(model !== undefined && previous?.model === undefined ? { model } : {}),
+            ...(op.contextWindow !== undefined ? { contextWindow: op.contextWindow } : {}),
+          },
+        });
+      }
       options.onSessionEvent?.(op, { origin, sessionId });
     }
   }
@@ -396,6 +452,12 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     normalizer.reset();
     const result = normalizer.ingest(value);
     applyResult(result, 'snapshot-rebuild', sessionId, true);
+    const snapshotUsage = dshUsageFromSnapshot(value);
+    if (snapshotUsage) {
+      mergeSession(sessionId, {
+        usage: { ...sessionStates.get(sessionId)?.usage, ...snapshotUsage },
+      });
+    }
     // The normalizer's applied watermark is the honest cursor (R2: equal to
     // the declared one on the wire); a malformed declaration cannot inflate it.
     sync.commitSnapshot(normalizer.cursor(), snapshotVersionOf(value));

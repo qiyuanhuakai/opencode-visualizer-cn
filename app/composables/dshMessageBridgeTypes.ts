@@ -162,6 +162,21 @@ export type DshBridgeSessionState = {
   readonly busy?: boolean;
   /** Authoritative completion from `turn/end.reason`. */
   readonly completion?: DshCompletion;
+  /**
+   * Latest token usage from the `session/follow` snapshot projections
+   * (`projections.values.tokenUsage`) plus the model/context window seen on the
+   * `request/context` record. Absent until an authoritative frame lands.
+   */
+  readonly usage?: DshSessionUsage;
+};
+
+export type DshSessionUsage = {
+  readonly uncachedInputTokens?: number;
+  readonly outputTokens?: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly model?: string;
+  readonly contextWindow?: number;
 };
 
 /** Bridge HTTP seam: the vis_bridge `/dsh` prefix (never the dsh upstream). */

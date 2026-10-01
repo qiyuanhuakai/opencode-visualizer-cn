@@ -24,6 +24,46 @@ export type DshConnectionState =
 
 export type DshFollowHealth = 'live' | 'degraded' | 'rebuilding' | 'detached' | 'replaying';
 
+/** Gateway health verdict of `POST /dsh/account/getState` judged by `result.ok`. */
+export type DshHealthState = 'ok' | 'error' | 'unknown';
+
+/** Todo 31 runtime probe verdict (skills is the only probed dsh legacy surface). */
+export type DshSurfaceProbeState = 'unknown' | 'supported' | 'unsupported' | 'gated';
+
+export type DshAccountSnapshot = {
+  /** `account/getState` `value.status`, e.g. `signed-out`. */
+  status?: string;
+  /** External guidance links shipped by the same payload. */
+  usageUrl?: string;
+  topUpUrl?: string;
+};
+
+export type DshVersionSnapshot = {
+  /** Supervisor-captured `dsh --version`; never the bridge build version. */
+  value?: string;
+  /** Supervisor service state (`running` | `error` | `stopped` | `disabled` | …). */
+  state?: string;
+  /** Version-gate verdict: true only when the gate accepted this value. */
+  supported?: boolean;
+  error?: string;
+};
+
+/**
+ * Display-ready dsh token usage mapped from the
+ * `{type:'usage',usage:TokenUsage}` chunk and/or `session/follow`
+ * `projections.values` (model / context window).
+ */
+export type DshUsageSnapshot = {
+  uncachedInputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  totalTokens?: number;
+  model?: string;
+  contextWindow?: number;
+  contextUsed?: number;
+};
+
 export type DshStatusSnapshot = {
   connectionState?: DshConnectionState;
   /** Turn running (`turn/start` without its `turn/end`). */
@@ -42,7 +82,94 @@ export type DshStatusSnapshot = {
     model: string;
     reasoningEffort?: string;
   } | null;
+  /** Gateway health (`POST account/getState` judged by `result.ok`). */
+  health?: DshHealthState;
+  healthError?: string;
+  /** Account state from the SAME endpoint (signed-out is still healthy). */
+  account?: DshAccountSnapshot | null;
+  /** Live version-gate state fed by the bridge supervisor probe. */
+  version?: DshVersionSnapshot | null;
+  /** Token usage mapped by {@link mapDshUsageFrame}. */
+  usage?: DshUsageSnapshot | null;
+  /** Todo 31 probe verdicts for the dsh-only legacy rows (fail closed on absence). */
+  probes?: Partial<Record<'mcp' | 'lsp' | 'skills' | 'plugins', DshSurfaceProbeState>>;
 };
+
+function dshRecordOf(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** A wire token count is trusted only as a finite non-negative number. */
+function dshTokenCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function dshModelLabel(ref: unknown): string | undefined {
+  const record = dshRecordOf(ref);
+  if (!record) return undefined;
+  const provider = typeof record.provider === 'string' ? record.provider.trim() : '';
+  const model = typeof record.model === 'string' ? record.model.trim() : '';
+  if (provider && model) return `${provider}/${model}`;
+  return model || undefined;
+}
+
+/**
+ * Map the raw `{type:'usage',usage:TokenUsage}` stream chunk plus the
+ * `session/follow` `projections.values` (model / context window) into the
+ * display-ready {@link DshUsageSnapshot}. Missing or malformed fields degrade
+ * to absent values; a payload that proves nothing yields `null` (never a
+ * fabricated zero state).
+ */
+export function mapDshUsageFrame(
+  frame: unknown,
+  projections?: unknown,
+  contextWindow?: number,
+): DshUsageSnapshot | null {
+  const frameRecord = dshRecordOf(frame);
+  const frameUsage =
+    frameRecord && frameRecord.type === 'usage' ? dshRecordOf(frameRecord.usage) : undefined;
+  const projectionValues = dshRecordOf(dshRecordOf(projections)?.values) ?? dshRecordOf(projections);
+  const projectionUsage = dshRecordOf(projectionValues?.tokenUsage);
+  const usage = frameUsage ?? projectionUsage;
+
+  const uncachedInputTokens = dshTokenCount(usage?.uncachedInputTokens);
+  const outputTokens = dshTokenCount(usage?.outputTokens);
+  const cacheReadTokens = dshTokenCount(usage?.cacheReadTokens);
+  const cacheWriteTokens = dshTokenCount(usage?.cacheWriteTokens);
+  const hasUsage =
+    uncachedInputTokens !== undefined ||
+    outputTokens !== undefined ||
+    cacheReadTokens !== undefined ||
+    cacheWriteTokens !== undefined;
+
+  const modelSelection = dshRecordOf(projectionValues?.modelSelection);
+  const model =
+    dshModelLabel(modelSelection?.next) ??
+    dshModelLabel(modelSelection?.lastUsed) ??
+    (typeof frameRecord?.model === 'string' ? frameRecord.model : undefined);
+  const window =
+    dshTokenCount(contextWindow) ?? dshTokenCount(projectionValues?.contextWindow);
+
+  if (!hasUsage && model === undefined && window === undefined) return null;
+
+  const total =
+    (uncachedInputTokens ?? 0) +
+    (outputTokens ?? 0) +
+    (cacheReadTokens ?? 0) +
+    (cacheWriteTokens ?? 0);
+
+  return {
+    ...(uncachedInputTokens !== undefined ? { uncachedInputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+    ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
+    ...(hasUsage ? { totalTokens: total, contextUsed: total } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(window !== undefined ? { contextWindow: window } : {}),
+  };
+}
 </script>
 
 <script setup lang="ts">
@@ -54,6 +181,7 @@ import {
   type CodexPlugin,
 } from '../backends/codex/codexAdapter';
 import { DSH_CAPABILITY_REGISTRY } from '../backends/dsh/capabilities';
+import { getActiveDshCapabilityRegistry } from '../backends/dsh/capabilityRegistry';
 import type { BackendKind } from '../backends/types';
 import {
   DEFAULT_KIMI_WEB_BRIDGE_URL,
@@ -193,20 +321,28 @@ const isKimiWebBackend = computed(() => props.activeBackendKind === 'kimi-web');
 const isDshBackend = computed(() => props.activeBackendKind === 'dsh');
 const mcpUnsupportedText = computed(() => {
   if (isKimiWebBackend.value) return t('statusMonitor.mcp.unsupportedKimiWeb');
+  if (isDshBackend.value) return t('statusMonitor.mcp.unsupportedDsh');
   return t(isAcpBackend.value ? 'statusMonitor.mcp.unsupportedAcp' : 'statusMonitor.mcp.unsupported');
 });
 const lspUnsupportedText = computed(() => {
   if (isKimiWebBackend.value) return t('statusMonitor.lsp.unsupportedKimiWeb');
+  if (isDshBackend.value) return t('statusMonitor.lsp.unsupportedDsh');
   return t(isAcpBackend.value ? 'statusMonitor.lsp.unsupportedAcp' : 'statusMonitor.lsp.unsupported');
 });
 const skillUnsupportedText = computed(() => {
   if (isKimiWebBackend.value) return t('statusMonitor.skills.unsupportedKimiWeb');
+  if (isDshBackend.value) {
+    return dshProbeStates.value.skills === 'unsupported'
+      ? t('statusMonitor.skills.unsupportedDsh')
+      : t('statusMonitor.skills.unsupportedDshUnknown');
+  }
   return t(
     isAcpBackend.value ? 'statusMonitor.skills.unsupportedAcp' : 'statusMonitor.skills.unsupported',
   );
 });
 const pluginUnsupportedText = computed(() => {
   if (isKimiWebBackend.value) return t('statusMonitor.plugins.unsupportedKimiWeb');
+  if (isDshBackend.value) return t('statusMonitor.plugins.unsupportedDsh');
   return t(
     isAcpBackend.value
       ? 'statusMonitor.plugins.unsupportedAcp'
@@ -409,13 +545,23 @@ async function refresh() {
   }
 
   const activeBackend = backend();
-  mcpUnsupported.value = typeof activeBackend.getMcpStatus !== 'function';
-  lspUnsupported.value = typeof activeBackend.getLspStatus !== 'function';
-  skillUnsupported.value = typeof activeBackend.getSkillStatus !== 'function';
-  pluginUnsupported.value = isAcpBackend.value
-    ? typeof activeBackend.getPluginStatus !== 'function'
-    : typeof activeBackend.getPluginStatus !== 'function' &&
-      typeof activeBackend.getGlobalConfig !== 'function';
+  if (isDshBackend.value) {
+    // dsh wires no MCP/LSP/plugin surface at all; its skills surface is gated
+    // by the Todo 31 runtime probe (unknown/unsupported until proven, so a
+    // stale or absent probe can never render as supported).
+    mcpUnsupported.value = true;
+    lspUnsupported.value = true;
+    pluginUnsupported.value = true;
+    skillUnsupported.value = dshProbeStates.value.skills !== 'supported';
+  } else {
+    mcpUnsupported.value = typeof activeBackend.getMcpStatus !== 'function';
+    lspUnsupported.value = typeof activeBackend.getLspStatus !== 'function';
+    skillUnsupported.value = typeof activeBackend.getSkillStatus !== 'function';
+    pluginUnsupported.value = isAcpBackend.value
+      ? typeof activeBackend.getPluginStatus !== 'function'
+      : typeof activeBackend.getPluginStatus !== 'function' &&
+        typeof activeBackend.getGlobalConfig !== 'function';
+  }
 
   const currentRefresh = (async () => {
     try {
@@ -801,6 +947,13 @@ async function fetchTokenData() {
   }
 
   if (props.activeBackendKind === 'codex') {
+    tokenLoading.value = false;
+    return;
+  }
+
+  if (isDshBackend.value) {
+    // dsh usage rides the status snapshot's `usage` field (usage chunk +
+    // projections), not the shared message store.
     tokenLoading.value = false;
     return;
   }
@@ -1339,6 +1492,88 @@ const dshCapabilitiesText = computed(() =>
     .join(', '),
 );
 
+const dshHealthState = computed<DshHealthState>(() =>
+  props.dshStatus?.health === 'ok' || props.dshStatus?.health === 'error'
+    ? props.dshStatus.health
+    : 'unknown',
+);
+const dshHealthText = computed(() => {
+  if (dshHealthState.value === 'ok') return t('statusMonitor.dsh.healthOk');
+  if (dshHealthState.value === 'error') return t('statusMonitor.dsh.healthError');
+  return '';
+});
+const dshHealthDot = computed(() => {
+  if (dshHealthState.value === 'ok') return 'status-dot-success';
+  if (dshHealthState.value === 'error') return 'status-dot-error';
+  return 'status-dot-muted';
+});
+
+const dshAccount = computed<DshAccountSnapshot | null>(() => props.dshStatus?.account ?? null);
+const dshAccountText = computed(() => {
+  const status = dshNonEmpty(dshAccount.value?.status);
+  if (!status) return '';
+  if (status === 'signed-out') return t('statusMonitor.dsh.accountSignedOut');
+  if (status === 'signed-in') return t('statusMonitor.dsh.accountSignedIn');
+  return status;
+});
+const dshAccountGuidance = computed(() =>
+  dshAccountText.value ? t('statusMonitor.dsh.accountGuidance') : '',
+);
+
+const dshVersion = computed<DshVersionSnapshot | null>(() => props.dshStatus?.version ?? null);
+const dshVersionText = computed(() => {
+  const version = dshVersion.value;
+  if (!version) return '';
+  const value = dshNonEmpty(version.value);
+  if (version.state === 'error') {
+    return value
+      ? t('statusMonitor.dsh.versionUnsupported', { version: value })
+      : t('statusMonitor.dsh.versionUnavailable');
+  }
+  if (value && version.supported === false) {
+    return t('statusMonitor.dsh.versionUnsupported', { version: value });
+  }
+  if (value) return value;
+  return t('statusMonitor.dsh.versionNotRunning');
+});
+const dshVersionDot = computed(() => {
+  const version = dshVersion.value;
+  if (!version) return 'status-dot-muted';
+  const value = dshNonEmpty(version.value);
+  if (version.state === 'error' || (value && version.supported === false)) {
+    return 'status-dot-error';
+  }
+  return value ? 'status-dot-success' : 'status-dot-muted';
+});
+
+const dshUsage = computed<DshUsageSnapshot | null>(() => props.dshStatus?.usage ?? null);
+const dshUsageContextPercent = computed(() => {
+  const usage = dshUsage.value;
+  if (!usage || !usage.contextWindow || usage.contextWindow <= 0) return null;
+  return Math.min(100, Math.round(((usage.contextUsed ?? 0) / usage.contextWindow) * 100));
+});
+
+type DshLegacyProbe = 'mcp' | 'lsp' | 'skills' | 'plugins';
+const dshRegistryProbeStates = computed<Record<DshLegacyProbe, DshSurfaceProbeState>>(() => ({
+  mcp: 'unsupported',
+  lsp: 'unsupported',
+  plugins: 'unsupported',
+  skills: getActiveDshCapabilityRegistry()?.states.value.skills ?? 'unknown',
+}));
+const dshProbeStates = computed<Record<DshLegacyProbe, DshSurfaceProbeState>>(() => {
+  const probes = props.dshStatus?.probes;
+  if (!probes) return dshRegistryProbeStates.value;
+  return {
+    mcp: probes.mcp ?? 'unknown',
+    lsp: probes.lsp ?? 'unknown',
+    plugins: probes.plugins ?? 'unknown',
+    skills: probes.skills ?? 'unknown',
+  };
+});
+const skillStatusUnsupported = computed(() =>
+  isDshBackend.value ? dshProbeStates.value.skills !== 'supported' : skillUnsupported.value,
+);
+
 </script>
 
 <template>
@@ -1419,7 +1654,7 @@ const dshCapabilitiesText = computed(() =>
                 </span>
               </div>
             </template>
-            <div v-if="serverHealth || serverVersionText" class="status-monitor-row">
+            <div v-if="!isDshBackend && (serverHealth || serverVersionText)" class="status-monitor-row">
               <div class="status-monitor-row-main">
                 <span class="status-monitor-name">{{ $t('statusMonitor.server.version') }}</span>
               </div>
@@ -1493,6 +1728,32 @@ const dshCapabilitiesText = computed(() =>
                   <span class="status-monitor-name">{{ $t('statusMonitor.dsh.model') }}</span>
                 </div>
                 <span class="status-monitor-meta">{{ dshModelText }}</span>
+              </div>
+              <div v-if="dshHealthText" class="status-monitor-row is-dsh">
+                <div class="status-monitor-row-main">
+                  <span class="status-dot" :class="dshHealthDot" />
+                  <span class="status-monitor-name">{{ $t('statusMonitor.dsh.health') }}</span>
+                </div>
+                <span class="status-monitor-meta">{{ dshHealthText }}</span>
+              </div>
+              <div v-if="dshAccountText" class="status-monitor-row is-dsh">
+                <div class="status-monitor-row-main">
+                  <span class="status-monitor-name">{{ $t('statusMonitor.dsh.account') }}</span>
+                </div>
+                <span class="status-monitor-meta">{{ dshAccountText }}</span>
+              </div>
+              <div v-if="dshAccountGuidance" class="status-monitor-row is-dsh">
+                <div class="status-monitor-row-main">
+                  <span class="status-monitor-name">{{ $t('statusMonitor.dsh.accountGuidanceLabel') }}</span>
+                </div>
+                <span class="status-monitor-meta">{{ dshAccountGuidance }}</span>
+              </div>
+              <div v-if="dshVersionText" class="status-monitor-row is-dsh">
+                <div class="status-monitor-row-main">
+                  <span class="status-dot" :class="dshVersionDot" />
+                  <span class="status-monitor-name">{{ $t('statusMonitor.dsh.version') }}</span>
+                </div>
+                <span class="status-monitor-meta">{{ dshVersionText }}</span>
               </div>
               <div class="status-monitor-row is-dsh">
                 <div class="status-monitor-row-main">
@@ -1653,7 +1914,7 @@ const dshCapabilitiesText = computed(() =>
           <div v-if="loading && skillEntries.length === 0" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
-          <div v-else-if="skillUnsupported && skillEntries.length === 0" class="status-monitor-empty">
+          <div v-else-if="skillStatusUnsupported && skillEntries.length === 0" class="status-monitor-empty">
             {{ skillUnsupportedText }}
           </div>
           <div v-else-if="skillEntries.length === 0" class="status-monitor-empty">
@@ -1713,6 +1974,47 @@ const dshCapabilitiesText = computed(() =>
               <div class="status-monitor-row token-row"><span class="token-label">{{ codexSessionCopy.latest }}</span><span class="token-value">{{ formatTokenCount(codexSessionUsage.last.totalTokens) }}</span></div>
               <div class="status-monitor-row token-row"><span class="token-label">{{ codexSessionCopy.context }}</span><span class="token-value">{{ formatTokenCount(codexSessionUsage.last.inputTokens) }} / {{ codexSessionUsage.modelContextWindow ? formatTokenCount(codexSessionUsage.modelContextWindow) : '—' }}</span></div>
             </template>
+          </section>
+          <section v-else-if="isDshBackend" class="dsh-session-usage">
+            <div v-if="!dshUsage" class="status-monitor-empty">
+              {{ $t('statusMonitor.token.noData') }}
+            </div>
+            <div v-else class="status-monitor-list">
+              <div v-if="dshUsageContextPercent !== null" class="token-usage-bar-row">
+                <div class="token-usage-track" role="meter" :aria-label="$t('statusMonitor.token.usagePercent')" :aria-valuenow="dshUsageContextPercent" aria-valuemin="0" aria-valuemax="100">
+                  <div class="token-usage-fill" :style="{ width: `${dshUsageContextPercent}%` }" />
+                </div>
+                <span class="token-usage-percent">{{ dshUsageContextPercent }}%</span>
+              </div>
+              <div class="status-monitor-row token-row dsh-token-row">
+                <span class="token-label">{{ $t('statusMonitor.token.model') }}</span>
+                <span class="token-value">{{ dshUsage.model || '-' }}</span>
+              </div>
+              <div class="status-monitor-row token-row dsh-token-row">
+                <span class="token-label">{{ $t('statusMonitor.token.contextLimit') }}</span>
+                <span class="token-value">{{ dshUsage.contextWindow !== undefined ? formatTokenCount(dshUsage.contextWindow) : '-' }}</span>
+              </div>
+              <div class="status-monitor-row token-row dsh-token-row">
+                <span class="token-label">{{ $t('statusMonitor.token.contextUsed') }}</span>
+                <span class="token-value">{{ dshUsage.contextUsed !== undefined ? formatTokenCount(dshUsage.contextUsed) : '-' }}</span>
+              </div>
+              <div class="status-monitor-row token-row dsh-token-row">
+                <span class="token-label">{{ $t('statusMonitor.token.totalTokens') }}</span>
+                <span class="token-value">{{ dshUsage.totalTokens !== undefined ? formatTokenCount(dshUsage.totalTokens) : '-' }}</span>
+              </div>
+              <div class="status-monitor-row token-row dsh-token-row">
+                <span class="token-label">{{ $t('statusMonitor.token.inputTokens') }}</span>
+                <span class="token-value">{{ dshUsage.uncachedInputTokens !== undefined ? formatTokenCount(dshUsage.uncachedInputTokens) : '-' }}</span>
+              </div>
+              <div class="status-monitor-row token-row dsh-token-row">
+                <span class="token-label">{{ $t('statusMonitor.token.outputTokens') }}</span>
+                <span class="token-value">{{ dshUsage.outputTokens !== undefined ? formatTokenCount(dshUsage.outputTokens) : '-' }}</span>
+              </div>
+              <div class="status-monitor-row token-row dsh-token-row">
+                <span class="token-label">{{ $t('statusMonitor.token.cacheTokens') }}</span>
+                <span class="token-value">{{ dshUsage.cacheReadTokens !== undefined ? formatTokenCount(dshUsage.cacheReadTokens) : '-' }} / {{ dshUsage.cacheWriteTokens !== undefined ? formatTokenCount(dshUsage.cacheWriteTokens) : '-' }}</span>
+              </div>
+            </div>
           </section>
           <div v-else-if="!sessionId" class="status-monitor-empty">
             {{ $t('statusMonitor.token.noSession') }}

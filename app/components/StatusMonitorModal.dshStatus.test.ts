@@ -82,10 +82,29 @@ vi.mock('../composables/useAcpBridge', () => ({
 }));
 
 import StatusMonitorModal from './StatusMonitorModal.vue';
-import type { DshStatusSnapshot } from './StatusMonitorModal.vue';
+import { mapDshUsageFrame, type DshStatusSnapshot } from './StatusMonitorModal.vue';
 import { DSH_FALSE_CAPABILITY_KEYS } from '../backends/dsh/capabilities';
+import {
+  createDshCapabilityRegistry,
+  setActiveDshCapabilityRegistry,
+} from '../backends/dsh/capabilityRegistry';
 import en from '../locales/en';
 import { useCodexApi } from '../composables/useCodexApi';
+
+function clickTab(root: HTMLElement, label: string) {
+  const button = [...root.querySelectorAll<HTMLButtonElement>('[role="tablist"] button')].find(
+    (candidate) => candidate.textContent?.trim() === label,
+  );
+  expect(button).toBeDefined();
+  button?.click();
+}
+
+function dshTokenRowValue(root: HTMLElement, label: string): string | undefined {
+  return [...root.querySelectorAll<HTMLElement>('.status-monitor-row.dsh-token-row')]
+    .find((row) => row.querySelector('.token-label')?.textContent?.trim() === label)
+    ?.querySelector('.token-value')
+    ?.textContent?.trim();
+}
 
 function dshRow(root: HTMLElement, label: string): HTMLElement | undefined {
   return [...root.querySelectorAll<HTMLElement>('.status-monitor-row.is-dsh')].find(
@@ -248,6 +267,166 @@ describe('StatusMonitorModal dsh status section', () => {
     const { root, app } = await mountDshModal(undefined);
     await vi.waitFor(() => expect(root.textContent).toContain('Healthy'));
     expect(root.querySelectorAll('.status-monitor-row.is-dsh')).toHaveLength(0);
+    app.unmount();
+  });
+});
+
+describe('StatusMonitorModal dsh usage mapping', () => {
+  it('maps a fixture-shaped usage frame + projections into the displayed token fields', async () => {
+    const mapped = mapDshUsageFrame(
+      {
+        type: 'usage',
+        usage: {
+          uncachedInputTokens: 1200,
+          outputTokens: 340,
+          cacheReadTokens: 88,
+          cacheWriteTokens: 12,
+        },
+      },
+      {
+        values: {
+          modelSelection: {
+            lastUsed: null,
+            next: { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'high' },
+          },
+        },
+      },
+      1_000_000,
+    );
+    expect(mapped).toEqual({
+      uncachedInputTokens: 1200,
+      outputTokens: 340,
+      cacheReadTokens: 88,
+      cacheWriteTokens: 12,
+      totalTokens: 1640,
+      model: 'deepseek-official/deepseek-flash',
+      contextWindow: 1_000_000,
+      contextUsed: 1640,
+    });
+
+    const { root, app } = await mountDshModal({ usage: mapped });
+    clickTab(root, 'Token');
+    await vi.waitFor(() => expect(dshTokenRowValue(root, 'Input tokens')).toBe('1,200'));
+    expect(dshTokenRowValue(root, 'Output tokens')).toBe('340');
+    expect(dshTokenRowValue(root, 'Cache tokens (read/write)')).toBe('88 / 12');
+    expect(dshTokenRowValue(root, 'Context limit')).toBe('1,000,000');
+    expect(dshTokenRowValue(root, 'Model')).toBe('deepseek-official/deepseek-flash');
+    app.unmount();
+  });
+
+  it('degrades a malformed usage frame without inventing numbers', () => {
+    expect(
+      mapDshUsageFrame({ type: 'usage', usage: { uncachedInputTokens: 'nope', outputTokens: -5 } }),
+    ).toBeNull();
+    expect(mapDshUsageFrame(null)).toBeNull();
+    expect(mapDshUsageFrame({ type: 'usage', usage: {} })).toBeNull();
+  });
+});
+
+describe('StatusMonitorModal dsh unsupported copy', () => {
+  it('renders probe-driven unsupported copy on the MCP/LSP/Plugins/Skills tabs', async () => {
+    const { root, app } = await mountDshModal({
+      probes: { mcp: 'unsupported', lsp: 'unsupported', plugins: 'unsupported', skills: 'unsupported' },
+    });
+    clickTab(root, 'MCP');
+    await vi.waitFor(() => expect(root.textContent).toContain('not exposed by DSH'));
+    clickTab(root, 'LSP');
+    await vi.waitFor(() => expect(root.textContent).toContain('not exposed by DSH'));
+    clickTab(root, 'Plugins');
+    await vi.waitFor(() => expect(root.textContent).toContain('not exposed by DSH'));
+    clickTab(root, 'Skills');
+    await vi.waitFor(() => expect(root.textContent).toContain('not supported by DSH'));
+    app.unmount();
+  });
+
+  it('never claims support for a surface whose probe did not prove it', async () => {
+    const { root, app } = await mountDshModal({});
+    clickTab(root, 'Skills');
+    await vi.waitFor(() => expect(root.textContent).toContain('could not be probed'));
+    expect(root.textContent).not.toContain('supported');
+    app.unmount();
+  });
+});
+
+describe('StatusMonitorModal dsh live version', () => {
+  it('renders the supervisor-captured dsh version, never the hardcoded wire constant', async () => {
+    const { root, app } = await mountDshModal({
+      version: { value: '0.2.9', state: 'running', supported: true },
+    });
+    await vi.waitFor(() => expect(dshRowMeta(root, 'Version')).toBe('0.2.9'));
+    // The generic server Version row (adapter `getGlobalHealth` → the pinned
+    // wire constant) is suppressed for dsh, so the constant never leaks.
+    expect(root.textContent).not.toContain('0.2.0-rc.2');
+    app.unmount();
+  });
+
+  it('renders an error state for a version the supervisor gate rejected', async () => {
+    const { root, app } = await mountDshModal({
+      version: {
+        value: '0.2.1',
+        state: 'error',
+        supported: false,
+        error: 'protocol generation mismatch',
+      },
+    });
+    await vi.waitFor(() => expect(dshRowMeta(root, 'Version')).toContain('0.2.1'));
+    expect(dshRowDotClass(root, 'Version')).toContain('status-dot-error');
+    expect(root.textContent).not.toContain('0.2.0-rc.2');
+    app.unmount();
+  });
+
+  it('shows the version as unavailable when the supervised service is not running', async () => {
+    const { root, app } = await mountDshModal({ version: { state: 'stopped', supported: false } });
+    await vi.waitFor(() => expect(dshRowMeta(root, 'Version')).toBe('Service not running'));
+    expect(dshRowDotClass(root, 'Version')).toContain('status-dot-muted');
+    app.unmount();
+  });
+});
+
+describe('StatusMonitorModal dsh connection switch', () => {
+  it('drops stale Todo 31 probe results when the connection is invalidated', async () => {
+    const registry = createDshCapabilityRegistry({ call: async () => ({ ok: true }) });
+    registry.markUnsupported('skills');
+    setActiveDshCapabilityRegistry(registry);
+    try {
+      const { root, app } = await mountDshModal({});
+      clickTab(root, 'Skills');
+      await vi.waitFor(() => expect(root.textContent).toContain('not supported by DSH'));
+
+      registry.invalidate('connection-switch');
+      await vi.waitFor(() => expect(root.textContent).toContain('could not be probed'));
+      expect(root.textContent).not.toContain('not supported by DSH');
+      app.unmount();
+    } finally {
+      setActiveDshCapabilityRegistry(null);
+    }
+  });
+});
+
+describe('StatusMonitorModal dsh account', () => {
+  it('shows the signed-out state and external sign-in guidance (no login flow)', async () => {
+    const { root, app } = await mountDshModal({
+      health: 'ok',
+      account: {
+        status: 'signed-out',
+        usageUrl: 'https://platform.deepseek.com/usage',
+        topUpUrl: 'https://platform.deepseek.com/top_up',
+      },
+    });
+    await vi.waitFor(() => expect(dshRowMeta(root, 'Account')).toBe('Signed out'));
+    expect(dshRowMeta(root, 'Sign-in guidance')).toContain('dsh CLI');
+    // Account sign-in is explicitly OUT of scope: no credential input renders.
+    expect(root.querySelector('input[type="password"]')).toBeNull();
+    app.unmount();
+  });
+
+  it('renders a gateway error when account/getState reports the gateway unreachable', async () => {
+    const { root, app } = await mountDshModal({
+      health: 'error',
+      healthError: 'bridge refused the request',
+    });
+    await vi.waitFor(() => expect(dshRowMeta(root, 'Gateway health')).toBe('Unreachable'));
+    expect(dshRowDotClass(root, 'Gateway health')).toContain('status-dot-error');
     app.unmount();
   });
 });

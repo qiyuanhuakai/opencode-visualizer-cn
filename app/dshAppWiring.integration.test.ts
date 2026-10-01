@@ -978,6 +978,8 @@ describe('dsh lifecycle wiring (Todo 33)', () => {
       selectedSessionId: box('session-a'),
       connectionState: box('ready'),
       dshPermissions,
+      dshStatusDiagnostic: box(null),
+      dshStatusVersion: box(null),
     }) as Record<string, unknown> | undefined;
 
     expect(snapshot).toEqual({
@@ -990,6 +992,9 @@ describe('dsh lifecycle wiring (Todo 33)', () => {
         sandboxMode: 'workspace-write',
         approvalPolicy: 'ask',
       },
+      account: null,
+      version: null,
+      usage: null,
     });
 
     // Another backend (or no bridge yet) publishes no snapshot at all: the

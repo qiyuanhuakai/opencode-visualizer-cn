@@ -41,6 +41,15 @@
           {{ feedbackMessage }}
         </div>
 
+        <section v-if="props.backendKind === 'dsh'" class="provider-section">
+          <div class="provider-section-header">
+            <div class="section-heading provider-section-title">
+              {{ $t('providerManager.dsh.title') }}
+            </div>
+            <div class="section-meta">{{ $t('providerManager.dsh.description') }}</div>
+          </div>
+        </section>
+
         <template v-if="props.backendKind === 'acp'">
           <section class="provider-section">
             <div class="provider-section-header">
