@@ -20,12 +20,13 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runInNewContext } from 'node:vm';
+import { createContext, runInContext, runInNewContext } from 'node:vm';
 import ts from 'typescript';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { computed } from 'vue';
 
-import { deriveDshBridgeHttpUrl } from './utils/dshRpc';
+import { createDshRpcClient, deriveDshBridgeHttpUrl } from './utils/dshRpc';
+import { appendCodexBridgeToken, codexBridgeHttpUrl } from './backends/codex/bridgeUrl';
 import { normalizeDshHistoryPage, readDshHistoryPage } from './backends/dsh/history';
 import { createDshSessionEventHub } from './composables/dshSessionEvents';
 import { createDshPermissions, parseDshApprovalRequestId } from './composables/dshPermissions';
@@ -1019,5 +1020,177 @@ describe('dsh lifecycle wiring (Todo 33)', () => {
         dshPermissions,
       }),
     ).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. dsh status diagnostics — health endpoint contract + live version path
+// ---------------------------------------------------------------------------
+
+describe('App.vue dsh status diagnostics (Todo 34 health/version contract)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** A `server-response` answer for the recording fetcher (echoes the client rpcId). */
+  function dshRpcResponse(
+    result: { ok: true; value: unknown } | { ok: false; error: { code: string; message: string } },
+  ): Response {
+    const body = { type: 'server-response', rpcId: 'dsh-1', result };
+    return responder(JSON.stringify(body));
+  }
+
+  function supervisorResponse(services: unknown): Response {
+    return responder(JSON.stringify({ services }));
+  }
+
+  function responder(text: string): Response {
+    return {
+      status: 200,
+      ok: true,
+      headers: {
+        get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+      },
+      text: async () => text,
+      json: async () => JSON.parse(text),
+      arrayBuffer: async () => new TextEncoder().encode(text).buffer,
+    } as unknown as Response;
+  }
+
+  const ACCOUNT_STATE = {
+    status: 'signed-out',
+    links: {
+      usageUrl: 'https://platform.deepseek.com/usage',
+      topUpUrl: 'https://platform.deepseek.com/top_up',
+    },
+  };
+
+  function runDiagnostics(input: { rpc: () => Response; supervisor?: unknown }) {
+    const calls: Array<{ url: string; method?: string; headers?: Record<string, string>; body?: string }> = [];
+    const fetchImpl = vi.fn(
+      async (
+        url: string,
+        init?: { method: string; headers: Record<string, string>; body: string },
+      ) => {
+        calls.push({ url, method: init?.method, headers: init?.headers, body: init?.body });
+        if (url.includes('/dsh/account/getState')) return input.rpc();
+        if (url.includes('/api/v1/supervisor')) return supervisorResponse(input.supervisor ?? []);
+        throw new Error(`unexpected fetch ${url}`);
+      },
+    );
+    // The extracted dshRpcClient is a host-realm function: its default fetcher
+    // reads globalThis.fetch in THIS realm, so the recorder must be stubbed on
+    // the host global as well as published into the vm sandbox.
+    vi.stubGlobal('fetch', fetchImpl);
+    const dshStatusDiagnostic = {
+      value: null as { health?: string; healthError?: string; account?: unknown } | null,
+    };
+    const dshStatusVersion = {
+      value: null as { value?: string; state?: string; supported?: boolean; error?: string } | null,
+    };
+    const credentials = {
+      backendKind: { value: 'dsh' },
+      dshBridgeUrl: { value: DSH_BRIDGE_URL },
+      dshBridgeToken: { value: DSH_BRIDGE_TOKEN },
+      codexBridgeUrl: { value: 'ws://localhost:23004/codex' },
+      codexBridgeToken: { value: 'codex-bridge-token' },
+    };
+    const program = transpile(
+      `var dshStatusDiagnosticGeneration = 0;\n${appFunctionDeclaration('dshAccountSnapshot')}\n${appFunctionDeclaration('dshRpcClient')}\n${appFunctionDeclaration('refreshDshStatusDiagnostics')}\nrefreshDshStatusDiagnostics();`,
+    );
+    const pending = runInContext(
+      program,
+      createContext({
+        dshStatusDiagnaticGeneration: 0,
+        dshStatusDiagnostic,
+        dshStatusVersion,
+        createDshRpcClient,
+        deriveDshBridgeHttpUrl,
+        appendCodexBridgeToken,
+        codexBridgeHttpUrl,
+        credentials,
+        fetch: fetchImpl,
+      }),
+    ) as Promise<void>;
+    return { calls, fetchImpl, dshStatusDiagnostic, dshStatusVersion, pending };
+  }
+
+  it('health is POST /dsh/account/getState judged by result.ok — never GET /dsh/ (review blocker #4)', async () => {
+    const run = runDiagnostics({
+      rpc: () => dshRpcResponse({ ok: true, value: ACCOUNT_STATE }),
+      supervisor: [{ id: 'dsh', state: 'running', version: '0.2.9' }],
+    });
+    await run.pending;
+
+    expect(run.fetchImpl).toHaveBeenCalledTimes(2);
+    const rpcCall = run.calls[0]!;
+    expect(rpcCall.url).toBe('http://localhost:23004/dsh/account/getState');
+    expect(rpcCall.method).toBe('POST');
+    expect(rpcCall.headers?.['content-type']).toBe('application/json');
+    expect(rpcCall.headers?.Authorization).toBe(`Bearer ${DSH_BRIDGE_TOKEN}`);
+    expect(JSON.parse(rpcCall.body ?? '{}')).toEqual({
+      type: 'client-request',
+      rpcId: 'dsh-1',
+      method: 'account/getState',
+      payload: { args: {} },
+    });
+
+    // A signed-out account is still a HEALTHY gateway; the verdict maps through.
+    expect(run.dshStatusDiagnostic.value).toEqual({
+      health: 'ok',
+      account: {
+        status: 'signed-out',
+        usageUrl: 'https://platform.deepseek.com/usage',
+        topUpUrl: 'https://platform.deepseek.com/top_up',
+      },
+    });
+  });
+
+  it('fails closed when account/getState answers result.ok === false (MISSING_CREDENTIAL)', async () => {
+    const run = runDiagnostics({
+      rpc: () =>
+        dshRpcResponse({
+          ok: false,
+          error: { code: 'MISSING_CREDENTIAL', message: 'session credential missing' },
+        }),
+    });
+    await run.pending;
+
+    const diagnostic = run.dshStatusDiagnostic.value;
+    expect(diagnostic?.health).toBe('error');
+    expect(diagnostic?.healthError).toContain('MISSING_CREDENTIAL');
+    expect(diagnostic?.account).toBeNull();
+  });
+
+  it('reads the version from the supervisor-captured dsh service, never another service entry', async () => {
+    const run = runDiagnostics({
+      rpc: () => dshRpcResponse({ ok: true, value: ACCOUNT_STATE }),
+      supervisor: [
+        { id: 'codex', state: 'running', version: '0.8.9' },
+        { id: 'dsh', state: 'running', version: '0.2.9' },
+      ],
+    });
+    await run.pending;
+
+    const supervisorCall = run.calls[1]!;
+    expect(supervisorCall.url).toContain('/api/v1/supervisor');
+    expect(supervisorCall.url).toContain('token=codex-bridge-token');
+    expect(run.dshStatusVersion.value).toEqual({ value: '0.2.9', state: 'running', supported: true });
+    expect(run.dshStatusVersion.value?.value).not.toBe('0.8.9');
+  });
+
+  it('marks a supervisor-gate-rejected dsh version as an error snapshot', async () => {
+    const run = runDiagnostics({
+      rpc: () => dshRpcResponse({ ok: true, value: ACCOUNT_STATE }),
+      supervisor: [{ id: 'dsh', state: 'error', version: '0.2.1', error: 'protocol generation mismatch' }],
+    });
+    await run.pending;
+
+    expect(run.dshStatusVersion.value).toEqual({
+      value: '0.2.1',
+      state: 'error',
+      supported: false,
+      error: 'protocol generation mismatch',
+    });
   });
 });
