@@ -66,6 +66,8 @@ function mount(
     cardActionsDisabled?: boolean;
     loadMessageDiffs?: () => Promise<[]>;
     hasMessageDiffs?: () => Promise<boolean>;
+    computeContextPercent?: () => number | null;
+    kimiSessionContext?: { used: number; limit: number } | null;
     kimiTurnPermissionForUser?: (sessionId: string, userMessageId: string) => string | undefined;
     kimiCurrentPermissionMode?: string;
     kimiDefaultPermissionMode?: string;
@@ -94,6 +96,8 @@ function mount(
             cardActionsDisabled: props.cardActionsDisabled,
             loadMessageDiffs: props.loadMessageDiffs,
             hasMessageDiffs: props.hasMessageDiffs,
+            computeContextPercent: props.computeContextPercent,
+            kimiSessionContext: props.kimiSessionContext,
             kimiTurnPermissionForUser: props.kimiTurnPermissionForUser,
             kimiCurrentPermissionMode: props.kimiCurrentPermissionMode,
             kimiDefaultPermissionMode: props.kimiDefaultPermissionMode,
@@ -314,6 +318,82 @@ describe('ThreadBlock history wiring', () => {
     await flushRender();
     expect(view.root.querySelector('.ib-target-agent')?.textContent?.trim()).toBe('yolo');
     expect(view.root.querySelector('.ib-meta-tokens')?.textContent?.replace(/\s/g, '')).toContain('3822660');
+  });
+
+  it('shows the per-turn context percent recorded on the Kimi message', async () => {
+    const user = makeUserMessage('main', 'u1', 1);
+    const assistant = {
+      ...makeAssistantMessage('main', 'a1', 'u1', 2, 'main'),
+      tokens: { input: 382, output: 266, reasoning: 0, cache: { read: 0, write: 0 } },
+      contextTokens: 21109,
+      maxContextTokens: 320000,
+    } as MessageInfo;
+    useMessages().loadHistory([{ info: user, parts: [] }, { info: assistant, parts: [makeTextPart('a1', 'main', 'Done')] }]);
+    const view = mount({ root: user, backendKind: 'kimi-web', isLatestRoot: true }, vi.fn());
+    await flushRender();
+    expect(view.root.querySelector('.ib-footer')?.textContent).toContain('7%');
+    unmount(view.app);
+  });
+
+  it('prefers the per-turn context over the session context fallback', async () => {
+    const user = makeUserMessage('main', 'u1', 1);
+    const assistant = {
+      ...makeAssistantMessage('main', 'a1', 'u1', 2, 'main'),
+      tokens: { input: 382, output: 266, reasoning: 0, cache: { read: 0, write: 0 } },
+      contextTokens: 21109,
+      maxContextTokens: 320000,
+    } as MessageInfo;
+    useMessages().loadHistory([{ info: user, parts: [] }, { info: assistant, parts: [makeTextPart('a1', 'main', 'Done')] }]);
+    const view = mount({
+      root: user, backendKind: 'kimi-web', isLatestRoot: true,
+      kimiSessionContext: { used: 64000, limit: 320000 },
+    }, vi.fn());
+    await flushRender();
+    const footer = view.root.querySelector('.ib-footer')?.textContent;
+    expect(footer).toContain('7%');
+    expect(footer).not.toContain('20%');
+    unmount(view.app);
+  });
+
+  it('falls back to the session context for the latest Kimi card without per-turn context', async () => {
+    const user = makeUserMessage('main', 'u1', 1);
+    const assistant = makeAssistantMessage('main', 'a1', 'u1', 2, 'main');
+    useMessages().loadHistory([{ info: user, parts: [] }, { info: assistant, parts: [makeTextPart('a1', 'main', 'Done')] }]);
+    const view = mount({
+      root: user, backendKind: 'kimi-web', isLatestRoot: true,
+      kimiSessionContext: { used: 64000, limit: 320000 },
+    }, vi.fn());
+    await flushRender();
+    expect(view.root.querySelector('.ib-footer')?.textContent).toContain('20%');
+    unmount(view.app);
+  });
+
+  it('does not borrow the session context for a historical Kimi card', async () => {
+    const user = makeUserMessage('main', 'u1', 1);
+    const assistant = makeAssistantMessage('main', 'a1', 'u1', 2, 'main');
+    useMessages().loadHistory([{ info: user, parts: [] }, { info: assistant, parts: [makeTextPart('a1', 'main', 'Done')] }]);
+    const view = mount({
+      root: user, backendKind: 'kimi-web', isLatestRoot: false,
+      kimiSessionContext: { used: 64000, limit: 320000 },
+    }, vi.fn());
+    await flushRender();
+    expect(view.root.querySelector('.ib-footer')?.textContent).not.toContain('%');
+    unmount(view.app);
+  });
+
+  it('falls back to computeContextPercent when no context is recorded', async () => {
+    const user = makeUserMessage('main', 'u1', 1);
+    const assistant = {
+      ...makeAssistantMessage('main', 'a1', 'u1', 2, 'main'),
+      tokens: { input: 1000, output: 500, reasoning: 0, cache: { read: 0, write: 0 } },
+    } as MessageInfo;
+    useMessages().loadHistory([{ info: user, parts: [] }, { info: assistant, parts: [makeTextPart('a1', 'main', 'Done')] }]);
+    const computeContextPercent = vi.fn(() => 42);
+    const view = mount({ root: user, backendKind: 'kimi-web', isLatestRoot: true, computeContextPercent }, vi.fn());
+    await flushRender();
+    expect(computeContextPercent).toHaveBeenCalled();
+    expect(view.root.querySelector('.ib-footer')?.textContent).toContain('42%');
+    unmount(view.app);
   });
 
   it('uses the accepted turn permission across live and reloaded cards', async () => {

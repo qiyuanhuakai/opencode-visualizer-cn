@@ -30,8 +30,11 @@ describe('Kimi live submitted prompt', () => {
     const normalizer = createKimiWebNormalizer();
     normalizer.ingest({ ...submitted, payload: { ...submitted.payload, userMessageId: 'msg-user' } });
     normalizer.ingest({ type: 'prompt.started', session_id: 'session-live', payload: { agentId: 'main', promptId: 'msg-prompt' } });
-    const ops = normalizer.ingest({ type: 'turn.started', session_id: 'session-live', payload: {
+    normalizer.ingest({ type: 'turn.started', session_id: 'session-live', payload: {
       agentId: 'main', turnId: 2, promptId: 'msg-prompt', time: 1790083367903,
+    } });
+    const ops = normalizer.ingest({ type: 'turn.step.started', session_id: 'session-live', payload: {
+      agentId: 'main', turnId: 2, step: 1, stepId: 'step-2', time: 1790083367904,
     } }).ops;
     expect(ops.find((op) => op.kind === 'message')).toMatchObject({ message: { parentID: 'msg-user' } });
   });

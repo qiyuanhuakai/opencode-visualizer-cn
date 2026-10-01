@@ -197,6 +197,7 @@ const props = defineProps<{
   loadMessageDiffs?: (sessionId: string, messageId: string) => Promise<MessageDiffEntry[]>;
   hasMessageDiffs?: (sessionId: string, messageId: string) => Promise<boolean>;
   isLatestRoot?: boolean;
+  kimiSessionContext?: { used: number; limit: number } | null;
   assistantHtml?: string;
 }>();
 
@@ -525,7 +526,6 @@ function getThreadTokens(): MessageTokens | null {
 }
 
 function getThreadContextPercent(): number | null {
-  if (!props.computeContextPercent) return null;
   let lastUsage: MessageUsage | undefined;
 
   for (const m of assistantMessages.value) {
@@ -535,7 +535,23 @@ function getThreadContextPercent(): number | null {
     }
   }
 
-  if (!lastUsage) return null;
+  if (lastUsage) {
+    const { contextTokens, maxContextTokens } = lastUsage;
+    if (
+      contextTokens !== undefined && Number.isFinite(contextTokens) && contextTokens > 0 &&
+      maxContextTokens !== undefined && Number.isFinite(maxContextTokens) && maxContextTokens > 0
+    ) {
+      return Math.round((contextTokens / maxContextTokens) * 100);
+    }
+  }
+
+  const sessionContext = props.kimiSessionContext;
+  if (props.backendKind === 'kimi-web' && props.isLatestRoot && sessionContext && sessionContext.limit > 0) {
+    const value = Math.round((sessionContext.used / sessionContext.limit) * 100);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+
+  if (!lastUsage || !props.computeContextPercent) return null;
   const value = props.computeContextPercent(
     lastUsage.tokens,
     lastUsage.providerId,

@@ -146,6 +146,7 @@
                     :kimi-undo-available="kimiWebCapabilities.isAvailable('undo')"
                     :load-message-diffs="activeBackendKind === 'kimi-web' ? loadKimiMessageDiffs : undefined"
                     :has-message-diffs="activeBackendKind === 'kimi-web' ? hasKimiMessageDiffs : undefined"
+                    :kimi-session-context="kimiSessionContext"
                     :is-loading="isLoadingHistory"
                     :is-anchoring="isOutputAnchoring"
                     @message-rendered="handleOutputPanelMessageRendered"
@@ -8066,6 +8067,18 @@ const kimiWebCapabilities = createKimiWebCapabilityRegistry({
 });
 const kimiWebWsClient = shallowRef<KimiWebWsClient>();
 const kimiWebMessageBridge = shallowRef<ReturnType<typeof useKimiWebMessageBridge>>();
+const kimiSessionContext = computed(() => {
+  const state = kimiWebMessageBridge.value?.sessionState(selectedSessionId.value);
+  const used = state?.contextTokens;
+  const limit = state?.maxContextTokens;
+  if (
+    typeof used === 'number' && Number.isFinite(used) && used > 0 &&
+    typeof limit === 'number' && Number.isFinite(limit) && limit > 0
+  ) {
+    return { used, limit };
+  }
+  return null;
+});
 const kimiWebModeRevision = ref(0);
 const kimiWebTowerEnabled = ref(false);
 let detachKimiWebModeReconnect: (() => void) | undefined;

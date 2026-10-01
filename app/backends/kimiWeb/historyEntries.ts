@@ -306,24 +306,28 @@ export function kimiWebTranscriptToHistoryEntries(
 ): KimiWebHistoryEntry[] {
   return transcript.items.flatMap((item, index): KimiWebHistoryEntry[] => {
     if (item.kind !== 'turn') return [];
-    const messageId = `${childSessionId}:transcript:${item.turnId}`;
     const createdAt = parseCreatedAt(item.startedAt, index);
-    const message: KimiWebMessage = { id: messageId, session_id: childSessionId, role: 'assistant', content: [] };
-    const info = createAssistantInfo(message, createdAt, messageId, {});
-    info.agent = 'subagent';
-    if (item.endedAt) info.time.completed = parseCreatedAt(item.endedAt, createdAt);
-    const parts: MessagePart[] = [];
-    for (const step of item.steps) {
+    const completedAt = item.endedAt ? parseCreatedAt(item.endedAt, createdAt) : undefined;
+    // Each step is one utterance: emit a separate message per step so the
+    // subagent history window renders one cell per utterance instead of
+    // joining a whole turn's text with newlines.
+    return item.steps.map((step): KimiWebHistoryEntry => {
+      const messageId = `${childSessionId}:transcript:${item.turnId}:${step.stepId}`;
+      const message: KimiWebMessage = { id: messageId, session_id: childSessionId, role: 'assistant', content: [] };
+      const info = createAssistantInfo(message, createdAt, messageId, {});
+      info.agent = 'subagent';
+      if (completedAt !== undefined) info.time.completed = completedAt;
+      const parts: MessagePart[] = [];
       for (const frame of step.frames) {
         const base = partBase(message, `${messageId}:${frame.frameId}`);
         if (frame.kind === 'thinking') {
-          parts.push({ ...base, type: 'reasoning', text: frame.text, time: { start: createdAt, end: info.time.completed } });
+          parts.push({ ...base, type: 'reasoning', text: frame.text, time: { start: createdAt, end: completedAt } });
         } else if (frame.kind === 'text' && frame.role === 'assistant') {
-          parts.push({ ...base, type: 'text', text: frame.text, time: { start: createdAt, end: info.time.completed } });
+          parts.push({ ...base, type: 'text', text: frame.text, time: { start: createdAt, end: completedAt } });
         } else if (frame.kind === 'tool') {
           const input = isRecord(frame.input) ? frame.input : {};
           const output = stringifyToolOutput(frame.output);
-          const time = { start: createdAt, end: info.time.completed ?? createdAt };
+          const time = { start: createdAt, end: completedAt ?? createdAt };
           const state: ToolPart['state'] = frame.error
             ? { status: 'error', input, error: frame.error, time }
             : frame.state === 'done' || frame.state === 'completed'
@@ -333,7 +337,7 @@ export function kimiWebTranscriptToHistoryEntries(
             tool: resolveKimiWebToolName(frame.name), state, metadata: { source: 'kimi-web' } });
         }
       }
-    }
-    return [{ info, parts }];
+      return { info, parts };
+    });
   });
 }

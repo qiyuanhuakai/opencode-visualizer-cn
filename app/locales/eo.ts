@@ -386,6 +386,7 @@ const messages: LocaleMessages = {
       contextLimit: 'Konteksta limo',
       contextUsed: 'Konteksto uzata',
       totalTokens: 'Entutaj tokenoj',
+      currentContext: 'Nuna kunteksto',
       usagePercent: 'Uzado',
       inputTokens: 'Enigaj tokenoj',
       outputTokens: 'Eligaj tokenoj',

@@ -388,6 +388,7 @@ const messages: LocaleMessages = {
       contextLimit: 'コンテキスト制限',
       contextUsed: '使用中のコンテキスト',
       totalTokens: '総トークン数',
+      currentContext: '現在のコンテキスト',
       usagePercent: '使用率',
       inputTokens: '入力トークン',
       outputTokens: '出力トークン',

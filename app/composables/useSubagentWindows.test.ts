@@ -95,4 +95,23 @@ describe('useSubagentWindows message-level completion', () => {
     // Then: the entry flips to completed so the window can converge before close
     expect(api.entriesBySession?.get('session-1')?.[0]?.completed).toBe(true);
   });
+
+  it('keeps one window entry per utterance when parts arrive with distinct ids', () => {
+    // M4 per-utterance parts: each utterance is its own message + text part,
+    // so the keyed window manager must keep a separate entry per utterance.
+    const fake = createFakeSessionScope();
+    const api = mountSubagentWindows(fake.scope);
+    const sessionId = 'session-1:agent-0:0';
+    fake.emit('message.part.updated', { part: {
+      id: `${sessionId}:1:text`, sessionID: sessionId, messageID: `${sessionId}:1`,
+      type: 'text', text: 'First utterance.', time: { start: 1 },
+    } satisfies MessagePart });
+    fake.emit('message.part.updated', { part: {
+      id: `${sessionId}:2:text`, sessionID: sessionId, messageID: `${sessionId}:2`,
+      type: 'text', text: 'Second utterance.', time: { start: 2 },
+    } satisfies MessagePart });
+    const sessionEntries = api.entriesBySession?.get(sessionId);
+    expect(sessionEntries?.map((entry) => entry.id)).toEqual([`${sessionId}:1:text`, `${sessionId}:2:text`]);
+    expect(sessionEntries?.map((entry) => entry.text)).toEqual(['First utterance.', 'Second utterance.']);
+  });
 });

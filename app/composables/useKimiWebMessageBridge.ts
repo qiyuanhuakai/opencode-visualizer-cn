@@ -2,6 +2,7 @@ import { reactive, shallowReactive } from 'vue';
 import {
   createKimiWebNormalizer,
   type KimiWebNormalizer,
+  type KimiWebUsage,
 } from '../backends/kimiWeb/normalize';
 import type { KimiWebNormalizeOp } from '../backends/kimiWeb/normalize';
 import type { KimiWebSnapshot } from '../utils/kimiWeb';
@@ -33,6 +34,10 @@ const DEFAULT_MAX_BUFFERED_FRAMES = 1000;
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
+type KimiWebSessionPatchDraft = {
+  -readonly [K in keyof KimiWebBridgeSessionState]?: KimiWebBridgeSessionState[K];
+};
 
 function ackCursor(ack: KimiWebWsAck, sessionId: string): KimiWebWsCursor | undefined {
   const cursors = isRecord(ack.payload?.cursors) ? ack.payload.cursors : undefined;
@@ -225,7 +230,15 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
   function seedInFlight(snapshot: KimiWebSnapshot) {
     const turn = snapshot.in_flight_turn;
     if (!turn) return;
-    const base = { seq: snapshot.as_of_seq, epoch: snapshot.epoch, session_id: snapshot.session.id };
+    // Deliberately no seq on the synthesized frames: the snapshot exposes the whole
+    // in-flight turn as one string with no per-utterance watermark, so the seed must
+    // not claim a real opener seq. Stamping seq=as_of_seq would set openSeq on the
+    // seeded group AND advance its delta bucket's seq, so the step's live deltas —
+    // which carry their true opener seq, smaller than as_of_seq whenever durable
+    // frames landed between the opener and the snapshot — would be dropped as stale.
+    // With seq undefined both checks are skipped and the live tail keeps flowing
+    // into the seeded group; the next durable turn.step.started opens the next one.
+    const base = { epoch: snapshot.epoch, session_id: snapshot.session.id };
     normalize({
       ...base,
       type: 'turn.started',
@@ -234,6 +247,20 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
         agentId: 'main',
         turnId: turn.turn_id,
         promptId: turn.current_prompt_id,
+      },
+    }, 'snapshot-rebuild');
+    // The snapshot exposes the whole in-flight turn as one string with no
+    // per-utterance watermark, so synthesize the opening step and let the seeded
+    // (and buffered same-seq suffix) deltas land in their own utterance group.
+    normalize({
+      ...base,
+      type: 'turn.step.started',
+      payload: {
+        sessionId: snapshot.session.id,
+        agentId: 'main',
+        turnId: turn.turn_id,
+        step: 1,
+        stepId: `snapshot:${snapshot.as_of_seq}`,
       },
     }, 'snapshot-rebuild');
     if (turn.thinking_text) {
@@ -279,13 +306,25 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
     if (rebuilding?.kind !== 'rebuilding') return;
     clearEpochState(sessionId);
     applyAuthoritativeEntries(authoritativeEntries(snapshot));
-    mergeSession(sessionId, {
+    const sessionPatch: KimiWebSessionPatchDraft = {
       busy: snapshot.session.busy,
       mainTurnActive: snapshot.session.main_turn_active,
       pendingInteraction: snapshot.session.pending_interaction,
       lastTurnReason: snapshot.session.last_turn_reason,
       currentPromptId: snapshot.session.current_prompt_id,
-    });
+    };
+    const usage = snapshot.session.usage;
+    if (usage) {
+      const total: KimiWebUsage = {};
+      if (Number.isFinite(usage.input_tokens)) total.inputOther = usage.input_tokens;
+      if (Number.isFinite(usage.output_tokens)) total.output = usage.output_tokens;
+      if (Number.isFinite(usage.cache_read_tokens)) total.inputCacheRead = usage.cache_read_tokens;
+      if (Number.isFinite(usage.cache_creation_tokens)) total.inputCacheCreation = usage.cache_creation_tokens;
+      if (Object.keys(total).length > 0) sessionPatch.usage = { total };
+      if (Number.isFinite(usage.context_tokens)) sessionPatch.contextTokens = usage.context_tokens;
+      if (Number.isFinite(usage.context_limit)) sessionPatch.maxContextTokens = usage.context_limit;
+    }
+    mergeSession(sessionId, sessionPatch);
     seedInFlight(snapshot);
     const cursor = drainSnapshotBuffer(sessionId, snapshot, rebuilding.buffered);
     if (!cursor || recoveryGenerations.get(sessionId) !== generation) return;

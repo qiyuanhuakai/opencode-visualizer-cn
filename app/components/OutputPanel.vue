@@ -49,6 +49,7 @@
                   :kimi-undo-available="kimiUndoAvailable"
                   :load-message-diffs="loadMessageDiffs"
                   :has-message-diffs="hasMessageDiffs"
+                  :kimi-session-context="kimiSessionContext"
                   :card-actions-disabled="(backendKind === 'kimi-web' || backendKind === 'dsh') && isThinking"
                   :is-latest-root="root.id === latestRootId"
                   :assistant-html="getAssistantHtml(root.id)"
@@ -157,6 +158,7 @@ const props = defineProps<{
   kimiUndoAvailable?: boolean;
   loadMessageDiffs?: (sessionId: string, messageId: string) => Promise<MessageDiffEntry[]>;
   hasMessageDiffs?: (sessionId: string, messageId: string) => Promise<boolean>;
+  kimiSessionContext?: { used: number; limit: number } | null;
 }>();
 
 const emit = defineEmits<{
@@ -181,8 +183,20 @@ const emit = defineEmits<{
 const visibleRoots = computed(() => {
   const currentSessionId = props.currentSessionId?.trim();
   if (!currentSessionId) return msg.roots.value;
-  return msg.roots.value.filter((root) => root.sessionID === currentSessionId);
+  return msg.roots.value.filter(
+    (root) => root.sessionID === currentSessionId && !isSynthesizedSubagentSessionId(root.sessionID),
+  );
 });
+
+// Kimi subagent transcripts carry the synthesized identity `${session}:${agent}:${turn}`
+// (backends/kimiWeb/wire.ts kimiWebSubagentSessionId). They belong to the parent card's
+// 🤖 row and the floating window, never to the main session card list — exclude them even
+// if their id ever collides with the selected session.
+function isSynthesizedSubagentSessionId(sessionID: string): boolean {
+  const segments = sessionID.split(':');
+  if (segments.length < 3) return false;
+  return /^\d+$/.test(segments[segments.length - 1] ?? '');
+}
 
 const THREAD_BATCH_SIZE = 20;
 const THREAD_WINDOW_MAX = 100;

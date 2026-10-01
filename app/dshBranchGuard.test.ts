@@ -252,7 +252,7 @@ const BRANCHES: BranchEntry[] = [
   { file: "components/ThreadBlock.vue", fp: "props.backendKind!=='kimi-web'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 35, sym: "message card actions/diff gates" },
   { file: "components/ThreadBlock.vue", fp: "props.backendKind==='acp'", n: 2, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 35, sym: "message card actions/diff gates" },
   { file: "components/ThreadBlock.vue", fp: "props.backendKind==='codex'", n: 3, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 35, sym: "message card actions/diff gates" },
-  { file: "components/ThreadBlock.vue", fp: "props.backendKind==='kimi-web'", n: 12, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 35, sym: "message card actions/diff gates" },
+  { file: "components/ThreadBlock.vue", fp: "props.backendKind==='kimi-web'", n: 13, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 35, sym: "message card actions/diff gates (x13 after main #155 ghost-card fix)" },
   { file: "composables/backendMessageSend.kimiSlash.ts", fp: "params.activeBackendKind.value==='kimi-web'", n: 1, kind: 'cmp', cls: 'capability-optional', disp: 'handled', owner: 18, sym: "kimi slash dispatch (dsh has none)" },
   { file: "composables/backendMessageSend.openCode.ts", fp: "preflight.backend==='acp'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 25, sym: "opencode send fail-closed seam" },
   { file: "composables/backendMessageSend.openCode.ts", fp: "preflight.backend==='kimi-web'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 25, sym: "opencode send fail-closed seam" },

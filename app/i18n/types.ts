@@ -375,6 +375,7 @@ export interface LocaleMessages {
       contextLimit: string;
       contextUsed: string;
       totalTokens: string;
+      currentContext: string;
       usagePercent: string;
       inputTokens: string;
       outputTokens: string;

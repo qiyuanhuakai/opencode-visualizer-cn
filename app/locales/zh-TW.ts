@@ -384,6 +384,7 @@ const messages: LocaleMessages = {
       contextLimit: '上下文限制',
       contextUsed: '已使用上下文',
       totalTokens: '總 Token',
+      currentContext: '目前上下文',
       usagePercent: '使用率',
       inputTokens: '輸入 Token',
       outputTokens: '輸出 Token',

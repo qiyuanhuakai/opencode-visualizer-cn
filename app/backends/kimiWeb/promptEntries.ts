@@ -7,12 +7,14 @@ export function submittedPromptOps(
   payload: KimiWebPayload,
   sessionId: string,
   now: () => number,
+  onUserMessage?: (userMessageId: string) => void,
 ): KimiWebNormalizeOp[] {
   const id = asString(payload.userMessageId) || asString(payload.promptId);
   if (!id || !sessionId || !Array.isArray(payload.content)) return [];
   const metadata = isRecord(payload.metadata) ? payload.metadata : undefined;
   const origin = isRecord(metadata?.origin) ? metadata.origin : payload.origin;
   if (isRecord(origin) && origin.kind === 'injection') return [];
+  onUserMessage?.(id);
   // Keep wire positions so text part IDs match REST history even beside media.
   const content = payload.content.map((part): KimiWebContentPart => ({
     type: 'text',

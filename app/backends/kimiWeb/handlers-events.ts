@@ -12,7 +12,9 @@ import {
   type KimiWebWireFrame,
 } from './wire';
 import {
-  ensureGroup,
+  buildMessage,
+  findCurrentGroup,
+  openUtteranceGroup,
   sessionOf,
   terminalParts,
   type KimiWebCore,
@@ -121,7 +123,12 @@ function handlePrompt(core: KimiWebCore, frame: KimiWebWireFrame, payload: KimiW
   const userMessageId = asString(payload.userMessageId);
   if (promptId && userMessageId) core.promptUserMessageIds.set(`${sessionId}|${promptId}`, userMessageId);
   if (frame.type === 'prompt.submitted') {
-    ops.push(...submittedPromptOps(payload, core.subagentIdentity(sessionId, agentId), core.now));
+    ops.push(...submittedPromptOps(
+      payload,
+      core.subagentIdentity(sessionId, agentId),
+      core.now,
+      (userMessageId) => core.lastUserMessageIds.set(sessionId, userMessageId),
+    ));
   }
   if (promptId && (frame.type === 'prompt.submitted' || frame.type === 'prompt.started')) {
     core.promptIds.set(`${sessionId}|${agentId}`, promptId);
@@ -149,30 +156,44 @@ function handleSubagentSpawned(core: KimiWebCore, frame: KimiWebWireFrame, paylo
   const subagentId = asString(payload.subagentId);
   if (!subagentId) return;
   const turnId = core.agentTurns.get(`${sessionId}|${subagentId}`) ?? 0;
-  const group = ensureGroup(core, sessionId, subagentId, turnId, payload, ops);
+  const subagentSessionID = core.subagentIdentity(sessionId, subagentId, turnId);
   const parentToolCallId = asString(payload.parentToolCallId);
+  let parentMessageID = '';
   if (parentToolCallId) {
     for (const [key, part] of core.toolParts) {
       if (part.callID !== parentToolCallId || part.sessionID !== sessionId || part.tool !== 'task') continue;
       const previous = Array.isArray(part.metadata?.sessionIds)
         ? part.metadata.sessionIds.filter((id): id is string => typeof id === 'string')
         : [];
-      const sessionIds = [...new Set([...previous, group.sessionID])];
+      const sessionIds = [...new Set([...previous, subagentSessionID])];
       const previousLabels = part.metadata?.subagentLabels;
       const labels = previousLabels && typeof previousLabels === 'object' && !Array.isArray(previousLabels)
         ? previousLabels : {};
       const updated = { ...part, metadata: {
         ...part.metadata, sessionIds, source: 'kimi-web',
-        subagentLabels: { ...labels, [group.sessionID]: asString(payload.description) || asString(payload.subagentName) || group.sessionID },
+        subagentLabels: { ...labels, [subagentSessionID]: asString(payload.description) || asString(payload.subagentName) || subagentSessionID },
       } };
       core.toolParts.set(key, updated);
       ops.push({ kind: 'part', part: updated });
+      parentMessageID = part.messageID;
       break;
+    }
+  }
+  if (parentMessageID) {
+    // Nest the subagent turn under the main-agent message that issued the task
+    // call, so it is a child of that turn instead of a phantom root in the parent
+    // session view. The subagent's first utterance opens later (on its own
+    // turn.step.started), so remember the linkage for that group.
+    core.subagentParents.set(`${sessionId}|${subagentId}`, parentMessageID);
+    const group = findCurrentGroup(core, sessionId, subagentId, turnId);
+    if (group && group.parentId !== parentMessageID) {
+      group.parentId = parentMessageID;
+      ops.push({ kind: 'message', message: buildMessage(core, group) });
     }
   }
   ops.push({
     kind: 'subagent', phase: 'spawned', sessionId, agentId: asString(payload.agentId) || 'main', subagentId,
-    subagentSessionId: group.sessionID,
+    subagentSessionId: subagentSessionID,
     name: asString(payload.subagentName) || undefined,
     description: asString(payload.description) || undefined,
     parentToolCallId: parentToolCallId || undefined,
@@ -201,15 +222,24 @@ function handleSubagentTerminal(core: KimiWebCore, frame: KimiWebWireFrame, payl
   const subagentId = asString(payload.subagentId);
   if (!subagentId) return;
   const turnId = core.agentTurns.get(`${sessionId}|${subagentId}`) ?? 0;
-  const group = ensureGroup(core, sessionId, subagentId, turnId, payload, ops);
   const time = asNumber(payload.time) ?? core.now();
+  let subagentSessionID = core.subagentIdentity(sessionId, subagentId, turnId);
   if (phase !== 'suspended') {
+    // Finalize the last utterance; if the subagent produced no content at all
+    // (failed before any delta) still open a terminal message so the failure shows.
+    const group = findCurrentGroup(core, sessionId, subagentId, turnId)
+      ?? openUtteranceGroup(core, sessionId, subagentId, turnId, payload, ops);
     group.endedAt = time;
     terminalParts(group, true, ops);
+    subagentSessionID = group.sessionID;
+    // The spawn linkage has served its purpose (the group above was built with it);
+    // drop it so a later same-id group cannot inherit a stale parent. A resumed
+    // subagent re-spawns and re-records its parent. Suspended keeps it for resume.
+    core.subagentParents.delete(`${sessionId}|${subagentId}`);
   }
   ops.push({
     kind: 'subagent', phase, sessionId, agentId: asString(payload.agentId) || 'main', subagentId,
-    subagentSessionId: group.sessionID,
+    subagentSessionId: subagentSessionID,
     resultSummary: asString(payload.resultSummary) || undefined,
     error: asString(payload.error) || undefined,
     usage: isRecord(payload.usage) ? payload.usage : undefined,

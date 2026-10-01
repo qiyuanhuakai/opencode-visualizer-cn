@@ -140,6 +140,21 @@ describe('StatusMonitorModal Codex status isolation', () => {
     app.unmount();
   });
 
+  it('shows no summary chip on the Token tab (Codex usage lives in the session section)', async () => {
+    const { app, root, codexApi } = mountStatusMonitor('token');
+    codexApi.tokenUsage.value = {
+      threadId: 'thread-1', turnId: 'turn-2', tokenUsage: {
+        total: { totalTokens: 1900, inputTokens: 1300, cachedInputTokens: 400, cacheWriteInputTokens: 0, outputTokens: 600, reasoningOutputTokens: 100 },
+        last: { totalTokens: 350, inputTokens: 280, cachedInputTokens: 80, cacheWriteInputTokens: 0, outputTokens: 70, reasoningOutputTokens: 20 },
+        modelContextWindow: 1000,
+      },
+    };
+    await nextTick();
+    expect(root.querySelector('.codex-session-usage')?.textContent).toContain('1,900');
+    expect(root.querySelector('.status-monitor-actions')).toBeNull();
+    app.unmount();
+  });
+
   it('does not show a notification from another thread', async () => {
     const { app, root, codexApi } = mountStatusMonitor('token');
     codexApi.tokenUsage.value = {
