@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { watch, nextTick } from 'vue';
 
 import { kimiWebMessagesToHistoryEntries } from '../backends/kimiWeb/historyEntries';
-import type { KimiWebMessage, KimiWebPage, KimiWebSnapshot } from '../utils/kimiWeb';
+import type { KimiWebAgentTranscript, KimiWebMessage, KimiWebPage, KimiWebSnapshot } from '../utils/kimiWeb';
 import type {
   KimiWebWsAck,
   KimiWebWsCloseInfo,
@@ -143,6 +143,7 @@ class FakeSource implements KimiWebMessageSource {
 function createHarness(options: {
   getSnapshot?: () => Promise<KimiWebSnapshot>;
   getMessages?: () => Promise<KimiWebPage<KimiWebMessage>>;
+  getAgentTranscript?: () => Promise<KimiWebAgentTranscript>;
   maxBufferedFrames?: number;
 } = {}) {
   const source = new FakeSource();
@@ -176,6 +177,7 @@ function createHarness(options: {
     restClient: {
       getSnapshot: options.getSnapshot ?? vi.fn<() => Promise<KimiWebSnapshot>>(),
       getMessages: options.getMessages ?? vi.fn(async () => ({ items: [], has_more: false })),
+      getAgentTranscript: options.getAgentTranscript,
     },
     msg: { updateMessage, updatePart, loadHistory, removeMessage },
     applySnapshot,
@@ -535,6 +537,64 @@ describe('useKimiWebMessageBridge', () => {
     expect(onToolPart).toHaveBeenCalledOnce();
   });
 
+  it.each([false, true])('parents live task continuations to the latest loaded user (snapshot reset: %s)', async (reset) => {
+    // Given a reloaded session whose user prompts arrived before this WS connection.
+    const { source, bridge, messages } = createHarness({ getSnapshot: async () => snapshot({ messages: { items: [] } }) });
+    bridge.applyHistory(kimiWebMessagesToHistoryEntries([
+      { id: 'older-user', session_id: SESSION_ID, role: 'user', created_at: '2026-09-21T01:00:00Z', content: [{ type: 'text', text: 'Older' }] },
+      { id: 'latest-user', session_id: SESSION_ID, role: 'user', created_at: '2026-09-21T02:00:00Z', content: [{ type: 'text', text: 'Latest' }] },
+      { id: 'other-session-user', session_id: 'another-session', role: 'user', created_at: '2026-09-21T03:00:00Z', content: [{ type: 'text', text: 'Other' }] },
+    ]));
+    await enterLive(source, bridge, 21);
+    if (reset) {
+      source.emitResync();
+      await vi.waitFor(() => expect(bridge.syncState(SESSION_ID).kind).toBe('live'));
+    }
+    bridge.applyHistory(kimiWebMessagesToHistoryEntries([
+      { id: 'old-page-user', session_id: SESSION_ID, role: 'user', created_at: '2026-09-20T01:00:00Z', content: [{ type: 'text', text: 'Older page' }] },
+    ]));
+
+    // When a background task submits a hidden prompt and the main agent continues.
+    source.emitFrame({ type: 'prompt.submitted', seq: 22, epoch: EPOCH, session_id: SESSION_ID, payload: {
+      agentId: 'main', promptId: 'task-prompt', userMessageId: 'task-user',
+      content: [{ type: 'text', text: 'Task completed' }], metadata: { origin: { kind: 'task' } },
+    } });
+    source.emitFrame({ type: 'turn.started', seq: 23, epoch: EPOCH, session_id: SESSION_ID,
+      payload: { agentId: 'main', turnId: 7, promptId: 'task-prompt' } });
+    source.emitFrame({ type: 'turn.step.started', seq: 24, epoch: EPOCH, session_id: SESSION_ID,
+      payload: { agentId: 'main', turnId: 7, step: 1 } });
+
+    // Then no orphan card is manufactured and the other session cannot steal the parent.
+    expect(messages.get(`${SESSION_ID}:main:7:0`)).toHaveProperty('parentID', 'latest-user');
+    expect(messages.has('task-user')).toBe(false);
+    bridge.stop();
+  });
+
+  it('restores per-card transcript usage when a snapshot replaces live messages', async () => {
+    // Given a snapshot row without usage and its persisted transcript step.
+    const transcript: KimiWebAgentTranscript = { agent_id: 'main', has_more: false, items: [{
+      kind: 'turn', turnId: 't1', ordinal: 1, state: 'completed', steps: [{
+        stepId: 't1.1', usage: { inputOther: 13, output: 29, inputCacheRead: 37, inputCacheCreation: 5 },
+        frames: [{ kind: 'text', frameId: 'f1', role: 'assistant', text: 'Completed result' }],
+      }],
+    }] };
+    const { source, bridge, messages } = createHarness({
+      getSnapshot: async () => snapshot({ messages: { items: [restAssistant('Completed result')] } }),
+      getAgentTranscript: async () => transcript,
+    });
+    await enterLive(source, bridge, 21);
+
+    // When the bridge rebuilds from the persisted snapshot.
+    source.emitResync();
+    await vi.waitFor(() => expect(bridge.syncState(SESSION_ID).kind).toBe('live'));
+
+    // Then the replacement card retains its step usage.
+    expect(messages.get('msg_server_assistant')).toHaveProperty('tokens', {
+      input: 13, output: 29, reasoning: 0, cache: { read: 37, write: 5 },
+    });
+    bridge.stop();
+  });
+
   it('hydrates usage and context from the snapshot during rebuild', async () => {
     const snapshotRequest = deferred<KimiWebSnapshot>();
     const { source, bridge } = createHarness({ getSnapshot: () => snapshotRequest.promise });
@@ -586,7 +646,12 @@ describe('useKimiWebMessageBridge', () => {
 
   it('loads history through the replay-suppressed path', () => {
     const { bridge, loadHistory, onToolPart, onLiveReasoning, onLiveSubagent } = createHarness();
-    const entries = [{ fixture: 'Todo 15 normalized history' }];
+    const entries = kimiWebMessagesToHistoryEntries([{ id: 'history-assistant', session_id: SESSION_ID,
+      role: 'assistant', content: [
+        { type: 'thinking', thinking: 'Historical reasoning' },
+        { type: 'tool_use', tool_call_id: 'history-tool', tool_name: 'Read', input: {} },
+      ],
+    }]);
 
     bridge.applyHistory(entries);
 

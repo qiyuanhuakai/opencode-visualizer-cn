@@ -9021,6 +9021,8 @@ const kimiWebApi = {
     kimiWebRestClient().getMessages(...args),
   getSnapshot: (...args: Parameters<KimiWebAdapter['restClient']['getSnapshot']>) =>
     kimiWebRestClient().getSnapshot(...args),
+  getAgentTranscript: (...args: Parameters<KimiWebAdapter['restClient']['getAgentTranscript']>) =>
+    kimiWebRestClient().getAgentTranscript(...args),
   getSessionStatus: (...args: Parameters<KimiWebAdapter['restClient']['getSessionStatus']>) =>
     loadKimiWebSessionStatus(...args),
   listModels: (...args: Parameters<KimiWebAdapter['restClient']['listModels']>) =>
@@ -9068,7 +9070,7 @@ const kimiWebBridgeLifecycle = {
     }
     return kimiWebMessageBridge.value.subscribe(sessionIds);
   },
-  applyHistory: (entries: unknown[]) => {
+  applyHistory: (entries: Parameters<ReturnType<typeof useKimiWebMessageBridge>['applyHistory']>[0]) => {
     if (!kimiWebMessageBridge.value) throw new Error('Kimi Web message bridge is unavailable.');
     kimiWebMessageBridge.value.applyHistory(entries);
   },

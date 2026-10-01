@@ -105,6 +105,9 @@ export function createKimiWebNormalizer(options: { now?: () => number } = {}): K
     stats() {
       return { ...stats };
     },
+    seedUserMessage(sessionId, messageId) {
+      core.lastUserMessageIds.set(sessionId, messageId);
+    },
     reset() {
       core.groups.clear();
       core.toolParts.clear();

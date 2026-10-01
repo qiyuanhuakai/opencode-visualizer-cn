@@ -2,6 +2,7 @@ import type { ProjectState } from '../../types/worker-state';
 import type { KimiWebWsClient } from '../../utils/kimiWebWs';
 import type { KimiWebSessionStatus } from '../../utils/kimiWeb';
 import { loadKimiWebHistoryEntries } from './history';
+import type { KimiWebHistoryEntry } from './historyEntries';
 import {
   KimiWebAdapter,
   mapKimiWebSessionsToProjects,
@@ -9,7 +10,7 @@ import {
 
 export type KimiWebBootstrapBridge = {
   subscribe(sessionIds: string[]): Promise<unknown>;
-  applyHistory(entries: unknown[]): void;
+  applyHistory(entries: KimiWebHistoryEntry[]): void;
   stop(): void;
 };
 
@@ -63,6 +64,7 @@ export async function bootstrapKimiWebWorkspace(options: {
         sessionId: first.id,
         getMessages: options.adapter.restClient.getMessages,
         getSnapshot: options.adapter.restClient.getSnapshot,
+        getAgentTranscript: options.adapter.restClient.getAgentTranscript,
         isCurrent: options.isCurrent,
         profile: {
           model: modelId,

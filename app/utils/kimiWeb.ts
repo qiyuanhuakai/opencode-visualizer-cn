@@ -10,6 +10,7 @@
 import { parseKimiWebGoal } from '../backends/kimiWeb/goal';
 import { createKimiWebAgentClient } from './kimiWebAgents';
 import { createKimiWebCheckpointClient } from './kimiWebCheckpoints';
+import type { KimiWebUsage as KimiWebStepUsage } from '../backends/kimiWeb/wire';
 
 const JSON_CONTENT_TYPE = 'application/json';
 
@@ -128,7 +129,7 @@ export type KimiWebTranscriptFrame =
   | { kind: 'notice'; message: string; level: string; frameId: string };
 export type KimiWebTranscriptTurn = {
   kind: 'turn'; turnId: string; ordinal: number; state: string; prompt?: string; error?: string; startedAt?: string; endedAt?: string;
-  steps: Array<{ stepId: string; frames: KimiWebTranscriptFrame[] }>;
+  steps: Array<{ stepId: string; frames: KimiWebTranscriptFrame[]; usage?: KimiWebStepUsage }>;
 };
 export type KimiWebAgentTranscript = {
   agent_id: string; items: Array<KimiWebTranscriptTurn | { kind: 'marker' | 'taskref' }>;
@@ -285,7 +286,7 @@ export type KimiWebDirectoryBrowse = {
 export type KimiWebFsHome = { home: string; recent_roots: string[] };
 
 export type KimiWebMessageOrigin = {
-  kind?: 'user' | 'injection' | 'skill_activation' | 'plugin_command' | 'compaction_summary';
+  kind?: 'user' | 'injection' | 'task' | 'skill_activation' | 'plugin_command' | 'compaction_summary';
   [key: string]: unknown;
 };
 

@@ -43,7 +43,7 @@ export function useBackendSessionReload(params: {
   codexHistory: Ref<unknown[]>;
   codexReapplyBackfill: () => void;
   /** Kimi Web session-history REST pager; absent until the adapter is wired. */
-  kimiWebApi?: Pick<KimiWebClient, 'getMessages'> & Partial<Pick<KimiWebClient, 'getSessionStatus' | 'listModels' | 'getSnapshot'>>;
+  kimiWebApi?: Pick<KimiWebClient, 'getMessages'> & Partial<Pick<KimiWebClient, 'getSessionStatus' | 'listModels' | 'getSnapshot' | 'getAgentTranscript'>>;
   kimiWebBridge?: {
     subscribe(sessionIds: string[]): Promise<unknown>;
     applyHistory(entries: unknown[]): void;
@@ -209,6 +209,7 @@ export function useBackendSessionReload(params: {
               sessionId,
               getMessages: params.kimiWebApi.getMessages,
               getSnapshot: params.kimiWebApi.getSnapshot,
+              getAgentTranscript: params.kimiWebApi.getAgentTranscript,
               maxPages: params.kimiWebHistoryMaxPages,
               pageSize: params.kimiWebHistoryPageSize,
               isCurrent: () => reloadRequestId === params.sessionReloadRequestId.value,

@@ -29,9 +29,12 @@ export type KimiWebHistoryProfile = {
 };
 
 export function isInjectionMessage(message: KimiWebMessage): boolean {
-  const origin = message.metadata?.origin;
-  return origin?.kind === 'injection' ||
-    ((origin?.kind === 'skill_activation' || origin?.kind === 'plugin_command') && origin.trigger !== 'user-slash');
+  return isKimiWebInjectionOrigin(message.metadata?.origin);
+}
+
+export function isKimiWebInjectionOrigin(origin: unknown): boolean {
+  return isRecord(origin) && (origin.kind === 'injection' || origin.kind === 'task' ||
+    ((origin.kind === 'skill_activation' || origin.kind === 'plugin_command') && origin.trigger !== 'user-slash'));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -315,6 +318,12 @@ export function kimiWebTranscriptToHistoryEntries(
       const messageId = `${childSessionId}:transcript:${item.turnId}:${step.stepId}`;
       const message: KimiWebMessage = { id: messageId, session_id: childSessionId, role: 'assistant', content: [] };
       const info = createAssistantInfo(message, createdAt, messageId, {});
+      if (step.usage) info.tokens = {
+        input: step.usage.inputOther ?? 0,
+        output: step.usage.output ?? 0,
+        reasoning: 0,
+        cache: { read: step.usage.inputCacheRead ?? 0, write: step.usage.inputCacheCreation ?? 0 },
+      };
       info.agent = 'subagent';
       if (completedAt !== undefined) info.time.completed = completedAt;
       const parts: MessagePart[] = [];

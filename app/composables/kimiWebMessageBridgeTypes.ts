@@ -73,7 +73,7 @@ export type KimiWebBridgeSessionState = {
 
 export type KimiWebMessageBridgeOptions = {
   readonly client: KimiWebMessageSource;
-  readonly restClient: Pick<KimiWebClient, 'getSnapshot' | 'getMessages'>;
+  readonly restClient: Pick<KimiWebClient, 'getSnapshot' | 'getMessages'> & Partial<Pick<KimiWebClient, 'getAgentTranscript'>>;
   readonly msg: {
     updateMessage(info: MessageInfo): void;
     updatePart(part: MessagePart): void;
