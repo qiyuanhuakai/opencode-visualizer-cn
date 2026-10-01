@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+### Kimi Web 子代理与会话渲染修复
+
+- [x] 修复子代理完成时跳出无 user 幽灵卡片、主代理续轮新开错误卡片的问题：assistant 消息父级回退到会话最后一条 user 消息，子代理挂载到发起它的主代理消息，刷新前后卡片结构一致。
+- [x] 实况会话中主代理的每句话按 step 独立渲染，不再整段连在一起；工具调用与 token 用量归入对应话语，与刷新后的历史分段一致；修复快照重建后在途话语实况更新被误判丢弃的问题。
+- [x] 子代理历史窗口每句话渲染为独立历史格子，不再整段拼接；实况子代理窗口同步按话语分条（[#155](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/155)）。
+
+### Kimi Web token 上下文显示
+
+- [x] 会话卡片左下角百分比改为当前上下文/模型上下文，实况取自 `agent.status.updated` 的 `contextTokens`，快照重建时水合会话状态，刷新后保留。
+- [x] 状态监控面板「总 Token」改为「当前上下文」：Kimi 显示 `contextTokens`，OpenCode 显示最近一次请求的 input+output+缓存读写（[#155](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/155)）。
+
+### 安装包命名
+
+- [x] AppImage 文件名遵循 AppImageHub 规范去除 `-Linux` 后缀（AppImageHub PR #7483 反馈），应用内更新器、CI 产物上传与安装包 QA 同步新命名（[#155](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/155)）。
+
 ### Kimi Web 文件与会话状态修复
 
 - [x] 修复 `package.json` 等 JSON 文件打开空白的问题，保留下载内容并正确区分 API 错误响应。
