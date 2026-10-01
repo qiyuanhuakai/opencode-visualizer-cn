@@ -137,7 +137,7 @@ const BRANCHES: BranchEntry[] = [
   { file: "App.vue", fp: "activeBackendKind.value==='acp'", n: 6, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 33, sym: "active backend / composer / identity" },
   { file: "App.vue", fp: "activeBackendKind.value==='codex'", n: 13, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 33, sym: "active backend / composer / identity" },
   { file: "App.vue", fp: "activeBackendKind.value==='kimi-web'", n: 16, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 33, sym: "active backend / composer / identity" },
-  { file: "App.vue", fp: "activeBackendKind.value==='opencode'", n: 3, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 33, sym: "active backend / composer / identity" },
+  { file: "App.vue", fp: "activeBackendKind.value==='opencode'", n: 5, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 33, sym: "active backend / composer / identity; x2 additional sites from main merge (createOpenCodeSubagentHistory isActive + handleShowSubagentHistory loader ternary), main-implemented + tested in composables/openCodeSubagentHistory.test.ts" },
   { file: "App.vue", fp: "activeBackendKind==='acp'", n: 4, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 33, sym: "active backend / composer / identity" },
   { file: "App.vue", fp: "activeBackendKind==='codex'", n: 6, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 33, sym: "active backend / composer / identity" },
   { file: "App.vue", fp: "activeBackendKind==='dsh'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 33, sym: "composer dsh preset branch gate (Todo 33: read-only badge vs writable dropdown on the probed write capability)" },
@@ -376,6 +376,7 @@ const BRANCHES: BranchEntry[] = [
   { file: "components/ThreadBlock.vue", fp: "props.backendKind==='dsh'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 35, sym: "dsh hides the unsupported checkpoint revert action" },
   { file: "components/ProjectPicker.vue", fp: "getActiveBackendKind()==='dsh'", n: 2, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 35, sym: "dsh directory browse + .git file/dir boundary fallback" },
   { file: "components/OutputPanel.vue", fp: "backendKind==='dsh'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 35, sym: "dsh card actions disabled while the turn runs" },
+  { file: "composables/openCodeSubagentHistory.ts", fp: "store = options.createStore?.(scope) ?? createBackendHistoryStorage({ backend: 'opencode', scope });", n: 1, kind: 'literal', cls: 'data-only', disp: 'handled', sym: "main-merge: OpenCode subagent history persistence store backend discriminator (main-implemented + tested in composables/openCodeSubagentHistory.test.ts)" },
 ];
 
 const MANUAL: ManualEntry[] = [
