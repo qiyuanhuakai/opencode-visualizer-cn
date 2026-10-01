@@ -195,6 +195,8 @@
               :prefer-file-mentions="activeBackendKind === 'acp' || activeBackendKind === 'kimi-web' || activeBackendKind === 'codex'"
               :has-agent-options="hasAgentOptions"
               :agent-picker-state="agentPickerState"
+              :hide-agent-picker="activeBackendKind === 'dsh'"
+              :hide-thinking-picker="activeBackendKind === 'dsh' && !hasThinkingOptions"
               :agent-color="currentAgentColor"
               :resolve-agent-color="resolveAgentColorForName"
               :model-options="availableModelOptions"
@@ -1332,6 +1334,11 @@ type ComposerDraft = {
 const BATCH_SESSION_ACTION_CONCURRENCY = 6;
 
 const fw = useFloatingWindows();
+const popupPageHidden = ref(typeof document !== 'undefined' && document.hidden);
+const automaticWindowsSuppressed = computed(() => suppressAutoWindows.value || popupPageHidden.value);
+watch(automaticWindowsSuppressed, (suppressed) => {
+  fw.setAutomaticOpenAllowed(!suppressed);
+}, { immediate: true, flush: 'sync' });
 const CODEX_PANEL_KEY = 'codex-panel';
 let forgePtyId = '';
 const shellWindowMinimums = new Map<string, ShellWindowSize>();
@@ -1339,28 +1346,6 @@ const minimizedEntries = computed(() => fw.entries.value.filter((entry) => entry
 const showDockPanel = computed(
   () => showMinimizeButtons.value && (dockAlwaysOpen.value || minimizedEntries.value.length > 0),
 );
-
-// Close auto-opened floating windows when suppress is toggled ON.
-// Tool auto windows: closable === false AND finite expiry (not Infinity).
-// Reasoning/subagent windows: closable === false AND key starts with 'reasoning:' or 'subagent:'.
-// Permission/question (closable: false, expiry: Infinity) are excluded.
-watch(suppressAutoWindows, (suppressed) => {
-  if (!suppressed) return;
-  const keysToClose = new Set<string>();
-  for (const entry of fw.entries.value) {
-    if (
-      !entry.closable &&
-      (entry.expiresAt < Number.MAX_SAFE_INTEGER ||
-        entry.key.startsWith('reasoning:') ||
-        entry.key.startsWith('subagent:'))
-    ) {
-      keysToClose.add(entry.key);
-    }
-  }
-  if (keysToClose.size > 0) {
-    fw.closeAll({ exclude: (key) => !keysToClose.has(key) });
-  }
-});
 
 watch(showMinimizeButtons, (enabled) => {
   if (enabled) return;
@@ -2205,7 +2190,7 @@ const reasoning = useReasoningWindows({
     const key = `${providerID}/${modelID}`;
     return modelOptions.value.find((m) => m.id === key)?.displayName;
   },
-  suppressAutoWindows,
+  suppressAutoWindows: automaticWindowsSuppressed,
   t,
 });
 const { updateReasoningExpiry } = reasoning;
@@ -2220,7 +2205,7 @@ const subagentWindows = useSubagentWindows({
     const key = `${providerID}/${modelID}`;
     return modelOptions.value.find((m) => m.id === key)?.displayName;
   },
-  suppressAutoWindows,
+  suppressAutoWindows: automaticWindowsSuppressed,
 });
 
 const homePath = ref('');
@@ -5651,6 +5636,7 @@ function syncActiveSelectionToWorker() {
 }
 
 function handleWindowAttentionChange() {
+  popupPageHidden.value = document.hidden;
   syncActiveSelectionToWorker();
 }
 
@@ -8055,7 +8041,11 @@ const acpMessageBridge = useAcpMessageBridge({
   },
   onToolPart: (part) => {
     if (part.type !== 'tool') return;
-    if (suppressAutoWindows.value) return;
+    if (automaticWindowsSuppressed.value) return;
+    openToolPartAsWindow(part);
+  },
+  onReconcileToolPart: (part) => {
+    if (!fw.has(part.callID || part.id)) return;
     openToolPartAsWindow(part);
   },
 });
@@ -8191,7 +8181,6 @@ function kimiWebToolWindowStatus(part: ToolPart): 'running' | 'completed' | 'err
 // state sync as syncRealtimeCodexToolWindows (L8905).
 function syncKimiWebToolWindow(part: MessagePart) {
   if (part.type !== 'tool') return;
-  if (suppressAutoWindows.value) return;
   if (!isKimiWebPopupSession(part.sessionID)) return;
   if (!shouldRenderToolWindow(part.tool)) return;
   const contentSignature =
@@ -8206,6 +8195,7 @@ function syncKimiWebToolWindow(part: MessagePart) {
   const signature = `${part.tool}:${part.state.status}:${contentSignature}:${JSON.stringify(part.state.input ?? {})}`;
   if (lastKimiWebToolWindowSignature.get(windowKey) === signature) return;
   lastKimiWebToolWindowSignature.set(windowKey, signature);
+  if (automaticWindowsSuppressed.value) return;
   openToolPartAsWindow(part);
   fw.updateOptions(windowKey, { status: kimiWebToolWindowStatus(part) });
 }
@@ -8281,7 +8271,7 @@ function isDshPopupSession(sessionID: string): boolean {
 
 const dshPopupBridge = createDshPopupBridge({
   isPopupSession: (sessionID) => isDshPopupSession(sessionID),
-  isSuppressed: () => suppressAutoWindows.value,
+  isSuppressed: () => automaticWindowsSuppressed.value,
   shouldOpenToolWindow: (tool) => shouldRenderToolWindow(tool),
   openToolPartWindow: (part) => {
     // The bridge only forwards tool parts here; the shared surface is typed
@@ -8549,6 +8539,7 @@ function dshAdoptFollow(
 function dshDisposeFollow(sessionId: string) {
   const handle = dshFollowStreams.get(sessionId);
   if (!handle) return;
+  dshMessageBridge.value?.detachFollow(sessionId);
   dshFollowStreams.delete(sessionId);
   // Follow streams are downlink-only: the half-close is `cancel` (R13).
   handle.cancel();
@@ -8563,17 +8554,23 @@ function dshAttachFollow(sessionId: string) {
   const mux = dshMuxClient.value;
   const bridge = dshMessageBridge.value;
   if (!mux || !bridge) return;
-  if (dshFollowStreams.has(sessionId)) return;
-  for (const [trackedId, handle] of [...dshFollowStreams]) {
-    if (trackedId === sessionId) continue;
-    dshFollowStreams.delete(trackedId);
-    handle.cancel();
+  const allowed = allowedSessionIds.value;
+  for (const trackedId of dshFollowStreams.keys()) {
+    if (allowed.has(trackedId)) continue;
+    dshDisposeFollow(trackedId);
   }
-  const handle = mux.open('session/follow', {
-    args: { request: { address: { kind: 'session', sessionId } } },
-  });
-  dshFollowStreams.set(sessionId, handle);
-  bridge.attachFollow(handle, sessionId);
+  for (const trackedId of [sessionId, ...allowed].filter((id, index, ids) => ids.indexOf(id) === index)) {
+    if (dshFollowStreams.has(trackedId)) continue;
+    const parentId = sessionParentById.value.get(trackedId);
+    const address: DshSessionAddress = trackedId !== sessionId && parentId
+      ? { kind: 'subagent', parentSessionId: parentId, childSessionId: trackedId, mode: 'unknown' }
+      : { kind: 'session', sessionId: trackedId };
+    const handle = mux.open('session/follow', {
+      args: { request: { address, assistantStream: true } },
+    });
+    dshFollowStreams.set(trackedId, handle);
+    bridge.attachFollow(handle, address);
+  }
 }
 
 function dshCreateMessageBridge(mux: DshMuxClient): DshMessageBridge {
@@ -8585,9 +8582,9 @@ function dshCreateMessageBridge(mux: DshMuxClient): DshMessageBridge {
     },
     msg,
     // R5/R6 history-only window fill; reconnect recovery is the snapshot's job.
-    fetchPage: async ({ sessionId, throughSeq, beforeSeq }) => {
+    fetchPage: async ({ sessionId, address, throughSeq, beforeSeq }) => {
       const page = await dshFetchSessionPage({
-        address: { kind: 'session', sessionId },
+        address: address ?? { kind: 'session', sessionId },
         throughSeq,
         beforeSeq,
       });
@@ -8707,7 +8704,7 @@ watch(activeBackendKind, (kind) => {
 
 // Session selection follows the selected session: attach its follow stream
 // (the reload path publishes the history window through the same bridge).
-watch(selectedSessionId, (sessionId) => {
+watch([selectedSessionId, allowedSessionIds, dshMessageBridge], ([sessionId]) => {
   if (activeBackendKind.value !== 'dsh') return;
   if (!sessionId) return;
   dshAttachFollow(sessionId);
@@ -8777,7 +8774,7 @@ async function dshFollowSession(sessionId: string): Promise<{ archived?: boolean
   // R7: dispose the superseded stream BEFORE opening the fork's own stream.
   dshDisposeFollow(sessionId);
   const handle = mux.open('session/follow', {
-    args: { request: { address: { kind: 'session', sessionId } } },
+    args: { request: { address: { kind: 'session', sessionId }, assistantStream: true } },
   });
   dshFollowStreams.set(sessionId, handle);
   const snapshot = await dshReadFirstFollowFrame(handle);
@@ -9012,6 +9009,8 @@ const kimiWebApi = {
     kimiWebRestClient().getMessages(...args),
   getSnapshot: (...args: Parameters<KimiWebAdapter['restClient']['getSnapshot']>) =>
     kimiWebRestClient().getSnapshot(...args),
+  getAgentTranscript: (...args: Parameters<KimiWebAdapter['restClient']['getAgentTranscript']>) =>
+    kimiWebRestClient().getAgentTranscript(...args),
   getSessionStatus: (...args: Parameters<KimiWebAdapter['restClient']['getSessionStatus']>) =>
     loadKimiWebSessionStatus(...args),
   listModels: (...args: Parameters<KimiWebAdapter['restClient']['listModels']>) =>
@@ -9059,7 +9058,7 @@ const kimiWebBridgeLifecycle = {
     }
     return kimiWebMessageBridge.value.subscribe(sessionIds);
   },
-  applyHistory: (entries: unknown[]) => {
+  applyHistory: (entries: Parameters<ReturnType<typeof useKimiWebMessageBridge>['applyHistory']>[0]) => {
     if (!kimiWebMessageBridge.value) throw new Error('Kimi Web message bridge is unavailable.');
     kimiWebMessageBridge.value.applyHistory(entries);
   },
@@ -10661,6 +10660,9 @@ async function handleShowCommit(hashRaw: string) {
   }
 }
 
+const completedAutomaticToolWindows = new Set<string>();
+watch([activeBackendKind, selectedSessionId], () => completedAutomaticToolWindows.clear(), { flush: 'sync' });
+
 function openToolPartAsWindow(
   toolPart: ToolPart,
   overrides?: Record<string, unknown>,
@@ -10668,6 +10670,20 @@ function openToolPartAsWindow(
 ): string[] {
   const openedKeys: string[] = [];
   const isHistoryOpen = Boolean(keyPrefix?.startsWith('history-tool:'));
+  if (!isHistoryOpen) {
+    const toolKey = toolPart.callID || toolPart.id;
+    const identity = JSON.stringify([toolPart.sessionID, toolKey]);
+    const terminal = toolPart.state.status === 'completed' || toolPart.state.status === 'error';
+    if (completedAutomaticToolWindows.has(identity) && (!terminal || !fw.has(toolKey))) return openedKeys;
+    if (terminal) {
+      completedAutomaticToolWindows.add(identity);
+      if (completedAutomaticToolWindows.size > 512) {
+        const oldest = completedAutomaticToolWindows.values().next().value;
+        if (oldest !== undefined) completedAutomaticToolWindows.delete(oldest);
+      }
+    }
+  }
+  if (!isHistoryOpen && automaticWindowsSuppressed.value) return openedKeys;
   if (shouldSkipAutoOpenWebTool(toolPart, isHistoryOpen)) return openedKeys;
   const payload = {
     type: 'message.part.updated',
@@ -10684,6 +10700,7 @@ function openToolPartAsWindow(
       const key = keyPrefix ? `${keyPrefix}${rawId}` : rawId;
       const patchLang = patchEvent.lang ?? 'text';
       fw.open(key, {
+        autoOpen: !isHistoryOpen,
         content: renderEditDiffHtml({
           diff: '',
           code: patchEvent.code,
@@ -10725,6 +10742,7 @@ function openToolPartAsWindow(
       const { callId, toolName, toolStatus, ...rest } = entry;
       const key = keyPrefix ? `${keyPrefix}${callId}` : callId;
       fw.open(key, {
+        autoOpen: !isHistoryOpen,
         ...rest,
         themeType: toolName === 'bash' ? 'shell' : undefined,
         status:
@@ -10742,7 +10760,6 @@ function openToolPartAsWindow(
 }
 
 function syncRealtimeCodexToolWindows(entries: Array<{ parts: MessagePart[] }>) {
-  if (suppressAutoWindows.value) return;
   entries.forEach((entry) => {
     entry.parts.forEach((part) => {
       if (part.type !== 'tool') return;
@@ -10761,6 +10778,7 @@ function syncRealtimeCodexToolWindows(entries: Array<{ parts: MessagePart[] }>) 
         return;
       }
       lastCodexRealtimeToolWindowSignature.set(windowKey, signature);
+      if (automaticWindowsSuppressed.value) return;
       openToolPartAsWindow(part);
       fw.updateOptions(windowKey, {
         status:
@@ -11754,7 +11772,7 @@ onMounted(() => {
   globalEventUnsubscribers.push(
     sessionScope.on('message.part.updated', ({ part }) => {
       if (part.type !== 'tool') return;
-      if (suppressAutoWindows.value) return;
+      if (automaticWindowsSuppressed.value) return;
       openToolPartAsWindow(part);
     }),
   );

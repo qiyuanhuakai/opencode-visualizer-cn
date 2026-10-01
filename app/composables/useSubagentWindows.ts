@@ -53,6 +53,7 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
 
   function handleTextPart(part: MessagePart, info?: MessageInfo) {
     if (part.type !== 'text') return;
+    if (suppressAutoWindows?.value) return;
 
     const resolvedSessionId = part.sessionID || selectedSessionId.value;
     if (resolvedSessionId === selectedSessionId.value) return;
@@ -61,12 +62,23 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
     const partId = part.id;
     const messageText = part.text || '';
 
-    manager.clearCloseTimer(resolvedSessionId);
+    const messageInfo = info ?? manager.acc.getMessage(messageId)?.info;
+    const previous = manager.entriesBySession.get(resolvedSessionId)?.find(entry => entry.id === partId);
+    const activeId = activeMessageIdBySession.get(resolvedSessionId);
+    const knownCompleted = manager.hasCompletion(resolvedSessionId, messageId, partId);
+    if (knownCompleted && (!previous || activeId !== messageId)) return;
+    if (previous && activeId && activeId !== messageId) return;
+    const completed = knownCompleted || part.time?.end !== undefined || previous?.completed === true
+      || (messageInfo?.role === 'assistant' && (messageInfo.time.completed !== undefined || !!messageInfo.error));
+    if (completed) manager.rememberCompletion(resolvedSessionId, messageId, partId);
+    if (messageInfo?.role === 'assistant' && (messageInfo.time.completed !== undefined || messageInfo.error)) {
+      manager.rememberCompletion(resolvedSessionId, messageId);
+    }
+    if (!completed) manager.clearCloseTimer(resolvedSessionId);
     activeMessageIdBySession.set(resolvedSessionId, messageId);
 
-    manager.upsertEntry(resolvedSessionId, partId, messageText, !!part.time?.end);
+    manager.upsertEntry(resolvedSessionId, partId, messageText, completed);
 
-    const messageInfo = info ?? manager.acc.getMessage(messageId)?.info;
     let modelLabel: string | undefined;
     let agentLabel: string | undefined;
     if (messageInfo?.role === 'assistant') {
@@ -82,10 +94,10 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
       ? `🤖 [${modelLabel}] ${agentPart}Working...`
       : `🤖 ${agentPart}Working...`;
 
-    if (part.time?.end) manager.markSessionCompleted(resolvedSessionId);
+    if (completed) manager.markSessionCompleted(resolvedSessionId);
     manager.openWindow(resolvedSessionId, title);
 
-    if (part.time?.end) {
+    if (completed) {
       manager.scheduleClose(resolvedSessionId);
     }
   }
@@ -109,7 +121,10 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
         const resolvedSessionId = packet.info.sessionID || selectedSessionId.value;
         if (resolvedSessionId === selectedSessionId.value) return;
 
-        if (packet.info.time.completed || packet.info.error) {
+        if (packet.info.time.completed !== undefined || packet.info.error) {
+          manager.rememberCompletion(resolvedSessionId, packet.info.id);
+          const activeId = activeMessageIdBySession.get(resolvedSessionId);
+          if (activeId && activeId !== packet.info.id) return;
           manager.markSessionCompleted(resolvedSessionId);
           manager.scheduleClose(resolvedSessionId);
         }

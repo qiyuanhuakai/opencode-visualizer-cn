@@ -14,6 +14,59 @@ const submitted = {
 };
 
 describe('Kimi live submitted prompt', () => {
+  it.each(['injection', 'task', 'skill_activation', 'plugin_command'])(
+    'keeps continuation content under the visible user when a hidden %s prompt arrives',
+    (kind) => {
+      // Given a visible prompt followed by an automatic system prompt.
+      const normalizer = createKimiWebNormalizer();
+      normalizer.ingest(submitted);
+      normalizer.ingest({ type: 'subagent.completed', session_id: 'session-live', payload: {
+        agentId: 'main', subagentId: 'worker', summary: 'Worker finished',
+      } });
+      const hidden = normalizer.ingest({ ...submitted, payload: { ...submitted.payload,
+        promptId: 'hidden-prompt', userMessageId: 'hidden-user',
+        metadata: { origin: { kind } },
+      } });
+      normalizer.ingest({ type: 'prompt.started', session_id: 'session-live', payload: {
+        agentId: 'main', promptId: 'hidden-prompt', userMessageId: 'hidden-user',
+      } });
+      normalizer.ingest({ type: 'turn.started', session_id: 'session-live', payload: {
+        agentId: 'main', turnId: 2, promptId: 'hidden-prompt',
+      } });
+
+      // When the continuation opens its next utterance.
+      const result = normalizer.ingest({ type: 'turn.step.started', session_id: 'session-live', payload: {
+        agentId: 'main', turnId: 2, step: 1,
+      } });
+
+      // Then no hidden user root appears and the assistant stays on the visible user.
+      expect(hidden.ops.filter((op) => op.kind === 'message')).toEqual([]);
+      expect(result.ops.find((op) => op.kind === 'message')).toMatchObject({
+        message: { parentID: 'msg-prompt' },
+      });
+    },
+  );
+
+  it.each(['skill_activation', 'plugin_command'])(
+    'keeps user-slash %s prompts visible and parents their replies to them',
+    (kind) => {
+      // Given a user-invoked command prompt.
+      const normalizer = createKimiWebNormalizer();
+      const prompt = normalizer.ingest({ ...submitted, payload: { ...submitted.payload,
+        metadata: { origin: { kind, trigger: 'user-slash' } },
+      } });
+
+      // When its assistant utterance opens.
+      const result = normalizer.ingest({ type: 'turn.step.started', session_id: 'session-live', payload: {
+        agentId: 'main', turnId: 2, step: 1, promptId: 'msg-prompt',
+      } });
+
+      // Then the visible command remains the parent.
+      expect(prompt.ops.find((op) => op.kind === 'message')).toMatchObject({ message: { id: 'msg-prompt' } });
+      expect(result.ops.find((op) => op.kind === 'message')).toMatchObject({ message: { parentID: 'msg-prompt' } });
+    },
+  );
+
   it('emits the same stable user message and parts as REST history', () => {
     const normalizer = createKimiWebNormalizer();
     const ops = normalizer.ingest(submitted).ops;

@@ -11,7 +11,7 @@ vi.mock('../i18n/useI18n', () => ({ useI18n: () => ({ t: (key: string) => key })
 
 const mountedApps: Array<() => void> = [];
 
-function mountSubagentWindows(scope: SessionScope) {
+function mountSubagentWindows(scope: SessionScope, suppressAutoWindows = ref(false)) {
   const selectedSessionId = ref('main');
   let api: ReturnType<typeof useSubagentWindows> | undefined;
   const root = document.createElement('div');
@@ -26,6 +26,7 @@ function mountSubagentWindows(scope: SessionScope) {
           subagentComponent: defineComponent(() => () => null),
           theme: () => 'light',
           closeDelayMs: 60000,
+          suppressAutoWindows,
         });
         return () => null;
       },
@@ -41,6 +42,20 @@ function mountSubagentWindows(scope: SessionScope) {
 }
 
 describe('useSubagentWindows message-level completion', () => {
+  it('discards suppressed child output instead of retaining a hidden backlog', () => {
+    const fake = createFakeSessionScope();
+    const suppressed = ref(true);
+    const api = mountSubagentWindows(fake.scope, suppressed);
+    for (let i = 0; i < 100; i++) api.handlePart({
+      id: `hidden-${i}`, sessionID: 'child', messageID: `message-${i}`,
+      type: 'text', text: 'hidden output', time: { start: 1 },
+    });
+    expect(api.entriesBySession.size).toBe(0);
+    suppressed.value = false;
+    api.handlePart({ id: 'new', sessionID: 'child', messageID: 'new-message',
+      type: 'text', text: 'visible output', time: { start: 2 } });
+    expect(api.entriesBySession.get('child')?.map((entry) => entry.id)).toEqual(['new']);
+  });
   beforeEach(() => { vi.useFakeTimers(); });
 
   afterEach(async () => {

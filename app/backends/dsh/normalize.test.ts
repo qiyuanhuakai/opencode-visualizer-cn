@@ -234,6 +234,34 @@ describe('dsh normalizer — injected user/message records never become cards', 
     return { normalizer, ops };
   }
 
+  it('renders only genuine user input when an inbox splice also carries injected context', () => {
+    // Given: inbox entries use the same message/source fields as durable records.
+    const normalizer = createDshNormalizer({ address: { kind: 'session', sessionId: SESSION_ID } });
+    const inserted = liveTurnRecords().map((entry) => entry.event.data);
+    // When: a splice contains a prompt followed by runtime and catalog injections.
+    const { ops } = normalizer.ingest(record('agent/inbox/spliced', 3, { target: 'next-turn', start: 0, inserted }));
+    // Then: only the genuine prompt can become a card or answer-binding candidate.
+    expect(opsOfKind(ops, 'message').map((op) => op.message.id)).toEqual([USER_MESSAGE_ID]);
+    expect(opsOfKind(ops, 'part').map((op) => op.part)).toEqual([
+      expect.objectContaining({ messageID: USER_MESSAGE_ID, metadata: expect.objectContaining({ sourceKind: 'user', rpcId: RPC_ID }) }),
+    ]);
+    expect(opsOfKind(ops, 'user-message')).toEqual([
+      expect.objectContaining({ messageId: USER_MESSAGE_ID, sourceKind: 'user', rpcId: RPC_ID }),
+    ]);
+  });
+
+  it('keeps inbox injections silent when their splice and durable twins are replayed', () => {
+    // Given: all three message identities have already passed through the inbox.
+    const normalizer = createDshNormalizer({ address: { kind: 'session', sessionId: SESSION_ID } });
+    const splice = record('agent/inbox/spliced', 3, { target: 'next-turn', start: 0,
+      inserted: liveTurnRecords().map((entry) => entry.event.data) });
+    normalizer.ingest(splice);
+    // When: both the splice and durable message records replay.
+    const ops = [splice, ...liveTurnRecords()].flatMap((entry) => normalizer.ingest(entry).ops);
+    // Then: no duplicate card or injected context appears.
+    expect(ops).toEqual([]);
+  });
+
   it('renders only the genuine user/message record and preserves its binding lineage', () => {
     const { ops } = ingestLiveTurn();
 
@@ -502,6 +530,38 @@ describe('dsh normalizer — subagent child session', () => {
 // ---------------------------------------------------------------------------
 
 describe('dsh normalizer — assistant stream vocabulary (schema-driven)', () => {
+  it('keeps later step streaming independent of a durable earlier step in the same turn', () => {
+    // Given: a completed first assistant step followed by a second attempt.
+    const normalizer = createDshNormalizer({ address: { kind: 'session', sessionId: SESSION_ID } });
+    normalizer.ingest(record('assistant/message', 1, {
+      turn: 1, step: 1, message: { content: [{ type: 'text', text: 'Checking files' }] },
+    }));
+    normalizer.ingest({ type: 'assistant-stream', frame: { type: 'start', attemptId: 'second', turn: 1, step: 2 } });
+    // When: the next step streams its first chunk.
+    const result = normalizer.ingest({ type: 'assistant-stream', frame: {
+      type: 'chunk', attemptId: 'second', index: 0, chunk: { type: 'text-delta', text: 'Found the answer' },
+    } });
+    // Then: the second response is visible instead of being discarded as stale.
+    expect(opsOfKind(result.ops, 'part').map((op) => op.part)).toEqual([
+      expect.objectContaining({ type: 'text', text: 'Found the answer' }),
+    ]);
+  });
+
+  it('retains all step messages and completes them when the turn ends', () => {
+    // Given: two durable assistant steps in one turn.
+    const normalizer = createDshNormalizer({ address: { kind: 'session', sessionId: SESSION_ID } });
+    for (const step of [1, 2]) normalizer.ingest(record('assistant/message', step, {
+      turn: 1, step, message: { content: [{ type: 'text', text: `Step ${step}` }] },
+    }));
+    // When: the authoritative turn completion arrives.
+    const result = normalizer.ingest(record('turn/end', 3, { turn: 1, reason: { kind: 'completed' } }));
+    // Then: neither step overwrites the other and both carry completion.
+    const texts = opsOfKind(result.ops, 'part').map((op) => op.part).filter((part) => part.type === 'text');
+    expect(texts.map((part) => part.text)).toEqual(['Step 1', 'Step 2']);
+    expect(new Set(texts.map((part) => part.id)).size).toBe(2);
+    expect(texts.every((part) => part.time?.end !== undefined)).toBe(true);
+  });
+
   const address: DshSessionAddress = { kind: 'session', sessionId: SESSION_ID };
 
   function streamNormalizer() {

@@ -1,4 +1,5 @@
 import { reactive, shallowReactive } from 'vue';
+import { collectKimiWebUsageTranscript, restoreKimiWebHistoryUsage } from '../backends/kimiWeb/historyUsage';
 import {
   createKimiWebNormalizer,
   type KimiWebNormalizer,
@@ -106,6 +107,17 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
   function applyAuthoritativeEntries(entries: ReturnType<typeof authoritativeEntries>) {
     options.msg.loadHistory(entries);
     for (const entry of entries) messages.set(entry.info.id, entry.info);
+    seedHistoryParents();
+  }
+
+  function seedHistoryParents() {
+    const latestUsers = new Map<string, MessageInfo>();
+    for (const info of messages.values()) {
+      if (info.role !== 'user') continue;
+      const latest = latestUsers.get(info.sessionID);
+      if (!latest || info.time.created >= latest.time.created) latestUsers.set(info.sessionID, info);
+    }
+    for (const info of latestUsers.values()) normalizerFor(info.sessionID).seedUserMessage(info.sessionID, info.id);
   }
 
   function applySubagent(op: Extract<KimiWebNormalizeOp, { kind: 'subagent' }>) {
@@ -294,6 +306,7 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
 
   async function rebuild(sessionId: string, generation: number, expectedEpoch?: string) {
     const snapshot = await options.restClient.getSnapshot(sessionId);
+    const transcript = await collectKimiWebUsageTranscript(sessionId, options.restClient.getAgentTranscript);
     if (stopped || recoveryGenerations.get(sessionId) !== generation) return;
     if (expectedEpoch && snapshot.epoch !== expectedEpoch) {
       startRebuild(sessionId, [], expectedEpoch, true);
@@ -305,7 +318,7 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
     const rebuilding = syncStates.get(sessionId);
     if (rebuilding?.kind !== 'rebuilding') return;
     clearEpochState(sessionId);
-    applyAuthoritativeEntries(authoritativeEntries(snapshot));
+    applyAuthoritativeEntries(restoreKimiWebHistoryUsage(authoritativeEntries(snapshot), sessionId, transcript));
     const sessionPatch: KimiWebSessionPatchDraft = {
       busy: snapshot.session.busy,
       mainTurnActive: snapshot.session.main_turn_active,
@@ -354,6 +367,7 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
     const mutationFence = mutationGenerations.get(sessionId) ?? 0;
     setSync(sessionId, { kind: 'degraded', cursor });
     const page = await options.restClient.getMessages(sessionId);
+    const transcript = await collectKimiWebUsageTranscript(sessionId, options.restClient.getAgentTranscript);
     if (stopped || recoveryGenerations.get(sessionId) !== generation) return;
     if (syncStates.get(sessionId)?.kind === 'rebuilding') return;
     if ((mutationGenerations.get(sessionId) ?? 0) !== mutationFence) {
@@ -362,7 +376,7 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
       return;
     }
     removeSupersededMessages(sessionId);
-    applyAuthoritativeEntries(tailEntries(page.items));
+    applyAuthoritativeEntries(restoreKimiWebHistoryUsage(tailEntries(page.items), sessionId, transcript));
     setSync(sessionId, { kind: 'live', cursor });
   }
 
@@ -371,6 +385,7 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
       activeSubagents.delete(sessionId);
       nextRecoveryGeneration(sessionId);
       normalizerFor(sessionId).reset();
+      seedHistoryParents();
       mergeSession(sessionId, { busy: false, mainTurnActive: false });
       setSync(sessionId, { kind: 'replaying', boundary: 'matching-subscribe-ack' });
     }
@@ -420,8 +435,8 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
       }
       return ack;
     },
-    applyHistory(entries: unknown[]) {
-      options.msg.loadHistory(entries);
+    applyHistory(entries: ReturnType<typeof authoritativeEntries>) {
+      applyAuthoritativeEntries(entries);
     },
     sessionState: (sessionId: string) => sessionStates.get(sessionId),
     activeSubagentIds: (sessionId: string) => [...(activeSubagents.get(sessionId) ?? [])],

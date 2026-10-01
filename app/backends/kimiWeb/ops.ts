@@ -59,5 +59,6 @@ export type KimiWebNormalizer = {
   ingest(frame: unknown): KimiWebNormalizeResult;
   stats(): KimiWebNormalizeStats;
   reset(): void;
+  seedUserMessage(sessionId: string, messageId: string): void;
   subagentSessionId(sessionId: string, agentId: string, turnId?: number): string;
 };

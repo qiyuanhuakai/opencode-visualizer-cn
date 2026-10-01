@@ -219,6 +219,7 @@ function handleToolProgress(core: KimiWebCore, frame: KimiWebWireFrame, payload:
   );
   const existing = messageId ? core.toolParts.get(`${messageId}:tool:${callId}`) : undefined;
   if (!existing) return;
+  if (existing.state.status === 'completed' || existing.state.status === 'error') return;
   const update = isRecord(payload.update) ? payload.update : {};
   const text = asString(update.text);
   const previous = existing.state.status === 'running'

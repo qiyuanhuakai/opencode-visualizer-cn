@@ -517,7 +517,7 @@ describe('dsh message bridge — disconnect window recovery (Todo 23)', () => {
     const reopened = harness.mux.opened.filter((entry) => entry.endpoint === 'session/follow');
     expect(reopened).toHaveLength(1);
     expect(reopened[0].payload).toEqual({
-      args: { request: { address: { kind: 'session', sessionId: SESSION_ID } } },
+      args: { request: { address: { kind: 'session', sessionId: SESSION_ID }, assistantStream: true } },
     });
     const fresh = reopened[0].stream;
     expect(fresh.streamId).not.toBe('sf1');
@@ -863,7 +863,7 @@ describe('dsh message bridge — terminal and stale commits (Todo 23)', () => {
     expect(reopened).toHaveLength(1);
     expect(reopened[0].stream.streamId).not.toBe('sf1');
     expect(reopened[0].payload).toEqual({
-      args: { request: { address: { kind: 'session', sessionId: SESSION_ID } } },
+      args: { request: { address: { kind: 'session', sessionId: SESSION_ID }, assistantStream: true } },
     });
 
     reopened[0].stream.emit(snapshot(SESSION_ID, wordLog(['one', 'two', 'three']), 3));

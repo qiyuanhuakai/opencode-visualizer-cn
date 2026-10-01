@@ -11,7 +11,7 @@ vi.mock('../i18n/useI18n', () => ({ useI18n: () => ({ t: (key: string) => key })
 
 const mountedApps: Array<() => void> = [];
 
-function mountReasoningWindows(scope: SessionScope) {
+function mountReasoningWindows(scope: SessionScope, suppressAutoWindows = ref(false)) {
   const selectedSessionId = ref('main');
   let api: ReturnType<typeof useReasoningWindows> | undefined;
   const root = document.createElement('div');
@@ -26,6 +26,7 @@ function mountReasoningWindows(scope: SessionScope) {
           reasoningComponent: defineComponent(() => () => null),
           theme: () => 'light',
           reasoningCloseDelayMs: 60000,
+          suppressAutoWindows,
           t: (key: string) => key,
         });
         return () => null;
@@ -42,6 +43,20 @@ function mountReasoningWindows(scope: SessionScope) {
 }
 
 describe('useReasoningWindows message-level completion', () => {
+  it('discards suppressed reasoning instead of retaining a hidden backlog', () => {
+    const fake = createFakeSessionScope();
+    const suppressed = ref(true);
+    const api = mountReasoningWindows(fake.scope, suppressed);
+    for (let i = 0; i < 100; i++) api.handlePart({
+      id: `hidden-${i}`, sessionID: 'main', messageID: `message-${i}`,
+      type: 'reasoning', text: 'hidden reasoning', time: { start: 1 },
+    });
+    expect(api.entriesBySession.size).toBe(0);
+    suppressed.value = false;
+    api.handlePart({ id: 'new', sessionID: 'main', messageID: 'new-message',
+      type: 'reasoning', text: 'visible reasoning', time: { start: 2 } });
+    expect(api.entriesBySession.get('main')?.map((entry) => entry.id)).toEqual(['new']);
+  });
   beforeEach(() => { vi.useFakeTimers(); });
 
   afterEach(async () => {

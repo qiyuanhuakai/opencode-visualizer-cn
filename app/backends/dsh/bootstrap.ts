@@ -247,7 +247,7 @@ export async function bootstrapDshWorkspace(options: {
 
     if (entry) {
       follow = options.mux.open('session/follow', {
-        args: { request: { address: { kind: 'session', sessionId: entry.id } } },
+        args: { request: { address: { kind: 'session', sessionId: entry.id }, assistantStream: true } },
       });
       const snapshot = await readFirstFrame(follow);
       if (!options.isCurrent()) {

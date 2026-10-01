@@ -1,5 +1,5 @@
 import type { KimiWebContentPart } from '../../utils/kimiWeb';
-import { kimiWebMessagesToHistoryEntries } from './historyEntries';
+import { isKimiWebInjectionOrigin, kimiWebMessagesToHistoryEntries } from './historyEntries';
 import type { KimiWebNormalizeOp } from './ops';
 import { asNumber, asString, isRecord, type KimiWebPayload } from './wire';
 
@@ -13,7 +13,7 @@ export function submittedPromptOps(
   if (!id || !sessionId || !Array.isArray(payload.content)) return [];
   const metadata = isRecord(payload.metadata) ? payload.metadata : undefined;
   const origin = isRecord(metadata?.origin) ? metadata.origin : payload.origin;
-  if (isRecord(origin) && origin.kind === 'injection') return [];
+  if (isKimiWebInjectionOrigin(origin)) return [];
   onUserMessage?.(id);
   // Keep wire positions so text part IDs match REST history even beside media.
   const content = payload.content.map((part): KimiWebContentPart => ({

@@ -12,6 +12,59 @@ function setup() {
 }
 
 describe('Codex descendant streams', () => {
+  it('advances an already-live child shell when catch-up supplies its terminal item', () => {
+    const { stream, events, send } = setup();
+    send('item/started', { item: { id: 'shell', type: 'commandExecution', command: 'pwd' } });
+    expect(events.at(-1)?.part).toMatchObject({ state: { status: 'running' } });
+    stream.registerHistory({ id: 'child', turns: [{
+      id: 'turn', status: 'inProgress', items: [{
+        id: 'shell', type: 'commandExecution', command: 'pwd',
+        status: 'completed', aggregatedOutput: '/project',
+      }],
+    }] }, undefined, true);
+    expect(events.at(-1)?.part).toMatchObject({ state: { status: 'completed', output: '/project' } });
+    send('item/commandExecution/outputDelta', { itemId: 'shell', delta: 'late output' });
+    expect(events).toHaveLength(2);
+  });
+  it('keeps a completed shell terminal when catching up an in-progress child turn', () => {
+    const { stream, events, send } = setup();
+    stream.registerHistory({ id: 'child', turns: [{
+      id: 'turn', status: 'inProgress', items: [{
+        id: 'shell', type: 'commandExecution', command: 'pwd',
+        status: 'completed', aggregatedOutput: '/project', exitCode: 0,
+      }],
+    }] }, undefined, true);
+    expect(events.at(-1)?.part).toMatchObject({
+      callID: 'child:shell', state: { status: 'completed', output: '/project' },
+    });
+    send('item/commandExecution/outputDelta', { itemId: 'shell', delta: 'late output' });
+    expect(events).toHaveLength(1);
+  });
+  it.each(['failed', 'declined', 'error'])('keeps a %s shell terminal after catch-up and a late delta', (status) => {
+    const { stream, events, send } = setup();
+    stream.registerHistory({ id: 'child', turns: [{
+      id: 'turn', status: 'inProgress', items: [{
+        id: 'shell', type: 'commandExecution', command: 'pwd', status,
+        aggregatedOutput: 'Command failed',
+      }],
+    }] }, undefined, true);
+    expect(events.at(-1)?.part).toMatchObject({ state: { status: 'error' } });
+    send('item/commandExecution/outputDelta', { itemId: 'shell', delta: 'late output' });
+    expect(events).toHaveLength(1);
+  });
+  it('keeps an unfinished shell running during child turn catch-up', () => {
+    const { stream, events, send } = setup();
+    stream.registerHistory({ id: 'child', turns: [{
+      id: 'turn', status: 'inProgress', items: [{
+        id: 'shell', type: 'commandExecution', command: 'pwd', status: 'inProgress',
+      }],
+    }] }, undefined, true);
+    expect(events.at(-1)?.part).toMatchObject({ state: { status: 'running' } });
+    send('item/completed', { item: {
+      id: 'shell', type: 'commandExecution', command: 'pwd', status: 'completed',
+    } });
+    expect(events.at(-1)?.part).toMatchObject({ state: { status: 'completed' } });
+  });
   it('tracks one active child per live spawn and removes it when that child finishes', () => {
     const stream = createCodexSubagentStreams({ getSelectedParent: () => 'parent', publish: () => undefined });
     const spawn = (id: string) => stream.handle({ method: 'item/started', params: {

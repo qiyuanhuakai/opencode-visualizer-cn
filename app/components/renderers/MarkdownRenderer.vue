@@ -189,6 +189,14 @@ async function startRender() {
       if (current !== state.requestId) return;
       cancelActiveRender = null;
       if (error instanceof RenderCancelledError) return;
+      const fallback = document.createElement('div');
+      fallback.className = 'markdown-fallback';
+      fallback.textContent = code;
+      state.html = fallback.outerHTML;
+      await nextTick();
+      if (current !== state.requestId) return;
+      commitRenderedHtml(state.html);
+      state.finalizingStreaming = false;
       await nextTick();
       if (current !== state.requestId) return;
       emit('rendered');
@@ -256,6 +264,11 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.message-content :deep(.markdown-fallback) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .message-viewer.no-copy :deep(.md-copy-btn),
 .message-viewer.no-copy :deep(.md-copied-indicator) {
   display: none !important;

@@ -9,7 +9,7 @@
  * Todo 18 normalizer emits.
  */
 
-import type { DshJsonValue, DshRpcArgs } from '../backends/dsh/types';
+import type { DshJsonValue, DshRpcArgs, DshSessionAddress } from '../backends/dsh/types';
 import type { DshNormalizeOp } from '../backends/dsh/ops';
 import type { MessageInfo, MessagePart } from '../types/sse';
 import type { DshRpcFetcher, DshRpcTokenProvider } from '../utils/dshRpc';
@@ -70,7 +70,7 @@ export type DshHistoryPageWindow = {
 };
 
 export type DshBridgePageFetcher = (
-  request: DshHistoryPageRequest & { readonly sessionId: string },
+  request: DshHistoryPageRequest & { readonly sessionId: string; readonly address?: DshSessionAddress },
 ) => Promise<DshHistoryPageWindow>;
 
 export type DshHistoryFillResult =
@@ -243,11 +243,13 @@ export type DshMessageBridge = {
    * The first authoritative frame rebinds the stream's session; every later
    * snapshot (reconnect) is applied as authoritative full state (R1).
    *
-   * `sessionId` is the optional join-time binding (the bootstrap consumes the
+   * `binding` is the optional join-time session ID or complete child address (the bootstrap consumes the
    * first snapshot frame itself, so live records need the session up front);
    * omitting it keeps the snapshot-learned binding.
    */
-  attachFollow(handle: DshBridgeStreamHandle, sessionId?: string): void;
+  attachFollow(handle: DshBridgeStreamHandle, binding?: string | DshSessionAddress): void;
+  /** Cancel a session's streams and invalidate pending recovery before selection pruning. */
+  detachFollow(sessionId: string): void;
   /** Pre-normalized snapshot/history entries: loaded, never popped up. */
   applyHistory(entries: unknown[]): void;
   /**

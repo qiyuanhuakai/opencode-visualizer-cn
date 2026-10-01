@@ -135,6 +135,15 @@ function collaboratorDouble(options: { suppressed?: boolean; openWindows?: strin
 // ---------------------------------------------------------------------------
 
 describe('dshPopupBridge — three-way auto-popup wiring (Todo 24)', () => {
+  it('keeps reasoning open when replay text has no terminal marker', () => {
+    // Given: a running child reasoning window.
+    const { collaborators, recorded } = collaboratorDouble({ openWindows: [`reasoning:${CHILD_SESSION_ID}`] });
+    const bridge = createDshPopupBridge(collaborators);
+    // When: an unfinished child text is replayed.
+    bridge.onReconcilePart(assistantInfo(CHILD_SESSION_ID), subagentTextPart());
+    // Then: reconciliation cannot prematurely close its reasoning window.
+    expect(recorded.scheduledReasoningClose).toEqual([]);
+  });
   it('exposes the type-safe collaborator interface for all three paths', () => {
     const { collaborators } = collaboratorDouble();
     const bridge = createDshPopupBridge(collaborators);

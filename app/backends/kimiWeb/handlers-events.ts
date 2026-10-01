@@ -120,14 +120,15 @@ function handlePrompt(core: KimiWebCore, frame: KimiWebWireFrame, payload: KimiW
   const sessionId = sessionOf(frame, payload);
   const agentId = asString(payload.agentId) || 'main';
   const promptId = asString(payload.promptId);
-  const userMessageId = asString(payload.userMessageId);
-  if (promptId && userMessageId) core.promptUserMessageIds.set(`${sessionId}|${promptId}`, userMessageId);
   if (frame.type === 'prompt.submitted') {
     ops.push(...submittedPromptOps(
       payload,
       core.subagentIdentity(sessionId, agentId),
       core.now,
-      (userMessageId) => core.lastUserMessageIds.set(sessionId, userMessageId),
+      (userMessageId) => {
+        if (promptId) core.promptUserMessageIds.set(`${sessionId}|${promptId}`, userMessageId);
+        core.lastUserMessageIds.set(sessionId, userMessageId);
+      },
     ));
   }
   if (promptId && (frame.type === 'prompt.submitted' || frame.type === 'prompt.started')) {

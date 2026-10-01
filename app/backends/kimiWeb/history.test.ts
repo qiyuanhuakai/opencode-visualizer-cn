@@ -37,6 +37,26 @@ function expectedChronologicalIds(messages: KimiWebMessage[]): string[] {
 }
 
 describe('collectKimiWebHistoryMessages', () => {
+  it('keeps task-completion continuations under the visible user across system reminders', () => {
+    // Given a visible user turn followed by a background-task notification and reminder.
+    const messages: KimiWebMessage[] = [
+      { id: 'user', session_id: 'session', role: 'user', content: [{ type: 'text', text: 'Run task' }] },
+      { id: 'started', session_id: 'session', role: 'assistant', content: [{ type: 'text', text: 'Started' }] },
+      { id: 'task', session_id: 'session', role: 'user', content: [{ type: 'text', text: 'Task finished' }],
+        metadata: { origin: { kind: 'task', taskId: 'agent-1', status: 'completed' } } },
+      { id: 'reminder', session_id: 'session', role: 'user', content: [{ type: 'text', text: 'Reminder' }],
+        metadata: { origin: { kind: 'injection' } } },
+      { id: 'continued', session_id: 'session', role: 'assistant', content: [{ type: 'text', text: 'Finished' }] },
+    ];
+
+    // When the persisted messages are reconstructed.
+    const entries = kimiWebMessagesToHistoryEntries(messages);
+
+    // Then background messages create no card and the continuation keeps its user parent.
+    expect(entries.map(({ info }) => info.id)).toEqual(['user', 'started', 'continued']);
+    expect(entries.at(-1)?.info).toHaveProperty('parentID', 'user');
+  });
+
   it('pages backwards until has_more is false, then returns chronological messages', async () => {
     const newestFirst = fixtureMessages();
     const pageOne = newestFirst.slice(0, 6);

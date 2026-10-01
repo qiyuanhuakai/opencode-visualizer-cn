@@ -1,4 +1,4 @@
-import { onUnmounted, reactive, type Component, type Ref } from 'vue';
+import { onUnmounted, reactive, watch, type Component, type Ref } from 'vue';
 import type {
   MessagePartDeltaPacket,
   MessagePartUpdatedPacket,
@@ -31,6 +31,20 @@ export function useStreamingWindowManager(config: StreamingWindowConfig) {
   const acc = useDeltaAccumulator();
   const entriesBySession = reactive(new Map<string, StreamingWindowEntry[]>());
   const closeTimers = new Map<string, number>();
+  const completions = new Map<string, true>();
+
+  function rememberCompletion(sessionId: string, messageId: string, partId?: string) {
+    completions.set(JSON.stringify([sessionId, messageId, partId ?? null]), true);
+    if (completions.size > 256) {
+      const oldest = completions.keys().next().value;
+      if (oldest !== undefined) completions.delete(oldest);
+    }
+  }
+
+  function hasCompletion(sessionId: string, messageId: string, partId: string) {
+    return completions.has(JSON.stringify([sessionId, messageId, null]))
+      || completions.has(JSON.stringify([sessionId, messageId, partId]));
+  }
 
   function getWindowKey(sessionId: string) {
     return `${config.prefix}${sessionId}`;
@@ -44,7 +58,8 @@ export function useStreamingWindowManager(config: StreamingWindowConfig) {
   }
 
   function scheduleClose(sessionId: string) {
-    clearCloseTimer(sessionId);
+    if (closeTimers.has(sessionId)) return;
+    if (!entriesBySession.has(sessionId) && !config.fw.has(getWindowKey(sessionId))) return;
     const timer = window.setTimeout(() => {
       closeTimers.delete(sessionId);
       closeWindow(sessionId);
@@ -60,7 +75,7 @@ export function useStreamingWindowManager(config: StreamingWindowConfig) {
     entriesBySession.delete(sessionId);
   }
 
-  function reset() {
+  function resetWindows() {
     closeTimers.forEach((timer) => window.clearTimeout(timer));
     closeTimers.clear();
     entriesBySession.clear();
@@ -74,6 +89,11 @@ export function useStreamingWindowManager(config: StreamingWindowConfig) {
       const keySet = new Set(keysToClose);
       config.fw.closeAll({ exclude: (key) => !keySet.has(key) });
     }
+  }
+
+  function reset() {
+    completions.clear();
+    resetWindows();
   }
 
   function upsertEntry(sessionId: string, partId: string, text: string, completed?: boolean) {
@@ -95,6 +115,7 @@ export function useStreamingWindowManager(config: StreamingWindowConfig) {
     if (config.suppressAutoWindows?.value) return;
     const windowKey = getWindowKey(sessionId);
     void config.fw.open(windowKey, {
+      autoOpen: true,
       component: config.component,
       props: {
         entries: [...(entriesBySession.get(sessionId) ?? [])],
@@ -109,7 +130,17 @@ export function useStreamingWindowManager(config: StreamingWindowConfig) {
       expiresAt: Number.MAX_SAFE_INTEGER,
       width: config.width ?? 600,
       height: config.height ?? 400,
+      afterClose: () => {
+        entriesBySession.delete(sessionId);
+        clearCloseTimer(sessionId);
+      },
     });
+  }
+
+  if (config.suppressAutoWindows) {
+    watch(config.suppressAutoWindows, (suppressed) => {
+      if (suppressed) resetWindows();
+    }, { flush: 'sync' });
   }
 
   const unsubs: Array<() => void> = [];
@@ -156,6 +187,8 @@ export function useStreamingWindowManager(config: StreamingWindowConfig) {
     closeWindow,
     reset,
     upsertEntry,
+    rememberCompletion,
+    hasCompletion,
     markSessionCompleted,
     openWindow,
     subscribe,

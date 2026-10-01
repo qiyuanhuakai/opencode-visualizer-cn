@@ -10,6 +10,7 @@
  */
 import type { KimiWebMessage, KimiWebSnapshot } from '../../utils/kimiWeb';
 import { restoreKimiWebSubagentLinks } from './historySubagents';
+import { collectKimiWebUsageTranscript, restoreKimiWebHistoryUsage, type KimiWebTranscriptFetcher } from './historyUsage';
 import { KimiWebTransportError } from '../../utils/kimiWeb';
 import {
   isInjectionMessage,
@@ -95,6 +96,7 @@ export async function loadKimiWebHistoryEntries(params: {
   sessionId: string;
   getMessages: KimiWebMessagesFetcher;
   getSnapshot?: (sessionId: string) => Promise<KimiWebSnapshot>;
+  getAgentTranscript?: KimiWebTranscriptFetcher;
   maxPages?: number;
   pageSize?: number;
   signal?: AbortSignal;
@@ -111,10 +113,13 @@ export async function loadKimiWebHistoryEntries(params: {
   });
   if (params.isCurrent && !params.isCurrent()) return { entries: [], pages: collection.pages, truncated: collection.truncated };
   const snapshot = await params.getSnapshot?.(params.sessionId);
+  const transcript = await collectKimiWebUsageTranscript(params.sessionId, params.getAgentTranscript);
   if (params.isCurrent && !params.isCurrent()) return { entries: [], pages: collection.pages, truncated: collection.truncated };
   return {
     entries: restoreKimiWebSubagentLinks(
-      kimiWebMessagesToHistoryEntries(collection.messages, params.profile), snapshot?.subagents ?? [],
+      restoreKimiWebHistoryUsage(
+        kimiWebMessagesToHistoryEntries(collection.messages, params.profile), params.sessionId, transcript,
+      ), snapshot?.subagents ?? [],
     ),
     pages: collection.pages,
     truncated: collection.truncated,

@@ -71,6 +71,7 @@ import {
   isDshEventsFrame,
   type DshEventsWaterfallFrame,
   type DshJsonValue,
+  type DshSessionAddress,
 } from '../backends/dsh/types';
 import { createDshRpcClient, deriveDshBridgeHttpUrl } from '../utils/dshRpc';
 import { DshMuxError } from '../utils/dshMux';
@@ -219,9 +220,11 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
 
   const messages = new Map<string, MessageInfo>();
   const normalizers = new Map<string, DshNormalizer>();
+  const sessionAddresses = new Map<string, DshSessionAddress>();
   const sessionStates = shallowReactive(new Map<string, DshBridgeSessionState>());
   /** Which session a live follow stream delivers (learned from its snapshot). */
   const streamSessions = new Map<DshBridgeStreamHandle, string>();
+  const followSubscriptions = new Map<DshBridgeStreamHandle, () => void>();
   const approvals = new Map<string, DshApprovalRequest>();
   const approvalListeners = new Set<(request: DshApprovalRequest) => void>();
   const answeredEventIds = new Set<string>();
@@ -249,7 +252,7 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
   function normalizerFor(sessionId: string): DshNormalizer {
     let normalizer = normalizers.get(sessionId);
     if (!normalizer) {
-      normalizer = createDshNormalizer({ address: { kind: 'session', sessionId } });
+      normalizer = createDshNormalizer({ address: sessionAddresses.get(sessionId) ?? { kind: 'session', sessionId } });
       normalizers.set(sessionId, normalizer);
     }
     return normalizer;
@@ -334,7 +337,9 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     if (origin === 'live') {
       // Precedence matters: a child session's tool/reasoning part must reach the
       // subagent surface, so the session-mismatch check comes before the type checks.
-      if (part.type === 'subtask' || part.sessionID !== (primarySessionId ?? sessionId)) {
+      const address = sessionAddresses.get(part.sessionID);
+      const isChild = address ? address.kind === 'subagent' : part.sessionID !== (primarySessionId ?? sessionId);
+      if (part.type === 'subtask' || isChild) {
         if (info) options.onLiveSubagent?.(info, part);
         return;
       }
@@ -407,7 +412,7 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
   // -------------------------------------------------------------------------
 
   function handleFollowFrame(handle: DshBridgeStreamHandle, value: DshJsonValue | undefined): void {
-    if (stopped || !isRecord(value)) return;
+    if (stopped || !followHandles.includes(handle) || !isRecord(value)) return;
 
     if (value.type === 'snapshot') {
       const header = isRecord(value.header) ? value.header : {};
@@ -519,7 +524,7 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     if (stopped || pendingFollowOpens.has(sessionId)) return;
     pendingFollowOpens.add(sessionId);
     const handle = options.mux.open(FOLLOW_ENDPOINT, {
-      args: { request: { address: { kind: 'session', sessionId } } },
+      args: { request: { address: sessionAddresses.get(sessionId) ?? { kind: 'session', sessionId }, assistantStream: true } },
     });
     registerFollow(handle, sessionId);
   }
@@ -547,7 +552,7 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
       }
     }
     watchFollowStream(handle, sessionId);
-    unsubscribers.push(handle.onItem((value) => handleFollowFrame(handle, value)));
+    followSubscriptions.set(handle, handle.onItem((value) => handleFollowFrame(handle, value)));
   }
 
   /**
@@ -555,12 +560,16 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
    * rebinds the stream's session; every later snapshot (reconnect) is applied
    * as authoritative full state (R1).
    *
-   * The optional `sessionId` is the join-time binding: the bootstrap pipeline
+   * The optional binding carries the session ID or complete subagent address: the bootstrap pipeline
    * consumes the stream's first (snapshot) frame itself, so without it the
    * bridge would drop live records until a reconnect re-taught the session.
    * Omitting it keeps the snapshot-learned binding (the landed behavior).
    */
-  function attachFollow(handle: DshBridgeStreamHandle, sessionId?: string): void {
+  function attachFollow(handle: DshBridgeStreamHandle, binding?: string | DshSessionAddress): void {
+    const address = typeof binding === 'string' ? { kind: 'session' as const, sessionId: binding } : binding;
+    const sessionId = address?.kind === 'subagent' ? address.childSessionId : address?.sessionId;
+    if (address && sessionId) sessionAddresses.set(sessionId, address);
+    if (address?.kind === 'session') primarySessionId = address.sessionId;
     registerFollow(handle, sessionId);
   }
 
@@ -568,7 +577,7 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     if (handle.promise === undefined) return;
     handle.promise.catch((error: unknown) => {
       const id = sessionId ?? streamSessions.get(handle);
-      if (id === undefined || stopped) return;
+      if (id === undefined || stopped || !followHandles.includes(handle)) return;
       const code = dropCodeOf(error);
       if (code !== undefined && TERMINAL_DROP_CODES.has(code)) {
         // Fatal protocol violation (R14) or a deliberate teardown: terminal.
@@ -838,7 +847,8 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     const fetchPage = options.fetchPage;
     if (fetchPage === undefined) return { ok: false, reason: 'no-page-source' };
     const generation = sync.generation();
-    const page = await fetchPage(plan.request);
+    const address = sessionAddresses.get(sessionId);
+    const page = await fetchPage({ ...plan.request, ...(address?.kind === 'subagent' ? { address } : {}) });
     if (stopped) return { ok: false, reason: 'stale' };
     if (!sync.isCurrent(generation)) return { ok: false, reason: 'stale' };
     const normalizer = normalizerFor(sessionId);
@@ -880,6 +890,8 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     for (const eventId of pending) void respond(eventId, safeRejection(STOP_REJECTION));
     approvalListeners.clear();
     for (const unsubscribe of unsubscribers) unsubscribe();
+    for (const unsubscribe of followSubscriptions.values()) unsubscribe();
+    followSubscriptions.clear();
     for (const handle of followHandles) handle.cancel();
     followHandles.length = 0;
     eventsHandle?.cancel();
@@ -902,6 +914,24 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
 
   return {
     attachFollow,
+    detachFollow(sessionId) {
+      syncs.get(sessionId)?.markTerminal();
+      for (let index = followHandles.length - 1; index >= 0; index -= 1) {
+        const handle = followHandles[index];
+        if (!handle || streamSessions.get(handle) !== sessionId) continue;
+        followHandles.splice(index, 1);
+        streamSessions.delete(handle);
+        followSubscriptions.get(handle)?.();
+        followSubscriptions.delete(handle);
+        handle.cancel();
+      }
+      syncs.delete(sessionId);
+      normalizers.delete(sessionId);
+      sessionStates.delete(sessionId);
+      sessionAddresses.delete(sessionId);
+      pendingFollowOpens.delete(sessionId);
+      if (primarySessionId === sessionId) primarySessionId = undefined;
+    },
     applyHistory(entries: unknown[]) {
       if (stopped) return;
       // Pre-normalized snapshot/history entries are loaded verbatim: no

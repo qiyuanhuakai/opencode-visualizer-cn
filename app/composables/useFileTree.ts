@@ -14,6 +14,7 @@ import { normalizeDirectory } from '../utils/path';
 import { uniqueBy } from '../utils/array';
 import { createWorkspaceRefreshLoop } from '../utils/workspaceRefreshLoop';
 import { usePtyOneshot } from './usePtyOneshot';
+import { DshRemoteRpcError } from '../utils/dshRpc';
 
 const GIT_ENV_PREAMBLE = [
   'stty -opost -echo 2>/dev/null',
@@ -63,6 +64,7 @@ export type TreeNode = {
   loaded?: boolean;
   ignored?: boolean;
   synthetic?: boolean;
+  error?: string;
 };
 
 export type FileNode = {
@@ -259,6 +261,7 @@ function updateTreeNodeChildren(
         type: 'directory',
         children,
         loaded: true,
+        error: undefined,
       };
     }
     if (node.children?.length) {
@@ -1369,6 +1372,12 @@ async function loadSingleDirectory(path: string) {
     replaceDirectoryFilesInCache(path, mergedChildren);
     cacheCurrentDirectoryState(directory);
   } catch (error) {
+    if (options.activeDirectory.value.trim() !== directory) return;
+    if (path === '.') treeError.value = toErrorMessage(error);
+    else {
+      const node = findTreeNodeByPath(treeNodes.value, path);
+      if (node) node.error = toErrorMessage(error);
+    }
     console.error('[useFileTree] loadSingleDirectory (fs) failed:', error);
   }
 }
@@ -1456,7 +1465,16 @@ async function rebuildFileCache() {
       if (!path || visited.has(path)) continue;
       visited.add(path);
 
-      const list = await listFilesWithRetry(directory, path);
+      let list: unknown[];
+      try {
+        list = await listFilesWithRetry(directory, path);
+      } catch (error) {
+        if (buildId !== fileCacheBuildId || options.activeDirectory.value.trim() !== directory) return;
+        if (path === '.' || !(error instanceof DshRemoteRpcError) || error.code !== 'workspace-file/outside-workspace') throw error;
+        const node = findTreeNodeByPath(treeNodes.value, path);
+        if (node) node.error = toErrorMessage(error);
+        continue;
+      }
       if (buildId !== fileCacheBuildId) return;
       if (options.activeDirectory.value.trim() !== directory) return;
 

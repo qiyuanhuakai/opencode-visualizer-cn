@@ -917,6 +917,24 @@ describe('DshAdapter model + provider surface', () => {
 });
 
 describe('DshAdapter file surface', () => {
+  it('marks Git ignored directories so dependency trees stay outside automatic scans', async () => {
+    const responses = bridgeResponses();
+    responses['workspaceFiles/list'].entries = [
+      { name: 'node_modules', type: 'directory', size: 0 },
+      { name: '.git', type: 'directory', size: 0 },
+      { name: 'src', type: 'directory', size: 0 },
+    ];
+    const adapter = createDshAdapter({
+      bridgeUrl: DSH_BRIDGE_URL, bridgeToken: 'bridge-token',
+      rpcClient: fakeRpcClient(responses).client,
+      muxClient: fakeMuxClient({ 'workspace/follow': WORKSPACE_BASELINE }).client,
+      fetcher: async () => new Response(JSON.stringify({ stdout: 'node_modules\n', stderr: '', exitCode: 0 })),
+    });
+    const entries = await adapter.listFiles({ directory: '/tmp/dsh/repo' });
+    expect(entries.filter((entry) => entry.ignored).map((entry) => entry.name)).toEqual(['node_modules', '.git']);
+    expect(entries.find((entry) => entry.name === 'src')?.ignored).toBe(false);
+  });
+
   it('lists workspace files through workspaceFiles/list scoped by the directory session', async () => {
     const rpc = fakeRpcClient(bridgeResponses());
     const adapter = createDshAdapter({

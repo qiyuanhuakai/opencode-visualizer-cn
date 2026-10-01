@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, nextTick, ref } from 'vue';
 import { createI18n } from 'vue-i18n';
+import { DshRemoteRpcError } from '../utils/dshRpc';
 
 const mockRunOneShotPtyCommand = vi.fn<(command: string, args?: string[]) => Promise<string>>();
 const mockListFiles = vi.fn<(input: { directory: string; path: string }) => Promise<unknown[]>>();
@@ -734,6 +735,62 @@ describe('useFileTree scheduler ownership/disable/polling', () => {
 });
 
 describe('useFileTree dsh branch (bridge adapter files, no PTY git scan)', () => {
+  it('shows manual expansion errors locally and clears them after a successful retry', async () => {
+    let blocked = true;
+    mockListFiles.mockImplementation(async ({ path }) => {
+      if (path === '.') return [{ name: '.codegraph', path: '.codegraph', type: 'directory', ignored: true }];
+      if (blocked) throw new Error('outside workspace');
+      return [{ name: 'ok.ts', path: '.codegraph/ok.ts', type: 'file' }];
+    });
+    const mounted = await mountComposable('dsh');
+    await vi.advanceTimersByTimeAsync(300);
+    await mounted.settle();
+    mounted.api.toggleTreeDirectory('.codegraph');
+    await vi.advanceTimersByTimeAsync(300);
+    await mounted.settle();
+    expect(mounted.api.treeError.value).toBe('');
+    expect(mounted.api.treeNodes.value[0]?.error).toContain('outside workspace');
+    blocked = false;
+    mounted.api.toggleTreeDirectory('.codegraph');
+    mounted.api.toggleTreeDirectory('.codegraph');
+    await mounted.settle();
+    expect(mounted.api.treeNodes.value[0]?.error).toBeUndefined();
+    expect(mounted.api.treeNodes.value[0]?.children?.[0]?.path).toBe('.codegraph/ok.ts');
+    mounted.unmount();
+  });
+
+  it('keeps sibling files searchable when a child symlink leaves the workspace', async () => {
+    mockListFiles.mockImplementation(async ({ path }) => {
+      if (path === '.') return [
+        { name: '.codegraph', path: '.codegraph', type: 'directory' },
+        { name: 'src', path: 'src', type: 'directory' },
+        { name: 'root.txt', path: 'root.txt', type: 'file' },
+      ];
+      const { DshRemoteRpcError: CurrentRpcError } = await import('../utils/dshRpc');
+      if (path === '.codegraph') throw new CurrentRpcError({
+        code: 'workspace-file/outside-workspace', message: 'outside workspace',
+      }, 'files-test');
+      return [{ name: 'a.ts', path: 'src/a.ts', type: 'file' }];
+    });
+    const mounted = await mountComposable('dsh');
+    await vi.advanceTimersByTimeAsync(300);
+    await mounted.settle();
+    expect(mounted.api.treeError.value).toBe('');
+    expect(mounted.api.files.value).toEqual(['root.txt', 'src/a.ts']);
+    expect(mounted.api.treeNodes.value.find((node) => node.path === '.codegraph')?.error).toContain('outside workspace');
+    mounted.unmount();
+  });
+
+  it('reports a root workspace failure instead of presenting an empty tree', async () => {
+    mockListFiles.mockRejectedValue(new DshRemoteRpcError({
+      code: 'workspace-file/outside-workspace', message: 'root outside workspace',
+    }, 'root-test'));
+    const mounted = await mountComposable('dsh');
+    await vi.advanceTimersByTimeAsync(300);
+    await mounted.settle();
+    expect(mounted.api.treeError.value).toContain('root outside workspace');
+    mounted.unmount();
+  });
   it('builds the dsh tree from adapter listFiles and never runs a PTY git scan', async () => {
     mockGetVcsInfo.mockResolvedValue({ root: '/repo', branch: 'main' });
     mockListFiles.mockImplementation(async ({ path }) => {
