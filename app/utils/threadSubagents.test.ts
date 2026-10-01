@@ -208,6 +208,17 @@ describe('resolveThreadSubagentSessions', () => {
     const meta = { 'ses-child-1': { parentID: CURRENT_SESSION, label: 'child' } };
     expect(resolveThreadSubagentSessions(parts, '  ', meta)).toEqual([]);
   });
+
+  it('reads a dsh subagent child session from its subagent metadata pair', () => {
+    const task = makeTaskPart('dsh-1', undefined, 'pending');
+    task.metadata = {
+      source: 'dsh-web',
+      subagent: { parentSessionId: CURRENT_SESSION, childSessionId: 'ses-dsh-child', mode: 'agent' },
+    };
+    expect(resolveThreadSubagentSessions([task], CURRENT_SESSION)).toEqual([
+      { sessionId: 'ses-dsh-child', label: 'ses-dsh-child' },
+    ]);
+  });
 });
 
 it('resolves all Codex collaboration receiver threads without requiring OpenCode session metadata', () => {

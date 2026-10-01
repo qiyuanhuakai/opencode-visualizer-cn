@@ -99,6 +99,19 @@ describe('buildHistoryEntries', () => {
     expect(entries).toHaveLength(0);
   });
 
+  it('Given a dsh non-history tool part with dsh-web source metadata, When building entries, Then it is kept', () => {
+    const user = makeUserMessage('s1', 'u1', 1);
+    const assistant = makeAssistantMessage('s1', 'a1', 'u1', 2);
+    const part = makeToolPart('a1', 's1', 'task', 'completed', 3);
+    part.metadata = { source: 'dsh-web' };
+    const source = makeSource([user, assistant], { a1: [part] });
+
+    const entries = buildHistoryEntries(source);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.kind).toBe('tool');
+  });
+
   it('Given a reasoning part without text, When building entries, Then it is skipped', () => {
     const user = makeUserMessage('s1', 'u1', 1);
     const assistant = makeAssistantMessage('s1', 'a1', 'u1', 2);

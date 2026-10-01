@@ -4,6 +4,12 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { KIMI_TOKEN_UNREADABLE, KimiWebTokenError } from '../bridge/kimiWebToken.js';
+import { computeDshAuthCookieName } from '../bridge/dshAuth.js';
+import type {
+  DshWebAuthProbeResult,
+  DshWebFenceState,
+  NativeServiceDefinition,
+} from '../bridge/processSupervisor.js';
 import {
   createNativeServiceDefinitions,
   createProcessSupervisor,
@@ -11,6 +17,9 @@ import {
 
 const FAKE_KIMI_DIR = '/tmp/opencode';
 const FAKE_KIMI_SCRIPT = `${FAKE_KIMI_DIR}/process-supervisor-fake-kimi.mjs`;
+const FAKE_DSH_SCRIPT = `${FAKE_KIMI_DIR}/process-supervisor-fake-dsh.mjs`;
+const DSH_AUTHORITY = '127.0.0.1:3080';
+const DSH_LAUNCH_LINE = `dsh web: http://${DSH_AUTHORITY}/?token=fake-launch-token`;
 const spawnedChildren: ChildProcess[] = [];
 
 beforeAll(() => {
@@ -20,6 +29,15 @@ beforeAll(() => {
     [
       'const url = process.env.FAKE_KIMI_URL;',
       "const delay = Number(process.env.FAKE_KIMI_DELAY_MS ?? '0');",
+      'if (url) setTimeout(() => console.log(url), delay);',
+      'setInterval(() => {}, 1_000);',
+    ].join('\n'),
+  );
+  writeFileSync(
+    FAKE_DSH_SCRIPT,
+    [
+      'const url = process.env.FAKE_DSH_URL;',
+      "const delay = Number(process.env.FAKE_DSH_DELAY_MS ?? '0');",
       'if (url) setTimeout(() => console.log(url), delay);',
       'setInterval(() => {}, 1_000);',
     ].join('\n'),
@@ -65,8 +83,51 @@ function kimiDependencies() {
   };
 }
 
+function fakeDshSpawn(launchLine?: string, delayMs = 0) {
+  return vi.fn((_command: string, _args: readonly string[], options: SpawnOptions) => {
+    const child = spawn(process.execPath, [FAKE_DSH_SCRIPT], {
+      ...options,
+      env: {
+        ...process.env,
+        FAKE_DSH_URL: launchLine,
+        FAKE_DSH_DELAY_MS: String(delayMs),
+      },
+    });
+    spawnedChildren.push(child);
+    return child;
+  });
+}
+
+function fakeDshExchange(cookieValue = 'probe-cookie-value') {
+  return vi.fn().mockResolvedValue({
+    status: 303,
+    setCookie: [
+      `${computeDshAuthCookieName(DSH_AUTHORITY)}=${cookieValue}; Max-Age=2592000; Path=/; HttpOnly; SameSite=Strict`,
+    ],
+  });
+}
+
+function dshDependencies(fence: DshWebFenceState = { state: 'idle' }) {
+  return {
+    probeDshWebFence: vi
+      .fn<(service: NativeServiceDefinition) => Promise<DshWebFenceState>>()
+      .mockResolvedValue(fence),
+    probeDshWebAuth: vi
+      .fn<(cookie: string) => Promise<DshWebAuthProbeResult>>()
+      .mockResolvedValue({ ok: true }),
+    dshVersionProbe: vi.fn<() => Promise<string>>().mockResolvedValue('0.2.0-rc.2'),
+    dshExchange: fakeDshExchange(),
+  };
+}
+
+function dshService() {
+  const service = createNativeServiceDefinitions().find(({ id }) => id === 'dsh');
+  if (!service) throw new Error('Missing dsh service definition.');
+  return service;
+}
+
 describe('processSupervisor', () => {
-  it('uses verified OpenCode, Codex, and Kimi Web native launch commands', () => {
+  it('uses verified OpenCode, Codex, Kimi Web, and DSH native launch commands', () => {
     expect(createNativeServiceDefinitions()).toEqual([
       expect.objectContaining({
         id: 'opencode',
@@ -88,6 +149,13 @@ describe('processSupervisor', () => {
           url: 'http://127.0.0.1:58627/api/v1/healthz',
           expectJson: { 'data.ok': true },
         },
+      },
+      {
+        id: 'dsh',
+        name: 'DSH',
+        command: 'dsh',
+        args: ['web', '--no-open', '--port', '3080'],
+        probe: { type: 'http', url: 'http://127.0.0.1:3080/' },
       },
     ]);
   });
@@ -399,5 +467,309 @@ describe('processSupervisor', () => {
     expect(() => process.kill(firstPid ?? 0, 0)).toThrow();
     expect(() => process.kill(secondPid ?? 0, 0)).toThrow();
     await supervisor.stop();
+  });
+});
+
+describe('processSupervisor dsh web (spawn-only port contract)', () => {
+  it('reaches running only after launch line parse, cookie exchange, and authenticated readiness', async () => {
+    const spawnProcess = fakeDshSpawn(DSH_LAUNCH_LINE);
+    const deps = dshDependencies();
+    const supervisor = createProcessSupervisor({
+      services: [dshService()],
+      spawnProcess,
+      ...deps,
+      readinessAttempts: 100,
+      readinessIntervalMs: 20,
+    });
+
+    await supervisor.start();
+
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
+    expect(spawnProcess).toHaveBeenCalledWith(
+      'dsh',
+      ['web', '--no-open', '--port', '3080'],
+      expect.any(Object),
+    );
+    expect(deps.probeDshWebFence).toHaveBeenCalledTimes(1);
+    expect(deps.dshVersionProbe).toHaveBeenCalledTimes(1);
+    expect(deps.dshExchange).toHaveBeenCalledWith({
+      authority: DSH_AUTHORITY,
+      launchToken: 'fake-launch-token',
+    });
+    expect(deps.probeDshWebAuth).toHaveBeenCalledWith(
+      `${computeDshAuthCookieName(DSH_AUTHORITY)}=probe-cookie-value`,
+    );
+    expect(supervisor.getStatus()[0]).toEqual(
+      expect.objectContaining({
+        id: 'dsh',
+        state: 'running',
+        owned: true,
+        version: '0.2.0-rc.2',
+      }),
+    );
+    const serialized = JSON.stringify(supervisor.getStatus());
+    expect(serialized).not.toContain('fake-launch-token');
+    expect(serialized).not.toContain('probe-cookie-value');
+    await supervisor.stop();
+    expectChildStopped(spawnedChildren[0]);
+  });
+
+  it('stops the dsh child and never spawns a second one when the cookie exchange fails', async () => {
+    const spawnProcess = fakeDshSpawn(DSH_LAUNCH_LINE);
+    const deps = dshDependencies();
+    deps.dshExchange.mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:3080'));
+    const supervisor = createProcessSupervisor({
+      services: [dshService()],
+      spawnProcess,
+      ...deps,
+      readinessAttempts: 100,
+      readinessIntervalMs: 20,
+    });
+
+    await supervisor.start();
+
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
+    expect(deps.probeDshWebAuth).not.toHaveBeenCalled();
+    expect(supervisor.getStatus()[0]).toEqual(
+      expect.objectContaining({
+        state: 'error',
+        owned: false,
+        error: expect.stringContaining('cookie exchange'),
+      }),
+    );
+    expect(supervisor.getStatus()[0].error).not.toContain('fake-launch-token');
+    expectChildStopped(spawnedChildren[0]);
+  });
+
+  it('stops the dsh child when the exchange answers without a usable auth cookie', async () => {
+    const spawnProcess = fakeDshSpawn(DSH_LAUNCH_LINE);
+    const deps = dshDependencies();
+    deps.dshExchange.mockResolvedValue({ status: 401, setCookie: [] });
+    const supervisor = createProcessSupervisor({
+      services: [dshService()],
+      spawnProcess,
+      ...deps,
+      readinessAttempts: 100,
+      readinessIntervalMs: 20,
+    });
+
+    await supervisor.start();
+
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
+    expect(deps.probeDshWebAuth).not.toHaveBeenCalled();
+    expect(supervisor.getStatus()[0]).toEqual(
+      expect.objectContaining({
+        state: 'error',
+        owned: false,
+        error: expect.stringContaining('no usable auth cookie'),
+      }),
+    );
+    expectChildStopped(spawnedChildren[0]);
+  });
+
+  it('stops the dsh child and reports version guidance when dsh is not 0.2.0-rc.2', async () => {
+    const spawnProcess = fakeDshSpawn(DSH_LAUNCH_LINE);
+    const deps = dshDependencies();
+    deps.dshVersionProbe.mockResolvedValue('9.9.9');
+    const supervisor = createProcessSupervisor({
+      services: [dshService()],
+      spawnProcess,
+      ...deps,
+      readinessAttempts: 100,
+      readinessIntervalMs: 20,
+    });
+
+    await supervisor.start();
+
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
+    expect(deps.dshExchange).not.toHaveBeenCalled();
+    const [status] = supervisor.getStatus();
+    expect(status).toEqual(
+      expect.objectContaining({
+        state: 'error',
+        owned: false,
+        version: '9.9.9',
+        error: expect.stringContaining('0.2.0-rc.2'),
+      }),
+    );
+    expect(status.error).toContain('9.9.9');
+    expect(status.error).toContain('npm i -g @deepseek-ai/dsh@0.2.0-rc.2');
+    expectChildStopped(spawnedChildren[0]);
+  });
+
+  it('stops the dsh child when the dsh --version probe itself fails', async () => {
+    const spawnProcess = fakeDshSpawn(DSH_LAUNCH_LINE);
+    const deps = dshDependencies();
+    deps.dshVersionProbe.mockRejectedValue(new Error('spawn dsh ENOENT'));
+    const supervisor = createProcessSupervisor({
+      services: [dshService()],
+      spawnProcess,
+      ...deps,
+      readinessAttempts: 100,
+      readinessIntervalMs: 20,
+    });
+
+    await supervisor.start();
+
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
+    expect(supervisor.getStatus()[0]).toEqual(
+      expect.objectContaining({
+        state: 'error',
+        owned: false,
+        error: expect.stringContaining('npm i -g @deepseek-ai/dsh@0.2.0-rc.2'),
+      }),
+    );
+    expectChildStopped(spawnedChildren[0]);
+  });
+
+  it('never reaches running when the authenticated readiness check fails', async () => {
+    const spawnProcess = fakeDshSpawn(DSH_LAUNCH_LINE);
+    const deps = dshDependencies();
+    deps.probeDshWebAuth.mockResolvedValue({
+      ok: false,
+      reason: 'authenticated account/getState check returned HTTP 401',
+    });
+    const supervisor = createProcessSupervisor({
+      services: [dshService()],
+      spawnProcess,
+      ...deps,
+      readinessAttempts: 100,
+      readinessIntervalMs: 20,
+    });
+
+    await supervisor.start();
+
+    expect(deps.dshExchange).toHaveBeenCalledTimes(1);
+    expect(supervisor.getStatus()[0]).toEqual(
+      expect.objectContaining({
+        state: 'error',
+        owned: false,
+        error: expect.stringContaining('401'),
+      }),
+    );
+    expectChildStopped(spawnedChildren[0]);
+  });
+
+  it('reports a dsh-occupied port without spawning or adopting the external instance', async () => {
+    const spawnProcess = vi.fn();
+    const deps = dshDependencies({ state: 'fence' });
+    const supervisor = createProcessSupervisor({
+      services: [dshService()],
+      spawnProcess,
+      ...deps,
+      readinessAttempts: 2,
+      readinessIntervalMs: 0,
+    });
+
+    await supervisor.start();
+
+    expect(spawnProcess).not.toHaveBeenCalled();
+    expect(deps.dshVersionProbe).not.toHaveBeenCalled();
+    expect(deps.dshExchange).not.toHaveBeenCalled();
+    const [status] = supervisor.getStatus();
+    expect(status).toEqual(
+      expect.objectContaining({ state: 'error', owned: false, error: expect.stringContaining('occupied') }),
+    );
+    expect(status.state).not.toBe('adopted');
+  });
+
+  it('reports a non-dsh occupant of port 3080 without spawning', async () => {
+    const spawnProcess = vi.fn();
+    const deps = dshDependencies({ state: 'mismatch', reason: 'GET / answered HTTP 200' });
+    const supervisor = createProcessSupervisor({
+      services: [dshService()],
+      spawnProcess,
+      ...deps,
+      readinessAttempts: 2,
+      readinessIntervalMs: 0,
+    });
+
+    await supervisor.start();
+
+    expect(spawnProcess).not.toHaveBeenCalled();
+    const [status] = supervisor.getStatus();
+    expect(status).toEqual(
+      expect.objectContaining({
+        state: 'error',
+        owned: false,
+        error: expect.stringContaining('not usable DSH'),
+      }),
+    );
+    expect(status.error).toContain('HTTP 200');
+  });
+
+  it('reports a missing dsh binary with install guidance', async () => {
+    const supervisor = createProcessSupervisor({
+      services: [dshService()],
+      spawnProcess: vi.fn(() => {
+        const child = spawn('vis-definitely-missing-dsh', [], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        spawnedChildren.push(child);
+        return child;
+      }),
+      ...dshDependencies(),
+      readinessAttempts: 1,
+      readinessIntervalMs: 0,
+    });
+
+    await supervisor.start();
+
+    expect(supervisor.getStatus()[0]).toEqual(
+      expect.objectContaining({
+        id: 'dsh',
+        state: 'error',
+        owned: false,
+        error: expect.stringContaining('npm i -g @deepseek-ai/dsh@0.2.0-rc.2'),
+      }),
+    );
+  });
+
+  it('stops dsh when its startup line reports a drifted port', async () => {
+    const spawnProcess = fakeDshSpawn('dsh web: http://127.0.0.1:3081/?token=fake-launch-token');
+    const deps = dshDependencies();
+    const supervisor = createProcessSupervisor({
+      services: [dshService()],
+      spawnProcess,
+      ...deps,
+      readinessAttempts: 100,
+      readinessIntervalMs: 20,
+    });
+
+    await supervisor.start();
+
+    expect(supervisor.getStatus()[0]).toEqual(
+      expect.objectContaining({
+        state: 'error',
+        owned: false,
+        error: expect.stringContaining('3081'),
+      }),
+    );
+    expect(deps.dshExchange).not.toHaveBeenCalled();
+    expectChildStopped(spawnedChildren[0]);
+  });
+
+  it('stops a dsh child that never prints a launch line before readiness timeout', async () => {
+    const spawnProcess = fakeDshSpawn();
+    const deps = dshDependencies();
+    const supervisor = createProcessSupervisor({
+      services: [dshService()],
+      spawnProcess,
+      ...deps,
+      readinessAttempts: 2,
+      readinessIntervalMs: 0,
+    });
+
+    await supervisor.start();
+
+    expect(deps.dshExchange).not.toHaveBeenCalled();
+    expect(supervisor.getStatus()[0]).toEqual(
+      expect.objectContaining({
+        state: 'error',
+        owned: false,
+        error: expect.stringContaining('did not become ready'),
+      }),
+    );
+    expectChildStopped(spawnedChildren[0]);
   });
 });

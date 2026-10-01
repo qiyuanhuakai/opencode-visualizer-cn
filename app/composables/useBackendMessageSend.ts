@@ -1,6 +1,7 @@
 import { watch } from 'vue';
 import { createKimiWebSlashDispatcher } from './backendMessageSend.kimiSlash';
 import { createBackendRequestFence } from '../utils/backendRequestFence';
+import { runDshSend, type DshSendExecutionResult } from '../backends/dsh/sessionSend';
 import {
   runKimiWebSend,
   type KimiWebSendExecutionResult,
@@ -29,7 +30,9 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
   let openingForge = false;
   watch(params.activeBackendKind, () => requestFence.invalidate(), { flush: 'sync' });
   watch(params.selectedSessionId, () => {
-    if (params.activeBackendKind.value === 'kimi-web') requestFence.invalidate();
+    if (params.activeBackendKind.value === 'kimi-web' || params.activeBackendKind.value === 'dsh') {
+      requestFence.invalidate();
+    }
   }, { flush: 'sync' });
 
   function beginSend(text: string, owner: object) {
@@ -105,6 +108,39 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
     params.clearComposerDraftForCurrentContext();
   }
 
+  function commitDshResult(
+    params: BackendMessageSendParams,
+    result: DshSendExecutionResult,
+    preflight: SendPreflight,
+    guard: RequestGuard,
+  ) {
+    if (!guard.isCurrent() || result.kind === 'stale') return;
+    switch (result.kind) {
+      case 'pending':
+        // No session existed: the text stays pending with a padded EMPTY
+        // identity — never a success, never a silent drop.
+        params.messageInput.value = result.record.text;
+        params.persistComposerDraftForCurrentContext();
+        params.setSendStatusKey('app.error.noSessionSelected');
+        return;
+      case 'server-terminal':
+        if (result.phase === 'before-send' && !params.messageInput.value) {
+          params.messageInput.value = preflight.text;
+        }
+        // A phantom "sent" is forbidden: a terminal stream is a failure.
+        params.setSendStatusKey('app.error.sendFailed', { message: result.message });
+        return;
+      case 'accepted':
+        // `{accepted:true}` is fire-and-forget: mark the dot busy so a fast
+        // turn/start cannot arrive before the REST acceptance.
+        params.onDshPromptRunning?.(result.sessionId);
+        params.setSendStatusKey('app.status.sent');
+        params.attachments.value = [];
+        params.clearComposerDraftForCurrentContext();
+        return;
+    }
+  }
+
   async function runTransaction(
     params: BackendMessageSendParams,
     preflight: SendPreflight,
@@ -132,6 +168,16 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
       }
       const result = await runKimiWebSend(params, preflight, guard, kimiWebApi);
       commitKimiWebResult(params, result, preflight, guard);
+      return;
+    }
+    if (preflight.backend === 'dsh') {
+      const dshSendApi = params.dshSendApi;
+      if (!dshSendApi) {
+        params.setSendStatusKey('app.error.unavailable', { action: 'dsh' });
+        return;
+      }
+      const result = await runDshSend(params, preflight, guard, dshSendApi);
+      commitDshResult(params, result, preflight, guard);
       return;
     }
     const result = await runOpenCodeSend(params, preflight, guard);
@@ -185,7 +231,10 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
       await runTransaction(params, preflight, guard);
     } catch (error) {
       if (guard.isCurrent()) {
-        if (preflight.backend === 'kimi-web' && !params.messageInput.value) {
+        if (
+          (preflight.backend === 'kimi-web' || preflight.backend === 'dsh') &&
+          !params.messageInput.value
+        ) {
           params.messageInput.value = preflight.text;
           params.persistComposerDraftForCurrentContext();
         }

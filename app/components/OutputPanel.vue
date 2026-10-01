@@ -50,7 +50,7 @@
                   :load-message-diffs="loadMessageDiffs"
                   :has-message-diffs="hasMessageDiffs"
                   :kimi-session-context="kimiSessionContext"
-                  :card-actions-disabled="backendKind === 'kimi-web' && isThinking"
+                  :card-actions-disabled="(backendKind === 'kimi-web' || backendKind === 'dsh') && isThinking"
                   :is-latest-root="root.id === latestRootId"
                   :assistant-html="getAssistantHtml(root.id)"
                   @fork-message="emit('fork-message', $event)"

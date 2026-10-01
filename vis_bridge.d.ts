@@ -12,6 +12,14 @@ export type VisBridgeKimiWebOptions = {
   upstreamTimeoutMs?: number;
 };
 
+export type VisBridgeDshOptions = {
+  upstreamOrigin?: string;
+  target?: string;
+  getUpstreamCookie?: () => string | Promise<string>;
+  handshakeTimeoutMs?: number;
+  upstreamTimeoutMs?: number;
+};
+
 export type VisBridgeServerOptions = {
   host?: string;
   port?: number;
@@ -22,6 +30,7 @@ export type VisBridgeServerOptions = {
   ptyModule?: unknown;
   runtime?: BridgeRuntime;
   kimiWeb?: VisBridgeKimiWebOptions;
+  dsh?: VisBridgeDshOptions;
 };
 
 export type VisBridgeServer = Server & {

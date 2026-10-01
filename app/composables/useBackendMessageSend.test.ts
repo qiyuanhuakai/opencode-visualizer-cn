@@ -7,6 +7,7 @@ import {
   deferred,
   imageAttachment,
 } from './useBackendMessageSend.test-helpers';
+import type { DshSendApi } from '../backends/dsh/sessionSend';
 import type { KimiWebSlashAction } from '../backends/kimiWeb/slashCommands';
 import type { BackendKind } from '../backends/types';
 import {
@@ -512,6 +513,199 @@ describe('useBackendMessageSend kimi-web', () => {
 
     expect(base.setSendStatusKey).toHaveBeenCalledTimes(1);
     expect(base.attachments.value).toHaveLength(1);
+    expect(base.clearComposerDraftForCurrentContext).not.toHaveBeenCalled();
+    expect(base.isSending.value).toBe(false);
+  });
+
+});
+
+function createDshApi() {
+  return {
+    prompt: vi.fn().mockResolvedValue({ accepted: true }),
+    abortSession: vi.fn().mockResolvedValue(undefined),
+  } as unknown as DshSendApi & {
+    prompt: ReturnType<typeof vi.fn>;
+    abortSession: ReturnType<typeof vi.fn>;
+  };
+}
+
+function createDshRuntime(
+  options: {
+    readonly api?: ReturnType<typeof createDshApi>;
+    readonly activeBackendKind?: Ref<BackendKind>;
+    readonly onDshPromptRunning?: (sessionId: string) => void;
+  } = {},
+) {
+  const base = createBaseParams();
+  const api = options.api ?? createDshApi();
+  const runtime = useBackendMessageSend({
+    ...base,
+    activeBackendKind: options.activeBackendKind ?? ref<BackendKind>('dsh'),
+    openCodeApi: { sendPromptAsync: vi.fn().mockResolvedValue(undefined) },
+    codexApi: createCodexApi({ activeThreadId: '', threads: [] }),
+    dshSendApi: api,
+    onDshPromptRunning: options.onDshPromptRunning,
+  });
+  return { base, runtime, api };
+}
+
+describe('useBackendMessageSend dsh', () => {
+  it('fails closed when the dsh send client is not wired instead of using the OpenCode path', async () => {
+    const base = createBaseParams();
+    const sendPromptAsync = vi.fn();
+    const runtime = useBackendMessageSend({
+      ...base,
+      activeBackendKind: ref<BackendKind>('dsh'),
+      openCodeApi: { sendPromptAsync },
+      codexApi: createCodexApi({ activeThreadId: '', threads: [] }),
+    });
+
+    await runtime.sendMessage();
+
+    expect(sendPromptAsync).not.toHaveBeenCalled();
+    expect(base.setSendStatusKey).toHaveBeenLastCalledWith('app.error.unavailable', {
+      action: 'dsh',
+    });
+  });
+
+  it('sends a text-only queue prompt with the request-wrapper envelope and bound rpcId', async () => {
+    const onDshPromptRunning = vi.fn();
+    const { base, runtime, api } = createDshRuntime({ onDshPromptRunning });
+
+    await runtime.sendMessage();
+
+    expect(api.prompt).toHaveBeenCalledTimes(1);
+    const request = api.prompt.mock.calls[0]?.[0] as {
+      type: string;
+      method: string;
+      rpcId: string;
+      payload: { args: { request: Record<string, unknown> } };
+    };
+    expect(request.type).toBe('client-request');
+    expect(request.method).toBe('session/prompt');
+    expect(Object.keys(request.payload.args)).toEqual(['request']);
+    expect(request.payload.args.request.sessionId).toBe('session-1');
+    expect(request.payload.args.request.mode).toBe('queue');
+    expect(request.payload.args.request.content).toEqual([{ type: 'text', text: 'hello world' }]);
+    expect(request.payload.args.request.requestId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(request.rpcId).toBe(request.payload.args.request.requestId);
+    expect(base.setSendStatusKey).toHaveBeenLastCalledWith('app.status.sent');
+    expect(base.clearComposerDraftForCurrentContext).toHaveBeenCalledTimes(1);
+    expect(base.attachments.value).toEqual([]);
+    expect(onDshPromptRunning).toHaveBeenCalledWith('session-1');
+  });
+
+  it('does not gate dsh sends on OpenCode model availability', async () => {
+    const base = createBaseParams();
+    base.selectedModel.value = 'deepseek-official/deepseek-flash';
+    base.modelOptions.value = [];
+    base.isProviderEnabled = () => false;
+    base.isModelAvailable = () => false;
+    const api = createDshApi();
+    const runtime = useBackendMessageSend({
+      ...base,
+      activeBackendKind: ref<BackendKind>('dsh'),
+      openCodeApi: { sendPromptAsync: vi.fn().mockResolvedValue(undefined) },
+      codexApi: createCodexApi({ activeThreadId: '', threads: [] }),
+      dshSendApi: api,
+    });
+
+    await runtime.sendMessage();
+
+    expect(api.prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses dsh sends with attachments before dispatch', async () => {
+    const { base, runtime, api } = createDshRuntime();
+    base.attachments.value = [imageAttachment()];
+
+    await runtime.sendMessage();
+
+    expect(api.prompt).not.toHaveBeenCalled();
+    expect(base.messageInput.value).toBe('hello world');
+    expect(base.setSendStatusText).toHaveBeenCalledWith(
+      'dsh supports text prompts only; attachments are not supported.',
+    );
+  });
+
+  it('keeps a dsh send with no session out of the OpenCode path', async () => {
+    const base = createBaseParams();
+    base.selectedSessionId.value = '';
+    base.filteredSessions.value = [];
+    const api = createDshApi();
+    const runtime = useBackendMessageSend({
+      ...base,
+      activeBackendKind: ref<BackendKind>('dsh'),
+      openCodeApi: { sendPromptAsync: vi.fn().mockResolvedValue(undefined) },
+      codexApi: createCodexApi({ activeThreadId: '', threads: [] }),
+      dshSendApi: api,
+    });
+
+    await runtime.sendMessage();
+
+    expect(api.prompt).not.toHaveBeenCalled();
+    expect(base.messageInput.value).toBe('hello world');
+  });
+
+  it('restores the composer text when the dsh prompt fails', async () => {
+    const { base, runtime, api } = createDshRuntime();
+    api.prompt.mockRejectedValueOnce(new Error('gateway/input-invalid'));
+
+    await runtime.sendMessage();
+
+    expect(base.setSendStatusKey).toHaveBeenLastCalledWith('app.error.sendFailed', {
+      message: 'Error: gateway/input-invalid',
+    });
+    expect(base.messageInput.value).toBe('hello world');
+    expect(base.isSending.value).toBe(false);
+  });
+
+  it('reports a terminal stream instead of a phantom sent success and restores the text', async () => {
+    const { base, runtime, api } = createDshRuntime();
+    api.isServerTerminal = () => true;
+
+    await runtime.sendMessage();
+
+    expect(api.prompt).not.toHaveBeenCalled();
+    expect(base.setSendStatusKey.mock.calls.map(([key]) => key)).not.toContain('app.status.sent');
+    expect(base.setSendStatusKey).toHaveBeenLastCalledWith(
+      'app.error.sendFailed',
+      expect.objectContaining({ message: expect.stringContaining('dsh stream') }),
+    );
+    expect(base.messageInput.value).toBe('hello world');
+    expect(base.isSending.value).toBe(false);
+  });
+
+  it('drops a dsh send whose prompt resolves after the backend fence moved', async () => {
+    const activeBackendKind = ref<BackendKind>('dsh');
+    const { base, runtime, api } = createDshRuntime({ activeBackendKind });
+    const prompt = deferred<{ accepted: true }>();
+    api.prompt.mockReturnValueOnce(prompt.promise);
+
+    const sending = runtime.sendMessage();
+    await vi.waitFor(() => expect(api.prompt).toHaveBeenCalledTimes(1));
+    activeBackendKind.value = 'opencode';
+    prompt.resolve({ accepted: true });
+    await sending;
+
+    expect(base.setSendStatusKey).toHaveBeenCalledTimes(1);
+    expect(base.attachments.value).toEqual([]);
+    expect(base.clearComposerDraftForCurrentContext).not.toHaveBeenCalled();
+    expect(base.isSending.value).toBe(false);
+  });
+
+  it('drops a dsh send whose prompt resolves after the selected session changed', async () => {
+    const { base, runtime, api } = createDshRuntime();
+    const prompt = deferred<{ accepted: true }>();
+    api.prompt.mockReturnValueOnce(prompt.promise);
+
+    const sending = runtime.sendMessage();
+    await vi.waitFor(() => expect(api.prompt).toHaveBeenCalledTimes(1));
+    base.selectedSessionId.value = 'session-2';
+    prompt.resolve({ accepted: true });
+    await sending;
+
+    expect(base.setSendStatusKey).toHaveBeenCalledTimes(1);
     expect(base.clearComposerDraftForCurrentContext).not.toHaveBeenCalled();
     expect(base.isSending.value).toBe(false);
   });

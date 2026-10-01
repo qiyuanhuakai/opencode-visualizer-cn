@@ -12,7 +12,7 @@ const agent = {
 
 describe('bridge runtime lifecycle', () => {
   it('passes saved native service choices to the supervisor at startup', async () => {
-    const nativeServices = { opencode: false, codex: true, 'kimi-web': false };
+    const nativeServices = { opencode: false, codex: true, 'kimi-web': false, dsh: false };
     const nativeStart = vi.fn(async () => []);
     const runtime = createBridgeRuntime({
       configStore: {

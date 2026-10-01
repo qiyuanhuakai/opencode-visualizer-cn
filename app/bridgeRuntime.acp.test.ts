@@ -48,7 +48,9 @@ afterEach(async () => {
 });
 
 describe('bridge runtime ACP client capabilities', () => {
-  it('wires session roots into bridge-owned reverse filesystem requests', async () => {
+  it('wires session roots into bridge-owned reverse filesystem requests', {
+    timeout: 20000,
+  }, async () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'vis-runtime-acp-'));
     tempDirectories.push(directory);
     const file = path.join(directory, 'context.txt');

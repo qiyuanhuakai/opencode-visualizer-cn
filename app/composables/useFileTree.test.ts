@@ -732,3 +732,45 @@ describe('useFileTree scheduler ownership/disable/polling', () => {
     mounted.unmount();
   });
 });
+
+describe('useFileTree dsh branch (bridge adapter files, no PTY git scan)', () => {
+  it('builds the dsh tree from adapter listFiles and never runs a PTY git scan', async () => {
+    mockGetVcsInfo.mockResolvedValue({ root: '/repo', branch: 'main' });
+    mockListFiles.mockImplementation(async ({ path }) => {
+      if (path !== '.') return [];
+      return [
+        { name: 'src', path: 'src', type: 'directory' },
+        { name: 'a.txt', path: 'a.txt', type: 'file' },
+      ];
+    });
+
+    const mounted = await mountComposable('dsh');
+    await mounted.settle();
+
+    expect(mockListFiles).toHaveBeenCalledWith({ directory: '/repo', path: '.' });
+    expect(mounted.api.treeNodes.value.map((node) => node.path)).toEqual(['src', 'a.txt']);
+    expect(mounted.api.files.value).toEqual(['a.txt']);
+    expect(mockRunOneShotPtyCommand).not.toHaveBeenCalled();
+
+    mounted.unmount();
+  });
+
+  it('re-fetches the dsh file list after the active directory changes', async () => {
+    mockGetVcsInfo.mockResolvedValue({ root: '/repo', branch: 'main' });
+    mockListFiles.mockImplementation(async () => [{ name: 'a.txt', path: 'a.txt', type: 'file' }]);
+
+    const mounted = await mountComposable('dsh');
+    await mounted.settle();
+    mockListFiles.mockClear();
+
+    mockListFiles.mockImplementation(async () => [{ name: 'b.txt', path: 'b.txt', type: 'file' }]);
+    mounted.activeDirectory.value = '/repo/next';
+    await vi.advanceTimersByTimeAsync(200);
+    await mounted.settle();
+
+    expect(mockListFiles).toHaveBeenCalledWith({ directory: '/repo/next', path: '.' });
+    expect(mounted.api.files.value).toEqual(['b.txt']);
+
+    mounted.unmount();
+  });
+});

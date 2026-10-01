@@ -49,6 +49,13 @@ export function createBridgeRuntime(options = {}) {
     return configStore.getConfig();
   }
 
+  // The dsh session cookie lives behind the supervisor (only its spawned dsh
+  // child prints the launch token); optional because supervisor stubs in tests
+  // may not implement the accessor.
+  function getDshAuthProvider() {
+    return nativeSupervisor.getDshAuthProvider?.();
+  }
+
   async function listAgents() {
     if (!started) await start();
     return acpManager.getStatus();
@@ -136,6 +143,7 @@ export function createBridgeRuntime(options = {}) {
     stop,
     getStatus,
     getConfig,
+    getDshAuthProvider,
     listAgents,
     upsertAgent,
     updateAgent,

@@ -11,6 +11,7 @@ import type {
   KimiWebAbortChannel,
   KimiWebSendApi,
 } from '../backends/kimiWeb/backendMessageSend.kimiWeb';
+import type { DshSendApi } from '../backends/dsh/sessionSend';
 import type { ParsedSkill } from '../utils/parseSkill';
 import type { TextTransformer } from '../utils/textTransformers';
 import type { ParsedCodexSlashCommand } from '../utils/codexSlashCommands';
@@ -124,6 +125,13 @@ export type BackendMessageSendParams = {
   readonly isKimiWebSessionModeReady?: (sessionId: string) => boolean;
   readonly recordKimiWebTurnPermission?: (sessionId: string, userMessageId: string, mode: string) => void;
   readonly onKimiWebPromptRunning?: (sessionId: string) => void;
+  /**
+   * dsh send surface (plan Todo 25). Optional until the dsh client is wired;
+   * when absent the dsh dispatch fails closed instead of using OpenCode.
+   */
+  readonly dshSendApi?: DshSendApi;
+  /** Optimistic busy-dot dispatch after a dsh prompt is accepted (mirrors onKimiWebPromptRunning). */
+  readonly onDshPromptRunning?: (sessionId: string) => void;
   readonly ensureConnectionReady: (action: string) => boolean;
   readonly translate: (key: string, params?: Record<string, unknown>) => string;
   readonly toErrorMessage: (error: unknown) => string;

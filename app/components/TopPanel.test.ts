@@ -240,6 +240,56 @@ describe('TopPanel', () => {
     app.unmount();
   });
 
+  it('hides worktree actions when the backend disables worktrees (dsh capability matrix)', async () => {
+    const { default: TopPanel } = await import('./TopPanel.vue');
+    const mountWithWorktrees = async (worktreesEnabled: boolean) => {
+      const root = document.createElement('div');
+      document.body.appendChild(root);
+      const app = createApp(
+        defineComponent({
+          setup() {
+            return () =>
+              h(TopPanel, {
+                treeData: [
+                  {
+                    directory: '/repo',
+                    label: 'repo',
+                    projectId: 'dsh',
+                    sandboxes: [
+                      {
+                        directory: '/repo/wt',
+                        sessions: [{ id: 'session-1', title: 'Session', status: 'idle' }],
+                      },
+                    ],
+                  },
+                ],
+                notificationSessions: [],
+                projectDirectory: '/repo',
+                activeDirectory: '/repo',
+                selectedSessionId: 'session-1',
+                ptySupported: true,
+                worktreesEnabled,
+              });
+          },
+        }),
+      );
+      app.provide('showConfirm', vi.fn());
+      app.use(createI18n({ legacy: false, locale: 'en', messages: createMessages() }));
+      app.mount(root);
+      requireButton(root, '.tree-dropdown-root .ui-dropdown-button').click();
+      await nextTick();
+      return { root, app };
+    };
+
+    const hidden = await mountWithWorktrees(false);
+    expect(hidden.root.querySelector('.tree-action-button.fork')).toBeNull();
+    hidden.app.unmount();
+
+    const shown = await mountWithWorktrees(true);
+    expect(shown.root.querySelector('.tree-action-button.fork')).not.toBeNull();
+    shown.app.unmount();
+  });
+
   it('shows native archive and permanent delete as distinct Codex actions', async () => {
     const { default: TopPanel } = await import('./TopPanel.vue');
     const root = document.createElement('div');

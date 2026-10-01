@@ -3,16 +3,16 @@ import { createCodexAdapter } from './codex/codexAdapter';
 import { appendCodexBridgeToken } from './codex/bridgeUrl';
 import { createAcpAdapter } from './acp/acpAdapter';
 import { acpBridgeWebSocketUrl, normalizeAcpBridgeUrl } from './acp/bridgeUrl';
-import {
-  createKimiWebAdapter,
-  KIMI_WEB_CAPABILITIES,
-} from './kimiWeb/kimiWebAdapter';
+import { createKimiWebAdapter, KIMI_WEB_CAPABILITIES } from './kimiWeb/kimiWebAdapter';
+import { createDshAdapter } from './dsh/dshAdapter';
 import type { BackendAdapter, BackendKind } from './types';
 import { StorageKeys, storageGet } from '../utils/storageKeys';
+import { deriveDshBridgeHttpUrl } from '../utils/dshRpc';
 
 export const DEFAULT_CODEX_BRIDGE_URL = 'ws://localhost:23004/codex';
 export const DEFAULT_ACP_BRIDGE_URL = 'ws://localhost:23004';
 export const DEFAULT_KIMI_WEB_BRIDGE_URL = 'ws://localhost:23004/kimi-web/ws';
+export const DEFAULT_DSH_BRIDGE_URL = 'ws://localhost:23004/dsh/ws';
 
 // Only bits with a measured basis in docs/kimi.md are enabled. Actions that Todo 21
 // gates behind runtime probing (fork/compact/undo, tasks, terminal) stay off.
@@ -55,6 +55,31 @@ let acpAdapter: ReturnType<typeof createAcpAdapter> | undefined;
 let acpAdapterKey = '';
 let kimiWebAdapter: ReturnType<typeof createKimiWebAdapter> | undefined;
 let kimiWebAdapterKey = '';
+let dshAdapter: BackendAdapter | undefined;
+let dshAdapterKey = '';
+
+/**
+ * Factory seam for the dsh adapter.
+ *
+ * The real `createDshAdapter` is registered at module load below; the seam
+ * stays exported so tests can inject their own factory and exercise the
+ * registry contract without building a live adapter. Registering a factory
+ * invalidates any adapter built by a previous one.
+ */
+export type DshAdapterFactory = (options: {
+  bridgeUrl: string;
+  bridgeToken: string;
+}) => BackendAdapter;
+
+let dshAdapterFactory: DshAdapterFactory | undefined;
+
+export function registerDshAdapterFactory(factory: DshAdapterFactory | undefined) {
+  dshAdapterFactory = factory;
+  dshAdapter = undefined;
+  dshAdapterKey = '';
+  adapters = { ...adapters, dsh: undefined };
+}
+
 const initialCodexBridgeUrl = getPersistedCodexBridgeUrl();
 const initialCodexBridgeToken = getPersistedCodexBridgeToken();
 let codexAdapterKey = JSON.stringify([initialCodexBridgeUrl, initialCodexBridgeToken]);
@@ -68,7 +93,11 @@ let adapters: Record<BackendKind, BackendAdapter | undefined> = {
   codex: codexAdapter,
   acp: acpAdapter,
   'kimi-web': undefined,
+  dsh: undefined,
 };
+
+// Registered after `adapters` exists (TDZ) so the seam reset can write the slot.
+registerDshAdapterFactory((options) => createDshAdapter(options));
 
 let activeBackendKind: BackendKind = 'opencode';
 
@@ -121,6 +150,20 @@ export function configureKimiWebBackend(options: { bridgeUrl: string; bridgeToke
   return kimiWebAdapter;
 }
 
+export function configureDshBackend(options: { bridgeUrl: string; bridgeToken?: string }) {
+  const bridgeUrl = options.bridgeUrl.trim();
+  if (!bridgeUrl) throw new Error('dsh bridge URL is required.');
+  deriveDshBridgeHttpUrl(bridgeUrl);
+  const bridgeToken = options.bridgeToken?.trim() ?? '';
+  const nextKey = JSON.stringify([bridgeUrl, bridgeToken]);
+  if (dshAdapter && dshAdapterKey === nextKey) return dshAdapter;
+  if (!dshAdapterFactory) throw new Error('dsh adapter factory is not registered.');
+  dshAdapter = dshAdapterFactory({ bridgeUrl, bridgeToken });
+  dshAdapterKey = nextKey;
+  adapters = { ...adapters, dsh: dshAdapter };
+  return dshAdapter;
+}
+
 export function configureAcpBackend(options: {
   bridgeUrl: string;
   bridgeToken?: string;
@@ -154,6 +197,13 @@ export function disconnectAcpBackend() {
 
 export function disconnectCodexBackend() {
   codexAdapter.disconnect();
+}
+
+export function disconnectDshBackend() {
+  dshAdapter?.disconnect?.();
+  dshAdapter = undefined;
+  dshAdapterKey = '';
+  adapters = { ...adapters, dsh: undefined };
 }
 
 export function getBackendAdapter(kind: BackendKind) {

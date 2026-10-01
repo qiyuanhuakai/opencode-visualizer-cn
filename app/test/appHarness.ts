@@ -76,6 +76,7 @@ const harness = vi.hoisted(() => {
   const configureCodexBackend = vi.fn();
   const configureAcpBackend = vi.fn();
   const configureKimiWebBackend = vi.fn();
+  const configureDshBackend = vi.fn();
   const listProviders = vi.fn<() => Promise<ProviderListResult>>(async () => emptyProviderList);
   const getGlobalConfig = vi.fn(async () => ({}));
   const updateGlobalConfig = vi.fn(async (payload: Record<string, unknown>) => payload);
@@ -182,6 +183,7 @@ const harness = vi.hoisted(() => {
     configureCodexBackend,
     configureAcpBackend,
     configureKimiWebBackend,
+    configureDshBackend,
     acpEventHandlers,
     listProviders,
     getGlobalConfig,
@@ -383,13 +385,16 @@ harness.configureAcpBackend.mockImplementation(() => acpAdapter);
 vi.mock('../backends/registry', () => ({
   DEFAULT_ACP_BRIDGE_URL: 'ws://127.0.0.1:23004',
   DEFAULT_CODEX_BRIDGE_URL: 'ws://127.0.0.1:23004/codex',
+  DEFAULT_DSH_BRIDGE_URL: 'ws://localhost:23004/dsh/ws',
   DEFAULT_KIMI_WEB_BRIDGE_URL: 'ws://127.0.0.1:23004/kimi-web/ws',
   configureAcpBackend: harness.configureAcpBackend,
   configureCodexBackend: harness.configureCodexBackend,
   configureKimiWebBackend: harness.configureKimiWebBackend,
+  configureDshBackend: harness.configureDshBackend,
   configureOpenCodeBackend: vi.fn(),
   disconnectAcpBackend: vi.fn(),
   disconnectCodexBackend: vi.fn(),
+  disconnectDshBackend: vi.fn(),
   getActiveBackendAdapter: () => (harness.activeBackendKind() === 'acp' ? acpAdapter : adapter),
   getActiveBackendKind: harness.activeBackendKind,
   getBackendAdapter: (kind: BackendKind) => (kind === 'acp' ? acpAdapter : adapter),
@@ -522,6 +527,7 @@ async function mountApp(
   harness.configureCodexBackend.mockClear();
   harness.configureAcpBackend.mockClear();
   harness.configureKimiWebBackend.mockClear();
+  harness.configureDshBackend.mockClear();
   harness.listProviders.mockReset();
   harness.listProviders.mockResolvedValue(emptyProviderList);
   harness.getGlobalConfig.mockReset();
@@ -600,6 +606,7 @@ async function mountApp(
     configureCodexBackend: harness.configureCodexBackend,
     configureAcpBackend: harness.configureAcpBackend,
     configureKimiWebBackend: harness.configureKimiWebBackend,
+    configureDshBackend: harness.configureDshBackend,
     listProviders: harness.listProviders,
     getGlobalConfig: harness.getGlobalConfig,
     updateGlobalConfig: harness.updateGlobalConfig,

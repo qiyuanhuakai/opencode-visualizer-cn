@@ -8,11 +8,17 @@ export type BridgeRuntimeStatus = {
   acpAgents: AcpProcessStatus[];
 };
 
+export type DshAuthProvider = {
+  getCookie(authority: string): Promise<string>;
+  invalidate(authority: string): boolean;
+};
+
 export type BridgeRuntime = {
   start(): Promise<BridgeRuntimeStatus>;
   stop(): Promise<void>;
   getStatus(): BridgeRuntimeStatus;
   getConfig(): Promise<BridgeConfig>;
+  getDshAuthProvider?(): DshAuthProvider | undefined;
   listAgents(): Promise<AcpProcessStatus[]>;
   upsertAgent(agent: AcpAgentConfig): Promise<AcpProcessStatus | undefined>;
   updateAgent(id: string, patch: Partial<AcpAgentConfig>): Promise<AcpProcessStatus | undefined>;

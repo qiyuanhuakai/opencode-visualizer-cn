@@ -151,6 +151,19 @@ describe('resolveDesktopBridgeHealthUrl', () => {
     expect(url).toBe('');
   });
 
+  it('uses the shared bridge for the dsh backend instead of the dsh ws path prefix', () => {
+    const url = resolveDesktopBridgeHealthUrl({
+      backendKind: 'dsh',
+      acpBridgeUrl: 'ws://localhost:23004',
+      acpBridgeToken: '',
+      codexBridgeUrl: 'ws://localhost:23004/codex',
+      codexBridgeToken: 'shared-token',
+    });
+
+    expect(url).toBe('http://localhost:23004/healthz?token=shared-token');
+    expect(url).not.toContain('/dsh');
+  });
+
   it('returns no health url when the configured bridge url is invalid', () => {
     const url = resolveDesktopBridgeHealthUrl({
       backendKind: 'opencode',

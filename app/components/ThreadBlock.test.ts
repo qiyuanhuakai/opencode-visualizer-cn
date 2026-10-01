@@ -58,7 +58,7 @@ function mount(
   props: {
     root: MessageInfo;
     currentSessionId?: string;
-    backendKind?: 'codex' | 'opencode' | 'acp' | 'kimi-web';
+    backendKind?: 'codex' | 'opencode' | 'acp' | 'kimi-web' | 'dsh';
     isLatestRoot?: boolean;
     kimiCardActionsReady?: boolean;
     kimiForkAvailable?: boolean;
@@ -180,6 +180,18 @@ describe('ThreadBlock history wiring', () => {
     );
     await flushRender();
     expect(view.root.querySelector('.ib-top-right')).toBeNull();
+    expect(view.root.querySelector('.ib-footer .ib-action-danger')).toBeNull();
+  });
+
+  it('keeps fork but hides the unsupported revert action on dsh history cards', async () => {
+    const user = makeUserMessage('dsh-session', 'u1', 1);
+    useMessages().loadHistory([{ info: user, parts: [] }]);
+    const view = mount(
+      { root: user, currentSessionId: 'dsh-session', backendKind: 'dsh', isLatestRoot: true },
+      vi.fn(),
+    );
+    await flushRender();
+    expect(view.root.querySelector('.ib-top-right')?.textContent?.trim()).toBe('FORK');
     expect(view.root.querySelector('.ib-footer .ib-action-danger')).toBeNull();
   });
 

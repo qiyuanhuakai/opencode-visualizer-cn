@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### DSH (Beta) 后端接入
+
+- [x] 第五个后端 DSH：经 vis_bridge 连接 DeepSeek Harness 的 `dsh web` 服务（HTTP unary RPC + WS mux 双路转发），复用主界面的项目、会话、模型目录、文件树与 Git、审批、思考与工具调用、子代理与状态监控；登录页新增 DSH 入口，默认地址 `ws://localhost:23004/dsh/ws`。协议与已验证范围见 [DSH 说明](docs/dsh.md)。
+- [x] bridge 侧：`nativeServices.dsh` 新增默认 `false` 的托管开关（opt-in）；spawn-only 托管（端口被占即报错，不接管外部实例）、版本闸门只接受 `0.2.0-rc.2`（不符即停子进程并提示 `npm i -g @deepseek-ai/dsh@0.2.0-rc.2`）、launch token → cookie 交换与失效重交换、`/dsh/*` 与 `/dsh/ws` 转发（剥离 `sec-fetch-*`/Origin/Host，桥侧注入 cookie，不外泄 bridge token）。
+- [x] 前端侧：新增 `app/backends/dsh/` 适配器（能力矩阵显式声明不支持项：worktrees、session 删除/回退/压缩、todos、questions）、`dshRpc.ts` 信封与错误分类、`dshMux.ts` 流与重连、事件归一化与子代理寻址、历史分页、审批 waterfall 应答（放行 `allowed-once` / 驳回 `rejected` / 降级 fail-closed）、只读的权限 preset 选择器、状态监控 DSH 区块。
+- [x] 兼容性与已知限制：DSH 为 Beta，只支持协议代 `0.2.0-rc.2`，升级必须重新探测；live QA 在 Linux 上以降级模式完成（`DEEPSEEK_API_KEY` 缺席，41/41 断言通过，错误路径完整可观测），未实测面（流式增量、真实审批、cookie 跨重启、multipart 等）逐行记录在 `docs/dsh.md` §15；Windows/macOS 的进程派生未实机验证（继承 Kimi Web 的 spawn 先例）；`sessionDelete` 无远端端点（本地隐藏 + 明确拒绝）。
+
+---
+
 ### Kimi Web 子代理与会话渲染修复
 
 - [x] 修复子代理完成时跳出无 user 幽灵卡片、主代理续轮新开错误卡片的问题：assistant 消息父级回退到会话最后一条 user 消息，子代理挂载到发起它的主代理消息，刷新前后卡片结构一致。

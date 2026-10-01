@@ -7,6 +7,10 @@ const DEFAULT_NATIVE_SERVICES = Object.freeze({
   opencode: true,
   codex: true,
   'kimi-web': true,
+  // Opt-in on purpose (differs from the true siblings): dsh is rc-stage and
+  // spawn-only, so a legacy bridge.json missing this key stays disabled
+  // instead of pulling existing installs into an unauthenticatable service.
+  dsh: false,
 });
 
 const ACP_PRESETS = [

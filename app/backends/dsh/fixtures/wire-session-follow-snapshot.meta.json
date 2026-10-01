@@ -1,0 +1,12 @@
+{
+  "dshVersion": "0.2.0-rc.2",
+  "dshPackage": "@deepseek-ai/dsh@0.2.0-rc.2",
+  "capturedAt": "2026-09-29T14:36:36.628Z",
+  "captureWindow": "2026-09-29T14:35:32.388Z..2026-09-29T14:36:36.628Z",
+  "captureEndpoint": "ws://127.0.0.1:8765/api/remote.mux",
+  "captureStream": "open streamId=sf1 endpoint=session/follow payload={args:{request:{address:{kind:'session',sessionId:'session-06ee930d-7d74-42b1-928d-ac8fdd4376bf'},assistantStream:true}}}",
+  "capturedBy": ".omo/evidence/dsh-adapt/03-ws-mux-probe.mjs",
+  "source": ".omo/evidence/dsh-adapt/04-session-follow-full.txt",
+  "frames": 1,
+  "note": "Opening snapshot: 18 records (seq 0-17) of an unauthenticated turn that failed with MISSING_CREDENTIAL at assistant/attempt + turn/end."
+}

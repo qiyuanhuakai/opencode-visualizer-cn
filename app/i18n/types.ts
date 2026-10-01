@@ -9,11 +9,13 @@ export interface LocaleMessages {
       codexTitle: string;
       acpTitle: string;
       kimiWebTitle: string;
+      dshTitle: string;
       backendLabel: string;
       openCodeBackend: string;
       codexBackend: string;
       acpBackend: string;
       kimiWebBackend: string;
+      dshBackend: string;
       username: string;
       password: string;
       url: string;
@@ -27,6 +29,16 @@ export interface LocaleMessages {
       kimiWebBridgeUrl: string;
       kimiWebBridgeToken: string;
       kimiWebBridgeHint: string;
+      dshBridgeUrl: string;
+      dshBridgeToken: string;
+      dshBridgeHint: string;
+      dshErrors: {
+        bridgeUrlRequired: string;
+        missingCredential: string;
+        nativeServicesDisabled: string;
+        launchTokenMissing: string;
+        versionMismatch: string;
+      };
       authRequired: string;
       connect: string;
       retry: string;
@@ -316,6 +328,7 @@ export interface LocaleMessages {
       unsupported: string;
       unsupportedAcp: string;
       unsupportedKimiWeb: string;
+      unsupportedDsh: string;
       enable: string;
       disable: string;
       toggleFailed: string;
@@ -328,6 +341,7 @@ export interface LocaleMessages {
       unsupported: string;
       unsupportedAcp: string;
       unsupportedKimiWeb: string;
+      unsupportedDsh: string;
     };
     plugins: {
       marketplaces: string;
@@ -340,6 +354,7 @@ export interface LocaleMessages {
       unsupported: string;
       unsupportedAcp: string;
       unsupportedKimiWeb: string;
+      unsupportedDsh: string;
     };
     skills: {
       total: string;
@@ -347,6 +362,8 @@ export interface LocaleMessages {
       unsupported: string;
       unsupportedAcp: string;
       unsupportedKimiWeb: string;
+      unsupportedDsh: string;
+      unsupportedDshUnknown: string;
       enable: string;
       disable: string;
       toggleFailed: string;
@@ -356,6 +373,8 @@ export interface LocaleMessages {
       noData: string;
       model: string;
       contextLimit: string;
+      contextUsed: string;
+      totalTokens: string;
       currentContext: string;
       usagePercent: string;
       inputTokens: string;
@@ -417,6 +436,43 @@ export interface LocaleMessages {
       rateLimitUsed: string;
       rateLimitFiveHourUsed: string;
     };
+    dsh: {
+      connection: string;
+      session: string;
+      followStream: string;
+      approvals: string;
+      permissionPreset: string;
+      sandbox: string;
+      approvalPolicy: string;
+      model: string;
+      capabilities: string;
+      health: string;
+      healthOk: string;
+      healthError: string;
+      account: string;
+      accountSignedOut: string;
+      accountSignedIn: string;
+      accountGuidanceLabel: string;
+      accountGuidance: string;
+      version: string;
+      versionUnsupported: string;
+      versionUnavailable: string;
+      versionNotRunning: string;
+      states: {
+        connecting: string;
+        bootstrapping: string;
+        ready: string;
+        reconnecting: string;
+        error: string;
+        busy: string;
+        idle: string;
+        live: string;
+        degraded: string;
+        rebuilding: string;
+        detached: string;
+        replaying: string;
+      };
+    };
   };
   providerManager: {
     discovery: {
@@ -434,6 +490,10 @@ export interface LocaleMessages {
       unavailable: string;
       failed: string;
       completed: string;
+    };
+    dsh: {
+      title: string;
+      description: string;
     };
     tabs: {
       providers: string;

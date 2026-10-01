@@ -28,6 +28,8 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     acpAgentId: ref('oh-my-pi'),
     kimiWebBridgeUrl: ref('ws://localhost:23004/kimi-web/ws'),
     kimiWebBridgeToken: ref('kimi-bridge-token'),
+    dshBridgeUrl: ref('ws://localhost:23004/dsh/ws'),
+    dshBridgeToken: ref('dsh-bridge-token'),
   };
   const codexApi = {
     url: ref(''),
@@ -93,6 +95,9 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
   const configureKimiWebBackend = vi.fn(() => {
     calls.push('configureKimiWebBackend');
   });
+  const configureDshBackend = vi.fn(() => {
+    calls.push('configureDshBackend');
+  });
   const disconnectAcpBackend = vi.fn(() => {
     calls.push('disconnectAcpBackend');
   });
@@ -101,6 +106,9 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
   });
   const disconnectKimiWebBackend = vi.fn(() => {
     calls.push('disconnectKimiWebBackend');
+  });
+  const disconnectDshBackend = vi.fn(() => {
+    calls.push('disconnectDshBackend');
   });
 
   const activation = useBackendActivation({
@@ -138,9 +146,11 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     },
     configureAcpBackend,
     configureKimiWebBackend,
+    configureDshBackend,
     disconnectAcpBackend,
     disconnectCodexBackend,
     disconnectKimiWebBackend,
+    disconnectDshBackend,
     bootstrapAcpWorkspace:
       overrides.bootstrapAcpWorkspace ??
       (async () => {
@@ -219,7 +229,9 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     serverState,
     configureAcpBackend,
     configureKimiWebBackend,
+    configureDshBackend,
     disconnectKimiWebBackend,
+    disconnectDshBackend,
     activation,
   };
 }
@@ -274,6 +286,8 @@ function createKimiWebActivationHarness(
     acpAgentId: ref('oh-my-pi'),
     kimiWebBridgeUrl: ref('ws://localhost:23004/kimi-web/ws'),
     kimiWebBridgeToken: ref('kimi-bridge-token'),
+    dshBridgeUrl: ref('ws://localhost:23004/dsh/ws'),
+    dshBridgeToken: ref('dsh-bridge-token'),
   };
   const codexApi = {
     url: ref(''),
@@ -355,6 +369,9 @@ function createKimiWebActivationHarness(
     configureKimiWebBackend: () => {
       calls.push('configureKimiWebBackend');
     },
+    configureDshBackend: () => {
+      calls.push('configureDshBackend');
+    },
     disconnectAcpBackend: () => {
       calls.push('disconnectAcpBackend');
     },
@@ -363,6 +380,9 @@ function createKimiWebActivationHarness(
     },
     disconnectKimiWebBackend: () => {
       calls.push('disconnectKimiWebBackend');
+    },
+    disconnectDshBackend: () => {
+      calls.push('disconnectDshBackend');
     },
     bootstrapAcpWorkspace: async () => {
       calls.push('bootstrapAcpWorkspace');
@@ -1131,6 +1151,8 @@ function createCrossBackendHarness(target: BackendKind): CrossBackendHarness {
     acpAgentId: ref('oh-my-pi'),
     kimiWebBridgeUrl: ref('ws://localhost:23004/kimi-web/ws'),
     kimiWebBridgeToken: ref('kimi-bridge-token'),
+    dshBridgeUrl: ref('ws://localhost:23004/dsh/ws'),
+    dshBridgeToken: ref('dsh-bridge-token'),
   };
   const codexApi = {
     url: ref(''),
@@ -1202,11 +1224,14 @@ function createCrossBackendHarness(target: BackendKind): CrossBackendHarness {
     configureCodexBackend: () => {},
     configureAcpBackend: () => {},
     configureKimiWebBackend: () => {},
+    configureDshBackend: () => {},
     disconnectAcpBackend: () => {},
     disconnectCodexBackend: () => {},
     disconnectKimiWebBackend: () => {},
+    disconnectDshBackend: () => {},
     bootstrapAcpWorkspace: async () => {},
     bootstrapKimiWebWorkspace: async () => {},
+    bootstrapDshWorkspace: async () => {},
     fetchGlobalProviderConfig: async () => {},
     fetchProviders: async () => {},
     fetchAgents: async () => {},
@@ -1337,4 +1362,577 @@ describe('every backend switch clears the shared cross-backend surface (R6b/S5a)
       expectCrossBackendStateCleared(harness, target);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// dsh activation (Todo 14) — mirrors the kimi-web fence contract:
+//   resetCrossBackendState → requestFence.start() → disconnect other backends
+//   → configureDshBackend → setActiveBackendKind('dsh') → precheck →
+//   bootstrapDshWorkspace → ready → model catalog + providers IN PARALLEL.
+// The default precheck is the unary `POST /dsh/account/getState` RPC (Todo 4
+// client): `result.ok === true` is healthy, a signed-out payload is healthy
+// too, and `result.ok === false` (incl. `MISSING_CREDENTIAL`) fails closed to
+// the login surface instead of crashing activation.
+// ---------------------------------------------------------------------------
+
+type DshActivationOverrides = {
+  precheckDshConnection?: () => Promise<void>;
+  bootstrapDshWorkspace?: (isCurrent: () => boolean) => Promise<void>;
+  fetchGlobalProviderConfig?: () => Promise<void>;
+  fetchProviders?: (force?: boolean) => Promise<void>;
+  connectOpenCode?: () => Promise<void>;
+  bootstrapSelections?: () => Promise<void>;
+};
+
+function createDshActivationHarness(overrides: DshActivationOverrides = {}) {
+  const calls: string[] = [];
+  const fetchProviderArgs: Array<boolean | undefined> = [];
+  const credentials = {
+    backendKind: ref<BackendKind>('dsh'),
+    codexBridgeUrl: ref('http://localhost:4040'),
+    acpBridgeUrl: ref('ws://localhost:23004'),
+    codexBridgeToken: ref('token'),
+    acpBridgeToken: ref('acp-token'),
+    acpAgentId: ref('oh-my-pi'),
+    kimiWebBridgeUrl: ref('ws://localhost:23004/kimi-web/ws'),
+    kimiWebBridgeToken: ref('kimi-bridge-token'),
+    dshBridgeUrl: ref('ws://localhost:23004/dsh/ws'),
+    dshBridgeToken: ref('dsh-bridge-token'),
+  };
+  const codexApi = {
+    url: ref(''),
+    bridgeToken: ref(''),
+    activeThreadId: ref(''),
+    visibleThreads: ref<Array<{ id: string }>>([]),
+    connect: vi.fn(async () => {}),
+    disconnect: vi.fn(),
+    disconnectTransport: vi.fn(),
+    selectThread: vi.fn(async () => {}),
+  };
+  const ge = {
+    connect: vi.fn(overrides.connectOpenCode ?? (async () => {})),
+    disconnect: vi.fn(() => {
+      calls.push('ge.disconnect');
+    }),
+  };
+  const activeBackendKind = ref<BackendKind>('opencode');
+  const uiInitState = ref<'loading' | 'ready' | 'error' | 'login'>('login');
+  const initLoadingMessage = ref('');
+  const initErrorMessage = ref('');
+  const connectionState = ref<'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'error'>(
+    'connecting',
+  );
+  const reconnectingMessage = ref('');
+  const selectedProjectId = ref('');
+  const selectedSessionId = ref('');
+  const providerConfig = ref<unknown>(null);
+  const providersLoaded = ref(false);
+  const providers = ref<unknown[]>([]);
+  const connectedProviderIds = ref<string[]>([]);
+  const modelOptions = ref<unknown[]>([]);
+  const selectedModel = ref('');
+  const agents = ref<unknown[]>([]);
+  const agentOptions = ref<unknown[]>([]);
+  const commands = ref<unknown[]>([]);
+  const thinkingOptions = ref<Array<string | undefined>>([]);
+  const providerDefaults = ref<unknown>({});
+  const modelMetaByPath = ref<unknown>(new Map());
+  const serverState = {
+    bootstrapped: ref(true),
+    projects: { stale: {} as unknown },
+  };
+
+  const configureDshBackend = vi.fn(() => {
+    calls.push('configureDshBackend');
+  });
+  const disconnectDshBackend = vi.fn(() => {
+    calls.push('disconnectDshBackend');
+  });
+
+  const activation = useBackendActivation({
+    credentials,
+    codexApi,
+    ge,
+    activeBackendKind,
+    uiInitState,
+    initLoadingMessage,
+    initErrorMessage,
+    connectionState,
+    reconnectingMessage,
+    selectedProjectId,
+    selectedSessionId,
+    providerConfig,
+    providersLoaded,
+    providers,
+    connectedProviderIds,
+    modelOptions,
+    selectedModel,
+    agents,
+    agentOptions,
+    commands,
+    thinkingOptions,
+    providerDefaults,
+    modelMetaByPath,
+    serverState,
+    t: (key: string) => key,
+    toErrorMessage: (error: unknown) => String(error),
+    setActiveBackendKind: (kind) => {
+      calls.push(`setActiveBackendKind:${kind}`);
+    },
+    configureCodexBackend: () => {
+      calls.push('configureCodexBackend');
+    },
+    configureAcpBackend: () => {
+      calls.push('configureAcpBackend');
+    },
+    configureKimiWebBackend: () => {
+      calls.push('configureKimiWebBackend');
+    },
+    configureDshBackend,
+    disconnectAcpBackend: () => {
+      calls.push('disconnectAcpBackend');
+    },
+    disconnectCodexBackend: () => {
+      calls.push('disconnectCodexBackend');
+    },
+    disconnectKimiWebBackend: () => {
+      calls.push('disconnectKimiWebBackend');
+    },
+    disconnectDshBackend,
+    bootstrapAcpWorkspace: async () => {
+      calls.push('bootstrapAcpWorkspace');
+    },
+    bootstrapKimiWebWorkspace: async () => {
+      calls.push('bootstrapKimiWebWorkspace');
+    },
+    bootstrapDshWorkspace:
+      overrides.bootstrapDshWorkspace ??
+      (async () => {
+        calls.push('bootstrapDshWorkspace');
+      }),
+    fetchGlobalProviderConfig: async () => {
+      calls.push('fetchGlobalProviderConfig');
+      await overrides.fetchGlobalProviderConfig?.();
+    },
+    fetchProviders: async (force?: boolean) => {
+      calls.push('fetchProviders');
+      fetchProviderArgs.push(force);
+      await overrides.fetchProviders?.(force);
+    },
+    fetchAgents: async () => {
+      calls.push('fetchAgents');
+    },
+    fetchCommands: async () => {
+      calls.push('fetchCommands');
+    },
+    fetchHomePath: async () => {
+      calls.push('fetchHomePath');
+    },
+    bootstrapSelections:
+      overrides.bootstrapSelections ??
+      (async () => {
+        calls.push('bootstrapSelections');
+      }),
+    hydrateActiveWorktreeResources: async () => {
+      calls.push('hydrateActiveWorktreeResources');
+    },
+    reloadSelectedSessionState: async () => {
+      calls.push('reloadSelectedSessionState');
+    },
+    precheckKimiWebConnection: async () => {
+      calls.push('precheckKimiWebConnection');
+    },
+    // Undefined by default so the REAL `POST /dsh/account/getState` RPC
+    // precheck runs; individual cases inject a stub when they need to.
+    precheckDshConnection: overrides.precheckDshConnection
+      ? vi.fn(async () => {
+          calls.push('precheckDshConnection');
+          await overrides.precheckDshConnection?.();
+        })
+      : undefined,
+    handleOpenCodeUnauthorized: (message: string) => {
+      calls.push(`handleOpenCodeUnauthorized:${message}`);
+    },
+  });
+
+  return {
+    calls,
+    fetchProviderArgs,
+    credentials,
+    ge,
+    activeBackendKind,
+    uiInitState,
+    initErrorMessage,
+    connectionState,
+    selectedProjectId,
+    selectedSessionId,
+    providerConfig,
+    providersLoaded,
+    providers,
+    connectedProviderIds,
+    modelOptions,
+    selectedModel,
+    serverState,
+    configureDshBackend,
+    disconnectDshBackend,
+    activation,
+  };
+}
+
+function stubDshFetch(result: {
+  ok: true;
+  value?: unknown;
+} | { ok: false; error: { code: string; message: string } }) {
+  const requests: Array<{ url: string; init: RequestInit }> = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init: RequestInit) => {
+      requests.push({ url, init });
+      return new Response(dshServerResponse(result), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }),
+  );
+  return requests;
+}
+
+function dshServerResponse(result: { ok: true; value?: unknown } | { ok: false; error: { code: string; message: string } }) {
+  return JSON.stringify({
+    type: 'server-response',
+    rpcId: 'dsh-1',
+    result,
+  });
+}
+
+describe('useBackendActivation dsh branch (Todo 14)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('runs the exact dsh activation sequence with parallel post-ready loading', async () => {
+    // Given: the dsh backend is selected with bridge credentials
+    stubDshFetch({ ok: true, value: { status: 'signed-in' } });
+    const harness = createDshActivationHarness({
+      precheckDshConnection: async () => {},
+    });
+
+    // When: activation runs the fenced sequence
+    await harness.activation.startInitialization();
+
+    // Then: cross-backend state is reset first and the identity is committed
+    // in the kimi-mirrored order: configure BEFORE setActiveBackendKind.
+    expect(harness.configureDshBackend).toHaveBeenCalledWith({
+      bridgeUrl: 'ws://localhost:23004/dsh/ws',
+      bridgeToken: 'dsh-bridge-token',
+    });
+    expect(harness.activeBackendKind.value).toBe('dsh');
+    expect(harness.serverState.bootstrapped.value).toBe(false);
+    expect(harness.serverState.projects).toEqual({});
+    expect(harness.selectedProjectId.value).toBe('');
+    expect(harness.selectedSessionId.value).toBe('');
+    expect(harness.providerConfig.value).toBe(null);
+    expect(harness.providersLoaded.value).toBe(false);
+    expect(harness.providers.value).toEqual([]);
+    expect(harness.modelOptions.value).toEqual([]);
+    expect(harness.selectedModel.value).toBe('');
+    expect(harness.connectionState.value).toBe('ready');
+    expect(harness.uiInitState.value).toBe('ready');
+    expect(harness.activation.initializationInFlight.value).toBe(false);
+
+    // Then: Ready must NOT block on the model catalog / provider fetches
+    expect(harness.calls).not.toContain('fetchGlobalProviderConfig');
+    expect(harness.calls).not.toContain('fetchProviders');
+
+    // When: the deferred post-ready load runs
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Then: every step ran in the exact fenced order, fetches in parallel
+    expect(harness.calls).toEqual([
+      'ge.disconnect',
+      'disconnectAcpBackend',
+      'disconnectCodexBackend',
+      'disconnectKimiWebBackend',
+      'configureDshBackend',
+      'setActiveBackendKind:dsh',
+      'precheckDshConnection',
+      'bootstrapDshWorkspace',
+      'fetchGlobalProviderConfig',
+      'fetchProviders',
+    ]);
+    expect(harness.fetchProviderArgs).toContain(true);
+  });
+
+  it('loads the model catalog and providers in parallel without blocking Ready', async () => {
+    // Given: both post-ready fetches stay pending
+    stubDshFetch({ ok: true, value: { status: 'signed-in' } });
+    const settled: string[] = [];
+    let finishConfig: (() => void) | undefined;
+    let finishProviders: (() => void) | undefined;
+    const harness = createDshActivationHarness({
+      fetchGlobalProviderConfig: () =>
+        new Promise<void>((resolve) => {
+          finishConfig = () => {
+            settled.push('modelCatalog');
+            resolve();
+          };
+        }),
+      fetchProviders: () =>
+        new Promise<void>((resolve) => {
+          finishProviders = () => {
+            settled.push('providers');
+            resolve();
+          };
+        }),
+    });
+
+    const initialization = harness.activation.startInitialization();
+    await initialization;
+
+    // Then: Ready is published before the deferred post-ready load even starts
+    expect(harness.uiInitState.value).toBe('ready');
+    expect(harness.connectionState.value).toBe('ready');
+    expect(harness.calls).not.toContain('fetchGlobalProviderConfig');
+
+    // When: the deferred load fires
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Then: BOTH fetches are in flight and NEITHER has settled — they run in
+    // parallel, and neither blocks or is blocked by the other
+    expect(harness.calls).toContain('fetchGlobalProviderConfig');
+    expect(harness.calls).toContain('fetchProviders');
+    expect(settled).toEqual([]);
+    expect(finishConfig).toBeTypeOf('function');
+    expect(finishProviders).toBeTypeOf('function');
+
+    // When: only one of the two settles
+    finishProviders?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Then: Ready survives without waiting for the still-pending catalog fetch
+    expect(settled).toEqual(['providers']);
+    expect(harness.uiInitState.value).toBe('ready');
+
+    finishConfig?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toEqual(['providers', 'modelCatalog']);
+    expect(harness.uiInitState.value).toBe('ready');
+  });
+
+  it('prechecks through the RPC client POST /dsh/account/getState with an {args:{}} envelope', async () => {
+    // Given: the default precheck (no injected stub) and a healthy dsh bridge
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const fetchSpy = vi.fn(async (url: string, init: RequestInit) => {
+      requests.push({ url, init });
+      return new Response(dshServerResponse({ ok: true, value: { status: 'signed-in' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    const harness = createDshActivationHarness();
+
+    // When: dsh activation runs with the real RPC precheck
+    await harness.activation.startInitialization();
+
+    // Then: the unary account/getState call went to the bridge HTTP prefix
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.url).toBe('http://localhost:23004/dsh/account/getState');
+    expect(requests[0]!.init.method).toBe('POST');
+    expect(JSON.parse(String(requests[0]!.init.body))).toEqual({
+      type: 'client-request',
+      rpcId: 'dsh-1',
+      method: 'account/getState',
+      payload: { args: {} },
+    });
+    expect((requests[0]!.init.headers as Record<string, string>).Authorization).toBe(
+      'Bearer dsh-bridge-token',
+    );
+    expect(harness.uiInitState.value).toBe('ready');
+    expect(harness.connectionState.value).toBe('ready');
+  });
+
+  it('treats a signed-out account/getState response as healthy', async () => {
+    // Given: dsh answers ok:true with the signed-out payload (docs/dsh.md §7.5)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            dshServerResponse({
+              ok: true,
+              value: { status: 'signed-out', attempt: null, links: {} },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+      ),
+    );
+    const harness = createDshActivationHarness();
+
+    // When: activation runs
+    await harness.activation.startInitialization();
+
+    // Then: signed-out still proceeds to bootstrap and Ready (login UI later)
+    expect(harness.calls).toContain('bootstrapDshWorkspace');
+    expect(harness.uiInitState.value).toBe('ready');
+    expect(harness.initErrorMessage.value).toBe('');
+  });
+
+  it('lands a MISSING_CREDENTIAL precheck on the login surface without crashing', async () => {
+    // Given: the bridge reports the session-credential fence (ok:false)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            dshServerResponse({
+              ok: false,
+              error: { code: 'MISSING_CREDENTIAL', message: 'dsh session cookie missing' },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+      ),
+    );
+    const harness = createDshActivationHarness();
+
+    // When: activation runs
+    await expect(harness.activation.startInitialization()).resolves.toBeUndefined();
+
+    // Then: the classified error surfaces on login — no bootstrap, no catalog
+    expect(harness.uiInitState.value).toBe('login');
+    expect(harness.connectionState.value).toBe('error');
+    expect(harness.initErrorMessage.value).toContain('MISSING_CREDENTIAL');
+    expect(harness.calls).not.toContain('bootstrapDshWorkspace');
+    expect(harness.calls).not.toContain('fetchGlobalProviderConfig');
+    expect(harness.calls).not.toContain('fetchProviders');
+    expect(harness.disconnectDshBackend).toHaveBeenCalledOnce();
+    expect(harness.activation.initializationInFlight.value).toBe(false);
+  });
+
+  it('returns a failed dsh precheck to the login screen', async () => {
+    // Given: the fenced precheck rejects (bridge unreachable / RPC transport)
+    const harness = createDshActivationHarness({
+      precheckDshConnection: async () => {
+        throw new Error('dsh precheck failed');
+      },
+    });
+
+    // When: dsh activation runs
+    await harness.activation.startInitialization();
+
+    // Then: the failure is surfaced and the lock is released back to login
+    expect(harness.uiInitState.value).toBe('login');
+    expect(harness.connectionState.value).toBe('error');
+    expect(harness.initErrorMessage.value).toContain('dsh precheck failed');
+    expect(harness.calls).not.toContain('bootstrapDshWorkspace');
+    expect(harness.calls).not.toContain('fetchGlobalProviderConfig');
+    expect(harness.calls).not.toContain('fetchProviders');
+    expect(harness.activation.initializationInFlight.value).toBe(false);
+  });
+
+  it('drops a stale-generation dsh activation after a backend switch without mutating state', async () => {
+    // Given: a dsh precheck is pending when the user switches to OpenCode
+    let finishStalePrecheck: (() => void) | undefined;
+    const harness = createDshActivationHarness({
+      precheckDshConnection: () =>
+        new Promise<void>((resolve) => {
+          finishStalePrecheck = resolve;
+        }),
+    });
+    const staleInitialization = harness.activation.startInitialization();
+    await vi.waitFor(() => expect(finishStalePrecheck).toBeTypeOf('function'));
+
+    harness.activation.abortInitialization();
+    harness.credentials.backendKind.value = 'opencode';
+    const currentInitialization = harness.activation.startInitialization();
+    await currentInitialization;
+    expect(harness.uiInitState.value).toBe('ready');
+
+    // When: the obsolete dsh precheck finally resolves "successfully"
+    const callsAfterCurrent = [...harness.calls];
+    finishStalePrecheck?.();
+    await staleInitialization;
+
+    // Then: the stale response commits nothing — no new setActiveBackendKind,
+    // no bootstrap, no Ready flip, no state mutation of the current backend
+    expect(harness.calls).toEqual(callsAfterCurrent);
+    expect(harness.activeBackendKind.value).toBe('opencode');
+    expect(harness.connectionState.value).toBe('ready');
+    expect(harness.uiInitState.value).toBe('ready');
+  });
+
+  it('discards the expired post-ready fetches after an abort', async () => {
+    // Given: dsh activation already reached Ready with its deferred load pending
+    stubDshFetch({ ok: true, value: { status: 'signed-in' } });
+    const harness = createDshActivationHarness();
+    await harness.activation.startInitialization();
+    expect(harness.uiInitState.value).toBe('ready');
+
+    // When: the user aborts before the deferred load macrotask runs
+    harness.activation.abortInitialization();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Then: the expired fetches never run and no state is mutated
+    expect(harness.calls).not.toContain('fetchGlobalProviderConfig');
+    expect(harness.calls).not.toContain('fetchProviders');
+    expect(harness.uiInitState.value).toBe('login');
+    expect(harness.connectionState.value).toBe('connecting');
+  });
+
+  it('keeps the dsh bootstrap fence valid after initialization and invalidates it on abort', async () => {
+    // Given
+    stubDshFetch({ ok: true, value: { status: 'signed-in' } });
+    let bootstrapFence: (() => boolean) | undefined;
+    const harness = createDshActivationHarness({
+      bootstrapDshWorkspace: async (isCurrent) => {
+        bootstrapFence = isCurrent;
+      },
+    });
+    // When
+    await harness.activation.startInitialization();
+    // Then
+    expect(harness.activation.initializationInFlight.value).toBe(false);
+    expect(bootstrapFence?.()).toBe(true);
+    harness.activation.abortInitialization();
+    expect(bootstrapFence?.()).toBe(false);
+  });
+
+  it('disconnects the dsh backend when initialization is aborted', () => {
+    // Given: the dsh backend is being initialized
+    const harness = createDshActivationHarness();
+
+    // When: initialization is aborted
+    harness.activation.abortInitialization();
+
+    // Then: the dsh transport is disposed alongside the other backends
+    expect(harness.disconnectDshBackend).toHaveBeenCalledOnce();
+  });
+
+  it('holds the dsh initialization lock against a concurrent start', async () => {
+    // Given: a dsh precheck is pending and owns the initialization lock
+    let finishPrecheck: (() => void) | undefined;
+    const precheck = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishPrecheck = resolve;
+        }),
+    );
+    const harness = createDshActivationHarness({ precheckDshConnection: precheck });
+    const first = harness.activation.startInitialization();
+    await vi.waitFor(() => expect(precheck).toHaveBeenCalledTimes(1));
+
+    // When: a second initialization is requested while the first is in flight
+    await harness.activation.startInitialization();
+
+    // Then: the second request is ignored and the lock is still held
+    expect(precheck).toHaveBeenCalledTimes(1);
+    expect(harness.activation.initializationInFlight.value).toBe(true);
+
+    finishPrecheck?.();
+    await first;
+    expect(harness.activation.initializationInFlight.value).toBe(false);
+    expect(harness.uiInitState.value).toBe('ready');
+  });
 });

@@ -152,3 +152,36 @@ describe('kimi-web bridge token invalidates the message cache (R8/S5c)', () => {
     fixture.dispose();
   });
 });
+
+describe('dsh bridge token invalidates the message cache (Todo 35)', () => {
+  it('Given a warm message cache, When the dsh bridge token changes, Then all invalidation effects run synchronously', () => {
+    const username = ref('user-a');
+    const codexBridgeToken = ref('codex-a');
+    const acpBridgeToken = ref('acp-a');
+    const kimiWebBridgeToken = ref('kimi-a');
+    const dshBridgeToken = ref('dsh-a');
+    const messageCacheAuthGeneration = ref(4);
+    const sessionReloadRequestId = ref(8);
+    const clearSessionCache = vi.fn();
+    const invalidateMessageCacheContext = vi.fn();
+    const dispose = useMessageCacheAuthInvalidation({
+      authHeader: computed(() => (username.value ? `Basic ${username.value}` : undefined)),
+      codexBridgeToken,
+      acpBridgeToken,
+      kimiWebBridgeToken,
+      dshBridgeToken,
+      messageCacheAuthGeneration,
+      sessionReloadRequestId,
+      clearSessionCache,
+      invalidateMessageCacheContext,
+    });
+
+    dshBridgeToken.value = 'dsh-b';
+
+    expect(messageCacheAuthGeneration.value).toBe(5);
+    expect(sessionReloadRequestId.value).toBe(9);
+    expect(clearSessionCache).toHaveBeenCalledOnce();
+    expect(invalidateMessageCacheContext).toHaveBeenCalledOnce();
+    dispose();
+  });
+});

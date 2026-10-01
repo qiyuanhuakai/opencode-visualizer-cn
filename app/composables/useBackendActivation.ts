@@ -4,6 +4,7 @@ import { appendCodexBridgeToken } from '../backends/codex/bridgeUrl';
 import { createKimiWebClient } from '../utils/kimiWeb';
 import { kimiWebProxyHttpUrl, kimiWebWsUrl } from '../utils/kimiWebWs';
 import { createBackendRequestFence } from '../utils/backendRequestFence';
+import { createDshRpcClient, deriveDshBridgeHttpUrl } from '../utils/dshRpc';
 
 // allow: SIZE_OK — one composable owns the shared generation/lock lifecycle closure
 // for four backend activation flows; extraction would thread >3 closure params.
@@ -20,9 +21,16 @@ type CredentialsLike = {
   acpAgentId: Ref<string>;
   kimiWebBridgeUrl: Ref<string>;
   kimiWebBridgeToken: Ref<string>;
+  dshBridgeUrl: Ref<string>;
+  dshBridgeToken: Ref<string>;
 };
 
 export type KimiWebPrecheckRequest = {
+  bridgeUrl: string;
+  bridgeToken: string;
+};
+
+export type DshPrecheckRequest = {
   bridgeUrl: string;
   bridgeToken: string;
 };
@@ -87,8 +95,12 @@ export type UseBackendActivationOptions = {
   disconnectAcpBackend: () => void;
   disconnectCodexBackend: () => void;
   disconnectKimiWebBackend: () => void;
+  disconnectDshBackend?: () => void;
   bootstrapAcpWorkspace: () => Promise<void>;
   bootstrapKimiWebWorkspace: (isCurrent: () => boolean) => Promise<void>;
+  bootstrapDshWorkspace?: (isCurrent: () => boolean) => Promise<void>;
+  configureDshBackend?: (options: { bridgeUrl: string; bridgeToken?: string }) => void;
+  precheckDshConnection?: (request: DshPrecheckRequest) => Promise<void>;
   fetchGlobalProviderConfig: () => Promise<void>;
   fetchProviders: (force?: boolean) => Promise<void>;
   fetchAgents: () => Promise<void>;
@@ -118,6 +130,25 @@ async function runKimiWebPrecheck(request: KimiWebPrecheckRequest) {
     getToken: () => request.bridgeToken,
   });
   await client.getMeta();
+}
+
+/**
+ * dsh health contract: there is no `/api/`-prefixed health route on the dsh
+ * gateway, and the bare bridge prefix (`GET /dsh/`) maps to the non-existent
+ * `GET /api/` root — so a plain health GET is not a usable probe. Health is
+ * the unary `account/getState` RPC: `result.ok === true` (a signed-out
+ * payload included) proves the gateway, the bridge token fence and the
+ * credential chain all answer. `result.ok === false` throws the classified
+ * remote error — `DshMissingCredentialError` for the session-cookie fence is
+ * a distinct surface that still lands the user on the login UI instead of
+ * crashing activation; the sign-in flow itself is a later todo.
+ */
+async function runDshPrecheck(request: DshPrecheckRequest) {
+  const client = createDshRpcClient({
+    baseUrl: deriveDshBridgeHttpUrl(request.bridgeUrl),
+    getBridgeToken: () => request.bridgeToken,
+  });
+  await client.call('account', 'getState', {});
 }
 
 export function useBackendActivation(options: UseBackendActivationOptions) {
@@ -386,6 +417,59 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     }
   }
 
+  async function activateDsh(generation: number) {
+    resetCrossBackendState();
+    const requestToken = requestFence.start();
+    const hasCurrentRequest = () => requestFence.isCurrent(requestToken);
+    const isCurrent = () => ownsInitialization(generation) && hasCurrentRequest();
+    const remainsCurrent = () => generation === initializationGeneration && hasCurrentRequest();
+
+    try {
+      const bootstrapDshWorkspace = options.bootstrapDshWorkspace;
+      if (!bootstrapDshWorkspace) {
+        throw new Error('dsh workspace bootstrap is not wired.');
+      }
+      options.ge.disconnect();
+      options.disconnectAcpBackend();
+      options.disconnectCodexBackend();
+      options.disconnectKimiWebBackend();
+      options.activeBackendKind.value = 'dsh';
+      const bridgeUrl = options.credentials.dshBridgeUrl.value;
+      const bridgeToken = options.credentials.dshBridgeToken.value;
+      options.configureDshBackend?.({ bridgeUrl, bridgeToken });
+      options.setActiveBackendKind('dsh');
+      resetSharedUiState();
+      options.connectionState.value = 'connecting';
+      options.initLoadingMessage.value = options.t('app.connection.connecting');
+
+      const precheck = options.precheckDshConnection ?? runDshPrecheck;
+      await precheck({ bridgeUrl, bridgeToken });
+      if (!isCurrent()) return;
+
+      options.connectionState.value = 'bootstrapping';
+      await bootstrapDshWorkspace(remainsCurrent);
+      if (!isCurrent()) return;
+
+      options.connectionState.value = 'ready';
+      options.uiInitState.value = 'ready';
+      setTimeout(() => {
+        if (!remainsCurrent()) return;
+        void Promise.allSettled([
+          options.fetchGlobalProviderConfig(),
+          options.fetchProviders(true),
+        ]);
+      }, 0);
+    } catch (error) {
+      if (!isCurrent()) return;
+      options.disconnectDshBackend?.();
+      options.connectionState.value = 'error';
+      options.initErrorMessage.value = options.toErrorMessage(error);
+      options.uiInitState.value = 'login';
+    } finally {
+      if (generation === initializationGeneration) initializationInFlight.value = false;
+    }
+  }
+
   async function startInitialization() {
     if (initializationInFlight.value) return;
     initializationInFlight.value = true;
@@ -402,6 +486,10 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       await activateKimiWeb(generation);
       return;
     }
+    if (options.credentials.backendKind.value === 'dsh') {
+      await activateDsh(generation);
+      return;
+    }
     await activateOpenCode(generation);
   }
 
@@ -416,6 +504,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     options.ge.disconnect();
     options.disconnectAcpBackend();
     options.disconnectKimiWebBackend();
+    options.disconnectDshBackend?.();
     if (options.credentials.backendKind.value === 'codex') options.codexApi.disconnectTransport();
     options.disconnectCodexBackend();
     options.connectionState.value = 'connecting';

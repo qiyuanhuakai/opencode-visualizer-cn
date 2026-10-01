@@ -249,7 +249,7 @@ async function fetchDirectory(dir: string) {
       gitEntries = [];
     }
     let hasGitEntry = data.some((entry) => entry.name === '.git');
-    if (!hasGitEntry && gitEntries.length === 0 && getActiveBackendKind() === 'kimi-web') {
+    if (!hasGitEntry && gitEntries.length === 0 && (getActiveBackendKind() === 'kimi-web' || getActiveBackendKind() === 'dsh')) {
       try {
         const files = await getActiveBackendAdapter().listFiles?.(
           { directory: cleanDir, path: '.' },
@@ -290,7 +290,7 @@ async function listDirectory(dir: string, signal: AbortSignal) {
       ignored: false,
     }));
   }
-  const { directory, path } = getActiveBackendKind() === 'codex'
+  const { directory, path } = getActiveBackendKind() === 'codex' || getActiveBackendKind() === 'dsh'
     ? { directory: cleanDir, path: '.' }
     : splitFileContentDirectoryAndPath(cleanDir, null);
   const listFiles = getActiveBackendAdapter().listFiles;

@@ -33,6 +33,14 @@ export function resolveDesktopBridgeHealthUrl(target: DesktopBridgeHealthTarget)
       bridgeHttpUrl.search = '';
       return appendCodexBridgeToken(bridgeHttpUrl.toString(), target.kimiWebBridgeToken);
     }
+    if (target.backendKind === 'dsh') {
+      // dsh is supervised by the shared vis_bridge, so its `/healthz` is the
+      // common bridge endpoint (not the dsh path prefix).
+      return appendCodexBridgeToken(
+        codexBridgeHttpUrl(target.codexBridgeUrl, '/healthz'),
+        target.codexBridgeToken,
+      );
+    }
     // Codex and OpenCode share the configured common bridge; the OpenCode server
     // URL is never a bridge health endpoint.
     return appendCodexBridgeToken(

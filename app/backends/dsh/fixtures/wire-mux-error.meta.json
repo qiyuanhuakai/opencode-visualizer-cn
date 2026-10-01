@@ -1,0 +1,12 @@
+{
+  "dshVersion": "0.2.0-rc.2",
+  "dshPackage": "@deepseek-ai/dsh@0.2.0-rc.2",
+  "capturedAt": "2026-09-29T14:36:36.628Z",
+  "captureWindow": "2026-09-29T14:35:32.388Z..2026-09-29T14:36:36.628Z",
+  "captureEndpoint": "ws://127.0.0.1:8765/api/remote.mux",
+  "captureStream": "open streamId=pg1 endpoint=session/page payload={args:{request:{address:{kind:'session',sessionId:'session-06ee930d-7d74-42b1-928d-ac8fdd4376bf'}}}}",
+  "capturedBy": ".omo/evidence/dsh-adapt/03-ws-mux-probe.mjs",
+  "source": ".omo/evidence/dsh-adapt/04-session-follow-full.txt",
+  "frames": 1,
+  "note": "Host-side mux error frame: page open with a request missing throughSeq failed boundary validation."
+}

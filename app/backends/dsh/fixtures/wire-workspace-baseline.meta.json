@@ -1,0 +1,12 @@
+{
+  "dshVersion": "0.2.0-rc.2",
+  "dshPackage": "@deepseek-ai/dsh@0.2.0-rc.2",
+  "capturedAt": "2026-09-29T14:36:36.628Z",
+  "captureWindow": "2026-09-29T14:35:32.388Z..2026-09-29T14:36:36.628Z",
+  "captureEndpoint": "ws://127.0.0.1:8765/api/remote.mux",
+  "captureStream": "open streamId=ws1 endpoint=workspace/follow payload={args:{}}",
+  "capturedBy": ".omo/evidence/dsh-adapt/03-ws-mux-probe.mjs",
+  "source": ".omo/evidence/dsh-adapt/04-session-follow-full.txt",
+  "frames": 1,
+  "note": "Baseline value is double-nested under {type:'baseline',value:{...}}; increments (upsert/remove/order/archived/pinned) were not exercised in this capture."
+}
