@@ -4,7 +4,7 @@
 
 ---
 
-## [Unreleased]
+## [v0.8.11 released]
 
 ### DSH 后端与文件树修复
 
