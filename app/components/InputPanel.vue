@@ -328,7 +328,7 @@
               </template>
             </Dropdown>
           </div>
-          <div v-else class="input-field compact">
+          <div v-else-if="!props.hideAgentPicker" class="input-field compact">
             <Dropdown
               v-model="modeValue"
               :placeholder="agentPickerPlaceholder"
@@ -476,7 +476,7 @@
             </Dropdown>
           </div>
         </div>
-        <div class="input-field compact">
+        <div v-if="!props.hideThinkingPicker" class="input-field compact">
           <Dropdown
             v-model="thinkingKeyValue"
             :placeholder="
@@ -649,6 +649,8 @@ const props = defineProps<{
   preferFileMentions?: boolean;
   hasAgentOptions: boolean;
   agentPickerState?: AgentPickerState;
+  hideAgentPicker?: boolean;
+  hideThinkingPicker?: boolean;
   selectedModel: string;
   selectedThinking: string | undefined;
   modelOptions: ModelOption[];

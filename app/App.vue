@@ -195,6 +195,8 @@
               :prefer-file-mentions="activeBackendKind === 'acp' || activeBackendKind === 'kimi-web' || activeBackendKind === 'codex'"
               :has-agent-options="hasAgentOptions"
               :agent-picker-state="agentPickerState"
+              :hide-agent-picker="activeBackendKind === 'dsh'"
+              :hide-thinking-picker="activeBackendKind === 'dsh' && !hasThinkingOptions"
               :agent-color="currentAgentColor"
               :resolve-agent-color="resolveAgentColorForName"
               :model-options="availableModelOptions"
@@ -8549,6 +8551,7 @@ function dshAdoptFollow(
 function dshDisposeFollow(sessionId: string) {
   const handle = dshFollowStreams.get(sessionId);
   if (!handle) return;
+  dshMessageBridge.value?.detachFollow(sessionId);
   dshFollowStreams.delete(sessionId);
   // Follow streams are downlink-only: the half-close is `cancel` (R13).
   handle.cancel();
@@ -8563,17 +8566,23 @@ function dshAttachFollow(sessionId: string) {
   const mux = dshMuxClient.value;
   const bridge = dshMessageBridge.value;
   if (!mux || !bridge) return;
-  if (dshFollowStreams.has(sessionId)) return;
-  for (const [trackedId, handle] of [...dshFollowStreams]) {
-    if (trackedId === sessionId) continue;
-    dshFollowStreams.delete(trackedId);
-    handle.cancel();
+  const allowed = allowedSessionIds.value;
+  for (const trackedId of dshFollowStreams.keys()) {
+    if (allowed.has(trackedId)) continue;
+    dshDisposeFollow(trackedId);
   }
-  const handle = mux.open('session/follow', {
-    args: { request: { address: { kind: 'session', sessionId } } },
-  });
-  dshFollowStreams.set(sessionId, handle);
-  bridge.attachFollow(handle, sessionId);
+  for (const trackedId of [sessionId, ...allowed].filter((id, index, ids) => ids.indexOf(id) === index)) {
+    if (dshFollowStreams.has(trackedId)) continue;
+    const parentId = sessionParentById.value.get(trackedId);
+    const address: DshSessionAddress = trackedId !== sessionId && parentId
+      ? { kind: 'subagent', parentSessionId: parentId, childSessionId: trackedId, mode: 'unknown' }
+      : { kind: 'session', sessionId: trackedId };
+    const handle = mux.open('session/follow', {
+      args: { request: { address, assistantStream: true } },
+    });
+    dshFollowStreams.set(trackedId, handle);
+    bridge.attachFollow(handle, address);
+  }
 }
 
 function dshCreateMessageBridge(mux: DshMuxClient): DshMessageBridge {
@@ -8585,9 +8594,9 @@ function dshCreateMessageBridge(mux: DshMuxClient): DshMessageBridge {
     },
     msg,
     // R5/R6 history-only window fill; reconnect recovery is the snapshot's job.
-    fetchPage: async ({ sessionId, throughSeq, beforeSeq }) => {
+    fetchPage: async ({ sessionId, address, throughSeq, beforeSeq }) => {
       const page = await dshFetchSessionPage({
-        address: { kind: 'session', sessionId },
+        address: address ?? { kind: 'session', sessionId },
         throughSeq,
         beforeSeq,
       });
@@ -8707,7 +8716,7 @@ watch(activeBackendKind, (kind) => {
 
 // Session selection follows the selected session: attach its follow stream
 // (the reload path publishes the history window through the same bridge).
-watch(selectedSessionId, (sessionId) => {
+watch([selectedSessionId, allowedSessionIds, dshMessageBridge], ([sessionId]) => {
   if (activeBackendKind.value !== 'dsh') return;
   if (!sessionId) return;
   dshAttachFollow(sessionId);
@@ -8777,7 +8786,7 @@ async function dshFollowSession(sessionId: string): Promise<{ archived?: boolean
   // R7: dispose the superseded stream BEFORE opening the fork's own stream.
   dshDisposeFollow(sessionId);
   const handle = mux.open('session/follow', {
-    args: { request: { address: { kind: 'session', sessionId } } },
+    args: { request: { address: { kind: 'session', sessionId }, assistantStream: true } },
   });
   dshFollowStreams.set(sessionId, handle);
   const snapshot = await dshReadFirstFollowFrame(handle);

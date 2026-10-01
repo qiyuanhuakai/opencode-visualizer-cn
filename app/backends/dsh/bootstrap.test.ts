@@ -199,7 +199,7 @@ function messageBridge() {
  */
 function liveMux(firstFrames: Record<string, unknown> = {}) {
   const opened: Array<{ endpoint: string; args: Record<string, unknown> }> = [];
-  const handles: Array<{ streamId: string; listeners: Set<(value: DshJsonValue | undefined) => void> }> =
+  const handles: Array<{ streamId: string; assistantStream: boolean; listeners: Set<(value: DshJsonValue | undefined) => void> }> =
     [];
   let counter = 0;
   const client = {
@@ -209,8 +209,10 @@ function liveMux(firstFrames: Record<string, unknown> = {}) {
       const itemListeners = new Set<(value: DshJsonValue | undefined) => void>();
       const promise = new Promise<readonly (DshJsonValue | undefined)[]>(() => undefined);
       void promise.catch(() => undefined);
+      const request = payload.args.request;
       const handle = {
         streamId: `stream-${(counter += 1)}`,
+        assistantStream: typeof request === 'object' && request !== null && 'assistantStream' in request && request.assistantStream === true,
         listeners: itemListeners,
         promise,
         onItem(listener: (value: DshJsonValue | undefined) => void) {
@@ -239,6 +241,12 @@ function liveMux(firstFrames: Record<string, unknown> = {}) {
   return {
     client: client as unknown as DshMuxClient,
     opened,
+    deliverAssistant(frame: DshJsonValue) {
+      for (const handle of handles) {
+        if (!handle.assistantStream) continue;
+        for (const listener of handle.listeners) listener({ type: 'assistant-stream', frame });
+      }
+    },
     deliver(value: DshJsonValue | undefined) {
       for (const handle of handles) {
         for (const listener of [...handle.listeners]) listener(value);
@@ -365,7 +373,7 @@ describe('bootstrapDshWorkspace', () => {
     expect(mux.opened).toEqual([
       {
         endpoint: 'session/follow',
-        args: { request: { address: { kind: 'session', sessionId: 'session-root' } } },
+        args: { request: { address: { kind: 'session', sessionId: 'session-root' }, assistantStream: true } },
       },
     ]);
     expect(normalize.normalizeSnapshot).toHaveBeenCalledWith(SESSION_FOLLOW_SNAPSHOT);
@@ -461,7 +469,7 @@ describe('bootstrapDshWorkspace', () => {
     expect(mux.opened).toEqual([
       {
         endpoint: 'session/follow',
-        args: { request: { address: { kind: 'session', sessionId: 'session-root' } } },
+        args: { request: { address: { kind: 'session', sessionId: 'session-root' }, assistantStream: true } },
       },
     ]);
     expect(bridge.attachFollow).toHaveBeenCalledWith(
@@ -679,6 +687,22 @@ describe('bootstrapDshWorkspace', () => {
     const texts = [...store.parts.values()].map((part) => (part as { text?: string }).text);
     expect(texts).toContain('Live after bootstrap');
     expect(bridge.syncState('session-root')).toEqual({ kind: 'live', cursor: 9 });
+  });
+
+  it('receives volatile assistant deltas on the initial selected session before durable completion', async () => {
+    // Given: the follow provider only streams assistant frames when requested.
+    const mux = liveMux({ 'session/follow': SESSION_FOLLOW_SNAPSHOT });
+    const store = new RecordingMessageStore();
+    const bridge = useDshMessageBridge({ mux: mux.client, rpc: { baseUrl: 'http://localhost:23004/dsh' }, msg: store });
+    await bootstrapDshWorkspace({ adapter: sessionSource(sessionsFixture()), mux: mux.client,
+      createBridge: () => bridge, normalize: normalizer(), fetchPage: () => Promise.resolve(emptyWindow()),
+      isCurrent: () => true, commit: vi.fn() });
+    // When: the initial selected session streams without a durable message yet.
+    mux.deliverAssistant({ type: 'start', attemptId: 'initial', turn: 1, step: 1 });
+    mux.deliverAssistant({ type: 'chunk', attemptId: 'initial', index: 0, chunk: { type: 'text-delta', text: 'Live initial response' } });
+    // Then: the shared message store immediately exposes the streamed response.
+    expect([...store.parts.values()]).toEqual([expect.objectContaining({ type: 'text', text: 'Live initial response' })]);
+    bridge.stop();
   });
 });
 

@@ -64,6 +64,7 @@ function handleInboxSpliced(core: DshCore, event: DshSessionWireEvent, ops: DshN
     core.appliedMessages.add(id);
     const source = isRecord(raw.source) ? raw.source : {};
     const sourceKind = asString(source.kind) || 'user';
+    if (sourceKind !== 'user') continue;
     const rpcId = asString(source.rpcId);
     const text = textOfContent(raw.content, 'text');
     ops.push({ kind: 'message', message: userMessageOf(core, core.sessionId, id, now) });

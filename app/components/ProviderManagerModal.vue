@@ -342,6 +342,7 @@
                       <span class="toggle-track" />
                     </label>
                     <button
+                      v-if="props.backendKind !== 'dsh'"
                       type="button"
                       class="ghost-action danger"
                       :disabled="!canDisconnectProvider(provider) || busyProviderId === provider.id"
@@ -999,7 +1000,7 @@ function isProviderDisconnected(provider: ProviderInfo) {
 }
 
 function isBackendManagedProvider(provider: ProviderInfo) {
-  return provider.source === 'codex-app-server';
+  return props.backendKind === 'dsh' || provider.source === 'codex-app-server';
 }
 
 function supportsProviderConfigUpdates() {

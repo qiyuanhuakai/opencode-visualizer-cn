@@ -47,30 +47,47 @@ function handleTurnStart(core: DshCore, event: DshSessionWireEvent, ops: DshNorm
 function handleTurnEnd(core: DshCore, event: DshSessionWireEvent, ops: DshNormalizeOp[]) {
   const data = dataOf(event);
   const turn = asNumber(data.turn) ?? 0;
-  const group = ensureGroup(core, core.sessionId, turn, event.time, ops);
+  ensureGroup(core, core.sessionId, turn, event.time, ops);
   const reason = turnReasonOf(data);
   const terminal = reason.kind !== 'completed';
-  group.endedAt = event.time;
-  if (reason.kind === 'error') {
-    group.error = {
-      name: 'DshTurnError',
-      data: { code: reason.code, message: reason.message ?? 'dsh turn failed' },
-    };
-    group.finish = 'error';
-  } else if (terminal) {
-    group.finish = reason.kind;
-  } else {
-    group.finish = 'stop';
+  for (const group of core.groups.values()) {
+    if (group.sessionId !== core.sessionId || group.turn !== turn) continue;
+    group.endedAt = event.time;
+    if (reason.kind === 'error') {
+      group.error = {
+        name: 'DshTurnError',
+        data: { code: reason.code, message: reason.message ?? 'dsh turn failed' },
+      };
+      group.finish = 'error';
+    } else {
+      group.finish = terminal ? reason.kind : 'stop';
+    }
+    if (terminal) {
+      for (const part of core.toolParts.values()) {
+        if (part.messageID !== group.messageID || (part.state.status !== 'pending' && part.state.status !== 'running')) continue;
+        const finished: ToolPart = {
+          ...part,
+          state: {
+            status: 'error', input: part.state.input,
+            error: reason.message ?? `dsh turn ${reason.kind}`,
+            metadata: partMeta(core, { terminal: reason.kind }),
+            time: { start: part.state.status === 'running' ? part.state.time.start : group.startedAt, end: event.time },
+          },
+        };
+        core.toolParts.set(finished.id, finished);
+        ops.push({ kind: 'part', part: finished });
+      }
+    }
+    core.sealedGroups.add(groupKeyOf(group.sessionId, group.turn, group.step));
+    ops.push({ kind: 'message', message: buildMessage(core, group) });
+    terminalParts(
+      core,
+      group,
+      reason.kind === 'aborted' || reason.kind === 'cancelled',
+      terminal ? { terminal: reason.kind } : undefined,
+      ops,
+    );
   }
-  core.sealedGroups.add(groupKeyOf(group.sessionId, group.turn));
-  ops.push({ kind: 'message', message: buildMessage(core, group) });
-  terminalParts(
-    core,
-    group,
-    reason.kind === 'aborted' || reason.kind === 'cancelled',
-    terminal ? { terminal: reason.kind } : undefined,
-    ops,
-  );
   ops.push({
     kind: 'turn', phase: 'ended', sessionId: core.sessionId, turn, time: event.time, reason,
   });
@@ -176,11 +193,11 @@ function handleSystemMessage(core: DshCore, event: DshSessionWireEvent, ops: Dsh
 function handleAssistantMessage(core: DshCore, event: DshSessionWireEvent, ops: DshNormalizeOp[]) {
   const data = dataOf(event);
   const turn = asNumber(data.turn) ?? 0;
-  const group = ensureGroup(core, core.sessionId, turn, event.time, ops);
+  const group = ensureGroup(core, core.sessionId, turn, event.time, ops, asNumber(data.step) ?? 1);
   const message = messageOf(data);
   const text = textOfContent(message.content, 'text');
   const reasoning = textOfContent(message.content, 'reasoning');
-  const key = groupKeyOf(group.sessionId, group.turn);
+  const key = groupKeyOf(group.sessionId, group.turn, group.step);
   const unchanged = core.sealedGroups.has(key)
     && aggregate(group.text) === text
     && aggregate(group.reasoning) === reasoning;
@@ -201,7 +218,7 @@ function handleAssistantMessage(core: DshCore, event: DshSessionWireEvent, ops: 
 function handleAssistantAttempt(core: DshCore, event: DshSessionWireEvent, ops: DshNormalizeOp[]) {
   const data = dataOf(event);
   const turn = asNumber(data.turn) ?? 0;
-  const group = ensureGroup(core, core.sessionId, turn, event.time, ops);
+  const group = ensureGroup(core, core.sessionId, turn, event.time, ops, asNumber(data.step) ?? 1);
   applyStreamChunks(core, group, asArray(data.stream), event.time, ops);
   ops.push({ kind: 'message', message: buildMessage(core, group) });
 }
@@ -234,7 +251,7 @@ function applyChunk(
 ) {
   const type = asString(chunk.type);
   if (!type) return;
-  const key = groupKeyOf(group.sessionId, group.turn);
+  const key = groupKeyOf(group.sessionId, group.turn, group.step);
   const chunkKey = `${key}|${index}`;
   if (core.sealedGroups.has(key)) {
     core.stats.staleDeltaCount += 1;
@@ -289,7 +306,7 @@ function handleToolCall(core: DshCore, event: DshSessionWireEvent, ops: DshNorma
   const data = dataOf(event);
   const callId = asString(data.callId);
   if (!callId) return;
-  const group = ensureGroup(core, core.sessionId, asNumber(data.turn) ?? 0, event.time, ops);
+  const group = ensureGroup(core, core.sessionId, asNumber(data.turn) ?? 0, event.time, ops, asNumber(data.step) ?? 1);
   const part = toolPartOf(core, group, callId, asString(data.name) || 'other');
   const args = isRecord(data.arguments) ? data.arguments : {};
   part.state = { status: 'pending', input: args, raw: JSON.stringify(args) };
@@ -299,7 +316,7 @@ function handleToolCall(core: DshCore, event: DshSessionWireEvent, ops: DshNorma
 
 function handleToolResult(core: DshCore, event: DshSessionWireEvent, ops: DshNormalizeOp[]) {
   const data = dataOf(event);
-  const group = ensureGroup(core, core.sessionId, asNumber(data.turn) ?? 0, event.time, ops);
+  const group = ensureGroup(core, core.sessionId, asNumber(data.turn) ?? 0, event.time, ops, asNumber(data.step) ?? 1);
   const callId = asString(data.callId);
   const existing = resolveToolPart(core, group, callId);
   if (!existing) return;
@@ -382,8 +399,8 @@ export function applyLiveAssistantChunk(
   time: number,
   ops: DshNormalizeOp[],
 ) {
-  const turn = core.attempts.get(attemptId)?.turn ?? 0;
-  const group = ensureGroup(core, core.sessionId, turn, time, ops);
+  const attempt = core.attempts.get(attemptId);
+  const group = ensureGroup(core, core.sessionId, attempt?.turn ?? 0, time, ops, attempt?.step ?? 1);
   applyChunk(core, group, index, chunk, time, ops);
 }
 

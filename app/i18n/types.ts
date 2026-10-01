@@ -437,6 +437,7 @@ export interface LocaleMessages {
       rateLimitFiveHourUsed: string;
     };
     dsh: {
+      capabilityLabels: Record<string, string>;
       connection: string;
       session: string;
       followStream: string;

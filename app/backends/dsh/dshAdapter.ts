@@ -244,7 +244,7 @@ export type DshCatalogProvider = {
  * A catalog that yields no provider is an error, not an empty selector.
  */
 export function normalizeDshModelCatalog(value: unknown): DshCatalogProvider[] {
-  const raw = isRecord(value) ? (value.providers ?? value.items ?? value) : value;
+  const raw = isRecord(value) ? (value.groups ?? value.providers ?? value.items ?? value) : value;
   const providers: DshCatalogProvider[] = [];
   for (const entry of readArray(raw)) {
     if (!isRecord(entry)) continue;
@@ -255,7 +255,13 @@ export function normalizeDshModelCatalog(value: unknown): DshCatalogProvider[] {
       if (!isRecord(modelEntry)) continue;
       const modelId = readString(modelEntry, ['id', 'model', 'modelId']);
       if (!modelId) continue;
-      const efforts = readStringArray(modelEntry.reasoningEfforts ?? modelEntry.reasoning_efforts);
+      const reasoning = isRecord(modelEntry.reasoning) ? modelEntry.reasoning : undefined;
+      const efforts = reasoning
+        ? readArray(reasoning.efforts).flatMap((effort) => {
+            const id = typeof effort === 'string' ? effort : isRecord(effort) ? readString(effort, ['id']) : '';
+            return id ? [id] : [];
+          })
+        : readStringArray(modelEntry.reasoningEfforts ?? modelEntry.reasoning_efforts);
       const contextLimit =
         typeof modelEntry.maxContextTokens === 'number'
           ? modelEntry.maxContextTokens
@@ -267,7 +273,7 @@ export function normalizeDshModelCatalog(value: unknown): DshCatalogProvider[] {
         name: readString(modelEntry, ['display_name', 'displayName', 'name', 'label']) || modelId,
         reasoningEfforts: efforts,
         defaultReasoningEffort:
-          readString(modelEntry, [
+          (reasoning ? readString(reasoning, ['defaultEffort']) : '') || readString(modelEntry, [
             'defaultReasoningEffort',
             'default_reasoning_effort',
             'defaultEffort',
@@ -883,10 +889,10 @@ export class DshAdapter implements BackendAdapter {
   /** Session whose cwd resolves to `directory` (the workspaceFiles scope id). */
   private async sessionIdForDirectory(directory: string): Promise<string> {
     const normalized = normalizeDirectory(directory.trim() || '/');
-    const sessions = await this.listMappedSessions({ directory: normalized });
-    const session = sessions.find((entry) => !entry.time?.archived) ?? sessions[0];
+    const sessions = await this.sessionListItems();
+    const session = sessions.find((entry) => entry.cwd && normalizeDirectory(entry.cwd) === normalized);
     if (!session) throw new Error(`No dsh session found for directory ${normalized}.`);
-    return session.id;
+    return session.sessionId;
   }
 
   /** Run one bridge command (`/command/exec`) and return its result. */
@@ -1148,7 +1154,7 @@ export class DshAdapter implements BackendAdapter {
     );
     if (!isRecord(value)) throw new Error('dsh workspaceFiles/list did not return an object.');
     const prefix = relative === '.' ? '' : relative.replace(/^\/+/u, '').replace(/\/+$/u, '');
-    return readArray(value.entries).flatMap((entry) => {
+    const entries = readArray(value.entries).flatMap((entry) => {
       if (!isRecord(entry)) return [];
       const name = readString(entry, ['name']);
       if (!name) return [];
@@ -1164,6 +1170,15 @@ export class DshAdapter implements BackendAdapter {
         },
       ];
     });
+    if (entries.length === 0) return entries;
+    const ignored = await this.bridgeCommand('git', [
+      '-c', 'core.quotePath=false', 'check-ignore', '--',
+      ...entries.map((entry) => entry.path),
+    ], directory, options);
+    const ignoredPaths = new Set(ignored.exitCode === 0
+      ? ignored.stdout.split('\n')
+      : []);
+    return entries.map((entry) => ({ ...entry, ignored: entry.path === '.git' || entry.path.startsWith('.git/') || ignoredPaths.has(entry.path) || ignoredPaths.has(JSON.stringify(entry.path)) }));
   }
 
   async readFileContent(

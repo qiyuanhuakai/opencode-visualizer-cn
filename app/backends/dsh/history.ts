@@ -36,6 +36,7 @@
 import { createDshNormalizer } from './normalize';
 import type { DshNormalizeOp } from './ops';
 import type { DshJsonValue, DshSessionAddress, DshSessionRecord } from './types';
+import type { MessageInfo, MessagePart } from '../../types/sse';
 
 // ---------------------------------------------------------------------------
 // Page envelope: `type`/`args` are data, `status`/`cursor`/`hasMore` are envelope
@@ -430,23 +431,28 @@ export const normalizeDshHistoryPage: DshHistoryNormalizer = (request) => {
 
 /** Flatten neutral ops into `{info, parts}` entries (the `loadHistory` shape). */
 function entriesFromDshOps(ops: readonly DshNormalizeOp[]): unknown[] {
-  const byMessage = new Map<string, { info: unknown; parts: unknown[] }>();
-  const entries: Array<{ info: unknown; parts: unknown[] }> = [];
+  const byMessage = new Map<string, { info: MessageInfo; parts: MessagePart[] }>();
+  const entries: Array<{ info: MessageInfo; parts: MessagePart[] }> = [];
   for (const op of ops) {
     if (op.kind === 'message') {
-      const info = op.message as { id: string };
-      if (byMessage.has(info.id)) continue;
+      const info = op.message;
+      const existing = byMessage.get(info.id);
+      if (existing) {
+        existing.info = info;
+        continue;
+      }
       const entry = { info, parts: [] };
       byMessage.set(info.id, entry);
       entries.push(entry);
       continue;
     }
     if (op.kind === 'part') {
-      const part = op.part as { id: string; messageID: string };
+      const part = op.part;
       const entry = byMessage.get(part.messageID);
-      if (entry && !entry.parts.some((existing) => (existing as { id: string }).id === part.id)) {
-        entry.parts.push(part);
-      }
+      if (!entry) continue;
+      const index = entry.parts.findIndex((existing) => existing.id === part.id);
+      if (index < 0) entry.parts.push(part);
+      else entry.parts[index] = part;
     }
   }
   return entries;

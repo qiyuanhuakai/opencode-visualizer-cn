@@ -320,6 +320,7 @@
           v-for="row in visibleRows"
           :key="row.node.path"
           class="tree-row"
+          :title="row.node.error"
           :class="row.classList"
           :style="{ transform: `translateY(${row.offsetY}px)`, '--indent': String(row.depth) }"
           @click="onRowClick(row, $event)"
@@ -360,6 +361,7 @@
               <template v-else>{{ part.text }}</template>
             </template>
           </span>
+          <Icon v-if="row.node.error" icon="lucide:triangle-alert" :width="12" :height="12" :aria-label="row.node.error" />
           <button
             v-if="row.displayStatus && row.node.type !== 'directory'"
             type="button"

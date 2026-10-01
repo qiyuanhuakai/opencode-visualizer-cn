@@ -16,6 +16,7 @@ import {
   DshHistoryError,
   DSH_HISTORY_MAX_PAGES,
   loadDshHistory,
+  normalizeDshHistoryPage,
   matchDshChildSessions,
   readDshHistoryPage,
   resolveDshChildSessions,
@@ -41,6 +42,18 @@ const snapshot = (() => {
 /** Real captured records in wire order. */
 const RECORDS: readonly DshSessionRecord[] = snapshot.records;
 const CURSOR = snapshot.cursor;
+
+it('preserves terminal errors when recorded history updates an existing assistant message', () => {
+  // Given: captured records containing turn/start followed by MISSING_CREDENTIAL.
+  // When: replay is projected into loadHistory entries.
+  const result = normalizeDshHistoryPage({ records: RECORDS, address: { kind: 'session', sessionId: SESSION_ID } });
+  // Then: the final message replaces the initial empty assistant state.
+  expect(result.entries).toEqual(expect.arrayContaining([
+    expect.objectContaining({ info: expect.objectContaining({ role: 'assistant', finish: 'error',
+      error: expect.objectContaining({ data: expect.objectContaining({ code: 'MISSING_CREDENTIAL' }) }),
+    }) }),
+  ]));
+});
 
 /** A window of the captured records: `[lowest, below)` by seq, ascending. */
 function windowOf(lowest: number, below: number): readonly DshSessionRecord[] {

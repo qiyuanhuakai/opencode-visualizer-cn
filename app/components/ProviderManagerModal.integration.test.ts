@@ -15,6 +15,18 @@ import {
 } from './providerManagerModal.test-helpers';
 
 describe('ProviderManagerModal integration contracts', () => {
+  it('keeps DSH runtime-managed provider credentials read-only', async () => {
+    setProviderBackend(openCodeBackend());
+    const { host } = await mountProviderManager({
+      backendKind: 'dsh',
+      providers: [{ id: 'deepseek-official', models: { flash: { id: 'flash' } } }],
+      connectedProviderIds: ['deepseek-official'],
+    });
+    expect(host.querySelector('.provider-list-row')).not.toBeNull();
+    expect(requireElement<HTMLInputElement>(host, '.provider-toggle .toggle-input').disabled).toBe(true);
+    expect(host.querySelector('.provider-list-row-actions .danger')).toBeNull();
+  });
+
   it('keeps shared model visibility controls available for Kimi Web', async () => {
     setProviderBackend(openCodeBackend());
     const { host, events } = await mountProviderManager({

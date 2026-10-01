@@ -211,6 +211,7 @@ function bridgeDouble(order: string[] = []) {
   return {
     attached: [] as Array<{ handle: unknown; sessionId?: string }>,
     stopped: false,
+    detachFollow: vi.fn(),
     history: [] as unknown[][],
     attachFollow(handle: unknown, sessionId?: string) {
       this.attached.push({ handle, sessionId });
@@ -998,7 +999,7 @@ describe('dshSessionApi (Todo 27 session action routing)', () => {
     const opened = harness.mux.opened.filter((entry) => entry.endpoint === 'session/follow');
     expect(opened).toHaveLength(1);
     expect(opened[0]!.payload).toEqual({
-      args: { request: { address: { kind: 'session', sessionId: 'session-forked' } } },
+      args: { request: { address: { kind: 'session', sessionId: 'session-forked' }, assistantStream: true } },
     });
     // Attached with the join-time binding and the snapshot published.
     expect(harness.bridge.attached).toEqual([

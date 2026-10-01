@@ -184,8 +184,8 @@ describe('StatusMonitorModal dsh status section', () => {
     expect(dshRowMeta(root, 'Sandbox')).toBe('workspace');
     expect(dshRowMeta(root, 'Approval policy')).toBe('on-request');
     expect(dshRowMeta(root, 'Model')).toContain('deepseek/deepseek-chat');
-    expect(dshRowMeta(root, 'Capabilities')).toContain('projects');
-    expect(dshRowMeta(root, 'Capabilities')).toContain('sessions');
+    expect(dshRowMeta(root, 'Capabilities')).toContain('Projects');
+    expect(dshRowMeta(root, 'Capabilities')).toContain('Sessions');
 
     // Exactly nine rows: no row exists for a state dsh does not expose.
     expect(root.querySelectorAll('.status-monitor-row.is-dsh')).toHaveLength(9);
@@ -201,8 +201,8 @@ describe('StatusMonitorModal dsh status section', () => {
       expect(capabilities).not.toContain(falseCapability);
     }
     // True capability names are present, false ones are not.
-    expect(capabilities).toContain('projects');
-    expect(capabilities).toContain('sessions');
+    expect(capabilities).toContain('Projects');
+    expect(capabilities).toContain('Sessions');
     // No rows were fabricated for the unsupported capability names.
     for (const label of ['Worktrees', 'Todos', 'Questions']) {
       expect(dshRow(root, label)).toBeUndefined();
@@ -323,27 +323,25 @@ describe('StatusMonitorModal dsh usage mapping', () => {
   });
 });
 
-describe('StatusMonitorModal dsh unsupported copy', () => {
-  it('renders probe-driven unsupported copy on the MCP/LSP/Plugins/Skills tabs', async () => {
-    const { root, app } = await mountDshModal({
-      probes: { mcp: 'unsupported', lsp: 'unsupported', plugins: 'unsupported', skills: 'unsupported' },
-    });
-    clickTab(root, 'MCP');
-    await vi.waitFor(() => expect(root.textContent).toContain('not exposed by DSH'));
-    clickTab(root, 'LSP');
-    await vi.waitFor(() => expect(root.textContent).toContain('not exposed by DSH'));
-    clickTab(root, 'Plugins');
-    await vi.waitFor(() => expect(root.textContent).toContain('not exposed by DSH'));
-    clickTab(root, 'Skills');
-    await vi.waitFor(() => expect(root.textContent).toContain('not supported by DSH'));
+describe('StatusMonitorModal dsh capability navigation', () => {
+  it('omits unsupported or unknown status surfaces from navigation', async () => {
+    const { root, app } = await mountDshModal({});
+    expect([...root.querySelectorAll('[role="tab"]')].map((tab) => tab.id)).toEqual([
+      'status-monitor-tab-server', 'status-monitor-tab-token', 'status-monitor-tab-acp',
+    ]);
     app.unmount();
   });
 
-  it('never claims support for a surface whose probe did not prove it', async () => {
-    const { root, app } = await mountDshModal({});
+  it('reveals skills only when the runtime probe confirms support', async () => {
+    const status = reactive<DshStatusSnapshot>({ probes: { skills: 'supported' } });
+    const { root, app } = await mountDshModal(status);
     clickTab(root, 'Skills');
-    await vi.waitFor(() => expect(root.textContent).toContain('could not be probed'));
-    expect(root.textContent).not.toContain('supported');
+    await nextTick();
+    expect(root.querySelector('#status-monitor-tab-skills')?.getAttribute('aria-selected')).toBe('true');
+    status.probes = { skills: 'unknown' };
+    await nextTick();
+    expect(root.querySelector('#status-monitor-tab-skills')).toBeNull();
+    expect(root.querySelector('#status-monitor-tab-server')?.getAttribute('aria-selected')).toBe('true');
     app.unmount();
   });
 });
@@ -384,18 +382,16 @@ describe('StatusMonitorModal dsh live version', () => {
 });
 
 describe('StatusMonitorModal dsh connection switch', () => {
-  it('drops stale Todo 31 probe results when the connection is invalidated', async () => {
+  it('keeps unconfirmed skills hidden after connection invalidation', async () => {
     const registry = createDshCapabilityRegistry({ call: async () => ({ ok: true }) });
     registry.markUnsupported('skills');
     setActiveDshCapabilityRegistry(registry);
     try {
       const { root, app } = await mountDshModal({});
-      clickTab(root, 'Skills');
-      await vi.waitFor(() => expect(root.textContent).toContain('not supported by DSH'));
-
+      expect(root.querySelector('#status-monitor-tab-skills')).toBeNull();
       registry.invalidate('connection-switch');
-      await vi.waitFor(() => expect(root.textContent).toContain('could not be probed'));
-      expect(root.textContent).not.toContain('not supported by DSH');
+      await nextTick();
+      expect(root.querySelector('#status-monitor-tab-skills')).toBeNull();
       app.unmount();
     } finally {
       setActiveDshCapabilityRegistry(null);

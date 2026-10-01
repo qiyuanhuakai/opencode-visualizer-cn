@@ -48,6 +48,7 @@ import type {
   DshWaterfallOutcome,
 } from './dshMessageBridgeTypes';
 import { useDshMessageBridge } from './useDshMessageBridge';
+import { DshMuxError } from '../utils/dshMux';
 
 // ---------------------------------------------------------------------------
 // Real wire fixtures (version-gated by the sidecars)
@@ -678,6 +679,96 @@ describe('dsh message bridge — popup callback surface', () => {
     expect(onLiveSubagent).toHaveBeenCalledTimes(1);
     expect(onLiveSubagent.mock.calls[0][1]).toMatchObject({ type: 'tool', callID: 'child-call-1' });
     expect(onToolPart).not.toHaveBeenCalled();
+  });
+
+  it('preserves a child address in popup metadata and terminal events', () => {
+    // Given: a parent and an explicitly addressed child follow stream.
+    const onLiveSubagent = vi.fn();
+    const onSessionEvent = vi.fn();
+    const harness = createHarness({ onLiveSubagent, onSessionEvent });
+    harness.bridge.attachFollow(new FakeStream('parent'), SESSION_ID);
+    const child = new FakeStream('child');
+    harness.bridge.attachFollow(child, { kind: 'subagent', parentSessionId: SESSION_ID, childSessionId: CHILD_SESSION_ID, mode: 'one-shot' });
+    child.emit(snapshot(CHILD_SESSION_ID, [], 0));
+    // When: child output and completion arrive.
+    child.emit(record('assistant/message', 1, { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'child answer' }] } }));
+    child.emit(record('turn/end', 2, { turn: 1, reason: { kind: 'completed' } }));
+    // Then: both rendering metadata and completion retain parent linkage.
+    expect(onLiveSubagent).toHaveBeenCalledWith(expect.objectContaining({ agent: 'subagent' }), expect.objectContaining({
+      metadata: expect.objectContaining({ subagent: { parentSessionId: SESSION_ID, childSessionId: CHILD_SESSION_ID, mode: 'one-shot' } }),
+    }));
+    expect(onSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'subagent', parentSessionId: SESSION_ID, childSessionId: CHILD_SESSION_ID, phase: 'completed' }), expect.anything());
+    harness.bridge.stop();
+  });
+
+  it('reopens a failed child stream with its original subagent address', async () => {
+    // Given: an attached child stream.
+    const harness = createHarness();
+    const child = new FakeStream('child');
+    const address = { kind: 'subagent', parentSessionId: SESSION_ID, childSessionId: CHILD_SESSION_ID, mode: 'one-shot' } as const;
+    harness.bridge.attachFollow(child, address);
+    child.emit(snapshot(CHILD_SESSION_ID, [], 0));
+    // When: the host kills this logical stream.
+    child.drop(new DshMuxError('stream-error', 'child stream failed'));
+    await Promise.resolve();
+    // Then: recovery uses the same address, including parent and mode.
+    expect(harness.mux.opened.at(-1)).toMatchObject({ endpoint: 'session/follow', payload: { args: { request: { address } } } });
+    harness.bridge.stop();
+  });
+
+  it('pages child history using the child address', async () => {
+    // Given: a child snapshot has established its own sequence watermark.
+    const fetchPage = vi.fn(async () => ({ records: [] }));
+    const harness = createHarness({ fetchPage });
+    const address = { kind: 'subagent', parentSessionId: SESSION_ID, childSessionId: CHILD_SESSION_ID, mode: 'one-shot' } as const;
+    const child = new FakeStream('child');
+    harness.bridge.attachFollow(child, address);
+    child.emit(snapshot(CHILD_SESSION_ID, [], 5));
+    // When: older child history is requested.
+    await harness.bridge.fillHistoryWindow(CHILD_SESSION_ID);
+    // Then: the RPC source receives the child namespace, never the parent namespace.
+    expect(fetchPage).toHaveBeenCalledWith({ sessionId: CHILD_SESSION_ID, address, throughSeq: 5, beforeSeq: 6 });
+    harness.bridge.stop();
+  });
+
+  it('routes a newly selected root through root callbacks after another root was attached', () => {
+    // Given: the shared bridge first followed root A.
+    const onLiveSubagent = vi.fn();
+    const onToolPart = vi.fn();
+    const harness = createHarness({ onLiveSubagent, onToolPart });
+    harness.bridge.attachFollow(new FakeStream('root-a'), SESSION_ID);
+    const rootB = new FakeStream('root-b');
+    harness.bridge.attachFollow(rootB, 'root-b');
+    rootB.emit(snapshot('root-b', [], 0));
+    // When: selected root B emits a live tool.
+    rootB.emit(record('tool/call', 1, { turn: 1, step: 1, callId: 'root-b-tool', name: 'read', arguments: {} }));
+    // Then: the tool follows the root surface and default accessors follow B.
+    expect(onToolPart).toHaveBeenCalledWith(expect.objectContaining({ sessionID: 'root-b', callID: 'root-b-tool' }));
+    expect(onLiveSubagent).not.toHaveBeenCalled();
+    expect(harness.bridge.sessionState()?.sessionId).toBe('root-b');
+    harness.bridge.stop();
+  });
+
+  it('ignores detached stream errors and permits reattaching the same session', async () => {
+    // Given: selection leaves a followed session while its stream is failing.
+    const harness = createHarness();
+    const old = new FakeStream('old');
+    harness.bridge.attachFollow(old, SESSION_ID);
+    old.emit(snapshot(SESSION_ID, [], 0));
+    // When: it is detached, a late error arrives, then selection returns.
+    harness.bridge.detachFollow(SESSION_ID);
+    old.drop(new DshMuxError('stream-error', 'late error'));
+    await Promise.resolve();
+    const replacement = new FakeStream('replacement');
+    harness.bridge.attachFollow(replacement, SESSION_ID);
+    replacement.emit(snapshot(SESSION_ID, [], 0));
+    replacement.emit(record('tool/call', 1, { turn: 1, callId: 'new-tool', name: 'read', arguments: {} }));
+    // Then: no ghost recovery opens and the replacement publishes live output.
+    expect(harness.mux.opened.filter((entry) => entry.endpoint === 'session/follow')).toEqual([]);
+    expect(old.cancelled).toBe(true);
+    expect(old.listeners.size).toBe(0);
+    expect([...harness.store.parts.values()]).toEqual([expect.objectContaining({ type: 'tool', callID: 'new-tool' })]);
+    harness.bridge.stop();
   });
 });
 

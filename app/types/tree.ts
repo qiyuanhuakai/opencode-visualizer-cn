@@ -5,4 +5,5 @@ export type TreeNode = {
   children?: TreeNode[];
   ignored?: boolean;
   synthetic?: boolean;
+  error?: string;
 };

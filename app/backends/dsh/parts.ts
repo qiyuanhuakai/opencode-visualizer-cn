@@ -96,6 +96,7 @@ export type DshGroup = {
   sessionId: string;
   parentSessionId?: string;
   turn: number;
+  step: number;
   messageID: string;
   startedAt: number;
   endedAt?: number;
@@ -147,8 +148,8 @@ export function toolPartKeyOf(sessionId: string, messageID: string, callId: stri
   return `${sessionId}|${messageID}:tool:${callId}`;
 }
 
-export function groupKeyOf(sessionId: string, turn: number): string {
-  return `${sessionId}|${turn}`;
+export function groupKeyOf(sessionId: string, turn: number, step = 1): string {
+  return `${sessionId}|${turn}|${step}`;
 }
 
 export function buildMessage(core: DshCore, group: DshGroup): AssistantMessageInfo {
@@ -192,8 +193,9 @@ export function ensureGroup(
   turn: number,
   time: number | undefined,
   ops: DshNormalizeOp[],
+  step = 1,
 ): DshGroup {
-  const key = groupKeyOf(sessionId, turn);
+  const key = groupKeyOf(sessionId, turn, step);
   let group = core.groups.get(key);
   if (!group) {
     group = {
@@ -202,7 +204,8 @@ export function ensureGroup(
         ? { parentSessionId: core.address.parentSessionId }
         : {}),
       turn,
-      messageID: `${sessionId}:t${turn}`,
+      step,
+      messageID: `${sessionId}:t${turn}${step === 1 ? '' : `:s${step}`}`,
       startedAt: time ?? core.now(),
       usageStepIds: new Set(),
       text: newBucket(),

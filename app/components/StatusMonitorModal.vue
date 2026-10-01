@@ -274,6 +274,7 @@ function requireBackendMethod<T extends (...args: never[]) => unknown>(method: T
 
 type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills' | 'token' | 'mc' | 'acp';
 function availableTab(tab: TabId | undefined): TabId {
+  if (props.activeBackendKind === 'dsh' && (tab === 'mcp' || tab === 'lsp' || tab === 'plugins' || (tab === 'skills' && props.dshStatus?.probes?.skills !== 'supported'))) return 'server';
   return tab === 'mc' && props.activeBackendKind !== 'opencode' ? 'server' : tab ?? 'server';
 }
 const activeTab = ref<TabId>(availableTab(props.initialTab));
@@ -1246,7 +1247,9 @@ const tabs = computed<{ id: TabId; labelKey: string }[]>(() => {
     base.push({ id: 'mc', labelKey: 'statusMonitor.tabs.mc' });
   }
   base.push({ id: 'acp', labelKey: 'statusMonitor.tabs.acp' });
-  return base;
+  return isDshBackend.value
+    ? base.filter((tab) => tab.id !== 'mcp' && tab.id !== 'lsp' && tab.id !== 'plugins' && (tab.id !== 'skills' || dshProbeStates.value.skills === 'supported'))
+    : base;
 });
 
 function handleTabKeydown(event: KeyboardEvent, index: number) {
@@ -1505,7 +1508,7 @@ const dshModelText = computed(() => {
 const dshCapabilitiesText = computed(() =>
   Object.entries(DSH_CAPABILITY_REGISTRY)
     .filter(([, enabled]) => enabled === true)
-    .map(([name]) => name)
+    .map(([name]) => t(`statusMonitor.dsh.capabilityLabels.${name}`))
     .join(', '),
 );
 
@@ -1590,6 +1593,10 @@ const dshProbeStates = computed<Record<DshLegacyProbe, DshSurfaceProbeState>>(()
 const skillStatusUnsupported = computed(() =>
   isDshBackend.value ? dshProbeStates.value.skills !== 'supported' : skillUnsupported.value,
 );
+
+watch(tabs, (available) => {
+  if (!available.some((tab) => tab.id === activeTab.value)) activeTab.value = 'server';
+});
 
 </script>
 
@@ -1772,7 +1779,7 @@ const skillStatusUnsupported = computed(() =>
                 </div>
                 <span class="status-monitor-meta">{{ dshVersionText }}</span>
               </div>
-              <div class="status-monitor-row is-dsh">
+              <div class="status-monitor-row is-dsh is-capabilities">
                 <div class="status-monitor-row-main">
                   <span class="status-monitor-name">{{ $t('statusMonitor.dsh.capabilities') }}</span>
                 </div>
@@ -2582,6 +2589,19 @@ const skillStatusUnsupported = computed(() =>
 .status-monitor-meta {
   font-size: 12px;
   color: var(--theme-list-row-text-muted, var(--theme-modal-text-muted, #94a3b8));
+}
+
+.status-monitor-row.is-dsh {
+  flex-wrap: wrap;
+}
+
+.status-monitor-row.is-dsh .status-monitor-row-main {
+  flex-shrink: 0;
+}
+
+.status-monitor-row.is-dsh .status-monitor-meta {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .status-monitor-row.is-capabilities {
