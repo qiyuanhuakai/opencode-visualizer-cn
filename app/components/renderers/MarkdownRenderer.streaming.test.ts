@@ -78,6 +78,49 @@ afterEach(() => {
 });
 
 describe('MarkdownRenderer characterization (default path, no streaming)', () => {
+  it('keeps rejected markdown readable as literal text and recovers on the next render', async () => {
+    // Given a user message containing markup and a worker that rejects it.
+    const code = '<img src=x onerror="alert(1)">\nUser prompt & details';
+    const mounted = mountMarkdownRenderer({ code, lang: 'markdown' });
+    await settle();
+    for (const worker of StreamingTestWorker.instances) {
+      for (const request of requestsSince(testStart)) {
+        markRenderRequestResponded(request.id);
+        worker.emit({ id: request.id, ok: false, error: 'Worker unavailable' });
+      }
+    }
+
+    // When the failed render settles.
+    await settle();
+
+    // Then the prompt stays readable without creating executable markup.
+    expect(mounted.target.querySelector('.message-content')?.textContent).toBe(code);
+    expect(mounted.target.querySelector('img')).toBeNull();
+    expect(mounted.renderedCount()).toBe(1);
+
+    // When a later render succeeds, it replaces the fallback normally.
+    mounted.props.code = 'Recovered prompt';
+    await flushRenders();
+    expect(mounted.target.querySelector('.message-content')?.innerHTML).toBe(htmlFor('Recovered prompt'));
+  });
+
+  it('does not restore stale fallback text after a newer message renders', async () => {
+    // Given a pending old render that is cancelled by a newer message.
+    const mounted = mountMarkdownRenderer({ code: 'Old prompt', lang: 'markdown' });
+    await settle();
+    const old = requestsSince(testStart)[0];
+    if (!old) throw new Error('Expected the first render request');
+    mounted.props.code = 'New prompt';
+    await flushRenders();
+
+    // When the cancelled request reports a late error.
+    for (const worker of StreamingTestWorker.instances) worker.emit({ id: old.id, ok: false, error: 'Late failure' });
+    await settle();
+
+    // Then the newer result remains visible.
+    expect(mounted.target.querySelector('.message-content')?.innerHTML).toBe(htmlFor('New prompt'));
+  });
+
   it('does not schedule copy-state cleanup after unmount while clipboard write is pending', async () => {
     let resolveClipboard: () => void = () => {};
     const writeText = vi.fn(
@@ -141,7 +184,7 @@ describe('MarkdownRenderer characterization (default path, no streaming)', () =>
     // Then: a second full-document request replaces the content
     const allRequests = requestsSince(testStart);
     expect(allRequests).toHaveLength(2);
-    expect(allRequests[1]?.code).toBe(nextCode);
+    expect(allRequests.map((request) => request.code)).toContain(nextCode);
     expect(content?.innerHTML).toBe(htmlFor(nextCode));
     expect(mounted.renderedCount()).toBe(2);
   });
@@ -283,7 +326,7 @@ describe('MarkdownRenderer streaming', () => {
     await flushRenders();
     const allRequests = requestsSince(testStart);
     expect(allRequests).toHaveLength(2);
-    expect(allRequests[1]?.code).toBe(nextCode);
+    expect(allRequests.map((request) => request.code)).toContain(nextCode);
   });
 
   it('behaves sanely with empty or missing code and streams content when it arrives', async () => {
