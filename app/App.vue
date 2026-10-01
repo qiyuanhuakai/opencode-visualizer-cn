@@ -806,6 +806,7 @@ import {
 import { useGlobalEvents } from './composables/useGlobalEvents';
 import { useLiveDescendantHistoryHydration } from './composables/useLiveDescendantHistoryHydration';
 import { useMessages } from './composables/useMessages';
+import { createOpenCodeSubagentHistory } from './composables/openCodeSubagentHistory';
 import { useMessageCacheAuthInvalidation } from './composables/useMessageCacheAuthInvalidation';
 import { useProviderModelSync } from './composables/useProviderModelSync';
 import { usePtyWindowOwner } from './composables/usePtyWindowOwner';
@@ -962,6 +963,7 @@ import {
 } from './backends/kimiWeb/sessionModes';
 import { kimiWebMessagesToHistoryEntries, kimiWebTranscriptToHistoryEntries } from './backends/kimiWeb/historyEntries';
 import { createKimiWebTurnPermissionStore } from './backends/kimiWeb/turnPermissions';
+import { createKimiWebModePreferenceStore } from './utils/kimiWebModePreferenceStorage';
 import {
   answerKimiWebApproval,
   answerKimiWebQuestion,
@@ -7880,6 +7882,24 @@ const sessionScope = ge.session(selectedSessionId, sessionParentRecord);
 const msg = useMessages();
 const messageCacheAuthGeneration = ref(0);
 msg.bindScope(sessionScope);
+const openCodeSubagentHistoryScope = () => JSON.stringify([
+  credentials.url.value, credentials.username.value, activeDirectory.value,
+]);
+const openCodeSubagentHistory = createOpenCodeSubagentHistory({
+  getScope: openCodeSubagentHistoryScope,
+  isActive: () => activeBackendKind.value === 'opencode',
+  getRootSessionId: () => selectedSessionId.value,
+  getMemoryEntries: (sessionId) => Array.from(msg.messages.value.values()).flatMap((entry) => {
+    const info = entry.value.info && msg.get(entry.value.info.id);
+    return info?.sessionID === sessionId ? [{ info, parts: msg.getParts(info.id) }] : [];
+  }),
+});
+const stopRecordingOpenCodeHistory = msg.onHistoryEntryChanged(openCodeSubagentHistory.record);
+const flushOpenCodeSubagentHistory = () => {
+  void openCodeSubagentHistory.flush().catch((error: unknown) =>
+    console.error('[OpenCode] Unable to flush child history', error));
+};
+window.addEventListener('pagehide', flushOpenCodeSubagentHistory);
 reasoning.bindScope(sessionScope);
 subagentWindows.bindScope(sessionScope);
 
@@ -8063,7 +8083,11 @@ async function loadKimiWebDefaultPermissionMode() {
   }
 }
 
+const kimiWebModePreferences = createKimiWebModePreferenceStore(() => credentials.kimiWebBridgeUrl.value);
 const kimiWebSessionModes = useKimiWebSessionModes({
+  getScope: () => credentials.kimiWebBridgeUrl.value,
+  readModes: kimiWebModePreferences.read,
+  writeModePreference: kimiWebModePreferences.write,
   writeMode: async (sessionId, change) => {
     const active = backend();
     if (!(active instanceof KimiWebAdapter)) {
@@ -8083,6 +8107,17 @@ function refreshKimiWebModeState() {
   kimiWebModeRevision.value += 1;
   const permissionMode = kimiWebSessionModes.sessionState(selectedSessionId.value).permissionMode;
   if (permissionMode) selectedMode.value = permissionMode;
+}
+
+async function loadKimiWebSessionStatus(sessionId: string) {
+  const adapter = configuredKimiWebAdapter;
+  const request = kimiWebSessionModes.captureStatusRequest(sessionId);
+  const status = await kimiWebRestClient().getSessionStatus(sessionId);
+  if (adapter === configuredKimiWebAdapter) {
+    kimiWebSessionModes.applyStatus(sessionId, status, request);
+    if (sessionId === selectedSessionId.value) refreshKimiWebModeState();
+  }
+  return status;
 }
 
 async function changeKimiWebMode(change: KimiWebSessionModeChange) {
@@ -8954,8 +8989,10 @@ const kimiWebApi = {
     kimiWebRestClient().abortSession(...args),
   getMessages: (...args: Parameters<KimiWebAdapter['restClient']['getMessages']>) =>
     kimiWebRestClient().getMessages(...args),
+  getSnapshot: (...args: Parameters<KimiWebAdapter['restClient']['getSnapshot']>) =>
+    kimiWebRestClient().getSnapshot(...args),
   getSessionStatus: (...args: Parameters<KimiWebAdapter['restClient']['getSessionStatus']>) =>
-    kimiWebRestClient().getSessionStatus(...args),
+    loadKimiWebSessionStatus(...args),
   listModels: (...args: Parameters<KimiWebAdapter['restClient']['listModels']>) =>
     kimiWebRestClient().listModels(...args),
   sendPrompt: (...args: Parameters<KimiWebAdapter['restClient']['sendPrompt']>) =>
@@ -9259,6 +9296,10 @@ async function bootstrapKimiWebWorkspace(isCurrent: () => boolean) {
   const result = await runKimiWebBootstrap({
     adapter,
     isCurrent,
+    onSessionStatus: (sessionId, status) => {
+      kimiWebSessionModes.applyStatus(sessionId, status);
+      refreshKimiWebModeState();
+    },
     createClient: () =>
       createKimiWebWsClient({
         url: kimiWebWsUrl(adapter.bridgeUrl, adapter.bridgeToken),
@@ -10848,12 +10889,19 @@ function handleShowSubagentHistory(payload: { sessionId: string; label: string }
   const winH = 520;
   const x = Math.max(0, Math.round((width - winW) / 2));
   const y = Math.max(0, Math.round((height - winH) / 2));
+  const historyBackend = backend();
+  const historyDirectory = activeDirectory.value.trim();
+  const readOpenCodeSubagentHistory = openCodeSubagentHistory.loader(openCodeSubagentHistoryScope(), async (childSessionId) => {
+    const listMessages = requireBackendMethod(historyBackend.listSessionMessages, 'session history');
+    return listMessages(childSessionId, { directory: historyDirectory || undefined });
+  });
   fw.open(key, {
     component: SubagentHistoryContent,
     props: {
       parentThreadId: sessionId,
       loadHistory: activeBackendKind.value === 'codex' ? codexApi.readSubagentHistory
-        : activeBackendKind.value === 'kimi-web' ? readKimiWebSubagentHistory : undefined,
+        : activeBackendKind.value === 'kimi-web' ? readKimiWebSubagentHistory
+          : activeBackendKind.value === 'opencode' ? readOpenCodeSubagentHistory : undefined,
       sessionLabel: label,
       onToolClick: (part: ToolPart) => handleOpenHistoryTool({ part }),
       onReasoningClick: (part: ReasoningPart) => handleOpenHistoryReasoning({ part }),
@@ -11691,6 +11739,9 @@ onMounted(() => {
   );
 });
 onBeforeUnmount(() => {
+  stopRecordingOpenCodeHistory();
+  window.removeEventListener('pagehide', flushOpenCodeSubagentHistory);
+  flushOpenCodeSubagentHistory();
   desktopNotifications?.dispose();
   kimiWebSessionModes.dispose();
   composerDraftPersistence.flush();

@@ -12,8 +12,23 @@
 - [x] bridge 侧：`nativeServices.dsh` 新增默认 `false` 的托管开关（opt-in）；spawn-only 托管（端口被占即报错，不接管外部实例）、版本闸门只接受 `0.2.0-rc.2`（不符即停子进程并提示 `npm i -g @deepseek-ai/dsh@0.2.0-rc.2`）、launch token → cookie 交换与失效重交换、`/dsh/*` 与 `/dsh/ws` 转发（剥离 `sec-fetch-*`/Origin/Host，桥侧注入 cookie，不外泄 bridge token）。
 - [x] 前端侧：新增 `app/backends/dsh/` 适配器（能力矩阵显式声明不支持项：worktrees、session 删除/回退/压缩、todos、questions）、`dshRpc.ts` 信封与错误分类、`dshMux.ts` 流与重连、事件归一化与子代理寻址、历史分页、审批 waterfall 应答（放行 `allowed-once` / 驳回 `rejected` / 降级 fail-closed）、只读的权限 preset 选择器、状态监控 DSH 区块。
 - [x] 兼容性与已知限制：DSH 为 Beta，只支持协议代 `0.2.0-rc.2`，升级必须重新探测；live QA 在 Linux 上以降级模式完成（`DEEPSEEK_API_KEY` 缺席，41/41 断言通过，错误路径完整可观测），未实测面（流式增量、真实审批、cookie 跨重启、multipart 等）逐行记录在 `docs/dsh.md` §15；Windows/macOS 的进程派生未实机验证（继承 Kimi Web 的 spawn 先例）；`sessionDelete` 无远端端点（本地隐藏 + 明确拒绝）。
-
 ---
+
+### Kimi Web 文件与会话状态修复
+
+- [x] 修复 `package.json` 等 JSON 文件打开空白的问题，保留下载内容并正确区分 API 错误响应。
+- [x] 历史会话卡片的权限模式不再随输入区权限选择变化；模式选择按后端与会话保存，刷新后恢复，并避免过期状态覆盖新选择。
+- [x] 从会话快照恢复运行中子代理与父工具调用的关联，修复刷新后子代理卡片消失的问题。
+
+### OpenCode 子代理历史与 Windows 进程清理
+
+- [x] OpenCode 子代理历史按需加载，并区分加载失败与空历史。
+- [x] Windows 终端后代进程清理按实际退出状态判断，避免已退出进程被误判为仍在运行，并保留 PowerShell 错误输出（[#153](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/153)）。
+
+### OpenCode 子代理历史持久缓存
+
+- [x] 收到子代理消息即增量保存，刷新后点击历史优先读取本地缓存；上游清理子会话后，仍可查看已保存的内容，空响应和部分更新不会覆盖完整历史。
+- [x] 网页使用 IndexedDB，Electron 复用 Codex 会话 SQLite；按后端、服务地址、账号和目录隔离缓存，为后续多后端整合提供通用存储接口（[#154](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/154)）。
 
 ## [v0.8.9 released]
 

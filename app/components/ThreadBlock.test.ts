@@ -112,14 +112,19 @@ function mount(
 }
 
 describe('ThreadBlock history wiring', () => {
-  it('shows the current Kimi permission on the latest externally submitted turn', async () => {
+  it('keeps an unattributed latest Kimi turn independent of composer permission changes', async () => {
     const user = makeUserMessage('main', 'u-kimi-permission', 1);
-    const mounted = mount({
+    const props = reactive({
       root: user, currentSessionId: 'main', backendKind: 'kimi-web', isLatestRoot: true,
       kimiCurrentPermissionMode: 'manual', kimiTurnPermissionForUser: () => undefined,
-    }, () => undefined);
+      kimiDefaultPermissionMode: 'auto',
+    } satisfies Parameters<typeof mount>[0]);
+    const mounted = mount(props, () => undefined);
     await flushRender();
-    expect(mounted.root.querySelector('.ib-target-agent')?.textContent?.trim()).toBe('manual');
+    expect(mounted.root.querySelector('.ib-target-agent')?.textContent?.trim()).toBe('auto');
+    props.kimiCurrentPermissionMode = 'yolo';
+    await flushRender();
+    expect(mounted.root.querySelector('.ib-target-agent')?.textContent?.trim()).toBe('auto');
     unmount(mounted.app);
   });
   it('shows a Kimi subagent card while its parent task is running', async () => {
@@ -340,7 +345,7 @@ describe('ThreadBlock history wiring', () => {
     const assistant = { ...makeAssistantMessage('main', 'a1', 'u1', 2), mode: '' } as MessageInfo;
     useMessages().loadHistory([{ info: user, parts: [] }, { info: assistant, parts: [makeTextPart('a1', 'main', 'Done')] }]);
     const view = mount({
-      root: user, backendKind: 'kimi-web', isLatestRoot: false,
+      root: user, backendKind: 'kimi-web', isLatestRoot: true,
       kimiDefaultPermissionMode: 'manual', kimiDefaultPermissionColor: '#5c9cf5', kimiCurrentPermissionMode: 'yolo',
       kimiTurnPermissionForUser: () => undefined,
     }, vi.fn());

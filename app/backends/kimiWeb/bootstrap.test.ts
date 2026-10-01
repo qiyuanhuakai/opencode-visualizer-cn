@@ -51,6 +51,15 @@ function messageBridge() {
 }
 
 describe('bootstrapKimiWebWorkspace', () => {
+  it('restores authoritative mode status before history subscription on startup', async () => {
+    const adapter = createKimiWebAdapter({ bridgeUrl: 'ws://localhost:23004/kimi-web/ws', client: restClient([rawSession()]) });
+    const bridge = messageBridge();
+    const status = vi.fn();
+    await bootstrapKimiWebWorkspace({ adapter, isCurrent: () => true, createClient: transport,
+      createBridge: () => bridge, commit: vi.fn(), onSessionStatus: status });
+    expect(status).toHaveBeenCalledWith('session-1', expect.objectContaining({ permission: 'manual' }));
+    expect(status.mock.invocationCallOrder[0]).toBeLessThan(bridge.subscribe.mock.invocationCallOrder[0] ?? 0);
+  });
   it('selects an active root when newer entries are archived or child sessions', async () => {
     // Given
     const adapter = createKimiWebAdapter({

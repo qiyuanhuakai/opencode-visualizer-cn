@@ -22,7 +22,7 @@ if ($force) {
 }
 $deadline = [DateTime]::UtcNow.AddSeconds(3)
 do {
-  $alive = @(Get-Process -Id $targetIds -ErrorAction SilentlyContinue)
+  $alive = @(Get-Process -Id $targetIds -ErrorAction SilentlyContinue | Where-Object { -not $_.HasExited })
   if ($alive.Count -eq 0) { exit 0 }
   Start-Sleep -Milliseconds 50
 } while ([DateTime]::UtcNow -lt $deadline)
@@ -57,7 +57,7 @@ export async function stopWindowsProcessTree(pid, force, options = {}) {
         VIS_BRIDGE_TREE_ROOT_PID: String(pid),
         VIS_BRIDGE_TREE_FORCE: force ? '1' : '0',
       },
-      stdio: 'ignore',
+      stdio: ['ignore', 'ignore', 'inherit'],
       windowsHide: true,
     },
   );

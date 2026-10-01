@@ -284,6 +284,62 @@ describe('kimiWeb REST client', () => {
       );
     });
 
+    it.each([
+      '{\n  "name": "测试", "version": "1.0.0"\n}\n',
+      '[1, "two", null]',
+      '"hello"',
+      '{"code": 40001, "description": "a file field"}',
+      '{unfinished',
+      '',
+    ])('preserves JSON file bytes without an API envelope: %j', async (body) => {
+      fetchMock.mockResolvedValue(new Response(body, {
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      }));
+
+      const result = await client.downloadFile(SID, 'package.json');
+
+      expect(result).toEqual(new TextEncoder().encode(body));
+    });
+
+    it.each([
+      'attachment; filename="error.json"',
+      'inline; filename="error.json"',
+    ])('preserves envelope-shaped JSON files with %s', async (disposition) => {
+      const body = JSON.stringify(envelope(null, 40001, 'saved API response'));
+      fetchMock.mockResolvedValue(new Response(body, {
+        headers: {
+          'content-type': 'application/json',
+          'content-disposition': disposition,
+        },
+      }));
+
+      const result = await client.downloadFile(SID, 'error.json');
+
+      expect(result).toEqual(new TextEncoder().encode(body));
+    });
+
+    it('rejects a success API envelope without file disposition', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(envelope({})));
+
+      await expect(client.downloadFile(SID, 'out.bin')).rejects.toMatchObject({
+        kind: 'malformed-response',
+      });
+    });
+
+    it('preserves HTTP errors even with file disposition', async () => {
+      fetchMock.mockResolvedValue(new Response(JSON.stringify(envelope(null, 40401, 'missing')), {
+        status: 404,
+        headers: {
+          'content-type': 'application/json',
+          'content-disposition': 'attachment; filename="missing.json"',
+        },
+      }));
+
+      await expect(client.downloadFile(SID, 'missing.json')).rejects.toMatchObject({
+        name: 'KimiWebError', code: 40401, msg: 'missing',
+      });
+    });
+
     it('throws KimiWebError when a download returns a JSON error envelope', async () => {
       fetchMock.mockResolvedValue(
         jsonResponse(envelope(null, 40001, 'unsupported action: src/index.ts'), 200),

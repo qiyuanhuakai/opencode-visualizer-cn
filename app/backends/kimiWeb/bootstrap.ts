@@ -1,5 +1,6 @@
 import type { ProjectState } from '../../types/worker-state';
 import type { KimiWebWsClient } from '../../utils/kimiWebWs';
+import type { KimiWebSessionStatus } from '../../utils/kimiWeb';
 import { loadKimiWebHistoryEntries } from './history';
 import {
   KimiWebAdapter,
@@ -25,6 +26,7 @@ export async function bootstrapKimiWebWorkspace(options: {
   createClient: () => KimiWebWsClient;
   createBridge: (client: KimiWebWsClient) => KimiWebBootstrapBridge;
   commit: (state: KimiWebBootstrapCommit) => void;
+  onSessionStatus?: (sessionId: string, status: KimiWebSessionStatus) => void;
 }): Promise<{ client?: KimiWebWsClient; bridge?: KimiWebBootstrapBridge }> {
   let client: KimiWebWsClient | undefined;
   let bridge: KimiWebBootstrapBridge | undefined;
@@ -50,11 +52,17 @@ export async function bootstrapKimiWebWorkspace(options: {
     }
     if (first) {
       const status = await options.adapter.restClient.getSessionStatus(first.id).catch(() => undefined);
+      if (!options.isCurrent()) {
+        dispose();
+        return {};
+      }
+      if (status) options.onSessionStatus?.(first.id, status);
       const modelId = status?.model ?? first.model;
       const activeModel = modelPage.items.find((candidate) => candidate.model === modelId);
       const history = await loadKimiWebHistoryEntries({
         sessionId: first.id,
         getMessages: options.adapter.restClient.getMessages,
+        getSnapshot: options.adapter.restClient.getSnapshot,
         isCurrent: options.isCurrent,
         profile: {
           model: modelId,

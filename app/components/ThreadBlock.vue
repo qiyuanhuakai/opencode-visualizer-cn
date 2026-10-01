@@ -260,10 +260,6 @@ const kimiAttributedPermission = computed(() => {
   if (recorded) return recorded;
   const final = finalAnswer.value;
   if (final?.role === 'assistant' && ['manual', 'auto', 'yolo'].includes(final.mode)) return final.mode;
-  if (props.isLatestRoot && props.kimiCurrentPermissionMode &&
-    ['manual', 'auto', 'yolo'].includes(props.kimiCurrentPermissionMode)) {
-    return props.kimiCurrentPermissionMode;
-  }
   return undefined;
 });
 const kimiUsesDefaultPermission = computed(() =>
