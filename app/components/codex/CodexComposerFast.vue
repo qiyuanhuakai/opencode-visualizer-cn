@@ -1,12 +1,13 @@
 <template>
-  <button type="button" class="codex-composer-fast" :class="{ 'is-active': enabled }" :aria-pressed="enabled" :aria-busy="saving" :disabled="saving || !api.connected.value" :title="title" @click="toggle">
+  <ComposerToggle class="codex-composer-fast" :active="enabled" :busy="saving" :disabled="saving || !api.connected.value" :title="title" @click="toggle">
     <Icon icon="lucide:zap" :width="14" :height="14" aria-hidden="true" />
     <span>Fast</span>
     <span class="fast-state">{{ state }}</span>
-  </button>
+  </ComposerToggle>
 </template>
 
 <script setup lang="ts">
+import ComposerToggle from '../composer/ComposerToggle.vue';
 import { computed, ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useI18n } from 'vue-i18n';
@@ -44,25 +45,5 @@ async function toggle() {
 </script>
 
 <style scoped>
-.codex-composer-fast {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 4px;
-  height: 28px;
-  padding: 4px 8px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  cursor: pointer;
-  color: var(--theme-input-text-muted, var(--theme-text-muted));
-  font-family: inherit;
-  font-size: 12px;
-  white-space: nowrap;
-}
-.codex-composer-fast.is-active { color: var(--theme-input-accent, var(--theme-border-accent)); }
-.codex-composer-fast:hover:not(:disabled) { background: var(--theme-surface-panel-hover); }
-.codex-composer-fast:focus-visible { outline: 2px solid var(--theme-input-accent, var(--theme-border-accent)); outline-offset: 2px; }
-.codex-composer-fast:disabled { opacity: 0.5; cursor: not-allowed; }
 .fast-state { font-size: 10px; }
 </style>
