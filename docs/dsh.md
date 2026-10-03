@@ -688,7 +688,9 @@ dsh web                                        # 或 web-mount：GUI 与 /acp �
 - 第三方交叉参考：`fufankeji/deepseek-harness-web`（rc.6 客户端）、`OpenNekoPaw/codex-dsh-web`（旧信封客户端）、`dushaobindoudou/dsh-acp`（ACP 插件与 dsh 内部服务考古）
 - 本项目既有文档：`docs/kimi.md`（最接近的适配范式）、`docs/omo.md`、`docs/testing.md`
 
-2026-10-03 状态复核：插件管理及目录 API 可读；MCP 插件存在不等于 MCP 连接状态已验证。尚未确认专用 MCP/LSP 状态端点，因此状态标为未知，不声称不支持。所有状态页签保留，未知或失败时显示说明。
+2026-10-03 MCP/LSP 接口复核（DSH 0.2.0-rc.2）：原生 `dsh-mcp-client` 支持 stdio 与 Streamable HTTP，并通过工具注册及资源服务向 agent 提供 MCP；该插件及 `dsh-mcp-resources` 没有 Remote 方法，不公开连接列表、状态、连接或断开接口。隔离运行时的 `mcp/list`、`mcp/status`、`mcp/getStatus`、`mcpClient/list`、`mcpClient/status` 均为 HTTP 404；`pluginManager/listPlugins` 正常返回，已有插件管理继续用于查看与切换 MCP 插件启用状态，不能把插件 active 宣称为 MCP connected。
+
+安装包未提供 LSP 服务或语言服务器插件，API 控制器中也没有 LSP 注册；隔离运行时 `lsp/list`、`lsp/status`、`lsp/getStatus` 均为 HTTP 404。状态监控保留 MCP/LSP 页签，明确写出当前版本不支持 MCP 连接监控接口及 LSP 接口，取代“尚未验证”的说明。此结论结合当前安装版的完整接口源码与运行时核对，不以单次 404 判定所有未知能力；升级 DSH 后需重新核对。
 
 2026-10-03 权限与账号复核：`permissionPresets/catalog {}` 返回当前部署的预设选项；`commands/list {agentId}` 确认 `permission` 命令后，可通过 `commands/execute {agentId,line:"/permission <preset>",submittedAttachments:[]}` 修改当前会话的权限预设。此命令同时改变沙箱与审批策略；未验证到分别修改这两项的远端入口。Vis 仅展示实时目录中存在的预设，命令失败时显示错误，不乐观伪造状态。
 

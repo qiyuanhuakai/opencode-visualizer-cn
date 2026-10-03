@@ -336,7 +336,7 @@ const messages: LocaleMessages = {
       unsupported: 'Structured MCP status is not exposed by this backend.',
       unsupportedAcp: 'Structured MCP status is not exposed by this ACP agent.',
       unsupportedKimiWeb: 'Structured MCP status is not exposed by Kimi Web.',
-      unsupportedDsh: 'DSH MCP connection status is unverified. Installed MCP plugins are listed under Plugins.',
+      unsupportedDsh: 'This DSH version does not expose an MCP connection monitoring API. MCP servers are supported through plugins; view and manage plugin activation under Plugins.',
       enable: 'Enable',
       disable: 'Disable',
       toggleFailed: 'Failed to toggle MCP state',
@@ -349,7 +349,7 @@ const messages: LocaleMessages = {
       unsupported: 'Structured LSP status is not exposed by this backend.',
       unsupportedAcp: 'Structured LSP status is not exposed by this ACP agent.',
       unsupportedKimiWeb: 'Structured LSP status is not exposed by Kimi Web.',
-      unsupportedDsh: 'DSH language server status is unverified; no dedicated status endpoint has been confirmed.',
+      unsupportedDsh: 'This DSH version does not support an LSP language server API or status monitoring.',
     },
     plugins: {
       marketplaces: 'Marketplaces',

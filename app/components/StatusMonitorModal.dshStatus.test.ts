@@ -356,6 +356,16 @@ describe('StatusMonitorModal dsh capability navigation', () => {
     app.unmount();
   });
 
+  it('states the verified MCP monitoring and LSP interface limitations', async () => {
+    const { root, app } = await mountDshModal({});
+    clickTab(root, 'MCP');
+    await vi.waitFor(() => expect(root.textContent).toContain('does not expose an MCP connection monitoring API'));
+    expect(root.textContent).toContain('MCP servers are supported through plugins');
+    clickTab(root, 'LSP');
+    await vi.waitFor(() => expect(root.textContent).toContain('does not support an LSP language server API'));
+    app.unmount();
+  });
+
   it('keeps the selected skills tab when the runtime probe becomes unknown', async () => {
     const status = reactive<DshStatusSnapshot>({ probes: { skills: 'supported' } });
     const { root, app } = await mountDshModal(status);

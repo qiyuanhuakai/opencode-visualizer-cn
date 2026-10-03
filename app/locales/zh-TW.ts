@@ -337,7 +337,7 @@ const messages: LocaleMessages = {
       unsupported: '目前後端未公開結構化 MCP 狀態。',
       unsupportedAcp: '此 ACP Agent 未公開結構化 MCP 狀態。',
       unsupportedKimiWeb: 'Kimi Web 未公開結構化 MCP 狀態。',
-      unsupportedDsh: 'DSH MCP 連線狀態尚未驗證；已安裝的 MCP 外掛可在「外掛」中查看。',
+      unsupportedDsh: '目前 DSH 不支援 MCP 連線狀態監控介面。MCP 伺服器可透過外掛接入；外掛啟用狀態可在「外掛」中查看及管理。',
       enable: '啟用',
       disable: '停用',
       toggleFailed: '切換 MCP 狀態失敗',
@@ -350,7 +350,7 @@ const messages: LocaleMessages = {
       unsupported: '目前後端未公開結構化 LSP 狀態。',
       unsupportedAcp: '此 ACP Agent 未公開結構化 LSP 狀態。',
       unsupportedKimiWeb: 'Kimi Web 未公開結構化 LSP 狀態。',
-      unsupportedDsh: 'DSH 語言伺服器狀態尚未驗證；尚未確認專用狀態端點。',
+      unsupportedDsh: '目前 DSH 不支援 LSP 語言伺服器介面及狀態監控。',
     },
     plugins: {
       marketplaces: '倉庫源',

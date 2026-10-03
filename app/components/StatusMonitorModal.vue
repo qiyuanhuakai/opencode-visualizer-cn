@@ -1574,8 +1574,8 @@ const dshUsageContextPercent = computed(() => {
 
 type DshLegacyProbe = 'mcp' | 'lsp' | 'skills' | 'plugins';
 const dshRegistryProbeStates = computed<Record<DshLegacyProbe, DshSurfaceProbeState>>(() => ({
-  mcp: 'unknown',
-  lsp: 'unknown',
+  mcp: 'unsupported',
+  lsp: 'unsupported',
   plugins: getActiveDshCapabilityRegistry()?.states.value.plugins ?? 'unknown',
   skills: getActiveDshCapabilityRegistry()?.states.value.skills ?? 'unknown',
 }));
@@ -1583,8 +1583,8 @@ const dshProbeStates = computed<Record<DshLegacyProbe, DshSurfaceProbeState>>(()
   const probes = props.dshStatus?.probes;
   if (!probes) return dshRegistryProbeStates.value;
   return {
-    mcp: probes.mcp ?? 'unknown',
-    lsp: probes.lsp ?? 'unknown',
+    mcp: probes.mcp ?? 'unsupported',
+    lsp: probes.lsp ?? 'unsupported',
     plugins: probes.plugins ?? 'unknown',
     skills: probes.skills ?? 'unknown',
   };

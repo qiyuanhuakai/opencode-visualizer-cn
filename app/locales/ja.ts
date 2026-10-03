@@ -341,7 +341,7 @@ const messages: LocaleMessages = {
       unsupported: 'このバックエンドは構造化された MCP 状態を公開していません。',
       unsupportedAcp: 'この ACP エージェントは構造化された MCP 状態を公開していません。',
       unsupportedKimiWeb: 'Kimi Web は構造化された MCP 状態を公開していません。',
-      unsupportedDsh: 'DSH は構造化された MCP 状態を公開していません。',
+      unsupportedDsh: 'この DSH は MCP 接続監視 API を提供していません。MCP サーバーはプラグインで利用でき、プラグイン画面で有効化状態を確認・管理できます。',
       enable: '有効化',
       disable: '無効化',
       toggleFailed: 'MCP状態の切り替えに失敗しました',
@@ -354,7 +354,7 @@ const messages: LocaleMessages = {
       unsupported: 'このバックエンドは構造化された LSP 状態を公開していません。',
       unsupportedAcp: 'この ACP エージェントは構造化された LSP 状態を公開していません。',
       unsupportedKimiWeb: 'Kimi Web は構造化された LSP 状態を公開していません。',
-      unsupportedDsh: 'DSH は構造化された LSP 状態を公開していません。',
+      unsupportedDsh: 'この DSH は LSP サーバー API と状態監視に対応していません。',
     },
     plugins: {
       marketplaces: 'マーケットプレイス',

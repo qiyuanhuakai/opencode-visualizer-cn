@@ -337,7 +337,7 @@ const messages: LocaleMessages = {
       unsupported: '当前后端未公开结构化 MCP 状态。',
       unsupportedAcp: '此 ACP Agent 未公开结构化 MCP 状态。',
       unsupportedKimiWeb: 'Kimi Web 未公开结构化 MCP 状态。',
-      unsupportedDsh: 'DSH MCP 连接状态尚未验证；已安装的 MCP 插件可在「插件」中查看。',
+      unsupportedDsh: '当前 DSH 不支持 MCP 连接状态监控接口。DSH 支持通过 MCP 插件接入服务器；插件启用状态可在「插件」中查看和管理。',
       enable: '启用',
       disable: '禁用',
       toggleFailed: '切换 MCP 状态失败',
@@ -350,7 +350,7 @@ const messages: LocaleMessages = {
       unsupported: '当前后端未公开结构化 LSP 状态。',
       unsupportedAcp: '此 ACP Agent 未公开结构化 LSP 状态。',
       unsupportedKimiWeb: 'Kimi Web 未公开结构化 LSP 状态。',
-      unsupportedDsh: 'DSH 语言服务器状态尚未验证；尚未确认专用状态端点。',
+      unsupportedDsh: '当前 DSH 不支持 LSP 语言服务器接口及状态监控。',
     },
     plugins: {
       marketplaces: '仓库源',

@@ -339,7 +339,7 @@ const messages: LocaleMessages = {
       unsupported: 'Ĉi tiu backend ne montras strukturitan MCP-staton.',
       unsupportedAcp: 'Ĉi tiu ACP-agento ne montras strukturitan MCP-staton.',
       unsupportedKimiWeb: 'Kimi Web ne montras strukturitan MCP-staton.',
-      unsupportedDsh: 'DSH ne montras strukturitan MCP-staton.',
+      unsupportedDsh: 'Ĉi tiu DSH ne disponigas API por kontroli MCP-konektojn. MCP-serviloj funkcias per kromprogramoj; ilia aktivigo estas videbla kaj regebla ĉe Kromprogramoj.',
       enable: 'Ŝalti',
       disable: 'Malŝalti',
       toggleFailed: 'Ŝanĝo de MCP-stato malsukcesis',
@@ -352,7 +352,7 @@ const messages: LocaleMessages = {
       unsupported: 'Ĉi tiu backend ne montras strukturitan LSP-staton.',
       unsupportedAcp: 'Ĉi tiu ACP-agento ne montras strukturitan LSP-staton.',
       unsupportedKimiWeb: 'Kimi Web ne montras strukturitan LSP-staton.',
-      unsupportedDsh: 'DSH ne montras strukturitan LSP-staton.',
+      unsupportedDsh: 'Ĉi tiu DSH ne subtenas API por LSP-serviloj aŭ ilia statkontrolo.',
     },
     plugins: {
       marketplaces: 'Merkatejoj',
