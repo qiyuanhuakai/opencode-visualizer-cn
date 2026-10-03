@@ -685,7 +685,7 @@ export function useBackendSessionActions(params: {
     if (!params.ensureConnectionReady(params.translate('app.actions.fork'))) return;
     const requestBackend = params.activeBackendKind.value;
     const requestSelection = params.selectedSessionId.value;
-    const ownsRequest = () => requestBackend !== 'kimi-web' ||
+    const ownsRequest = () => (requestBackend !== 'kimi-web' && requestBackend !== 'dsh') ||
       (params.activeBackendKind.value === requestBackend && params.selectedSessionId.value === requestSelection);
     pendingCardMutations.add(payload.sessionId);
     params.clearSessionError();
@@ -701,6 +701,15 @@ export function useBackendSessionActions(params: {
         params.seedForkedSessionComposerDraft(payload, { id: session.id });
         await params.switchSessionSelection(session.workspaceId, session.id);
         if (params.activeBackendKind.value !== requestBackend) return;
+      } else if (params.activeBackendKind.value === 'dsh') {
+        const api = params.dshSessionApi;
+        if (!api?.resolveForkSeq) throw new Error('DSH message fork is unavailable.');
+        const atSeq = await api.resolveForkSeq(payload.sessionId, payload.messageId);
+        if (!ownsRequest()) return;
+        const outcome = await forkDshSession(api, payload.sessionId, atSeq);
+        if (!ownsRequest()) return;
+        params.seedForkedSessionComposerDraft(payload, { id: outcome.sessionId });
+        await params.switchSessionSelection(params.resolveProjectIdForSession(payload.sessionId), outcome.sessionId);
       } else if (params.activeBackendKind.value === 'codex') {
         const thread = await params.codexApi.forkThread(payload.sessionId);
         if (thread?.id) {

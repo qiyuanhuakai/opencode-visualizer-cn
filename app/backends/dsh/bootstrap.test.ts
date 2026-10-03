@@ -1,9 +1,10 @@
+import { createDshSelectionPersistence } from '../../composables/dshSelectionPersistence';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ProjectState } from '../../types/worker-state';
 import type { DshMuxClient, DshMuxStreamHandle } from '../../utils/dshMux';
 import type { DshMappedSession } from './dshAdapter';
-import { mapDshSessionItem } from './dshAdapter';
+import { mapDshSessionItem, mapDshSessionsToProjects } from './dshAdapter';
 import type { DshJsonValue } from './types';
 import { useDshMessageBridge } from '../../composables/useDshMessageBridge';
 import {
@@ -326,6 +327,29 @@ function harness(input: {
 // ---------------------------------------------------------------------------
 
 describe('bootstrapDshWorkspace', () => {
+  it('restores the requested root session even when another root is listed first', async () => {
+    const sessions = [mappedSession({ id: 'session-newer' }), ...sessionsFixture()];
+    const { mux, bridge, pages, normalize, commit } = harness({ sessions });
+    await bootstrapDshWorkspace({
+      preferredSessionId: 'session-root', adapter: sessionSource(sessions), mux: mux.client,
+      createBridge: () => bridge, normalize, fetchPage: pages.fetcher,
+      isCurrent: () => true, commit,
+    });
+    expect(commit).toHaveBeenCalledWith(expect.objectContaining({ selectedSessionId: 'session-root' }));
+    expect(mux.opened[0].args).toMatchObject({ request: { address: { sessionId: 'session-root' } } });
+  });
+
+  it.each(['session-child', 'session-archived', 'missing'])('falls back when requested session %s cannot be selected', async (preferredSessionId) => {
+    const sessions = sessionsFixture();
+    const { mux, bridge, pages, normalize, commit } = harness({ sessions });
+    await bootstrapDshWorkspace({
+      preferredSessionId, adapter: sessionSource(sessions), mux: mux.client,
+      createBridge: () => bridge, normalize, fetchPage: pages.fetcher,
+      isCurrent: () => true, commit,
+    });
+    expect(commit).toHaveBeenCalledWith(expect.objectContaining({ selectedSessionId: 'session-root' }));
+  });
+
   it('fills the project tree, selects the first non-archived non-child session, and subscribes its follow', async () => {
     const { mux, bridge, pages, normalize, commit } = harness({ sessions: sessionsFixture() });
     const source = sessionSource(sessionsFixture());
@@ -391,6 +415,7 @@ describe('bootstrapDshWorkspace', () => {
     expect(bridge.attachFollow).toHaveBeenCalledWith(
       expect.objectContaining({ streamId: 'stream-1' }),
       'session-root',
+      SESSION_FOLLOW_SNAPSHOT,
     );
 
     // Tree data source for Todo 21 + the live follow handle for Todo 19.
@@ -448,6 +473,7 @@ describe('bootstrapDshWorkspace', () => {
     const child = mapDshSessionItem({
       sessionId: 'session-child',
       parentSessionId: 'session-root',
+      origin: 'subagent',
       cwd: REPO_DIR,
       updatedAt: 2,
     });
@@ -475,6 +501,7 @@ describe('bootstrapDshWorkspace', () => {
     expect(bridge.attachFollow).toHaveBeenCalledWith(
       expect.objectContaining({ streamId: 'stream-1' }),
       'session-root',
+      SESSION_FOLLOW_SNAPSHOT,
     );
   });
 
@@ -672,7 +699,7 @@ describe('bootstrapDshWorkspace', () => {
       type: 'event',
       event: {
         type: 'assistant/message',
-        seq: 9,
+        seq: 5,
         time: 7,
         data: {
           turn: 1,
@@ -686,7 +713,7 @@ describe('bootstrapDshWorkspace', () => {
     expect(bridge.sessionIds()).toContain('session-root');
     const texts = [...store.parts.values()].map((part) => (part as { text?: string }).text);
     expect(texts).toContain('Live after bootstrap');
-    expect(bridge.syncState('session-root')).toEqual({ kind: 'live', cursor: 9 });
+    expect(bridge.syncState('session-root')).toEqual({ kind: 'live', cursor: 5 });
   });
 
   it('receives volatile assistant deltas on the initial selected session before durable completion', async () => {
@@ -709,3 +736,34 @@ describe('bootstrapDshWorkspace', () => {
 function repoSessionIds(projects: Record<string, ProjectState>): Record<string, unknown> {
   return projects['ws-git']?.sandboxes[REPO_DIR]?.sessions ?? {};
 }
+
+
+describe('DSH persisted selection bootstrap', () => {
+  it.each([true, false])('restores against the fresh baseline without creating sessions (target exists: %s)', async (exists) => {
+    // Given: the user selected a nonfirst root before the page was refreshed.
+    const bridgeUrl = `ws://selection-test-${exists}:23004/dsh/ws`;
+    const original = createDshSelectionPersistence();
+    const before = sessionsFixture();
+    original.commit(bridgeUrl, mapDshSessionsToProjects(before), 'session-pinned');
+    const fresh = createDshSelectionPersistence();
+    const sessions = exists ? before : before.filter((session) => session.id !== 'session-pinned');
+    const { mux, bridge, pages, normalize, commit } = harness({ sessions });
+    const createSession = vi.fn();
+    const adapter = { ...sessionSource(sessions), createSession };
+    // When: the fresh client reads the runtime baseline and restores its selection.
+    await bootstrapDshWorkspace({
+      preferredSessionId: fresh.preferredSessionId(bridgeUrl), adapter, mux: mux.client,
+      createBridge: () => bridge, normalize, fetchPage: pages.fetcher,
+      isCurrent: () => true, commit: (state) => {
+        fresh.commit(bridgeUrl, state.projects, state.selectedSessionId);
+        commit(state);
+      },
+    });
+    // Then: the exact existing target or existing fallback is followed; nothing is created.
+    const expected = exists ? 'session-pinned' : 'session-root';
+    expect(commit).toHaveBeenCalledWith(expect.objectContaining({ selectedSessionId: expected }));
+    expect(mux.opened[0]?.args).toMatchObject({ request: { address: { sessionId: expected } } });
+    expect(fresh.preferredSessionId(bridgeUrl)).toBe(expected);
+    expect(createSession).not.toHaveBeenCalled();
+  });
+});

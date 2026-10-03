@@ -18,6 +18,23 @@ import {
 
 const SESSION_FOLLOW_FIXTURE = 'wire-session-follow-snapshot.jsonl';
 const SESSION_ID = 'session-06ee930d-7d74-42b1-928d-ac8fdd4376bf';
+
+it('publishes authoritative snapshot titles when their event is outside the replay window', () => {
+  const normalizer = createDshNormalizer();
+  const result = normalizer.ingest({ type: 'snapshot', header: { id: SESSION_ID }, records: [], cursor: 30, projections: { values: { title: 'Latest title' } } });
+  expect(result.ops).toContainEqual(expect.objectContaining({ kind: 'session-title', sessionId: SESSION_ID, title: 'Latest title' }));
+});
+
+it('links catalog children to the spawning tool and retains links through tool completion', () => {
+  const normalizer = createDshNormalizer({ address: { kind: 'session', sessionId: SESSION_ID } });
+  const emit = (type: string, seq: number, data: Record<string, unknown>) => normalizer.ingest({ type: 'event', event: { type, seq, time: seq, data } });
+  emit('turn/start', 0, { turn: 1 });
+  emit('tool/call', 1, { turn: 1, step: 1, callId: 'spawn', name: 'subagent', arguments: {} });
+  const discovery = emit('subagent/catalog', 2, { childId: 'child-a', mode: 'one-shot' });
+  expect(discovery.ops).toContainEqual(expect.objectContaining({ kind: 'part', part: expect.objectContaining({ metadata: expect.objectContaining({ sessionIds: ['child-a'] }) }) }));
+  const completed = emit('tool/result', 3, { turn: 1, step: 1, callId: 'spawn', output: 'done' });
+  expect(completed.ops).toContainEqual(expect.objectContaining({ kind: 'part', part: expect.objectContaining({ metadata: expect.objectContaining({ sessionIds: ['child-a'] }) }) }));
+});
 const MISSING_CREDENTIAL_MESSAGE =
   'llm-deepseek: no API key for provider route "deepseek-official"; store DEEPSEEK_API_KEY '
   + 'through the credentials service (the web Models page writes it), or export DEEPSEEK_API_KEY '
@@ -68,6 +85,55 @@ const opsOfKind = <K extends DshNormalizeOp['kind']>(
 // ---------------------------------------------------------------------------
 
 describe('dsh normalizer — real captured snapshot (04 fixture)', () => {
+  it('discovers children from the real catalog event and snapshot projection', () => {
+    const address = { kind: 'session' as const, sessionId: SESSION_ID };
+    const live = createDshNormalizer({ address }).ingest({ type: 'event', event: {
+      type: 'subagent/catalog', seq: 54, time: 99,
+      data: { version: 0, childId: 'child-actual', childCreatedAt: 42, mode: 'one-shot', label: 'Tiny task' },
+    } });
+    const replay = createDshNormalizer({ address }).ingest({
+      type: 'snapshot', header: { id: SESSION_ID }, cursor: 54, records: [],
+      projections: { values: { subagentCatalog: [{ id: 'child-actual', createdAt: 42, mode: 'one-shot', label: 'Tiny task' }] } },
+    });
+    for (const result of [live, replay]) {
+      expect(result.ops).toContainEqual({ kind: 'subagent-discovered', parentSessionId: SESSION_ID,
+        childSessionId: 'child-actual', createdAt: 42, mode: 'one-shot', title: 'Tiny task' });
+    }
+  });
+
+  it('binds every assistant step to the genuine prompt in live and replayed records', () => {
+    for (const { ops } of [ingestSnapshot(), ingestRecords(fixtureRecords)]) {
+      const assistants = opsOfKind(ops, 'message').filter((op) => op.message.role === 'assistant');
+      expect(assistants.length).toBeGreaterThan(0);
+      for (const op of assistants) {
+        expect(op.message.role === 'assistant' && op.message.parentID)
+          .toBe('ec747195-c21f-4de7-9df6-fcbf4ff4e75b');
+      }
+    }
+  });
+
+  it('keeps queued prompts out of the active turn and binds the next turn on consumption', () => {
+    const normalizer = createDshNormalizer({ address: { kind: 'session', sessionId: SESSION_ID } });
+    let seq = 0;
+    const ingest = (type: DshSessionWireEvent['type'], data: Record<string, unknown>) =>
+      normalizer.ingest({ type: 'event', event: { type, seq: seq++, time: seq, data } }).ops;
+    const inbox = (id: string) => ingest('agent/inbox/spliced', {
+      inserted: [{ id, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: id }] }],
+    });
+    inbox('prompt-a');
+    ingest('turn/start', { turn: 1 });
+    ingest('user/message', { id: 'prompt-a', source: { kind: 'user' }, content: [] });
+    inbox('prompt-b');
+    const first = ingest('assistant/message', { turn: 1, step: 2, message: { content: [] } });
+    expect(opsOfKind(first, 'message')[0]?.message).toMatchObject({ parentID: 'prompt-a' });
+    ingest('turn/end', { turn: 1, reason: { kind: 'completed' } });
+    const second = ingest('turn/start', { turn: 2 });
+    expect(opsOfKind(second, 'message')[0]?.message).toMatchObject({ parentID: 'prompt-b' });
+    ingest('user/message', { id: 'context', source: { kind: 'runtime-context' }, content: [] });
+    const final = ingest('assistant/message', { turn: 2, step: 2, message: { content: [] } });
+    expect(opsOfKind(final, 'message')[0]?.message).toMatchObject({ parentID: 'prompt-b' });
+  });
+
   it('normalizes every real record of the captured turn without throwing', () => {
     const { ops } = ingestSnapshot();
     // 18 records → a non-trivial op sequence; nothing may be dropped silently.
@@ -108,8 +174,9 @@ describe('dsh normalizer — real captured snapshot (04 fixture)', () => {
     // (deduped by appliedMessages) and seq 9 / seq 10 are the injected
     // runtime-context / skill-catalog records, which must stay out of the
     // message list (defect D4: bare user cards).
-    expect(userMessages).toHaveLength(1);
+    expect(userMessages).toHaveLength(2);
     expect(userMessages[0]?.message.id).toBe('ec747195-c21f-4de7-9df6-fcbf4ff4e75b');
+    expect(userMessages[1]?.message).toMatchObject({ id: userMessages[0]?.message.id, variant: 'high' });
     const sourceKinds = opsOfKind(ops, 'part')
       .filter((op) => metaOf(op.part)?.sourceKind !== undefined)
       .map((op) => metaOf(op.part)?.sourceKind);
@@ -339,7 +406,10 @@ describe('dsh normalizer — replay dedup', () => {
     const { ops } = ingestSnapshot();
     const splicedId = 'ec747195-c21f-4de7-9df6-fcbf4ff4e75b';
     const emitted = opsOfKind(ops, 'message').filter((op) => op.message.id === splicedId);
-    expect(emitted).toHaveLength(1);
+    expect(emitted).toHaveLength(2);
+    expect(emitted[1]?.message).toMatchObject({ id: splicedId, variant: 'high' });
+    const { normalizer } = ingestRecords(fixtureRecords.slice(0, 8));
+    expect(opsOfKind(normalizer.ingest(fixtureRecords[8]).ops, 'message').filter(op => op.message.role === 'user')).toEqual([]);
   });
 
   it('a live assistant delta stream followed by the durable full message does not double the text', () => {
@@ -697,3 +767,60 @@ type AnyPart = {
 function metaOf(part: unknown): Record<string, unknown> | undefined {
   return (part as AnyPart | undefined)?.metadata;
 }
+
+
+describe('DSH durable turn permission attribution', () => {
+  const records = [
+    record('permission/preset', 0, { preset: 'read-only' }),
+    record('turn/start', 1, { turn: 1 }),
+    record('user/message', 2, { id: 'user-one', source: { kind: 'user' }, content: [{ type: 'text', text: 'one' }] }),
+    record('assistant/message', 3, { turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: 'one reply' }] } }),
+    record('permission/preset', 4, { preset: 'workspace-write' }),
+    record('turn/end', 5, { turn: 1, reason: { kind: 'completed' } }),
+    record('turn/start', 6, { turn: 2 }),
+    record('user/message', 7, { id: 'user-two', source: { kind: 'user' }, content: [{ type: 'text', text: 'two' }] }),
+    record('assistant/message', 8, { turn: 2, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: 'two reply' }] } }),
+  ];
+
+  it.each(['snapshot', 'live'] as const)('keeps each turn permission stable during %s replay', (transport) => {
+    // Given: two turns with a permission switch before the first turn finishes.
+    const normalizer = createDshNormalizer({ address: { kind: 'session', sessionId: 'permissions' } });
+    // When: identical records arrive through a snapshot or live events.
+    const ops = transport === 'snapshot'
+      ? normalizer.ingest({ type: 'snapshot', header: { id: 'permissions', agentPreset: 'standard' }, cursor: 8, records,
+          projections: { values: { permissions: { currentValue: 'danger-full-access' } } } }).ops
+      : records.flatMap((entry) => normalizer.ingest(entry).ops);
+    // Then: historical cards retain their turn permission rather than the latest projection.
+    const messages = new Map(opsOfKind(ops, 'message').map((op) => [op.message.id, op.message]));
+    expect(messages.get('permissions:t1')).toMatchObject({ permissionPreset: 'read-only' });
+    expect(messages.get('permissions:t2')).toMatchObject({ permissionPreset: 'workspace-write' });
+    expect(messages.get('user-one')).toMatchObject({ permissionPreset: 'read-only' });
+    expect(messages.get('user-two')).toMatchObject({ permissionPreset: 'workspace-write' });
+  });
+});
+
+
+it('attributes a queued DSH prompt when its turn starts without changing earlier prompts', () => {
+  const normalizer = createDshNormalizer({ address: { kind: 'session', sessionId: 'queued-permission' } });
+  const records = [
+    record('permission/preset', 0, { preset: 'read-only' }),
+    record('agent/inbox/spliced', 1, { inserted: [{ id: 'queued-user', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'queued' }] }] }),
+    record('permission/preset', 2, { preset: 'workspace-write' }),
+    record('turn/start', 3, { turn: 1 }),
+  ];
+  const ops = records.flatMap((entry) => normalizer.ingest(entry).ops);
+  const messages = new Map(opsOfKind(ops, 'message').map((op) => [op.message.id, op.message]));
+  expect(messages.get('queued-user')).toMatchObject({ permissionPreset: 'workspace-write' });
+  expect(messages.get('queued-permission:t1')).toMatchObject({ permissionPreset: 'workspace-write' });
+});
+
+it('uses snapshot permission projections only for future DSH turns', () => {
+  const normalizer = createDshNormalizer({ address: { kind: 'session', sessionId: 'projection-permission' } });
+  const historical = normalizer.ingest({ type: 'snapshot', header: { id: 'projection-permission', agentPreset: 'standard' }, cursor: 1,
+    records: [record('turn/start', 0, { turn: 1 }), record('turn/end', 1, { turn: 1, reason: { kind: 'completed' } })],
+    projections: { values: { permissions: { currentValue: 'danger-full-access' } } },
+  });
+  const future = normalizer.ingest(record('turn/start', 2, { turn: 2 }));
+  expect(opsOfKind(historical.ops, 'message').every((op) => op.message.permissionPreset === undefined)).toBe(true);
+  expect(opsOfKind(future.ops, 'message')[0]?.message).toMatchObject({ agent: 'standard', permissionPreset: 'danger-full-access' });
+});

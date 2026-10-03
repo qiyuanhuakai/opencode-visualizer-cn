@@ -41,14 +41,7 @@
           {{ feedbackMessage }}
         </div>
 
-        <section v-if="props.backendKind === 'dsh'" class="provider-section">
-          <div class="provider-section-header">
-            <div class="section-heading provider-section-title">
-              {{ $t('providerManager.dsh.title') }}
-            </div>
-            <div class="section-meta">{{ $t('providerManager.dsh.description') }}</div>
-          </div>
-        </section>
+        <DshProviderManager v-if="isDshBackend && props.open && props.dshRpcClient" ref="dshProviderManager" :rpc="props.dshRpcClient" :active="activeTab === 'providers'" @editing-changed="dshProviderEditing = $event" @inventory="dshProviderConfigurations = $event" @providers-changed="emit('providers-changed')" />
 
         <template v-if="props.backendKind === 'acp'">
           <section class="provider-section">
@@ -256,7 +249,7 @@
           </form>
         </template>
 
-        <template v-else-if="activeTab === 'providers'">
+        <template v-else-if="activeTab === 'providers' && !dshProviderEditing">
           <div class="provider-sections">
             <section class="provider-section">
               <div class="provider-section-header">
@@ -341,6 +334,7 @@
                       />
                       <span class="toggle-track" />
                     </label>
+                    <button v-if="isDshBackend && props.dshRpcClient && dshProviderConfigurations.some((row) => row.provider === provider.id)" type="button" class="ghost-action" data-dsh-provider-settings @click="dshProviderManager?.openSettings(provider.id)">{{ $t('kimiWeb.providers.edit') }}</button>
                     <button
                       v-if="props.backendKind !== 'dsh'"
                       type="button"
@@ -389,20 +383,20 @@
                   <button
                     type="button"
                     class="ghost-action provider-mini-row-action"
-                    :disabled="!supportsProviderConfigUpdates()"
+                    :disabled="isDshBackend ? !props.dshRpcClient : !supportsProviderConfigUpdates()"
                     :title="
-                      !supportsProviderConfigUpdates()
+                      !isDshBackend && !supportsProviderConfigUpdates()
                         ? $t('providerManager.messages.unsupportedBackendFeature', {
                             feature: 'custom providers',
                           })
                         : undefined
                     "
-                    @click="openCustomProviderForm"
+                    @click="isDshBackend ? dshProviderManager?.openCreate() : openCustomProviderForm()"
                   >
                     {{ $t('providerManager.actions.connect') }}
                   </button>
                 </div>
-                <ProviderDiscoveryList :entries="providers" v-slot="{ entry: provider, letter }">
+                <ProviderDiscoveryList :entries="availableProviders" v-slot="{ entry: provider, letter }">
                   <article
                     :data-provider-letter="letter"
                     tabindex="-1"
@@ -418,12 +412,12 @@
                     <div class="provider-mini-row-status">
                       <span
                         class="status-badge"
-                        :class="isProviderDisconnected(provider) ? 'is-warning' : 'is-enabled'"
+                        :class="isProviderDisconnected(provider) ? 'is-warning' : isProviderEnabled(provider.id) ? 'is-enabled' : 'is-disabled'"
                       >
                         {{
                           isProviderDisconnected(provider)
                             ? $t('providerManager.badges.disconnected')
-                            : $t('providerManager.badges.enabled')
+                            : $t(isProviderEnabled(provider.id) ? 'providerManager.badges.enabled' : 'providerManager.badges.disabled')
                         }}
                       </span>
                       <button
@@ -443,7 +437,7 @@
           </div>
         </template>
 
-        <template v-else>
+        <template v-else-if="!isDshBackend || !dshProviderEditing">
           <section class="model-toolbar">
             <label class="model-search-field">
               <Icon icon="lucide:search" :width="14" :height="14" />
@@ -568,7 +562,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, inject, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, inject, ref, shallowRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import { getActiveBackendAdapter } from '../backends/registry';
@@ -578,6 +572,9 @@ import {
   type KimiWebProvidersClient,
 } from '../composables/useKimiWebProviders';
 const KimiWebProviderManager = defineAsyncComponent(() => import('./kimiWeb/KimiWebProviderManager.vue'));
+const DshProviderManager = defineAsyncComponent(() => import('./dsh/DshProviderManager.vue'));
+import type { DshRpcClient } from '../utils/dshRpc';
+import type { DshProviderConfiguration } from '../backends/dsh/dshProviderConfig';
 import ProviderDiscoveryList from './ProviderDiscoveryList.vue';
 import type { BackendKind } from '../backends/types';
 import {
@@ -733,6 +730,7 @@ const props = defineProps<{
   hiddenModels: string[];
   providerConfig: ProviderConfigState | null;
   backendKind?: BackendKind;
+  dshRpcClient?: DshRpcClient;
 }>();
 
 const emit = defineEmits<{
@@ -779,6 +777,20 @@ const connectedProviderIdSet = computed(() => new Set(props.connectedProviderIds
 
 // Provider writes use Kimi REST; model visibility uses the shared local controls.
 const isKimiWebBackend = computed(() => props.backendKind === 'kimi-web');
+const isDshBackend = computed(() => props.backendKind === 'dsh');
+const dshProviderManager = ref<{ openSettings(id: string): void; openCreate(): void } | null>(null);
+const dshProviderConfigurations = shallowRef<DshProviderConfiguration[]>([]);
+const dshProviderEditing = ref(false);
+watch(() => props.dshRpcClient, () => { dshProviderConfigurations.value = []; });
+const availableProviders = computed<ProviderInfo[]>(() => {
+  if (!isDshBackend.value) return props.providers;
+  const rows = new Map(props.providers.map((provider) => [provider.id, provider]));
+  for (const row of dshProviderConfigurations.value) {
+    const live = rows.get(row.provider);
+    rows.set(row.provider, { ...live, id: row.provider, name: row.displayName, source: live?.source ?? 'config' });
+  }
+  return [...rows.values()];
+});
 const kimiWebProvidersClient = ref<KimiWebProvidersClient | null>(null);
 
 watch(
@@ -802,7 +814,7 @@ watch(
 );
 
 const sortedProviders = computed(() =>
-  [...props.providers].sort((a, b) => {
+  [...availableProviders.value].sort((a, b) => {
     const disconnectedDelta = Number(isProviderDisconnected(b)) - Number(isProviderDisconnected(a));
     if (disconnectedDelta !== 0) return disconnectedDelta;
     return (a.name?.trim() || a.id).localeCompare(b.name?.trim() || b.id);
@@ -996,6 +1008,7 @@ function providerAuthSummary(providerId: string) {
 }
 
 function isProviderDisconnected(provider: ProviderInfo) {
+  if (isDshBackend.value && dshProviderConfigurations.value.some((row) => row.provider === provider.id && row.declared)) return false;
   return !connectedProviderIdSet.value.has(provider.id);
 }
 
@@ -1370,6 +1383,7 @@ function toggleModel(modelKey: string, nextEnabled: boolean) {
 }
 
 async function connectProvider(provider: ProviderInfo) {
+  if (isDshBackend.value && props.dshRpcClient) { dshProviderManager.value?.openSettings(provider.id); return; }
   if (isBackendManagedProvider(provider)) {
     setFeedback(t('providerManager.messages.backendManagedProvider'), 'info');
     return;
@@ -2500,6 +2514,10 @@ async function disconnectProvider(provider: ProviderInfo) {
   .provider-list-row-actions,
   .model-row-actions {
     align-items: stretch;
+  }
+
+  .provider-list-row-actions {
+    flex-basis: auto;
   }
 
   .provider-action-group {

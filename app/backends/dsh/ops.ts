@@ -7,7 +7,7 @@
  * `reason.kind`; nothing else is a success or failure signal.
  */
 import type { MessageInfo, MessagePart } from '../../types/sse';
-import type { DshSessionAddress, DshSessionRecord } from './types';
+import type { DshProjectionModelRef, DshSessionAddress, DshSessionRecord } from './types';
 
 /**
  * `turn/end` reason (`docs/dsh.md` §8.3: `completed` | `error` | `aborted` | ...).
@@ -47,8 +47,11 @@ export type DshNormalizeOp =
   /** LLM request envelope (`request/header` / `request/context`). */
   | { kind: 'request'; phase: 'header' | 'context'; sessionId: string; provider?: string; model?: string;
       contextWindow?: number; reasoningEffort?: string; tools?: readonly string[]; time: number }
+  | { kind: 'model-selection'; sessionId: string; selection: DshProjectionModelRef | undefined }
   /** Subagent child-session terminal (and completion) mapping. */
-  | { kind: 'subagent'; phase: 'terminal' | 'completed'; parentSessionId: string; childSessionId: string;
+  | { kind: 'subagent-discovered'; parentSessionId: string; childSessionId: string; mode: string;
+      title: string; createdAt?: number }
+  | { kind: 'subagent'; phase: 'started' | 'terminal' | 'completed'; parentSessionId: string; childSessionId: string;
       mode: string; turn: number;
       reason?: DshTurnReason; time: number }
   /** A turn/step failure surfaced as a message error. */

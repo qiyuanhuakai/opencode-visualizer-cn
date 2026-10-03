@@ -19,6 +19,7 @@ import type {
 } from '../../types/sse';
 import type { DshSessionAddress, DshSessionRecord, DshSessionWireEvent } from './types';
 import type { DshNormalizeOp, DshNormalizeStats } from './ops';
+import { sumDshAttemptUsage, type DshMessageTokens } from './tokenUsage';
 
 export type DshJson = Record<string, unknown>;
 
@@ -100,7 +101,9 @@ export type DshGroup = {
   messageID: string;
   startedAt: number;
   endedAt?: number;
-  usageStepIds: Set<string>;
+  usageAttempt: number;
+  usageByAttempt: Map<number, DshMessageTokens>;
+  model: { providerID: string; modelID: string; variant?: string };
   error?: MessageError;
   finish?: string;
   text: DshDeltaBucket;
@@ -116,12 +119,20 @@ export type DshCore = {
   appliedSeqs: Set<number>;
   appliedChunks: Set<string>;
   appliedMessages: Set<string>;
+  pendingUserMessageIds: string[];
+  turnParents: Map<number, string>;
+  activeTurn: number;
+  lastUserMessageId: string;
+  sessionTitle: string;
   sealedGroups: Set<string>;
   groups: Map<string, DshGroup>;
   toolParts: Map<string, ToolPart>;
-  model: { providerID: string; modelID: string };
+  model: { providerID: string; modelID: string; variant?: string };
   /** Agent identity carried on the shared message: dsh's session agent preset. */
   agentPreset: string;
+  permissionPreset: string;
+  turnPermissionPresets: Map<number, string>;
+  userMessages: Map<string, UserMessageInfo>;
   records: DshSessionRecord[];
   attempts: Map<string, { turn: number; step: number }>;
 };
@@ -158,14 +169,16 @@ export function buildMessage(core: DshCore, group: DshGroup): AssistantMessageIn
     sessionID: group.sessionId,
     role: 'assistant',
     time: { created: group.startedAt, completed: group.endedAt },
-    parentID: '',
-    modelID: core.model.modelID,
-    providerID: core.model.providerID,
+    parentID: core.turnParents.get(group.turn) ?? core.lastUserMessageId,
+    modelID: group.model.modelID,
+    providerID: group.model.providerID,
+    variant: group.model.variant,
     mode: '',
     agent: agentLabelOf(core),
+    permissionPreset: core.turnPermissionPresets.get(group.turn) || undefined,
     path: { cwd: '', root: '' },
     cost: 0,
-    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    tokens: sumDshAttemptUsage(group.usageByAttempt),
   };
   if (group.error) message.error = group.error;
   if (group.finish) message.finish = group.finish;
@@ -176,15 +189,19 @@ export function agentLabelOf(core: DshCore): string {
   return core.address?.kind === 'subagent' ? 'subagent' : core.agentPreset;
 }
 
-export function userMessageOf(core: DshCore, sessionId: string, messageId: string, time: number): UserMessageInfo {
-  return {
+export function userMessageOf(core: DshCore, sessionId: string, messageId: string, time: number, permissionPreset = core.permissionPreset): UserMessageInfo {
+  const message: UserMessageInfo = {
     id: messageId,
     sessionID: sessionId,
     role: 'user',
     time: { created: time },
     agent: agentLabelOf(core),
+    permissionPreset: permissionPreset || undefined,
     model: { providerID: core.model.providerID, modelID: core.model.modelID },
+    variant: core.model.variant,
   };
+  core.userMessages.set(messageId, message);
+  return message;
 }
 
 export function ensureGroup(
@@ -195,6 +212,7 @@ export function ensureGroup(
   ops: DshNormalizeOp[],
   step = 1,
 ): DshGroup {
+  if (!core.turnPermissionPresets.has(turn)) core.turnPermissionPresets.set(turn, core.permissionPreset);
   const key = groupKeyOf(sessionId, turn, step);
   let group = core.groups.get(key);
   if (!group) {
@@ -207,7 +225,9 @@ export function ensureGroup(
       step,
       messageID: `${sessionId}:t${turn}${step === 1 ? '' : `:s${step}`}`,
       startedAt: time ?? core.now(),
-      usageStepIds: new Set(),
+      usageAttempt: 0,
+      usageByAttempt: new Map(),
+      model: { ...core.model },
       text: newBucket(),
       reasoning: newBucket(),
     };

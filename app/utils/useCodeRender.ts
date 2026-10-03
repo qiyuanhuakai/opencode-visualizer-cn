@@ -44,6 +44,7 @@ export function useCodeRender(params: WatchSource<CodeRenderParams | null>): Cod
         return;
       }
 
+      error.value = '';
       const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const task = startRenderWorkerHtml({
         id,

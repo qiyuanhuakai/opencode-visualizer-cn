@@ -1,21 +1,10 @@
 <template>
-  <button
-    type="button"
-    class="codex-composer-goal"
-    :disabled="disabled"
-    :title="`${t('codexPanel.runtime.goal')}: ${summary}`"
-    :aria-label="`${t('codexPanel.runtime.goal')}: ${summary}`"
-    @click="emit('open')"
-  >
-    <span class="goal-label">{{ t('codexPanel.runtime.goal') }}</span>
-    <span class="goal-summary" :role="loadError ? 'alert' : undefined">{{ summary }}</span>
-    <Icon icon="lucide:pencil" :width="14" :height="14" aria-hidden="true" />
-  </button>
+  <ComposerGoal class="codex-composer-goal" :label="t('codexPanel.runtime.goal')" :summary="summary" :error="Boolean(loadError)" :disabled="disabled"  @open="emit('open')" />
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { Icon } from '@iconify/vue';
+import ComposerGoal from '../composer/ComposerGoal.vue';
 import { useI18n } from 'vue-i18n';
 import type { useCodexApi } from '../../composables/useCodexApi';
 import { codexGoalUi } from '../../locales/codexGoalUi';
@@ -63,31 +52,3 @@ watch([
   }
 }, { immediate: true });
 </script>
-
-<style scoped>
-.codex-composer-goal {
-  display: flex;
-  flex: 1 1 120px;
-  min-width: 120px;
-  max-width: none;
-  align-items: center;
-  gap: 8px;
-  height: 28px;
-  overflow: hidden;
-  padding: 4px 8px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--theme-input-text, var(--theme-text-primary));
-  font-family: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-.goal-label, .codex-composer-goal :deep(svg) { flex: 0 0 auto; }
-.goal-label { color: var(--theme-input-text-muted, var(--theme-text-muted)); }
-.goal-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.codex-composer-goal:hover:not(:disabled) { background: var(--theme-surface-panel-hover); }
-.codex-composer-goal:focus-visible { outline: 2px solid var(--theme-input-accent, var(--theme-border-accent)); outline-offset: 2px; }
-.codex-composer-goal:disabled { opacity: 0.5; cursor: not-allowed; }
-</style>

@@ -9,7 +9,7 @@
  * Todo 18 normalizer emits.
  */
 
-import type { DshJsonValue, DshRpcArgs, DshSessionAddress } from '../backends/dsh/types';
+import type { DshJsonValue, DshProjectionModelRef, DshRpcArgs, DshSessionAddress } from '../backends/dsh/types';
 import type { DshNormalizeOp } from '../backends/dsh/ops';
 import type { MessageInfo, MessagePart } from '../types/sse';
 import type { DshRpcFetcher, DshRpcTokenProvider } from '../utils/dshRpc';
@@ -160,6 +160,12 @@ export type DshBridgeSessionState = {
   readonly sync: DshSyncState;
   /** Turn running (`turn/start` seen without its `turn/end`). */
   readonly busy?: boolean;
+  readonly agentPreset?: string;
+  readonly permissionPreset?: string;
+  readonly sandboxMode?: string;
+  readonly approvalPolicy?: string;
+  readonly presetLocked?: boolean;
+  readonly planGoalRevision?: number;
   /** Authoritative completion from `turn/end.reason`. */
   readonly completion?: DshCompletion;
   /**
@@ -168,6 +174,7 @@ export type DshBridgeSessionState = {
    * `request/context` record. Absent until an authoritative frame lands.
    */
   readonly usage?: DshSessionUsage;
+  readonly modelSelection?: DshProjectionModelRef;
 };
 
 export type DshSessionUsage = {
@@ -247,7 +254,7 @@ export type DshMessageBridge = {
    * first snapshot frame itself, so live records need the session up front);
    * omitting it keeps the snapshot-learned binding.
    */
-  attachFollow(handle: DshBridgeStreamHandle, binding?: string | DshSessionAddress): void;
+  attachFollow(handle: DshBridgeStreamHandle, binding?: string | DshSessionAddress, snapshot?: DshJsonValue): void;
   /** Cancel a session's streams and invalidate pending recovery before selection pruning. */
   detachFollow(sessionId: string): void;
   /** Pre-normalized snapshot/history entries: loaded, never popped up. */

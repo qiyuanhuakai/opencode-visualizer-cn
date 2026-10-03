@@ -1,3 +1,17 @@
+export type BackendPluginManagementEntry = {
+  readonly id: string;
+  readonly name: string;
+  readonly moduleName: string;
+  readonly description?: string;
+  readonly enabled: boolean;
+  readonly phase: string | null;
+} & ({ readonly writable: true } | { readonly writable: false; readonly readOnlyReason: 'management-required' | 'unaddressable' });
+
+export type BackendPluginChange = {
+  readonly changed: boolean;
+  readonly application: 'applied' | 'restart-required' | 'overridden';
+};
+
 export type BackendKind = 'opencode' | 'codex' | 'acp' | 'kimi-web' | 'dsh';
 
 export type BackendCapabilities = {
@@ -244,7 +258,11 @@ export type BackendAdapter = {
   getMcpStatus?(): Promise<unknown>;
   getLspStatus?(): Promise<unknown>;
   getPluginStatus?(): Promise<unknown>;
+  getPluginManagementEntries?(): Promise<BackendPluginManagementEntry[]>;
+  setPluginEnabled?(id: string, enabled: boolean): Promise<BackendPluginChange>;
   updateMcp?(payload: { name: string; config: Record<string, unknown> }): Promise<unknown>;
-  getSkillStatus?(): Promise<unknown>;
+  getSkillStatus?(sessionId?: string): Promise<unknown>;
+  getPermissionPresetOptions?(sessionId: string): Promise<Array<{ value: string; name: string }>>;
+  selectPermissionPreset?(sessionId: string, preset: string): Promise<void>;
   updateSkill?(payload: { path: string; name?: string; enabled: boolean }): Promise<unknown>;
 };

@@ -274,7 +274,6 @@ function requireBackendMethod<T extends (...args: never[]) => unknown>(method: T
 
 type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills' | 'token' | 'mc' | 'acp';
 function availableTab(tab: TabId | undefined): TabId {
-  if (props.activeBackendKind === 'dsh' && (tab === 'mcp' || tab === 'lsp' || tab === 'plugins' || (tab === 'skills' && props.dshStatus?.probes?.skills !== 'supported'))) return 'server';
   return tab === 'mc' && props.activeBackendKind !== 'opencode' ? 'server' : tab ?? 'server';
 }
 const activeTab = ref<TabId>(availableTab(props.initialTab));
@@ -444,6 +443,11 @@ watch(
   (newId, oldId) => {
     if (newId === oldId) return;
     resetTokenData();
+    if (isDshBackend.value) {
+      resetLoadedState();
+      if (props.open || props.preload) void ensureLoaded();
+      return;
+    }
     if (newId && (props.open || props.preload)) {
       void fetchTokenData();
     }
@@ -547,12 +551,9 @@ async function refresh() {
 
   const activeBackend = backend();
   if (isDshBackend.value) {
-    // dsh wires no MCP/LSP/plugin surface at all; its skills surface is gated
-    // by the Todo 31 runtime probe (unknown/unsupported until proven, so a
-    // stale or absent probe can never render as supported).
     mcpUnsupported.value = true;
     lspUnsupported.value = true;
-    pluginUnsupported.value = true;
+    pluginUnsupported.value = typeof activeBackend.getPluginStatus !== 'function';
     skillUnsupported.value = dshProbeStates.value.skills !== 'supported';
   } else {
     mcpUnsupported.value = typeof activeBackend.getMcpStatus !== 'function';
@@ -570,7 +571,7 @@ async function refresh() {
         activeBackend.getGlobalHealth?.() ?? Promise.resolve(null),
         activeBackend.getMcpStatus?.() ?? Promise.resolve({}),
         activeBackend.getLspStatus?.() ?? Promise.resolve([]),
-        activeBackend.getSkillStatus?.() ?? Promise.resolve([]),
+        activeBackend.getSkillStatus?.(isDshBackend.value ? props.sessionId : undefined) ?? Promise.resolve([]),
         activeBackend.getGlobalConfig?.() ?? Promise.resolve({}),
         activeBackend.getPluginStatus?.() ?? Promise.resolve([]),
       ]);
@@ -589,7 +590,7 @@ async function refresh() {
       if (!lspUnsupported.value && lsp.status === 'rejected') lspUnsupported.value = true;
       if (!skillUnsupported.value && skills.status === 'rejected') skillUnsupported.value = true;
       if (!pluginUnsupported.value && plugins.status === 'rejected') {
-        if (isAcpBackend.value || cfg.status === 'rejected') pluginUnsupported.value = true;
+        if (isDshBackend.value || isAcpBackend.value || cfg.status === 'rejected') pluginUnsupported.value = true;
       }
 
       await tokenRefresh;
@@ -1247,9 +1248,7 @@ const tabs = computed<{ id: TabId; labelKey: string }[]>(() => {
     base.push({ id: 'mc', labelKey: 'statusMonitor.tabs.mc' });
   }
   base.push({ id: 'acp', labelKey: 'statusMonitor.tabs.acp' });
-  return isDshBackend.value
-    ? base.filter((tab) => tab.id !== 'mcp' && tab.id !== 'lsp' && tab.id !== 'plugins' && (tab.id !== 'skills' || dshProbeStates.value.skills === 'supported'))
-    : base;
+  return base;
 });
 
 function handleTabKeydown(event: KeyboardEvent, index: number) {
@@ -1577,21 +1576,21 @@ type DshLegacyProbe = 'mcp' | 'lsp' | 'skills' | 'plugins';
 const dshRegistryProbeStates = computed<Record<DshLegacyProbe, DshSurfaceProbeState>>(() => ({
   mcp: 'unsupported',
   lsp: 'unsupported',
-  plugins: 'unsupported',
+  plugins: getActiveDshCapabilityRegistry()?.states.value.plugins ?? 'unknown',
   skills: getActiveDshCapabilityRegistry()?.states.value.skills ?? 'unknown',
 }));
 const dshProbeStates = computed<Record<DshLegacyProbe, DshSurfaceProbeState>>(() => {
   const probes = props.dshStatus?.probes;
   if (!probes) return dshRegistryProbeStates.value;
   return {
-    mcp: probes.mcp ?? 'unknown',
-    lsp: probes.lsp ?? 'unknown',
+    mcp: probes.mcp ?? 'unsupported',
+    lsp: probes.lsp ?? 'unsupported',
     plugins: probes.plugins ?? 'unknown',
     skills: probes.skills ?? 'unknown',
   };
 });
 const skillStatusUnsupported = computed(() =>
-  isDshBackend.value ? dshProbeStates.value.skills !== 'supported' : skillUnsupported.value,
+  isDshBackend.value ? skillUnsupported.value || !props.sessionId || dshProbeStates.value.skills !== 'supported' : skillUnsupported.value,
 );
 
 watch(tabs, (available) => {

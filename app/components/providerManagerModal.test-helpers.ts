@@ -1,6 +1,7 @@
 import { createApp, h, nextTick, ref, type App as VueApp } from 'vue';
 import { afterEach, beforeEach, vi } from 'vitest';
 import type { BackendKind } from '../backends/types';
+import type { DshRpcClient } from '../utils/dshRpc';
 import i18n from '../i18n';
 import ProviderManagerModal from './ProviderManagerModal.vue';
 
@@ -34,6 +35,7 @@ type ProviderConfigState = {
 };
 
 type MountedModalOptions = {
+  readonly dshRpcClient?: DshRpcClient;
   readonly backendKind?: BackendKind;
   readonly providers?: readonly ProviderInfo[];
   readonly connectedProviderIds?: readonly string[];
@@ -120,6 +122,7 @@ export async function mountProviderManager(
     hiddenModels: [...(options.hiddenModels ?? [])],
     providerConfig: options.providerConfig ?? null,
     backendKind: options.backendKind ?? 'opencode',
+    dshRpcClient: options.dshRpcClient,
   });
   const events = {
     configUpdated: vi.fn(),
