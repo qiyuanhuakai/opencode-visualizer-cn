@@ -1188,9 +1188,9 @@ describe('dsh lifecycle wiring (Todo 33)', () => {
     };
     const dshPermissions = {
       state: {
-        permissionPreset: 'workspace-write',
-        sandboxMode: 'workspace-write',
-        approvalPolicy: 'ask',
+        permissionPreset: 'danger-full-access',
+        sandboxMode: 'danger-full-access',
+        approvalPolicy: 'never',
       },
     };
     const snapshot = runInNewContext(program, {
