@@ -31,6 +31,8 @@
 
 import type {
   BackendAdapter,
+  BackendPluginManagementEntry,
+  BackendPluginChange,
   BackendCapabilities,
   BackendQueryValue,
   BackendRequestOptions,
@@ -46,9 +48,10 @@ import type {
 } from '../../types/backend-domain';
 import type { ProjectState } from '../../types/worker-state';
 import { normalizeDirectory } from '../../utils/path';
-import { createDshRpcClient, deriveDshBridgeHttpUrl, type DshRpcClient } from '../../utils/dshRpc';
+import { DshRpcError, createDshRpcClient, deriveDshBridgeHttpUrl, type DshRpcClient } from '../../utils/dshRpc';
 import { createDshMuxClient, dshMuxBridgeUrl, type DshMuxClient } from '../../utils/dshMux';
 import { DSH_WIRE_VERSION, type DshJsonValue, type DshSessionSnapshot } from './types';
+import { decodeDshFileContent } from './fileContent';
 
 /**
  * Capability matrix for the dsh backend.
@@ -93,9 +96,6 @@ export const DSH_MODEL_PROVIDER = 'deepseek-official';
 /** Fallback reasoning effort when the catalog does not declare a default. */
 const DSH_DEFAULT_REASONING_EFFORT = 'high';
 
-/** Byte window requested from `workspaceFiles/read` (docs/dsh.md §7.7). */
-const DSH_FILE_READ_LIMIT = 2 * 1024 * 1024;
-
 /**
  * Every public method of {@link DshAdapter}, in bind order.
  *
@@ -128,10 +128,18 @@ export const DSH_ADAPTER_METHODS = [
   'getVcsInfo',
   'listProviders',
   'getGlobalConfig',
+  'getPluginStatus',
+  'getPluginManagementEntries',
+  'setPluginEnabled',
+  'getSkillStatus',
+  'getPermissionPresetOptions',
+  'selectPermissionPreset',
   'updateSessionMode',
   'syncSessionConfig',
   'getSessionConfigOptions',
   'listCommands',
+  'listAgents',
+  'executeCommand',
   'getSessionStatusMap',
   'getGlobalHealth',
   'abortSession',
@@ -346,6 +354,8 @@ export type DshSessionItem = {
   title?: string;
   /** The live wire field (`session/list`), NOT the follow header's `parentSession`. */
   parentSessionId?: string;
+  origin?: string;
+  projections?: { values?: Record<string, unknown> };
   busy?: boolean;
   createdAt?: string | number;
   updatedAt?: string | number;
@@ -392,14 +402,14 @@ export function mapDshSessionItem(
   );
   const projectId = workspaceId || orphanProjectId(directory);
   if (!projectId) throw new Error(`dsh session ${sessionId} has no workspace id.`);
-  const parentID = item.parentSessionId?.trim() || undefined;
+  const parentID = item.origin === 'subagent' ? item.parentSessionId?.trim() || undefined : undefined;
   return {
     id: sessionId,
     projectID: projectId,
     projectId,
     workspaceId: projectId,
     parentID,
-    title: item.title?.trim() || sessionId,
+    title: item.title?.trim() || (typeof item.projections?.values?.title === 'string' ? item.projections.values.title.trim() : '') || sessionId,
     status: item.busy ? 'busy' : 'unknown',
     directory,
     time: {
@@ -652,6 +662,7 @@ export class DshAdapter implements BackendAdapter {
   private readonly bridgeUrl: string;
   private bridgeToken: string;
   private modelCatalog: DshCatalogProvider[] | null = null;
+  private readonly modelSelectionWrites = new Map<string, Promise<unknown>>();
 
   constructor(options: DshAdapterOptions) {
     const bridgeUrl = options.bridgeUrl.trim();
@@ -708,10 +719,18 @@ export class DshAdapter implements BackendAdapter {
     this.getVcsInfo = this.getVcsInfo.bind(this);
     this.listProviders = this.listProviders.bind(this);
     this.getGlobalConfig = this.getGlobalConfig.bind(this);
+    this.getPluginStatus = this.getPluginStatus.bind(this);
+    this.getPluginManagementEntries = this.getPluginManagementEntries.bind(this);
+    this.setPluginEnabled = this.setPluginEnabled.bind(this);
+    this.getSkillStatus = this.getSkillStatus.bind(this);
+    this.getPermissionPresetOptions = this.getPermissionPresetOptions.bind(this);
+    this.selectPermissionPreset = this.selectPermissionPreset.bind(this);
     this.updateSessionMode = this.updateSessionMode.bind(this);
     this.syncSessionConfig = this.syncSessionConfig.bind(this);
     this.getSessionConfigOptions = this.getSessionConfigOptions.bind(this);
     this.listCommands = this.listCommands.bind(this);
+    this.listAgents = this.listAgents.bind(this);
+    this.executeCommand = this.executeCommand.bind(this);
     this.getSessionStatusMap = this.getSessionStatusMap.bind(this);
     this.getGlobalHealth = this.getGlobalHealth.bind(this);
     this.abortSession = this.abortSession.bind(this);
@@ -854,8 +873,8 @@ export class DshAdapter implements BackendAdapter {
     return typeof limit === 'number' ? sessions.slice(0, limit) : sessions;
   }
 
-  private async loadModelCatalog(): Promise<DshCatalogProvider[]> {
-    if (this.modelCatalog) return this.modelCatalog;
+  private async loadModelCatalog(refresh = false): Promise<DshCatalogProvider[]> {
+    if (!refresh && this.modelCatalog) return this.modelCatalog;
     const providers = normalizeDshModelCatalog(
       await this.rpcClient.call('session', 'modelCatalog', {}),
     );
@@ -863,13 +882,15 @@ export class DshAdapter implements BackendAdapter {
     return providers;
   }
 
-  /** Resolve the provider that owns a model id (dsh serves exactly one). */
+  /** Resolve an unqualified model only when exactly one provider owns it. */
   private async resolveModelProvider(modelId: string): Promise<string> {
     const providers = await this.loadModelCatalog();
-    const owner = providers.find((provider) =>
+    const owners = providers.filter((provider) =>
       provider.models.some((model) => model.id === modelId),
     );
-    return owner?.id ?? providers[0]?.id ?? DSH_MODEL_PROVIDER;
+    const owner = owners[0];
+    if (owners.length !== 1 || !owner) throw new DshRpcError('Select an available DSH provider and model.', { code: 'invalid-model-selection' });
+    return owner.id;
   }
 
   /** The catalog's first model — dsh has no "default model" read endpoint. */
@@ -947,10 +968,7 @@ export class DshAdapter implements BackendAdapter {
     const normalized = normalizeDirectory(directory.trim() || '/');
     const workspace = await this.findWorkspaceForDirectory(normalized);
     const created = await this.rpcClient.call('session', 'create', {
-      request: {
-        ...(workspace ? { workspaceId: workspace.workspaceId } : {}),
-        cwd: normalized,
-      },
+      request: workspace ? { workspaceId: workspace.workspaceId } : { cwd: normalized },
     });
     if (!isRecord(created)) throw new Error('dsh session/create did not return an object.');
     const sessionId = readString(created, ['sessionId', 'session_id', 'id']);
@@ -1065,12 +1083,92 @@ export class DshAdapter implements BackendAdapter {
   // -------------------------------------------------------------------------
 
   async listProviders(): Promise<BackendProviderResponse> {
-    return dshModelResponse(await this.loadModelCatalog());
+    return dshModelResponse(await this.loadModelCatalog(true));
   }
 
   async getGlobalConfig(): Promise<{ enabled_providers: string[]; disabled_providers: string[] }> {
     const providers = await this.loadModelCatalog();
     return { enabled_providers: providers.map((provider) => provider.id), disabled_providers: [] };
+  }
+
+  async getPluginStatus() {
+    const value = await this.rpcClient.call('pluginManager', 'listPlugins', {});
+    if (!Array.isArray(value)) throw new DshRpcError('Invalid DSH plugin inventory.', { code: 'invalid-envelope' });
+    return value.map((entry) => {
+      if (!isRecord(entry) || typeof entry.entryId !== 'string' || typeof entry.moduleName !== 'string' || typeof entry.enabled !== 'boolean') {
+        throw new DshRpcError('Invalid DSH plugin entry.', { code: 'invalid-envelope' });
+      }
+      const title = isRecord(entry.meta) ? readString(entry.meta, ['title']) : '';
+      return { id: entry.entryId, name: title || entry.moduleName, enabled: entry.enabled, installed: true, accessible: true };
+    });
+  }
+
+  async getPluginManagementEntries(): Promise<BackendPluginManagementEntry[]> {
+    const value = await this.rpcClient.call('pluginManager', 'listPlugins', {});
+    if (!Array.isArray(value)) throw new DshRpcError('Invalid DSH plugin inventory.', { code: 'invalid-envelope' });
+    return value.map((entry): BackendPluginManagementEntry => {
+      if (!isRecord(entry) || typeof entry.entryId !== 'string' || typeof entry.moduleName !== 'string' || typeof entry.enabled !== 'boolean' || (entry.fiberPhase !== null && typeof entry.fiberPhase !== 'string')) {
+        throw new DshRpcError('Invalid DSH plugin entry.', { code: 'invalid-envelope' });
+      }
+      const meta = isRecord(entry.meta) ? entry.meta : {};
+      const common = { id: entry.entryId, name: readString(meta, ['title']) || entry.moduleName, moduleName: entry.moduleName, description: readString(meta, ['description']), enabled: entry.enabled, phase: entry.fiberPhase };
+      if (entry.readOnlyReason === 'management-required' || entry.readOnlyReason === 'unaddressable') return { ...common, writable: false, readOnlyReason: entry.readOnlyReason };
+      if (typeof entry.patchId === 'string' && entry.patchId.trim()) return { ...common, writable: true };
+      throw new DshRpcError('DSH plugin has no management availability.', { code: 'invalid-envelope' });
+    });
+  }
+
+  async setPluginEnabled(id: string, enabled: boolean): Promise<BackendPluginChange> {
+    const entry = (await this.getPluginManagementEntries()).find((plugin) => plugin.id === id);
+    if (!entry || !entry.writable) throw new DshRpcError('DSH plugin is read-only or unavailable.', { code: 'plugin-read-only' });
+    const value = await this.rpcClient.call('pluginManager', 'setPluginEnabled', { id, enabled });
+    if (!isRecord(value) || typeof value.changed !== 'boolean' || value.stage !== 'enable' || typeof value.target !== 'string') throw new DshRpcError('Invalid DSH plugin change result.', { code: 'invalid-envelope' });
+    switch (value.application) {
+      case 'applied':
+      case 'restart-required':
+      case 'overridden':
+        return { changed: value.changed, application: value.application };
+      case 'failed':
+      case 'cancelled': {
+        const error = isRecord(value.error) ? value.error : {};
+        throw new DshRpcError(readString(error, ['diagnostic', 'code']) || 'DSH plugin change failed.', { code: 'plugin-change-failed' });
+      }
+      default:
+        throw new DshRpcError('Invalid DSH plugin application state.', { code: 'invalid-envelope' });
+    }
+  }
+
+  async getSkillStatus(sessionId?: string) {
+    if (!sessionId?.trim()) return [];
+    const value = await this.rpcClient.call('skills', 'list', { request: { sessionId } });
+    if (!isRecord(value) || !Array.isArray(value.skills)) throw new DshRpcError('Invalid DSH skill inventory.', { code: 'invalid-envelope' });
+    return value.skills.map((skill) => {
+      if (!isRecord(skill) || typeof skill.name !== 'string') throw new DshRpcError('Invalid DSH skill entry.', { code: 'invalid-envelope' });
+      return { name: skill.name, ...(typeof skill.path === 'string' ? { path: skill.path } : {}) };
+    });
+  }
+
+  async getPermissionPresetOptions(sessionId: string): Promise<Array<{ value: string; name: string; description?: string }>> {
+    const [catalog, commands] = await Promise.all([
+      this.rpcClient.call('permissionPresets', 'catalog', {}),
+      this.rpcClient.call('commands', 'list', { agentId: sessionId }),
+    ]);
+    if (!Array.isArray(commands) || !commands.some((command) => isRecord(command) && command.name === 'permission')) return [];
+    if (!isRecord(catalog) || !Array.isArray(catalog.options)) throw new DshRpcError('Invalid DSH permission catalog.', { code: 'invalid-envelope' });
+    return catalog.options.map((option) => {
+      if (!isRecord(option) || typeof option.value !== 'string' || typeof option.name !== 'string') throw new DshRpcError('Invalid DSH permission option.', { code: 'invalid-envelope' });
+      return { value: option.value, name: option.name, ...(typeof option.description === 'string' ? { description: option.description } : {}) };
+    });
+  }
+
+  async selectPermissionPreset(sessionId: string, preset: string): Promise<void> {
+    const options = await this.getPermissionPresetOptions(sessionId);
+    if (!options.some((option) => option.value === preset)) throw new DshRpcError('DSH permission preset is unavailable.', { code: 'unsupported' });
+    const execution = await this.rpcClient.call('commands', 'execute', { agentId: sessionId, line: `/permission ${preset}`, submittedAttachments: [] });
+    if (!isRecord(execution) || !isRecord(execution.result) || execution.result.kind !== 'success') {
+      const result = isRecord(execution) && isRecord(execution.result) ? execution.result : {};
+      throw new DshRpcError(readString(result, ['text']) || 'DSH permission command failed.', { code: 'remote-error' });
+    }
   }
 
   getSessionConfigOptions() {
@@ -1097,34 +1195,57 @@ export class DshAdapter implements BackendAdapter {
     sessionId: string,
     selection: { model: string; mode: string; thoughtLevel?: string },
   ): Promise<unknown> {
-    const model = selection.model.trim();
-    if (!model) throw new Error('dsh session/selectModel requires a model id.');
-    const provider = await this.resolveModelProvider(model);
-    return this.rpcClient.call('session', 'selectModel', {
-      request: {
-        sessionId,
-        provider,
-        model,
-        ...(selection.thoughtLevel ? { reasoningEffort: selection.thoughtLevel } : {}),
-      },
+    const write = async () => {
+      const selected = selection.model.trim();
+      if (!selected) throw new DshRpcError('DSH model selection is empty.', { code: 'invalid-model-selection' });
+      const providers = await this.loadModelCatalog();
+      const exact = providers.flatMap((provider) => provider.models.map((model) => ({ provider: provider.id, model: model.id })))
+        .find((route) => `${route.provider}/${route.model}` === selected);
+      const model = exact?.model ?? selected;
+      const provider = exact?.provider ?? await this.resolveModelProvider(model);
+      return this.rpcClient.call('session', 'selectModel', {
+        request: { sessionId, provider, model, ...(selection.thoughtLevel ? { reasoningEffort: selection.thoughtLevel } : {}) },
+      });
+    };
+    const pending = (this.modelSelectionWrites.get(sessionId) ?? Promise.resolve()).then(write, write);
+    this.modelSelectionWrites.set(sessionId, pending);
+    const release = () => { if (this.modelSelectionWrites.get(sessionId) === pending) this.modelSelectionWrites.delete(sessionId); };
+    void pending.then(release, release);
+    return pending;
+  }
+
+  async listAgents() {
+    const value = await this.rpcClient.call('agentPresets', 'list', {});
+    if (!isRecord(value) || !Array.isArray(value.presets)) throw new DshRpcError('Invalid DSH preset catalog.', { code: 'invalid-envelope' });
+    return value.presets.flatMap((preset) => {
+      if (!isRecord(preset) || typeof preset.id !== 'string' || preset.broken) return [];
+      return [{ name: preset.id, label: typeof preset.name === 'string' ? preset.name : preset.id, description: typeof preset.description === 'string' ? preset.description : '', mode: 'primary', isDefault: preset.isDefault === true }];
     });
   }
 
-  updateSessionMode(_sessionId: string, _change: unknown): Promise<never> {
-    // No probed unary endpoint writes a dsh session mode: `settings/update` is
-    // unverified (docs/dsh.md §7.4, ➖) and `session/updateQueue` is
-    // input-invalid. Failing loudly beats guessing at the request shape.
-    return unsupported(
-      'session mode',
-      'no probed unary endpoint writes a dsh session mode (settings/update is unverified, docs §7.4)',
-    );
+  async updateSessionMode(sessionId: string, change: unknown): Promise<string> {
+    if (!isRecord(change) || typeof change.value !== 'string' || change.field !== 'agentPreset') throw new DshRpcError('Invalid DSH session mode selection.', { code: 'invalid-envelope' });
+    const selected = await this.rpcClient.call('agentPresets', 'select', { agentId: sessionId, agentPreset: change.value });
+    if (typeof selected !== 'string') throw new DshRpcError('Invalid DSH selected preset.', { code: 'invalid-envelope' });
+    return selected;
   }
 
-  listCommands(_directory?: string): Promise<never> {
-    return unsupported(
-      'commands',
-      'dsh exposes no slash-command catalog endpoint (docs/dsh.md §7).',
-    );
+  async listCommands(sessionId?: string) {
+    if (!sessionId?.trim()) return [];
+    const value = await this.rpcClient.call('commands', 'list', { agentId: sessionId });
+    if (!Array.isArray(value)) throw new DshRpcError('Invalid DSH command catalog.', { code: 'invalid-envelope' });
+    return value.flatMap((command) => {
+      if (!isRecord(command) || typeof command.name !== 'string') return [];
+      const hint = isRecord(command.input) && typeof command.input.hint === 'string' ? command.input.hint : '';
+      return [{ name: command.name, description: [typeof command.description === 'string' ? command.description : '', hint].filter(Boolean).join(' · ') }];
+    });
+  }
+
+  async executeCommand(sessionId: string, line: string): Promise<{ kind: 'success' | 'error'; text?: string }> {
+    const value = await this.rpcClient.call('commands', 'execute', { agentId: sessionId, line, submittedAttachments: [] });
+    if (value === undefined || value === null) return { kind: 'error', text: `Unknown DSH command: ${line}` };
+    if (!isRecord(value) || !isRecord(value.result) || (value.result.kind !== 'success' && value.result.kind !== 'error')) throw new DshRpcError('Invalid DSH command result.', { code: 'invalid-envelope' });
+    return { kind: value.result.kind, ...(typeof value.result.text === 'string' ? { text: value.result.text } : {}) };
   }
 
   async getSessionStatusMap(_directory?: string): Promise<Record<string, { type: string }>> {
@@ -1185,45 +1306,24 @@ export class DshAdapter implements BackendAdapter {
     payload: { directory: string; path: string },
     options?: BackendRequestOptions,
   ) {
-    const directory = normalizeDirectory(payload.directory.trim() || '/');
-    const scopeId = await this.sessionIdForDirectory(directory);
-    const relative = payload.path?.trim() || '.';
-    const value = await this.rpcClient.call(
-      'workspaceFiles',
-      'read',
-      {
-        workspaceFileScopeId: scopeId,
-        path: relative,
-        range: { offset: 0, limit: DSH_FILE_READ_LIMIT },
-      },
-      { signal: options?.signal },
-    );
-    if (!isRecord(value)) throw new Error('dsh workspaceFiles/read did not return an object.');
-    const text = typeof value.text === 'string' ? value.text : '';
-    const binary = text.includes('\0');
-    return {
-      type: binary ? ('binary' as const) : ('text' as const),
-      encoding: 'utf-8' as const,
-      content: text,
-    };
+    return decodeDshFileContent(await this.readFileContentBytes(payload, options));
   }
 
   async readFileContentBytes(
     payload: { directory: string; path: string },
     options?: BackendRequestOptions,
   ) {
-    // `workspaceFiles/readBytes` is unverified (docs/dsh.md §7.7, ➖) and may
-    // answer multipart; the verified `read` endpoint carries the same bytes as
-    // UTF-8 text, which is what the editor/file tree consumes.
     const directory = normalizeDirectory(payload.directory.trim() || '/');
     const scopeId = await this.sessionIdForDirectory(directory);
     const value = await this.rpcClient.callMultipart(
       'workspaceFiles',
       'readBytes',
-      { workspaceFileScopeId: scopeId, path: payload.path?.trim() || '.' },
+      { workspaceFileScopeId: scopeId, path: payload.path?.trim() || '.', options: {} },
       { signal: options?.signal },
     );
-    return value.bytes[0] ?? new TextEncoder().encode('');
+    const bytes = value.bytes[0];
+    if (!bytes) throw new DshRpcError('DSH file response is missing its bytes attachment.', { code: 'invalid-envelope' });
+    return bytes;
   }
 
   async getVcsInfo(directory: string, options?: BackendRequestOptions) {

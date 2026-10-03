@@ -178,7 +178,7 @@
             <InputPanel
               ref="inputPanelRef"
               :codex-commands-enabled="activeBackendKind === 'codex'"
-              :disabled="connectionState !== 'ready'"
+              :disabled="connectionState !== 'ready' || (!!dshComposerClient && isSending)"
               :current-session-id="selectedSessionId"
               :session-parent-by-id="sessionParentById"
               :can-send="canSend"
@@ -187,18 +187,20 @@
                   ? codexAgentOptions
                   : activeBackendKind === 'kimi-web'
                     ? kimiWebAgentOptions
-                    : agentOptions
+                    : dshComposerClient ? dshPermissionControls.agentOptions.value : agentOptions
               "
-              :subagent-options="subagentOptions"
+              :subagent-options="activeBackendKind === 'dsh' ? [] : subagentOptions"
+              :mention-agent-options="activeBackendKind === 'dsh' ? [] : undefined"
               :mention-files="composerMentionFiles"
               :mention-directories="composerMentionDirectories"
-              :prefer-file-mentions="activeBackendKind === 'acp' || activeBackendKind === 'kimi-web' || activeBackendKind === 'codex'"
-              :has-agent-options="hasAgentOptions"
-              :agent-picker-state="agentPickerState"
-              :hide-agent-picker="activeBackendKind === 'dsh'"
+              :prefer-file-mentions="activeBackendKind === 'dsh' || activeBackendKind === 'acp' || activeBackendKind === 'kimi-web' || activeBackendKind === 'codex'"
+              :has-agent-options="dshComposerClient ? dshPermissionControls.agentOptions.value.length > 0 : hasAgentOptions"
+              :agent-picker-state="dshComposerClient ? (dshPermissionControls.loading.value ? 'loading' : dshPermissionControls.agentOptions.value.length ? 'ready' : 'unsupported') : agentPickerState"
+              :agent-picker-disabled="dshComposerClient ? dshPermissionControls.disabled.value : false"
+              :agent-picker-title="dshComposerClient ? t('inputPanel.permissionModeTitle') : undefined"
               :hide-thinking-picker="activeBackendKind === 'dsh' && !hasThinkingOptions"
-              :agent-color="currentAgentColor"
-              :resolve-agent-color="resolveAgentColorForName"
+              :agent-color="dshComposerClient ? dshPermissionColor(dshPermissionControls.selected.value) : currentAgentColor"
+              :resolve-agent-color="dshComposerClient ? dshPermissionColor : resolveAgentColorForName"
               :model-options="availableModelOptions"
               :thinking-options="thinkingOptions"
               :has-model-options="hasModelOptions"
@@ -213,7 +215,7 @@
               :active-directory="activeDirectory"
               :active-file="selectedTreePath"
               :message-input="messageInput"
-              :selected-mode="selectedMode"
+              :selected-mode="dshComposerClient ? dshPermissionControls.selected.value : selectedMode"
               :selected-permission-mode="selectedAcpPermissionMode"
               :permission-mode-options="activeBackendKind === 'acp' ? acpPermissionModeOptions : []"
               :acp-permission-controls="activeBackendKind === 'acp'"
@@ -222,7 +224,7 @@
               :selected-model="selectedModel"
               :selected-thinking="selectedThinking"
               @update:message-input="handleMessageInputUpdate"
-              @update:selected-mode="handleSelectedModeUpdate"
+              @update:selected-mode="dshComposerClient ? dshPermissionControls.select($event) : handleSelectedModeUpdate($event)"
               @update:selected-permission-mode="handleSelectedPermissionModeUpdate"
               @toggle-plan="handleAcpPlanToggle"
               @update:selected-model="handleSelectedModelUpdate"
@@ -236,20 +238,24 @@
               @open-snippet-settings="openSettings('transformers')"
               @status-error="setSendStatusErrorText"
             >
+              <template #after-agent>
+                <DshComposerMode v-if="dshComposerClient" :current="selectedMode" :options="agentOptions" :disabled="dshPresetDisabled" :locked="dshPresetLocked" @select="handleSelectedModeUpdate" />
+                <KimiWebComposerModes
+                  v-if="activeBackendKind === 'kimi-web'"
+                  v-bind="kimiWebSelectedModeState"
+                  :tower-enabled="kimiWebTowerEnabled"
+                  :disabled="connectionState !== 'ready'"
+                  @toggle-plan="changeKimiWebBooleanMode('planMode', $event)"
+                  @toggle-swarm="changeKimiWebBooleanMode('swarmMode', $event)"
+                  @toggle-tower="changeKimiWebBooleanMode('towerMode', $event)"
+                />
+              </template>
               <template #after-thinking>
                 <template v-if="activeBackendKind === 'codex'">
                   <CodexComposerFast :api="codexApi" @error="setSendStatusErrorText" />
                   <CodexComposerGoal :api="codexApi" @open="openCodexThreadGoal" />
                 </template>
                 <template v-else-if="activeBackendKind === 'kimi-web'">
-                  <KimiWebComposerModes
-                    v-bind="kimiWebSelectedModeState"
-                    :tower-enabled="kimiWebTowerEnabled"
-                    :disabled="connectionState !== 'ready'"
-                    @toggle-plan="changeKimiWebBooleanMode('planMode', $event)"
-                    @toggle-swarm="changeKimiWebBooleanMode('swarmMode', $event)"
-                    @toggle-tower="changeKimiWebBooleanMode('towerMode', $event)"
-                  />
                   <KimiWebComposerActions
                     ref="kimiWebSettingsRef"
                     :disabled="connectionState !== 'ready' || !selectedSessionId"
@@ -266,32 +272,8 @@
                   />
                 </template>
                 <template v-else-if="activeBackendKind === 'dsh'">
-                  <div v-if="dshComposerPresetControl" class="dsh-composer-preset">
-                    <Dropdown
-                      v-if="dshComposerPresetControl.writable"
-                      class="dsh-composer-preset-dropdown"
-                      :model-value="dshComposerPresetControl.current"
-                      :label="t('statusMonitor.dsh.permissionPreset')"
-                      :disabled="connectionState !== 'ready'"
-                      menu-icon="lucide:chevron-up"
-                      button-class="dsh-composer-preset-trigger"
-                      :popup-style="{ top: 'auto', bottom: 'anchor(top)', left: 'clamp(8px, anchor(left), calc(100vw - 248px))', right: 'auto', marginTop: '0', marginBottom: '6px', minWidth: '200px' }"
-                      @select="selectDshComposerPreset"
-                    >
-                      <DropdownItem
-                        v-for="preset in dshComposerPresetControl.options"
-                        :key="preset"
-                        :value="preset"
-                        :active="preset === dshComposerPresetControl.current"
-                      >
-                        {{ preset }}
-                      </DropdownItem>
-                    </Dropdown>
-                    <span v-else class="dsh-composer-preset-badge">
-                      <span class="dsh-composer-preset-badge-label">{{ t('statusMonitor.dsh.permissionPreset') }}</span>
-                      <span class="dsh-composer-preset-badge-value">{{ dshComposerPresetControl.current }}</span>
-                    </span>
-                  </div>
+                  <DshComposerActions v-if="dshComposerClient" :client="dshComposerClient" :rpc="dshSettingsRpcClient" :session-id="selectedSessionId" :preset-id="dshCurrentPreset" :disabled="connectionState !== 'ready'" />
+                  <DshComposerPlanGoal :control="dshPlanGoal" @open="openDshThreadGoal" />
                 </template>
               </template>
             </InputPanel>
@@ -591,6 +573,7 @@
       :hidden-models="hiddenModels"
       :provider-config="providerConfig"
       :backend-kind="activeBackendKind"
+      :dsh-rpc-client="dshSettingsRpcClient"
       @close="isProviderManagerOpen = false"
       @update:model-visibility="handleModelVisibilityUpdate"
       @config-updated="handleProviderConfigUpdated"
@@ -751,10 +734,11 @@ import CodexRuntimeInspector from './components/codex/CodexRuntimeInspector.vue'
 import CodexComposerGoal from './components/codex/CodexComposerGoal.vue';
 import CodexComposerFast from './components/codex/CodexComposerFast.vue';
 import KimiWebComposerModes from './components/kimiWeb/KimiWebComposerModes.vue';
-import KimiWebComposerActions from './components/kimiWeb/KimiWebComposerActions.vue';
+import { useDshComposerPermissions } from './composables/useDshComposerPermissions';
+import { dshPermissionColor } from './components/dsh/permissionPresentation';
 import KimiWebComposerGoal from './components/kimiWeb/KimiWebComposerGoal.vue';
 import CodexThreadGoalWindow from './components/codex/CodexThreadGoalWindow.vue';
-import KimiWebThreadGoalWindow from './components/kimiWeb/KimiWebThreadGoalWindow.vue';
+import { useDshPlanGoal } from './composables/useDshPlanGoal';
 import KimiWebBtwWindow from './components/kimiWeb/KimiWebBtwWindow.vue';
 import type { KimiWebClient } from './utils/kimiWeb';
 import { createKimiWebCardActions } from './utils/kimiWebCardActions';
@@ -823,11 +807,14 @@ import { CODEX_PROJECT_ID, useCodexWorkspace } from './composables/useCodexWorks
 import { useReasoningWindows } from './composables/useReasoningWindows';
 import { useServerState } from './composables/useServerState';
 import { useOpenCodeSelectionBootstrap } from './composables/useOpenCodeSelectionBootstrap';
+import { createDshSelectionPersistence } from './composables/dshSelectionPersistence';
+import { useDshComposerSelection } from './composables/useDshComposerSelection';
 import { useSessionSelection } from './composables/useSessionSelection';
 import { useSubagentWindows } from './composables/useSubagentWindows';
 import { renderWorkerHtml } from './utils/workerRenderer';
 import { createLocalizedRenderRequest } from './utils/localizedRenderRequest';
 import type { HistoryWindowEntry, MessageDiffEntry } from './types/message';
+import { dshPresetPresentation } from './components/dsh/presetPresentation';
 import type {
   BackendProviderConfigState,
   BackendProviderInfo,
@@ -958,6 +945,7 @@ import { bootstrapKimiWebWorkspace as runKimiWebBootstrap } from './backends/kim
 import { kimiWebComposerProfile } from './backends/kimiWeb/modelSelection';
 import { KimiWebAdapter, mapKimiWebSession, upsertKimiWebSessionIntoProjects } from './backends/kimiWeb/kimiWebAdapter';
 import { createKimiWebCapabilityRegistry, probeKimiWebSessionActions } from './backends/kimiWeb/capabilityRegistry';
+import { resolveDshForkBoundary } from './backends/dsh/forkBoundary';
 import {
   isKimiWebPermissionMode,
   isTowerExperimentEnabled,
@@ -1022,6 +1010,13 @@ import { createKeyedTaskQueue } from './utils/keyedTaskQueue';
 import { createPendingPtyCreateRegistry, isCurrentPtySocket } from './utils/ptyLifecycle';
 
 const SubagentHistoryContent = defineAsyncComponent(() => import('./components/SubagentHistoryContent.vue'));
+const KimiWebThreadGoalWindow = defineAsyncComponent(() => import('./components/kimiWeb/KimiWebThreadGoalWindow.vue'));
+const DshComposerActions = defineAsyncComponent(() => import('./components/dsh/DshComposerActions.vue'));
+const KimiWebComposerActions = defineAsyncComponent(() => import('./components/kimiWeb/KimiWebComposerActions.vue'));
+const DshComposerMode = defineAsyncComponent(() => import('./components/dsh/DshComposerMode.vue'));
+const DshComposerPlanGoal = defineAsyncComponent(() => import('./components/dsh/DshComposerPlanGoal.vue'));
+const DshThreadGoalWindow = defineAsyncComponent(() => import('./components/dsh/DshThreadGoalWindow.vue'));
+const DshFeedbackDialog = defineAsyncComponent(() => import('./components/dsh/DshFeedbackDialog.vue'));
 const { t, locale } = useI18n();
 const desktopApi = window.electronAPI?.desktop;
 const desktopNotifications = desktopApi ? createDesktopNotificationRouter({
@@ -1621,6 +1616,21 @@ function openKimiThreadGoal(sessionId: string) {
   });
 }
 
+function openDshThreadGoal() {
+  if (!dshPlanGoal.sessionId.value) return;
+  const key = 'dsh-thread-goal';
+  if (fw.has(key)) { fw.activate(key); return; }
+  const extent = fw.getExtent();
+  const width = Math.min(560, Math.max(280, extent.width - 32));
+  const height = Math.min(600, Math.max(280, extent.height - 48));
+  void fw.open(key, {
+    component: DshThreadGoalWindow, props: markRaw({ control: dshPlanGoal }),
+    title: t('codexPanel.runtime.goal'), width, height,
+    x: Math.max(16, (extent.width - width) / 2), y: 24,
+    closable: true, resizable: true, scroll: 'none', focusOnOpen: true, expiry: Infinity,
+  });
+}
+
 const kimiWebSettingsRef = ref<InstanceType<typeof KimiWebComposerActions> | null>(null);
 function handleKimiTowerExperimentUpdated() {
   void loadKimiWebModeMeta().catch((cause: unknown) => {
@@ -2055,6 +2065,14 @@ const {
   ensureDirectorySession,
   initialize: initializeSessionSelection,
 } = sessionSelection;
+
+const dshSelectionPersistence = createDshSelectionPersistence();
+let dshInitialSelectionConsumed = false;
+watch([selectedProjectId, selectedSessionId], () => {
+  if (activeBackendKind.value === 'dsh') {
+    dshSelectionPersistence.persist(credentials.dshBridgeUrl.value, serverState.projects, selectedSessionId.value);
+  }
+});
 
 function persistActiveOpenCodeSelection() {
   if (activeBackendKind.value !== 'opencode') return;
@@ -4226,6 +4244,12 @@ function applyComposerDraftToComposerState(draft: ComposerDraft, contextKey: str
   messageInput.value = draft.messageInput;
   attachments.value = draft.attachments.slice();
 
+  if (activeBackendKind.value === 'dsh') {
+    if (dshCurrentPreset.value) selectedMode.value = dshCurrentPreset.value;
+    applyModelVariantSelection(draft.model, draft.variant);
+    return;
+  }
+
   if (activeBackendKind.value === 'kimi-web') {
     if (isKimiWebPermissionMode(draft.agent)) selectedMode.value = draft.agent;
     const modelToApply =
@@ -4378,6 +4402,10 @@ function resolveDefaultAgentModel(): { agent: string; model: string; variant: st
 }
 
 function handleSelectedModeUpdate(value: string) {
+  if (activeBackendKind.value === 'dsh') {
+    void selectDshPreset(value);
+    return;
+  }
   selectedMode.value = value;
   if (activeBackendKind.value === 'kimi-web') {
     if (isKimiWebPermissionMode(value)) {
@@ -4513,7 +4541,7 @@ function handleApplyHistoryEntry(entry: {
   variant?: string;
 }) {
   messageInput.value = entry.text;
-  if (entry.agent && agentOptions.value.some((option) => option.id === entry.agent)) {
+  if (activeBackendKind.value !== 'dsh' && entry.agent && agentOptions.value.some((option) => option.id === entry.agent)) {
     selectedMode.value = entry.agent;
     applyAgentDefaults(entry.agent);
   }
@@ -4527,6 +4555,7 @@ function handleSelectedModelUpdate(value: string) {
   syncAcpSelectionToSession();
   nextTick(() => {
     persistComposerDraftForCurrentContext();
+    void syncDshComposerSelection();
   });
 }
 
@@ -4587,6 +4616,21 @@ function handleSelectedThinkingUpdate(value: string | undefined) {
   selectedThinking.value = value;
   persistComposerDraftForCurrentContext();
   syncAcpSelectionToSession();
+  void syncDshComposerSelection();
+}
+
+async function syncDshComposerSelection() {
+  if (activeBackendKind.value !== 'dsh') return;
+  const sessionId = selectedSessionId.value;
+  if (!sessionId || !selectedModel.value) return;
+  const selection = { model: selectedModel.value, mode: selectedMode.value, thoughtLevel: selectedThinking.value };
+  try {
+    await dshBackend().syncSessionConfig(sessionId, selection);
+  } catch (error) {
+    if (activeBackendKind.value === 'dsh' && selectedSessionId.value === sessionId) {
+      setSendStatusKey('app.error.sendFailed', { message: toErrorMessage(error) });
+    }
+  }
 }
 
 function handleComposerDraftStorage(event: StorageEvent) {
@@ -5497,6 +5541,13 @@ async function fetchAgents() {
   agentLoadingOwner = request.generation;
   agentsLoading.value = true;
   try {
+    if (activeBackendKind.value === 'dsh') {
+      const presets = await dshBackend().listAgents();
+      if (!agentsRequestFence.isCurrent(request)) return;
+      agentOptions.value = presets.map((preset) => ({ id: preset.name, ...dshPresetPresentation(preset, locale.value) }));
+      selectedMode.value = dshCurrentPreset.value ?? presets.find((preset) => preset.isDefault)?.name ?? presets[0]?.name ?? '';
+      return;
+    }
     if (activeBackendKind.value === 'kimi-web') {
       agentOptions.value = [];
       const draftMode = readComposerDraft(selectedSessionId.value)?.agent;
@@ -5559,7 +5610,7 @@ async function fetchCommands(directory?: string) {
   commandsLoading.value = true;
   try {
     const listCommands = requireBackendMethod(backend().listCommands, 'commands');
-    const data = (await listCommands(directory)) as CommandInfo[];
+    const data = (await listCommands(activeBackendKind.value === 'dsh' ? selectedSessionId.value : directory)) as CommandInfo[];
     if (!commandsRequestFence.isCurrent(request)) return;
     const list = Array.isArray(data) ? data : [];
     list.sort((a, b) => a.name.localeCompare(b.name));
@@ -8327,6 +8378,7 @@ const dshMuxClient = shallowRef<DshMuxClient>();
  * the fork/switch paths need (R7: a fork never reuses a stale stream).
  */
 const dshFollowStreams = new Map<string, DshMuxStreamHandle>();
+const dshSubagentModes = new Map<string, 'unknown' | 'one-shot' | 'continuable'>();
 let dshGitInfoHydrationQueued = false;
 const dshGitInfoCheckedDirectories = new Set<string>();
 
@@ -8346,54 +8398,9 @@ const dshPermissions = createDshPermissions({
   closePermissionWindow: (requestId) => removePermissionEntry(requestId),
 });
 
-// ---------------------------------------------------------------------------
-// Todo 33: the composer's dsh preset control — one computed, one handler.
-//
-// The two branches are driven by the REAL probed write capability
-// (`dshPermissions.selector.writable`), never by a hardcoded flag:
-//
-//   writable   → the composer renders a preset dropdown over the
-//               protocol-native preset names (`selector.options`); a choice
-//               routes through `selectDshComposerPreset` (the write) and the
-//               displayed value reads back from the very state the write lands
-//               in (`state.permissionPreset`), so write→read-back is one source
-//               of truth.
-//   read-only  → the composer renders the current preset as a badge carrying
-//               the protocol's own preset string. NO writable dropdown renders
-//               and NO mutation request is ever emitted.
-//
-// The 0.2.0-rc.2 probe found NO preset write endpoint (Todo 6; review blocker
-// #6; Todo 28 evidence: writable:false, selectPreset refuses, zero mutations),
-// so read-only is the live branch — while the writable branch stays wired for
-// the day a write endpoint is probed (review blocker #2: the composer must
-// never unconditionally require write capability).
-//
-// agentPreset stays a default value only: no selector is exposed for it
-// (Metis #19 — Beta ships no preset-selection UI).
-//
-// Stale-state fencing: the control exists only while a bridge is PUBLISHED.
-// `bootstrapDshWorkspace` publishes the pair solely after its isCurrent-fenced
-// commit, so an expired bootstrap (orphaned by a backend switch) can never
-// surface a preset; leaving dsh disposes the singleton through the sync
-// activeBackendKind watch, so no other backend holds dsh preset UI.
-// ---------------------------------------------------------------------------
+const dshComposerClient = computed(() => dshMessageBridge.value ? dshBackend() : undefined);
+const dshSettingsRpcClient = computed(() => dshMessageBridge.value ? dshRpcClient() : undefined);
 
-const dshComposerPresetControl = computed(() => {
-  if (!dshMessageBridge.value) return undefined;
-  const selector = dshPermissions.selector.value;
-  return {
-    writable: selector.writable,
-    current: dshPermissions.state.permissionPreset,
-    options: selector.options,
-  };
-});
-
-/** Write path of the writable branch; the read-only surface never reaches it. */
-function selectDshComposerPreset(preset: unknown): boolean {
-  if (!dshComposerPresetControl.value?.writable) return false;
-  if (typeof preset !== 'string' || preset.length === 0) return false;
-  return dshPermissions.selectPreset(preset);
-}
 
 function dshRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -8529,7 +8536,7 @@ function dshAdoptFollow(
 ) {
   const bridge = dshMessageBridge.value;
   if (!bridge) throw new Error('dsh message bridge is unavailable.');
-  bridge.attachFollow(handle, sessionId);
+  bridge.attachFollow(handle, sessionId, snapshot);
   if (!snapshot) return;
   dshPermissions.ingestSnapshot(snapshot);
   const normalized = dshBootstrapNormalizer().normalizeSnapshot(snapshot);
@@ -8563,7 +8570,7 @@ function dshAttachFollow(sessionId: string) {
     if (dshFollowStreams.has(trackedId)) continue;
     const parentId = sessionParentById.value.get(trackedId);
     const address: DshSessionAddress = trackedId !== sessionId && parentId
-      ? { kind: 'subagent', parentSessionId: parentId, childSessionId: trackedId, mode: 'unknown' }
+      ? { kind: 'subagent', parentSessionId: parentId, childSessionId: trackedId, mode: dshSubagentModes.get(trackedId) ?? 'unknown' }
       : { kind: 'session', sessionId: trackedId };
     const handle = mux.open('session/follow', {
       args: { request: { address, assistantStream: true } },
@@ -8598,6 +8605,10 @@ function dshCreateMessageBridge(mux: DshMuxClient): DshMessageBridge {
     onLiveSubagent: dshPopupBridge.onLiveSubagent,
     onReconcilePart: dshPopupBridge.onReconcilePart,
     onSessionEvent: (op, context) => {
+      if (op.kind === 'subagent-discovered') {
+        const mode = op.mode === 'one-shot' || op.mode === 'continuable' ? op.mode : 'unknown';
+        dshSubagentModes.set(op.childSessionId, mode);
+      }
       dshPermissions.handleSessionEvent(op);
       dshSessionEvents.emitSessionEvent(op, context);
     },
@@ -8606,6 +8617,7 @@ function dshCreateMessageBridge(mux: DshMuxClient): DshMessageBridge {
 
 /** Dispose the dsh singleton: bridge first (rejects pending approvals), then transport. */
 function disconnectDshBackend() {
+  dshSelectionPersistence.reset();
   // Closes the open permission windows and answers their approvals safe-fail
   // while the bridge can still deliver the answer.
   dshPermissions.setApprovalUiEnabled(false);
@@ -8615,6 +8627,7 @@ function disconnectDshBackend() {
   dshMuxClient.value = undefined;
   for (const handle of dshFollowStreams.values()) handle.cancel();
   dshFollowStreams.clear();
+  dshSubagentModes.clear();
   // The registry holds the adapter (its own mux client + model catalog).
   disconnectDshBackendAdapter();
 }
@@ -8625,6 +8638,8 @@ function disconnectDshBackend() {
  * only while the activation generation is still current.
  */
 async function bootstrapDshWorkspace(isCurrent: () => boolean) {
+  const selectionBridgeUrl = credentials.dshBridgeUrl.value;
+  const preferredSessionId = dshSelectionPersistence.preferredSessionId(selectionBridgeUrl, dshInitialSelectionConsumed ? '' : initialQuery.sessionId);
   // Single-instance governance: dispose the previous pair BEFORE constructing
   // the new one (kimi precedent) so a re-activation can never leave a stale
   // follow stream attached or two bridges answering one waterfall. The disposal
@@ -8655,6 +8670,7 @@ async function bootstrapDshWorkspace(isCurrent: () => boolean) {
     },
   };
   const result = await runDshBootstrap({
+    preferredSessionId,
     adapter,
     mux: bootstrapMux,
     createBridge: () => bridge,
@@ -8662,12 +8678,17 @@ async function bootstrapDshWorkspace(isCurrent: () => boolean) {
     fetchPage: dshBootstrapFetchPage,
     isCurrent,
     commit: ({ projects, selectedProjectId: projectId, selectedSessionId: sessionId }) => {
+      if (!isCurrent()) return;
+      dshMuxClient.value = mux;
+      dshMessageBridge.value = bridge;
       if (bootstrapFollowHandle && sessionId) {
         dshFollowStreams.set(sessionId, bootstrapFollowHandle);
       }
       Object.keys(serverState.projects).forEach((key) => delete serverState.projects[key]);
       Object.assign(serverState.projects, projects);
-      selectedProjectId.value = projectId;
+      const restored = dshSelectionPersistence.commit(selectionBridgeUrl, projects, sessionId);
+      dshInitialSelectionConsumed = true;
+      selectedProjectId.value = restored?.projectId ?? projectId;
       selectedSessionId.value = sessionId;
       bootstrapReady.value = true;
       scheduleDshTopPanelGitInfoHydration();
@@ -8737,7 +8758,75 @@ function dshIsBlankSession(sessionId: string): boolean {
   return true;
 }
 
+watch(dshMessageBridge, (bridge) => {
+  if (bridge && activeBackendKind.value === 'dsh') void fetchAgents();
+});
+const dshCurrentPreset = computed(() => dshMessageBridge.value?.sessionState(selectedSessionId.value)?.agentPreset);
+useDshComposerSelection({
+  active: computed(() => activeBackendKind.value === 'dsh'),
+  sessionId: selectedSessionId,
+  nativeSelection: computed(() => dshMessageBridge.value?.sessionState(selectedSessionId.value)?.modelSelection),
+  models: modelOptions,
+  readDraft: readComposerDraft,
+  apply: applyModelVariantSelection,
+});
+const dshPlanGoal = useDshPlanGoal(() => {
+  const client = dshSettingsRpcClient.value;
+  const sessionId = selectedSessionId.value;
+  const state = dshMessageBridge.value?.sessionState(sessionId);
+  return activeBackendKind.value === 'dsh' && connectionState.value === 'ready' && client && sessionId && state?.sync.kind === 'live'
+    ? { client, sessionId, revision: state.planGoalRevision }
+    : null;
+});
+const dshPermissionControls = useDshComposerPermissions({
+  client: dshComposerClient,
+  sessionId: selectedSessionId,
+  current: computed(() => dshPermissions.state.permissionPreset),
+  preset: dshCurrentPreset,
+  disabled: computed(() => connectionState.value !== 'ready' || isThinking.value),
+  onError: setSendStatusErrorText,
+});
+const dshPresetLocked = computed(() => dshMessageBridge.value?.sessionState(selectedSessionId.value)?.presetLocked === true);
+const dshPresetSaving = ref(false);
+const dshPresetDisabled = computed(() => dshPresetSaving.value || dshPresetLocked.value || !selectedSessionId.value || dshMessageBridge.value?.syncState(selectedSessionId.value)?.kind !== 'live');
+watch(dshCurrentPreset, (preset) => {
+  if (activeBackendKind.value === 'dsh' && preset) selectedMode.value = preset;
+});
+watch([selectedSessionId, dshCurrentPreset], () => {
+  if (activeBackendKind.value !== 'dsh') return;
+  commands.value = [];
+  void fetchCommands();
+});
+async function selectDshPreset(value: string) {
+  if (dshPresetDisabled.value) return;
+  const sessionId = selectedSessionId.value;
+  dshPresetSaving.value = true;
+  try {
+    const selected = await dshBackend().updateSessionMode(sessionId, { field: 'agentPreset', value });
+    if (activeBackendKind.value !== 'dsh' || selectedSessionId.value !== sessionId) return;
+    selectedMode.value = selected;
+    persistComposerDraftForCurrentContext();
+    await fetchCommands();
+  } catch (error) {
+    if (selectedSessionId.value === sessionId) setSendStatusKey('app.error.sendFailed', { message: toErrorMessage(error) });
+  } finally {
+    dshPresetSaving.value = false;
+  }
+}
+
 const dshSendApi: DshSendApi = {
+  selectModel: async (request) => {
+    await dshBackend().syncSessionConfig(request.sessionId, {
+      model: `${request.provider}/${request.model}`,
+      mode: '',
+      thoughtLevel: request.reasoningEffort,
+    });
+  },
+  executeCommand: async (sessionId, line) => {
+    const result = await dshBackend().executeCommand(sessionId, line);
+    if (selectedSessionId.value === sessionId) await fetchCommands();
+    return result;
+  },
   prompt: async (request) => {
     // The builder already bound the inner requestId to the envelope rpcId
     // (Todo 20); sending with the same rpcId reproduces that envelope exactly.
@@ -8751,7 +8840,8 @@ const dshSendApi: DshSendApi = {
   },
   sessionIdForCwd: async (cwd) => {
     const sessions = await dshBackend().listSessions({ directory: cwd });
-    const session = sessions.find((entry) => !entry.time?.archived) ?? sessions[0];
+    const session = sessions.find((entry) => entry.id === selectedSessionId.value && !entry.time?.archived)
+      ?? sessions.find((entry) => !entry.time?.archived && !entry.parentID);
     return session?.id ?? null;
   },
   isServerTerminal: () => dshIsServerTerminal(),
@@ -8782,10 +8872,15 @@ async function dshFollowSession(sessionId: string): Promise<{ archived?: boolean
   // The follow snapshot carries no archive flag; the session list is the
   // authoritative classification (the fork copies the source's flag).
   const entry = (await dshBackend().listSessions()).find((session) => session.id === sessionId);
+  if (entry) upsertDshSessionIntoProjects(serverState.projects, entry);
   return entry?.time?.archived ? { archived: true } : {};
 }
 
 const dshSessionApi: DshSessionActionApi = {
+  resolveForkSeq: (sessionId, messageId) => resolveDshForkBoundary({
+    sessionId, messageId, cursor: dshMessageBridge.value?.cursor(sessionId) ?? -1,
+    fetchPage: dshHistoryFetchPage,
+  }),
   renameSession: async (sessionId, title) => {
     await dshBackend().updateSession(sessionId, { title });
   },
@@ -9550,7 +9645,7 @@ function codexThreadDirectoryMatch(
 
 function splitFileContentPathForActiveBackend(targetPath: string, sandboxDirectory: string | null) {
   return splitFileContentDirectoryAndPath(targetPath, sandboxDirectory, {
-    strictSandbox: activeBackendCapabilities.value.strictSandboxPaths,
+    strictSandbox: activeBackendCapabilities.value.strictSandboxPaths || activeBackendKind.value === 'dsh',
   });
 }
 
@@ -9955,7 +10050,29 @@ async function executeKimiWebSlashCommand(action: KimiWebSlashAction) {
   if (current()) setSendStatusKey('kimiWeb.commands.applied');
 }
 
+watch([selectedSessionId, activeBackendKind, connectionState], () => { void fw.close('dsh-feedback'); });
 const backendMessageSend = useBackendMessageSend({
+  onDshExportSession: async (sessionId, signal) => {
+    const { downloadDshSession } = await import('./utils/dshSessionExport');
+    await downloadDshSession({ bridgeUrl: credentials.dshBridgeUrl.value, bridgeToken: credentials.dshBridgeToken.value, sessionId, signal });
+  },
+  onDshFeedback: (sessionId) => {
+    const rpc = dshSettingsRpcClient.value;
+    if (rpc && activeBackendKind.value === 'dsh' && connectionState.value === 'ready') {
+      const key = 'dsh-feedback';
+      if (fw.has(key)) { fw.activate(key); return; }
+      const extent = fw.getExtent();
+      const width = Math.min(560, Math.max(280, extent.width - 32));
+      const height = Math.min(600, Math.max(280, extent.height - 48));
+      void fw.open(key, {
+        component: DshFeedbackDialog,
+        props: markRaw({ rpc, sessionId, onClose: () => { void fw.close(key); } }),
+        title: t('codexPanel.feedbackTitle'), width, height,
+        x: Math.max(16, (extent.width - width) / 2), y: 24,
+        closable: true, resizable: true, scroll: 'none', focusOnOpen: true, expiry: Infinity,
+      });
+    }
+  },
   executeKimiWebSlashCommand,
   executeCodexSlashCommand: codexSlashActions.execute,
   persistComposerDraftForCurrentContext,
@@ -11096,6 +11213,7 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
 
   try {
     const readFileContent = requireBackendMethod(backend().readFileContent, 'file reading');
+    fw.updateOptions(key, { props: { ...entry.props, loadError: undefined } });
     const data = (await readFileContent({
       directory,
       path: filePath,
@@ -11206,6 +11324,8 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
     });
     updateFileViewerEditProps(key, isEditing ? { editableContent: editingFileDrafts[key] } : {});
   } catch (error) {
+    const loadError = t('app.error.fileLoadFailed', { message: toErrorMessage(error) });
+    setSendStatusKey('app.error.fileLoadFailed', { message: toErrorMessage(error) });
     fw.updateOptions(key, {
       props: {
         ...entry.props,
@@ -11216,6 +11336,7 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
         filePath,
         fileContent: undefined,
         binaryBase64: undefined,
+        loadError,
         lines,
         gutterMode: 'none',
         theme: shikiTheme.value,
@@ -12582,39 +12703,4 @@ body {
   color: var(--theme-accent-primary, #60a5fa);
 }
 
-.dsh-composer-preset {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1, 4px);
-  min-width: 0;
-}
-
-.dsh-composer-preset :deep(.ui-dropdown-button) {
-  height: 28px;
-  padding: 4px 8px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
-  font-size: var(--type-sm, 12px);
-}
-
-.dsh-composer-preset-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
-  font-size: var(--type-sm, 12px);
-  white-space: nowrap;
-}
-
-.dsh-composer-preset-badge-label {
-  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
-}
-
-.dsh-composer-preset-badge-value {
-  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
-}
 </style>

@@ -19,8 +19,8 @@
  *     inbox) and stops there — nothing is invented, nothing is sent.
  *   - the send's cwd is the SELECTED worktree: the session is resolved for the
  *     passed worktree path, never the session's original cwd.
- *   - the first user message writes `model.presetName` as an EXPLICIT empty
- *     string (key present, never omitted) — see {@link DshPromptModel}.
+ *   - the exact selected provider/model/reasoning is acknowledged by native
+ *     session/selectModel before any prompt is admitted.
  *   - cancel routes through Todo 21's `abortSession` and produces a TERMINAL
  *     result, so a send racing a cancel can never leave a stuck "sending" or
  *     a phantom "sent".
@@ -37,7 +37,7 @@ import type {
   DshSessionPromptResult,
 } from './types';
 import { createDshPromptSend, type DshPromptIdFactory, type DshPromptSend } from './promptEntries';
-import { buildDshClientRequest } from '../../utils/dshRpc';
+import { buildDshClientRequest, DshRpcError } from '../../utils/dshRpc';
 
 /** Delivery mode dsh admits (docs/dsh.md §7: queue appends, steer interrupts). */
 export type DshSendMode = 'queue' | 'steer';
@@ -66,32 +66,18 @@ export function padDshPendingSend(text: string): DshPendingSendRecord {
   return { text, projectID: '', sessionID: '', agent: '', inbox: [] };
 }
 
-/**
- * The model selection the first user message carries. `provider` is EMPTY when
- * no route is selected (clamp-off / blank session) and `presetName` is written
- * EXPLICITLY as `''` — the key is present, never omitted:
- * when clamp is off, dsh reads a round with a missing presetName back as
- * `__none__` plus the endpoint/cli defaults and only re-explicitizes the value
- * at resume time; that 200-300ms window plus a slow first packet (2s) renders
- * a WRONG local badge for the round. Writing `presetName: ''` keeps the round
- * explicit from the first frame. (0.2.0-rc.2 strips the key at the strict
- * codec boundary — the live smoke proves the ack still succeeds.)
- */
-export type DshPromptModel = {
+export type DshSendModelSelection = {
+  readonly sessionId: string;
   readonly provider: string;
-  readonly presetName: string;
+  readonly model: string;
+  readonly reasoningEffort?: string;
 };
-
-/** The first user message's model: provider explicitly empty, presetName ''. */
-const FIRST_MESSAGE_MODEL: DshPromptModel = { provider: '', presetName: '' };
 
 export type DshPromptRequestInput = {
   readonly sessionId: string;
   readonly content: readonly DshPromptContentPart[];
   readonly mode?: DshSendMode;
   readonly clientTimeZone?: string;
-  /** True for the first user message of a blank session (writes the model). */
-  readonly firstUserMessage?: boolean;
   readonly newRequestId?: DshPromptIdFactory;
 };
 
@@ -108,8 +94,8 @@ export type DshPromptSendPlan = {
  * Build one guarded `session/prompt` plan. Todo 20's `createDshPromptSend`
  * generates the requestId and binds it to the envelope rpcId; this builder
  * re-wraps the flat args under the mandatory `request` key (the 0.2.0-rc.2
- * gateway rejects flat args with `gateway/arguments-invalid`) and adds the
- * explicit empty `model.presetName` on the first user message.
+ * gateway rejects flat args with `gateway/arguments-invalid`). Model selection
+ * belongs to session/selectModel, not to an unsupported prompt field.
  */
 export function buildDshPromptRequest(input: DshPromptRequestInput): DshPromptSendPlan {
   const send = createDshPromptSend(
@@ -122,7 +108,6 @@ export function buildDshPromptRequest(input: DshPromptRequestInput): DshPromptSe
     input.newRequestId,
   );
   const request: Record<string, DshJsonValue> = { ...send.request.payload.args };
-  if (input.firstUserMessage) request.model = { ...FIRST_MESSAGE_MODEL };
   return {
     requestId: send.requestId,
     send,
@@ -132,8 +117,11 @@ export function buildDshPromptRequest(input: DshPromptRequestInput): DshPromptSe
 
 /** The send boundary seam (Todo 33 wires the real client behind it). */
 export type DshSendApi = {
+  /** Apply the exact route before sending; a rejected selection prevents the prompt. */
+  selectModel(request: DshSendModelSelection): Promise<unknown>;
   /** Send one built `session/prompt` envelope (rpcId already bound). */
   prompt(request: DshClientRequest): Promise<DshSessionPromptResult>;
+  executeCommand?(sessionId: string, line: string): Promise<{ kind: 'success' | 'error'; text?: string }>;
   /** Todo 21's `session/cancel` seam (`abortSession`). */
   abortSession(sessionId: string): Promise<unknown>;
   /** Resolve the session id whose workspace cwd is `cwd` (the selected worktree). */
@@ -147,8 +135,6 @@ export type DshSendApi = {
 export type DshSendOptions = {
   readonly mode?: DshSendMode;
   readonly clientTimeZone?: string;
-  /** Overrides the api's blank-session probe when the caller already knows. */
-  readonly firstUserMessage?: boolean;
   readonly newRequestId?: DshPromptIdFactory;
   /** Overrides `api.isServerTerminal` (tests / injected connection state). */
   readonly isServerTerminal?: () => boolean;
@@ -156,6 +142,7 @@ export type DshSendOptions = {
 
 export type DshSendExecutionResult =
   | { readonly kind: 'stale' }
+  | { readonly kind: 'command'; readonly result: { kind: 'success' | 'error'; text?: string } }
   | { readonly kind: 'pending'; readonly record: DshPendingSendRecord }
   | {
       readonly kind: 'server-terminal';
@@ -220,16 +207,23 @@ export async function runDshSend(
     return { kind: 'pending', record: padDshPendingSend(preflight.text) };
   }
 
-  const firstUserMessage =
-    options.firstUserMessage ?? ((await api.isBlankSession?.(sessionId)) ?? false);
+  if (preflight.slash && api.executeCommand) {
+    const result = await api.executeCommand(sessionId, preflight.text.trim());
+    return guard.isCurrent() ? { kind: 'command', result } : { kind: 'stale' };
+  }
+
+  const provider = preflight.modelProvider?.trim();
+  const model = preflight.modelId?.trim();
+  if (!provider || !model) throw new DshRpcError('Select a DSH provider and model before sending.', { code: 'invalid-model-selection' });
+  await api.selectModel({ sessionId, provider, model, ...(preflight.selectedThinking ? { reasoningEffort: preflight.selectedThinking } : {}) });
   if (!guard.isCurrent()) return { kind: 'stale' };
+  if (isTerminal?.()) return { kind: 'server-terminal', phase: 'before-send', message: SERVER_TERMINAL_BEFORE_SEND };
 
   const plan = buildDshPromptRequest({
     sessionId,
     content: parts,
     mode: options.mode ?? 'queue',
     clientTimeZone: options.clientTimeZone,
-    firstUserMessage,
     newRequestId: options.newRequestId,
   });
   await api.prompt(plan.request);

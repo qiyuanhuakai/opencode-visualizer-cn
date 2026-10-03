@@ -51,6 +51,8 @@ export type DshServerSessionChange = {
   readonly turn?: number;
   /** Authoritative only from `turn/end.reason`. */
   readonly reason?: DshTurnReason;
+  readonly parentID?: string;
+  readonly timeCreated?: number;
 };
 
 /** The pid-safe dsh session view (the mapping layer that defaults pid). */
@@ -196,6 +198,9 @@ export function normalizeDshSessionEvent(
       return replay ? undefined : { sessionId: op.sessionId, pid, timeUpdated: op.time };
     case 'subagent':
       return replay ? undefined : { sessionId: op.parentSessionId, pid, timeUpdated: op.time };
+    case 'subagent-discovered':
+      return { sessionId: op.childSessionId, parentID: op.parentSessionId,
+        title: op.title, timeCreated: op.createdAt, pid };
     default:
       return undefined;
   }
@@ -217,6 +222,12 @@ export function applyDshSessionEvent(
 ): void {
   for (const project of Object.values(projects)) {
     for (const sandbox of Object.values(project.sandboxes)) {
+      if (change.parentID && sandbox.sessions[change.parentID]) {
+        sandbox.sessions[change.sessionId] ??= {
+          id: change.sessionId, parentID: change.parentID, directory: sandbox.directory,
+          timeCreated: change.timeCreated, status: 'unknown',
+        };
+      }
       const session = sandbox.sessions[change.sessionId];
       if (!session) continue;
       if (change.title !== undefined) session.title = change.title;

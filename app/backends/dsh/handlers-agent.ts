@@ -12,6 +12,7 @@ import {
   asArray,
   asNumber,
   asString,
+  buildMessage,
   isRecord,
   moduleLevelMeta,
   textOfContent,
@@ -21,13 +22,15 @@ import {
 import type { DshNormalizeOp } from './ops';
 import type { DshHandler } from './handlers-core';
 import type { DshSessionWireEvent } from './types';
+import { readDshModelRef } from './modelSelection';
 
 const dataOf = (event: DshSessionWireEvent): Record<string, unknown> =>
   isRecord(event.data) ? event.data : {};
 
-function handlePermissionPreset(_core: DshCore, event: DshSessionWireEvent, ops: DshNormalizeOp[]) {
+function handlePermissionPreset(core: DshCore, event: DshSessionWireEvent, ops: DshNormalizeOp[]) {
   const preset = asString(dataOf(event).preset);
   if (!preset) return;
+  core.permissionPreset = preset;
   ops.push({ kind: 'policy', policy: 'permission-preset', value: preset, time: event.time });
 }
 
@@ -65,6 +68,7 @@ function handleInboxSpliced(core: DshCore, event: DshSessionWireEvent, ops: DshN
     const source = isRecord(raw.source) ? raw.source : {};
     const sourceKind = asString(source.kind) || 'user';
     if (sourceKind !== 'user') continue;
+    core.pendingUserMessageIds.push(id);
     const rpcId = asString(source.rpcId);
     const text = textOfContent(raw.content, 'text');
     ops.push({ kind: 'message', message: userMessageOf(core, core.sessionId, id, now) });
@@ -105,6 +109,7 @@ function handleSessionTitle(core: DshCore, event: DshSessionWireEvent, ops: DshN
   const data = dataOf(event);
   const title = asString(data.title);
   if (!title) return;
+  core.sessionTitle = title;
   const source = isRecord(data.source) ? data.source : {};
   ops.push({
     kind: 'session-title',
@@ -130,6 +135,19 @@ function handleRequestHeader(core: DshCore, event: DshSessionWireEvent, ops: Dsh
     .filter((name) => name.length > 0);
   if (asString(config.provider)) core.model.providerID = asString(config.provider);
   if (asString(config.model)) core.model.modelID = asString(config.model);
+  core.model.variant = asString(config.reasoningEffort) || undefined;
+  const currentGroup = [...core.groups.values()].filter(group => group.turn === core.activeTurn).at(-1);
+  if (currentGroup) {
+    currentGroup.model = { ...core.model };
+    ops.push({ kind: 'message', message: buildMessage(core, currentGroup) });
+  }
+  const parentId = core.turnParents.get(core.activeTurn);
+  const parent = parentId ? core.userMessages.get(parentId) : undefined;
+  if (parent) {
+    const updated = { ...parent, model: { providerID: core.model.providerID, modelID: core.model.modelID }, variant: core.model.variant };
+    core.userMessages.set(updated.id, updated);
+    ops.push({ kind: 'message', message: updated });
+  }
   ops.push({
     kind: 'request',
     phase: 'header',
@@ -165,6 +183,23 @@ function handleRequestContext(core: DshCore, event: DshSessionWireEvent, ops: Ds
  * child turn is surfaced here for the history card that keeps the subagent's
  * thinking / tools / results.
  */
+export function discoverDshSubagent(core: DshCore, data: Record<string, unknown>, ops: DshNormalizeOp[]) {
+  const childSessionId = asString(data.childId) || asString(data.id);
+  if (!childSessionId || !core.sessionId || childSessionId === core.sessionId) return;
+  if (asString(data.childId)) {
+    const groupIds = new Set([...core.groups.values()].filter(group => group.turn === core.activeTurn).map(group => group.messageID));
+    const tool = [...core.toolParts.values()].findLast(part => part.tool === 'subagent' && part.state.status === 'pending' && groupIds.has(part.messageID));
+    if (tool) {
+      const ids = asArray(tool.metadata?.sessionIds).filter((id): id is string => typeof id === 'string');
+      tool.metadata = { ...tool.metadata, sessionIds: [...new Set([...ids, childSessionId])] };
+      ops.push({ kind: 'part', part: tool });
+    }
+  }
+  ops.push({ kind: 'subagent-discovered', parentSessionId: core.sessionId, childSessionId,
+    mode: asString(data.mode) || 'unknown', title: asString(data.label) || childSessionId,
+    createdAt: asNumber(data.childCreatedAt) ?? asNumber(data.createdAt) });
+}
+
 function handleSubagentDescriptor(core: DshCore, event: DshSessionWireEvent, ops: DshNormalizeOp[]) {
   const data = dataOf(event);
   const address = core.address;
@@ -173,7 +208,7 @@ function handleSubagentDescriptor(core: DshCore, event: DshSessionWireEvent, ops
   const parentSessionId = asString(data.parentSessionId) || address.parentSessionId;
   const mode = asString(data.mode) || address.mode;
   const model = asString(data.model);
-  const title = asString(data.description) || asString(data.prompt) || 'subagent';
+  const title = asString(data.label) || asString(data.description) || asString(data.prompt) || 'subagent';
   ops.push({
     kind: 'part',
     part: {
@@ -189,7 +224,7 @@ function handleSubagentDescriptor(core: DshCore, event: DshSessionWireEvent, ops
   });
   ops.push({
     kind: 'subagent',
-    phase: 'completed',
+    phase: 'started',
     parentSessionId,
     childSessionId,
     mode,
@@ -199,6 +234,7 @@ function handleSubagentDescriptor(core: DshCore, event: DshSessionWireEvent, ops
 }
 
 export const AGENT_HANDLERS: Record<string, DshHandler> = {
+  'model/selection': (core, event, ops) => ops.push({ kind: 'model-selection', sessionId: core.sessionId, selection: readDshModelRef(event.data) }),
   'permission/preset': handlePermissionPreset,
   'sandbox/mode': handleSandbox,
   'approval/policy': handleApproval,
@@ -208,4 +244,5 @@ export const AGENT_HANDLERS: Record<string, DshHandler> = {
   'request/header': handleRequestHeader,
   'request/context': handleRequestContext,
   'subagent/descriptor': handleSubagentDescriptor,
+  'subagent/catalog': (core, event, ops) => discoverDshSubagent(core, dataOf(event), ops),
 };

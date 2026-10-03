@@ -223,6 +223,7 @@ export const StorageKeys = {
     acpBridgeToken: 'auth.acpBridgeToken.v1',
     kimiWebBridgeToken: 'auth.kimiWebBridgeToken.v1',
     dshBridgeToken: 'auth.dshBridgeToken.v1',
+    dshAutoConnect: 'auth.dshAutoConnect.v1',
     acpAgentId: 'auth.acpAgentId.v1',
   },
 } as const;

@@ -3,6 +3,7 @@ import { createApp, defineComponent, h, nextTick, reactive } from 'vue';
 import { createI18n } from 'vue-i18n';
 
 import ThreadBlock from './ThreadBlock.vue';
+import { dshPermissionColor } from './dsh/permissionPresentation';
 import { useMessages } from '../composables/useMessages';
 import type { MessageInfo } from '../types/sse';
 import { makeAssistantMessage, makeTextPart, makeToolPart, makeUserMessage } from './historyTestBuilders';
@@ -559,4 +560,27 @@ describe('ThreadBlock history wiring', () => {
     unmount(app);
     root.remove();
   });
+});
+
+
+it('shows the DSH turn permission beside the model while preserving agent identity', async () => {
+  const user = { ...makeUserMessage('main', 'dsh-user', 1), agent: 'standard', permissionPreset: 'read-only' };
+  const assistant = { ...makeAssistantMessage('main', 'dsh-reply', 'dsh-user', 2), agent: 'standard', permissionPreset: 'workspace-write' };
+  useMessages().loadHistory([{ info: user, parts: [] }, { info: assistant, parts: [makeTextPart('dsh-reply', 'main', 'Done')] }]);
+  const view = mount({ root: user, backendKind: 'dsh' }, vi.fn());
+  await flushRender();
+  expect(view.root.querySelector('.ib-target-agent')?.textContent?.trim()).toBe('workspace-write');
+  const target = view.root.querySelector('.ib-round-target') as (HTMLElement & {
+    __vueParentComponent?: { props: { agentStyle: Record<string, string> } };
+  }) | null;
+  expect(target?.__vueParentComponent?.props.agentStyle.color).toBe(dshPermissionColor('workspace-write'));
+  expect(user.agent).toBe('standard');
+});
+
+it('does not substitute the DSH agent preset for missing historical permission', async () => {
+  const user = { ...makeUserMessage('main', 'dsh-unknown', 1), agent: 'standard' };
+  useMessages().loadHistory([{ info: user, parts: [] }]);
+  const view = mount({ root: user, backendKind: 'dsh' }, vi.fn());
+  await flushRender();
+  expect(view.root.querySelector('.ib-target-agent')).toBeNull();
 });

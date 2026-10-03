@@ -521,6 +521,7 @@ describe('useBackendMessageSend kimi-web', () => {
 
 function createDshApi() {
   return {
+    selectModel: vi.fn().mockResolvedValue({}),
     prompt: vi.fn().mockResolvedValue({ accepted: true }),
     abortSession: vi.fn().mockResolvedValue(undefined),
   } as unknown as DshSendApi & {
@@ -708,5 +709,30 @@ describe('useBackendMessageSend dsh', () => {
     expect(base.setSendStatusKey).toHaveBeenCalledTimes(1);
     expect(base.clearComposerDraftForCurrentContext).not.toHaveBeenCalled();
     expect(base.isSending.value).toBe(false);
+  });
+});
+
+
+describe('DSH native command feedback', () => {
+  it.each(['success', 'error'] as const)('reports %s without creating a busy prompt', async (kind) => {
+    // Given: a selected DSH session and a native command result.
+    const api = createDshApi();
+    api.executeCommand = vi.fn().mockResolvedValue({ kind, text: 'Native feedback' });
+    const onDshPromptRunning = vi.fn();
+    const { base, runtime } = createDshRuntime({ api, onDshPromptRunning });
+    base.messageInput.value = '/goal show';
+    // When: the composer submits the command.
+    await runtime.sendMessage();
+    // Then: feedback appears, no prompt is created, and failure preserves the draft.
+    expect(api.prompt).not.toHaveBeenCalled();
+    expect(onDshPromptRunning).not.toHaveBeenCalled();
+    expect(base.isSending.value).toBe(false);
+    if (kind === 'success') {
+      expect(base.setSendStatusText).toHaveBeenLastCalledWith('Native feedback');
+      expect(base.messageInput.value).toBe('');
+    } else {
+      expect(base.setSendStatusKey).toHaveBeenLastCalledWith('app.error.sendFailed', { message: 'Native feedback' });
+      expect(base.messageInput.value).toBe('/goal show');
+    }
   });
 });

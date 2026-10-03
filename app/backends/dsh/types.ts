@@ -367,6 +367,7 @@ export const DSH_SESSION_EVENT_TYPES = [
   'system/message',
   'assistant/message',
   'assistant/attempt',
+  'llm/retry-started',
   'tool/call',
   'tool/result',
   'request/header',

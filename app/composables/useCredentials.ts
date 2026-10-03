@@ -36,6 +36,7 @@ const codexBridgeToken = ref('');
 const acpBridgeToken = ref('');
 const kimiWebBridgeToken = ref('');
 const dshBridgeToken = ref('');
+const dshAutoConnect = ref(false);
 const acpAgentId = ref('');
 
 function applyCredentials(next: Credentials) {
@@ -64,7 +65,7 @@ export function useCredentials() {
     }
     if (backendKind.value === 'kimi-web') return kimiWebBridgeUrl.value.trim().length > 0;
     if (backendKind.value === 'dsh') {
-      return dshBridgeUrl.value.trim().length > 0 && dshBridgeToken.value.trim().length > 0;
+      return dshBridgeUrl.value.trim().length > 0 && dshAutoConnect.value;
     }
     return url.value.trim().length > 0;
   });
@@ -141,6 +142,8 @@ export function useCredentials() {
     saveBackendKind('dsh');
     dshBridgeUrl.value = bridgeUrl;
     dshBridgeToken.value = newBridgeToken;
+    dshAutoConnect.value = true;
+    storageSet(StorageKeys.auth.dshAutoConnect, 'true');
     storageSet(StorageKeys.auth.dshBridgeUrl, bridgeUrl);
     if (newBridgeToken.trim()) storageSet(StorageKeys.auth.dshBridgeToken, newBridgeToken);
     else storageRemove(StorageKeys.auth.dshBridgeToken);
@@ -193,6 +196,8 @@ export function useCredentials() {
       kimiWebBridgeToken.value = storageGet(StorageKeys.auth.kimiWebBridgeToken) ?? '';
       dshBridgeUrl.value = storageGet(StorageKeys.auth.dshBridgeUrl) ?? DEFAULT_DSH_BRIDGE_URL;
       dshBridgeToken.value = storageGet(StorageKeys.auth.dshBridgeToken) ?? '';
+      dshAutoConnect.value = storageGet(StorageKeys.auth.dshAutoConnect) !== 'false'
+        && Boolean(storageGet(StorageKeys.auth.dshBridgeUrl));
       acpAgentId.value = storedAcpAgentId;
     } catch {
       return;
@@ -232,6 +237,8 @@ export function useCredentials() {
         storageRemove(StorageKeys.auth.kimiWebBridgeToken);
         kimiWebBridgeToken.value = '';
       } else if (preservedBackendKind === 'dsh') {
+        dshAutoConnect.value = false;
+        storageSet(StorageKeys.auth.dshAutoConnect, 'false');
         storageSet(StorageKeys.auth.dshBridgeUrl, preservedDshUrl);
         storageRemove(StorageKeys.auth.dshBridgeToken);
         dshBridgeToken.value = '';
@@ -293,6 +300,11 @@ export function useCredentials() {
 
       if (event.key === storageKey(StorageKeys.auth.dshBridgeToken)) {
         dshBridgeToken.value = event.newValue ?? '';
+        return;
+      }
+
+      if (event.key === storageKey(StorageKeys.auth.dshAutoConnect)) {
+        dshAutoConnect.value = event.newValue === 'true';
         return;
       }
 

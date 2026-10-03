@@ -66,6 +66,7 @@
 import { shallowReactive } from 'vue';
 
 import { createDshNormalizer } from '../backends/dsh/normalize';
+import { readDshModelRef } from '../backends/dsh/modelSelection';
 import type { DshNormalizeResult, DshNormalizer } from '../backends/dsh/ops';
 import {
   isDshEventsFrame,
@@ -225,6 +226,7 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
   /** Which session a live follow stream delivers (learned from its snapshot). */
   const streamSessions = new Map<DshBridgeStreamHandle, string>();
   const followSubscriptions = new Map<DshBridgeStreamHandle, () => void>();
+  const followRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const approvals = new Map<string, DshApprovalRequest>();
   const approvalListeners = new Set<(request: DshApprovalRequest) => void>();
   const answeredEventIds = new Set<string>();
@@ -382,7 +384,7 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
           continue;
         }
         if (op.phase === 'started') {
-          mergeSession(sessionId, { busy: true });
+          mergeSession(sessionId, { busy: true, presetLocked: true });
         } else {
           mergeSession(sessionId, {
             busy: false,
@@ -392,6 +394,7 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
           });
         }
       }
+      if (op.kind === 'model-selection' && authoritative) mergeSession(sessionId, { modelSelection: op.selection });
       if (op.kind === 'request' && op.phase === 'context' && authoritative) {
         const previous = sessionStates.get(sessionId)?.usage;
         const model = dshModelLabel(op.provider, op.model);
@@ -423,7 +426,7 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
       if (sessionId === undefined) return;
       streamSessions.set(handle, sessionId);
       if (primarySessionId === undefined) primarySessionId = sessionId;
-      applyFollowSnapshot(sessionId, value);
+      applyFollowSnapshot(sessionId, value, handle);
       return;
     }
 
@@ -439,7 +442,7 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
    * A late snapshot (cursor behind the watermark) is dropped instead of
    * overwriting newer state.
    */
-  function applyFollowSnapshot(sessionId: string, value: Record<string, unknown>): void {
+  function applyFollowSnapshot(sessionId: string, value: Record<string, unknown>, handle: DshBridgeStreamHandle): void {
     const sync = syncFor(sessionId);
     const plan = sync.planSnapshot({
       cursor: snapshotCursorOf(value),
@@ -450,6 +453,9 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
       return;
     }
 
+    clearFollowRetry(sessionId);
+    cancelFollowHandles(sessionId, handle);
+
     sync.beginSnapshotApply();
     publishSync(sessionId);
     clearOwnedMessages(sessionId);
@@ -457,6 +463,19 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     normalizer.reset();
     const result = normalizer.ingest(value);
     applyResult(result, 'snapshot-rebuild', sessionId, true);
+    const projections = isRecord(value.projections) && isRecord(value.projections.values) ? value.projections.values : {};
+    const boundary = isRecord(projections.turnBoundary) ? projections.turnBoundary : undefined;
+    const header = isRecord(value.header) ? value.header : {};
+    const preset = projections.agentPreset ?? header.agentPreset;
+    const modelSelection = isRecord(projections.modelSelection) ? projections.modelSelection : {};
+    mergeSession(sessionId, {
+      modelSelection: readDshModelRef(modelSelection.next ?? modelSelection.lastUsed),
+      agentPreset: typeof preset === 'string' ? preset : undefined,
+      planGoalRevision: (sessionStates.get(sessionId)?.planGoalRevision ?? 0) + 1,
+      presetLocked: boundary !== undefined
+        ? (boundary.openTurnStartSeq !== null && boundary.openTurnStartSeq !== undefined) || (typeof boundary.lastTurn === 'number' && boundary.lastTurn > 0)
+        : sessionStates.get(sessionId)?.presetLocked,
+    });
     const snapshotUsage = dshUsageFromSnapshot(value);
     if (snapshotUsage) {
       mergeSession(sessionId, {
@@ -483,7 +502,10 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
         // for a fresh authoritative state instead of skipping seqs.
         sync.bufferFrames(buffered.slice(index + 1));
         publishSync(sessionId);
-        reopenFollow(sessionId);
+        followRetryTimers.set(sessionId, setTimeout(() => {
+          followRetryTimers.delete(sessionId);
+          reopenFollow(sessionId);
+        }, 1000));
         return;
       }
       // 'drop': the snapshot already covered this seq (no duplication).
@@ -510,6 +532,12 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     const normalizer = normalizerFor(sessionId);
     const result = normalizer.ingest(value);
     applyResult(result, 'live', sessionId, true);
+    if (isRecord(value) && isRecord(value.event) && ['plan/mode', 'goal/change', 'command/done'].includes(String(value.event.type))) {
+      mergeSession(sessionId, { planGoalRevision: (sessionStates.get(sessionId)?.planGoalRevision ?? 0) + 1 });
+    }
+    if (isRecord(value) && isRecord(value.event) && value.event.type === 'agent-preset/selected' && isRecord(value.event.data) && typeof value.event.data.agentPreset === 'string') {
+      mergeSession(sessionId, { agentPreset: value.event.data.agentPreset });
+    }
     sync.noteApplied(dshFollowFrameSeq(value));
     publishSync(sessionId);
   }
@@ -527,6 +555,24 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
       args: { request: { address: sessionAddresses.get(sessionId) ?? { kind: 'session', sessionId }, assistantStream: true } },
     });
     registerFollow(handle, sessionId);
+  }
+
+  function clearFollowRetry(sessionId: string): void {
+    const timer = followRetryTimers.get(sessionId);
+    if (timer !== undefined) clearTimeout(timer);
+    followRetryTimers.delete(sessionId);
+  }
+
+  function cancelFollowHandles(sessionId: string, keep?: DshBridgeStreamHandle): void {
+    for (let index = followHandles.length - 1; index >= 0; index -= 1) {
+      const handle = followHandles[index];
+      if (!handle || handle === keep || streamSessions.get(handle) !== sessionId) continue;
+      followHandles.splice(index, 1);
+      streamSessions.delete(handle);
+      followSubscriptions.get(handle)?.();
+      followSubscriptions.delete(handle);
+      handle.cancel();
+    }
   }
 
   function registerFollow(handle: DshBridgeStreamHandle, sessionId?: string): void {
@@ -565,12 +611,13 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
    * bridge would drop live records until a reconnect re-taught the session.
    * Omitting it keeps the snapshot-learned binding (the landed behavior).
    */
-  function attachFollow(handle: DshBridgeStreamHandle, binding?: string | DshSessionAddress): void {
+  function attachFollow(handle: DshBridgeStreamHandle, binding?: string | DshSessionAddress, snapshot?: DshJsonValue): void {
     const address = typeof binding === 'string' ? { kind: 'session' as const, sessionId: binding } : binding;
     const sessionId = address?.kind === 'subagent' ? address.childSessionId : address?.sessionId;
     if (address && sessionId) sessionAddresses.set(sessionId, address);
     if (address?.kind === 'session') primarySessionId = address.sessionId;
     registerFollow(handle, sessionId);
+    if (snapshot !== undefined) handleFollowFrame(handle, snapshot);
   }
 
   function watchFollowStream(handle: DshBridgeStreamHandle, sessionId?: string): void {
@@ -619,6 +666,12 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
         flushQueuedResponses();
         return;
       case 'emit':
+        if (value.event === 'goal/activation-changed') {
+          const change = value.args[0];
+          if (isRecord(change) && typeof change.sessionId === 'string') {
+            mergeSession(change.sessionId, { planGoalRevision: (sessionStates.get(change.sessionId)?.planGoalRevision ?? 0) + 1 });
+          }
+        }
         options.onEventsEmit?.(value.event, value.args);
         return;
       case 'waterfall':
@@ -885,6 +938,7 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
   function stop(): void {
     if (stopped) return;
     stopped = true;
+    for (const sessionId of followRetryTimers.keys()) clearFollowRetry(sessionId);
     // Never leave a pending waterfall unanswered, even while disposing.
     const pending = [...approvals.keys()];
     for (const eventId of pending) void respond(eventId, safeRejection(STOP_REJECTION));
@@ -916,15 +970,8 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     attachFollow,
     detachFollow(sessionId) {
       syncs.get(sessionId)?.markTerminal();
-      for (let index = followHandles.length - 1; index >= 0; index -= 1) {
-        const handle = followHandles[index];
-        if (!handle || streamSessions.get(handle) !== sessionId) continue;
-        followHandles.splice(index, 1);
-        streamSessions.delete(handle);
-        followSubscriptions.get(handle)?.();
-        followSubscriptions.delete(handle);
-        handle.cancel();
-      }
+      clearFollowRetry(sessionId);
+      cancelFollowHandles(sessionId);
       syncs.delete(sessionId);
       normalizers.delete(sessionId);
       sessionStates.delete(sessionId);

@@ -268,6 +268,8 @@ export type UserMessageInfo = {
     diffs: FileDiff[];
   };
   agent: string;
+  /** Permission preset captured for this message, independent of agent identity. */
+  permissionPreset?: string;
   model: { providerID: string; modelID: string };
   system?: string;
   tools?: Record<string, boolean>;
@@ -287,6 +289,8 @@ export type AssistantMessageInfo = {
   /** @deprecated */
   mode: string;
   agent: string;
+  /** Permission preset captured for this message, independent of agent identity. */
+  permissionPreset?: string;
   path: { cwd: string; root: string };
   summary?: boolean;
   cost: number;

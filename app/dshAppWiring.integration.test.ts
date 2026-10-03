@@ -22,12 +22,14 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createContext, runInContext, runInNewContext } from 'node:vm';
 import ts from 'typescript';
-import { type Mock, afterEach, describe, expect, it, vi } from 'vitest';
+import { type Mock, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computed } from 'vue';
 
 import { createDshRpcClient, deriveDshBridgeHttpUrl } from './utils/dshRpc';
 import { appendCodexBridgeToken, codexBridgeHttpUrl } from './backends/codex/bridgeUrl';
 import { normalizeDshHistoryPage, readDshHistoryPage } from './backends/dsh/history';
+import { upsertDshSessionIntoProjects, mapDshSessionItem, mapDshSessionsToProjects } from './backends/dsh/dshAdapter';
+import { createDshSelectionPersistence } from './composables/dshSelectionPersistence';
 import { createDshSessionEventHub } from './composables/dshSessionEvents';
 import { createDshPermissions, parseDshApprovalRequestId } from './composables/dshPermissions';
 import { parseKimiWebApprovalRequestId } from './backends/kimiWeb/interactions';
@@ -52,7 +54,10 @@ function appVariableDeclaration(name: string): string {
     const declaration = statement.declarationList.declarations.find(
       (candidate) => ts.isIdentifier(candidate.name) && candidate.name.text === name,
     );
-    if (declaration) return `const ${declaration.getText(APP_SCRIPT)};`;
+    if (declaration) {
+      const keyword = statement.declarationList.flags & ts.NodeFlags.Const ? 'const' : 'let';
+      return `${keyword} ${declaration.getText(APP_SCRIPT)};`;
+    }
   }
   throw new Error(`App.vue variable ${name} was not found`);
 }
@@ -303,6 +308,8 @@ describe('currentBackendIdentity (Todo 33 dsh case)', () => {
 // ---------------------------------------------------------------------------
 
 const DSH_BOOTSTRAP_DECLARATIONS = [
+  appVariableDeclaration('dshSelectionPersistence'),
+  appVariableDeclaration('dshInitialSelectionConsumed'),
   appVariableDeclaration('dshMessageBridge'),
   appVariableDeclaration('dshMuxClient'),
   appVariableDeclaration('dshFollowStreams'),
@@ -325,11 +332,14 @@ const DSH_BOOTSTRAP_DECLARATIONS = [
 ].join('\n');
 
 describe('bootstrapDshWorkspace (Todo 33 dsh bridge construction)', () => {
+  beforeEach(() => window.localStorage.clear());
   const DECLARATIONS = DSH_BOOTSTRAP_DECLARATIONS;
 
   type BootstrapSandbox = {
     bootstrapDshWorkspace: (isCurrent: () => boolean) => Promise<void>;
     disconnectDshBackend: () => void;
+    selectedProjectId: { value: string };
+    selectedSessionId: { value: string };
     dshMessageBridge: { value: unknown };
     dshMuxClient: { value: unknown };
     dshFollowStreams: Map<string, unknown>;
@@ -342,7 +352,7 @@ describe('bootstrapDshWorkspace (Todo 33 dsh bridge construction)', () => {
     };
   };
 
-  function createSandbox(options: { current?: boolean } = {}) {
+  function createSandbox(options: { current?: boolean; initialSessionId?: string } = {}) {
     const current = options.current ?? true;
     approvalListener.current = undefined;
     const order: string[] = [];
@@ -396,7 +406,7 @@ describe('bootstrapDshWorkspace (Todo 33 dsh bridge construction)', () => {
         }
         normalize.normalizeSnapshot(SNAPSHOT);
         commit({
-          projects: {},
+          projects: mapDshSessionsToProjects([mapDshSessionItem({ sessionId: 'session-entry', workspaceId: 'workspace-1', cwd: '/repo' })]),
           selectedProjectId: 'workspace-1',
           selectedSessionId: 'session-entry',
         });
@@ -406,11 +416,12 @@ describe('bootstrapDshWorkspace (Todo 33 dsh bridge construction)', () => {
 
     const sandbox = runInNewContext(
       transpile(
-        `${DECLARATIONS}\n;({ bootstrapDshWorkspace, disconnectDshBackend, dshMessageBridge, dshMuxClient, dshFollowStreams, dshPermissions, dshSessionEvents });`,
+        `${DECLARATIONS}\n;({ bootstrapDshWorkspace, disconnectDshBackend, selectedProjectId, selectedSessionId, dshMessageBridge, dshMuxClient, dshFollowStreams, dshPermissions, dshSessionEvents });`,
       ),
       {
         shallowRef: shallowRefDouble(),
         createDshSessionEventHub,
+        createDshSelectionPersistence,
         createDshPermissions,
         upsertPermissionEntry,
         removePermissionEntry,
@@ -427,6 +438,8 @@ describe('bootstrapDshWorkspace (Todo 33 dsh bridge construction)', () => {
           return bridge;
         }),
         runDshBootstrap,
+        initialQuery: { sessionId: options.initialSessionId ?? 'session-entry' },
+        dshSubagentModes: new Map(),
         deriveDshBridgeHttpUrl,
         readDshHistoryPage,
         normalizeDshHistoryPage,
@@ -465,6 +478,22 @@ describe('bootstrapDshWorkspace (Todo 33 dsh bridge construction)', () => {
       bootstrapCalls,
     };
   }
+
+  it('passes the persisted session into bootstrap and commits its refreshed project identity', async () => {
+    // Given: a prior selection with a project identity that no longer exists.
+    const persistence = createDshSelectionPersistence();
+    persistence.commit(DSH_BRIDGE_URL, mapDshSessionsToProjects([
+      mapDshSessionItem({ sessionId: 'session-entry', workspaceId: 'old-project', cwd: '/repo' }),
+    ]), 'session-entry');
+    const harness = createSandbox({ initialSessionId: '' });
+    // When: App's extracted bootstrap runs with the real persistence helper.
+    await harness.sandbox.bootstrapDshWorkspace(() => true);
+    // Then: it requests the saved session and commits the project from the new baseline.
+    expect(harness.bootstrapCalls[0]?.preferredSessionId).toBe('session-entry');
+    expect(harness.sandbox.selectedSessionId.value).toBe('session-entry');
+    expect(harness.sandbox.selectedProjectId.value).toBe('workspace-1');
+    expect(createDshSelectionPersistence().preferredSessionId(DSH_BRIDGE_URL)).toBe('session-entry');
+  });
 
   it('constructs exactly one bridge and wires the four water bodies', async () => {
     const harness = createSandbox();
@@ -663,6 +692,7 @@ describe('bootstrapDshWorkspace — adapter identity across the disposal (defect
       {
         shallowRef: shallowRefDouble(),
         createDshSessionEventHub,
+        createDshSelectionPersistence,
         createDshPermissions,
         upsertPermissionEntry: vi.fn(),
         removePermissionEntry: vi.fn(),
@@ -678,6 +708,8 @@ describe('bootstrapDshWorkspace — adapter identity across the disposal (defect
           return bridge;
         }),
         runDshBootstrap,
+        initialQuery: { sessionId: 'session-entry' },
+        dshSubagentModes: new Map(),
         deriveDshBridgeHttpUrl,
         readDshHistoryPage,
         normalizeDshHistoryPage,
@@ -853,6 +885,14 @@ describe('dshSendApi (Todo 25 send routing)', () => {
     expect(harness.adapter.listSessions).toHaveBeenCalledWith({ directory: '/repo' });
   });
 
+  it('keeps the selected session when another session in the cwd was updated more recently', async () => {
+    const harness = createSandbox();
+    harness.adapter.listSessions.mockResolvedValue([
+      { id: 'session-newer' }, { id: 'session-a' },
+    ]);
+    await expect(harness.sandbox.dshSendApi.sessionIdForCwd('/repo')).resolves.toBe('session-a');
+  });
+
   it('fails closed when the stream is terminal', () => {
     expect(createSandbox({ connected: false }).sandbox.dshSendApi.isServerTerminal()).toBe(true);
     expect(createSandbox({ syncKind: 'detached' }).sandbox.dshSendApi.isServerTerminal()).toBe(
@@ -924,7 +964,7 @@ describe('dshSessionApi (Todo 27 session action routing)', () => {
     const adapter = {
       kind: 'dsh',
       listSessions: vi.fn(async () =>
-        (input.archivedSessions ?? []).map((id) => ({ id, time: { archived: 1 } })),
+        (input.archivedSessions ?? []).map((id) => ({ id, projectID: 'dsh:/tmp/dsh', projectId: 'dsh:/tmp/dsh', workspaceId: 'dsh:/tmp/dsh', directory: '/tmp/dsh', title: id, status: 'unknown', time: { created: 1, updated: 1, archived: 1 } })),
       ),
       forkSession: vi.fn(async () => ({ sessionId: 'session-forked' })),
       updateSession: vi.fn(async () => ({})),
@@ -938,6 +978,7 @@ describe('dshSessionApi (Todo 27 session action routing)', () => {
       {
         shallowRef: shallowRefDouble(),
         createDshSessionEventHub,
+        createDshSelectionPersistence,
         createDshPermissions,
         upsertPermissionEntry: vi.fn(),
         removePermissionEntry: vi.fn(),
@@ -949,6 +990,8 @@ describe('dshSessionApi (Todo 27 session action routing)', () => {
         normalizeDshHistoryPage,
         credentials: credentialsDouble(),
         dshPopupBridge: dshPopupBridgeDouble(),
+        upsertDshSessionIntoProjects,
+        serverState: { projects: {} },
       },
     ) as SessionSandbox;
     // Install the doubles through the wiring's own refs (the program's

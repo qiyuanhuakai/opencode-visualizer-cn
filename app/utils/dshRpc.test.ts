@@ -278,6 +278,13 @@ describe('buildDshClientRequest', () => {
 });
 
 describe('parseDshServerResponseValue / Text', () => {
+  it('accepts the omitted value in successful void credential replies', async () => {
+    for (const method of ['set', 'unset']) {
+      const client = createDshRpcClient({ baseUrl: BASE, fetcher: async () => jsonResponse({ type: 'server-response', rpcId: 'void-credential', result: { ok: true } }) });
+      await expect(client.call('credentials', method, { ref: 'VIS_DSH_QA' }, { rpcId: 'void-credential' })).resolves.toBeNull();
+    }
+  });
+
   it('parses a valid envelope from text and enforces the rpcId echo', () => {
     const response = parseDshServerResponseText(JSON.stringify(okEnvelope({ a: 1 }, 'rpc-1')), 'rpc-1');
     expect(unwrapDshServerResponse(response)).toEqual({ a: 1 });

@@ -58,6 +58,7 @@ export class DshSessionDeleteUnsupportedError extends Error {
 export type DshSessionActionApi = {
   renameSession: (sessionId: string, title: string) => Promise<unknown>;
   forkSession: (sessionId: string, atSeq?: number) => Promise<unknown>;
+  resolveForkSeq?: (sessionId: string, messageId: string) => Promise<number>;
   archiveSession: (sessionId: string) => Promise<unknown>;
   unarchiveSession: (sessionId: string) => Promise<unknown>;
   pinSession: (sessionId: string) => Promise<unknown>;

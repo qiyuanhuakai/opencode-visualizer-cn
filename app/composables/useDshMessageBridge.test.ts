@@ -307,6 +307,21 @@ function createHarness(overrides: Partial<DshMessageBridgeOptions> = {}) {
   return { bridge, mux, provider, store, calls };
 }
 
+it('refreshes plan and goal controls after authoritative records and activation notifications', () => {
+  const { bridge, mux } = createHarness();
+  const follow = new FakeStream('plan-goal');
+  bridge.attachFollow(follow);
+  follow.emit(snapshot('session-controls', [], 0));
+  expect(bridge.sessionState('session-controls')?.planGoalRevision).toBe(1);
+  follow.emit({ type: 'event', event: { type: 'plan/mode', seq: 1, time: 1, data: { active: true } } });
+  expect(bridge.sessionState('session-controls')?.planGoalRevision).toBe(2);
+  follow.emit({ type: 'event', event: { type: 'goal/change', seq: 2, time: 2, data: { operation: 'clear' } } });
+  expect(bridge.sessionState('session-controls')?.planGoalRevision).toBe(3);
+  mux.events().emit({ type: 'emit', event: 'goal/activation-changed', args: [{ sessionId: 'session-controls', goal: null }] });
+  expect(bridge.sessionState('session-controls')?.planGoalRevision).toBe(4);
+  bridge.stop();
+});
+
 /** Emit a waterfall frame the way the host would: the turn blocks on it. */
 function emitWaterfall(
   harness: Harness,
@@ -357,6 +372,23 @@ describe('dsh message bridge — dual attach ($events + session/follow)', () => 
 // ---------------------------------------------------------------------------
 
 describe('dsh message bridge — bootstrap join binding (defect D2)', () => {
+  it('adopts the consumed snapshot before history reload reads the watermark', () => {
+    const { bridge, store } = createHarness();
+    const follow = new FakeStream('sf-consumed-snapshot');
+    bridge.attachFollow(follow, SESSION_ID, followSnapshot);
+    expect(bridge.cursor(SESSION_ID)).toBe(17);
+    expect(bridge.syncState(SESSION_ID)).toMatchObject({ kind: 'live', cursor: 17 });
+    expect(store.messages.size).toBeGreaterThan(0);
+    follow.emit(record('assistant/message', 18, {
+      turn: 1, step: 2, message: { role: 'assistant', content: [{ type: 'text', text: 'next step' }] },
+    }));
+    expect(bridge.cursor(SESSION_ID)).toBe(18);
+    expect(store.messages.get(`${SESSION_ID}:t1:s2`)).toMatchObject({
+      parentID: 'ec747195-c21f-4de7-9df6-fcbf4ff4e75b',
+    });
+    bridge.stop();
+  });
+
   it('creates the sync machine for a follow bound at attach time', () => {
     // The bootstrap consumed this stream's snapshot, so the bridge is the only
     // place the machine can come from: without it `syncState` reports
@@ -953,4 +985,56 @@ describe('dsh message bridge — robustness', () => {
     await harness.provider.settled('evt-ws');
     expect(urls).toEqual(['http://localhost:23004/dsh/$events/result']);
   });
+});
+
+
+describe('DSH current preset projection', () => {
+  it('restores pending native thinking and receives subsequent live selections', () => {
+    const { bridge } = createHarness();
+    const follow = new FakeStream('model-snapshot');
+    bridge.attachFollow(follow, SESSION_ID);
+    const previous = { provider: 'native', model: 'one', reasoningEffort: 'high' };
+    const pending = { provider: 'native', model: 'two', reasoningEffort: 'low' };
+    follow.emit({ type: 'snapshot', header: { id: SESSION_ID }, cursor: 2, records: [], hasMore: false,
+      projections: { values: { modelSelection: { lastUsed: previous, next: pending } } } });
+    expect(bridge.sessionState(SESSION_ID)?.modelSelection).toEqual(pending);
+    follow.emit(record('model/selection', 3, { ...pending, reasoningEffort: 'max' }));
+    expect(bridge.sessionState(SESSION_ID)?.modelSelection).toEqual({ ...pending, reasoningEffort: 'max' });
+    bridge.stop();
+  });
+
+  it('restores the durable preset over the stale header and locks started sessions', () => {
+    // Given: a snapshot whose header predates a preset selection.
+    const { bridge } = createHarness();
+    const follow = new FakeStream('preset-snapshot');
+    bridge.attachFollow(follow, SESSION_ID);
+    // When: the current projections arrive.
+    follow.emit({ type: 'snapshot', header: { id: SESSION_ID, agentPreset: 'standard' }, cursor: 0, records: [], hasMore: false,
+      projections: { values: { agentPreset: 'cordis', turnBoundary: { openTurnStartSeq: null, lastTurn: 1 } } } });
+    // Then: the selected identity and lock follow durable state.
+    expect(bridge.sessionState(SESSION_ID)).toMatchObject({ agentPreset: 'cordis', presetLocked: true });
+    bridge.stop();
+  });
+
+  it('updates the selected preset from a live selection event', () => {
+    const { bridge } = createHarness();
+    const follow = new FakeStream('preset-live');
+    bridge.attachFollow(follow, SESSION_ID, snapshot(SESSION_ID, [], 0));
+    follow.emit(record('agent-preset/selected', 1, { agentPreset: 'minimal' }));
+    expect(bridge.sessionState(SESSION_ID)?.agentPreset).toBe('minimal');
+    bridge.stop();
+  });
+});
+
+
+it('locks the DSH preset as soon as the first turn starts', () => {
+  // Given: a blank session with a selectable preset.
+  const { bridge } = createHarness();
+  const follow = new FakeStream('preset-lock');
+  bridge.attachFollow(follow, SESSION_ID, snapshot(SESSION_ID, [], 0));
+  // When: the runtime begins its first turn.
+  follow.emit(record('turn/start', 1, { turn: 1 }));
+  // Then: the selector is locked before any turn completion.
+  expect(bridge.sessionState(SESSION_ID)).toMatchObject({ presetLocked: true, busy: true });
+  bridge.stop();
 });

@@ -4,7 +4,7 @@
  *
  * Contract under test:
  *   - a probe state machine with unknown / supported / unsupported / gated;
- *   - 404-class endpoints (agent-scoped, e.g. `session/skills/list`) classify
+ *   - 404-class endpoints (agent-scoped, e.g. `skills/list`) classify
  *     `unknown`, never `unsupported` and never a false `supported`;
  *   - a rejected / malformed probe NEVER yields `supported`;
  *   - each probe owns an independent result slot (one failure cannot poison
@@ -167,12 +167,12 @@ describe('dsh runtime capability registry — probe descriptors', () => {
     expect(byKey.terminal.method).toBe('environment');
     expect(byKey.workspaceFiles.namespace).toBe('workspaceFiles');
     expect(byKey.workspaceFiles.method).toBe('list');
-    expect(byKey.skills.namespace).toBe('session');
-    expect(byKey.skills.method).toBe('skills/list');
+    expect(byKey.skills.namespace).toBe('skills');
+    expect(byKey.skills.method).toBe('list');
     expect(byKey.profile.namespace).toBe('account');
     expect(byKey.profile.method).toBe('getProfile');
-    expect(byKey.fileReferences.namespace).toBe('session');
-    expect(byKey.fileReferences.method).toBe('fileReferences/list');
+    expect(byKey.fileReferences.namespace).toBe('fileReferences');
+    expect(byKey.fileReferences.method).toBe('list');
   });
 
   it('marks exactly the agent-scoped 404-class probes', () => {
@@ -191,7 +191,7 @@ describe('dsh runtime capability registry — probe descriptors', () => {
 
 describe('classifyDshCapabilityError', () => {
   it('classifies an HTTP 404 as unknown (agent-scoped endpoint may legitimately not exist)', () => {
-    expect(classifyDshCapabilityError(new DshRpcNotFoundError({ method: 'session/skills/list', rpcId: 'r' }))).toBe(
+    expect(classifyDshCapabilityError(new DshRpcNotFoundError({ method: 'skills/list', rpcId: 'r' }))).toBe(
       'unknown',
     );
     expect(classifyDshCapabilityError({ status: 404, code: 'http-404' })).toBe('unknown');
@@ -245,7 +245,7 @@ describe('createDshCapabilityRegistry — probe (Codex precedent)', () => {
     await expect(registry.probe('models', async () => MODEL_CATALOG_VALUE)).resolves.toEqual(MODEL_CATALOG_VALUE);
     expect(registry.getState('models')).toBe('supported');
 
-    const notFound = new DshRpcNotFoundError({ method: 'session/skills/list', rpcId: 'r' });
+    const notFound = new DshRpcNotFoundError({ method: 'skills/list', rpcId: 'r' });
     await expect(registry.probe('skills', async () => { throw notFound; })).rejects.toBe(notFound);
     expect(registry.getState('skills')).toBe('unknown');
 
@@ -257,7 +257,7 @@ describe('createDshCapabilityRegistry — probe (Codex precedent)', () => {
 
 describe('createDshCapabilityRegistry — probeAll independence', () => {
   it('keeps independent result slots when probes succeed, fail, 404, are gated or malformed', async () => {
-    const notFound = () => new DshRpcNotFoundError({ method: 'session/skills/list', rpcId: 'r' });
+    const notFound = () => new DshRpcNotFoundError({ method: 'skills/list', rpcId: 'r' });
     const gated = new DshMissingCredentialError({ code: 'MISSING_CREDENTIAL', message: 'no credential' }, 'r');
     const unavailable = buildError('terminal/unavailable', 'Terminal no longer exists in this Session');
     const { call } = recordingCall({
@@ -265,9 +265,9 @@ describe('createDshCapabilityRegistry — probeAll independence', () => {
       'session/modelCatalog': () => { throw new DshRpcNetworkError('session/modelCatalog', 'r', new Error('down')); },
       'terminal/environment': () => { throw notFound(); },
       'workspaceFiles/list': () => ({ nope: true }), // malformed
-      'session/skills/list': () => { throw notFound(); },
+      'skills/list': () => { throw notFound(); },
       'account/getProfile': () => { throw gated; },
-      'session/fileReferences/list': () => { throw unavailable; },
+      'fileReferences/list': () => { throw unavailable; },
     });
     const registry = createDshCapabilityRegistry({ call });
 
@@ -290,7 +290,7 @@ describe('createDshCapabilityRegistry — probeAll independence', () => {
     const { call, calls } = recordingCall({
       'account/getState': () => ACCOUNT_GET_STATE_VALUE,
       'session/modelCatalog': () => MODEL_CATALOG_VALUE,
-      'session/skills/list': () => ({}),
+      'skills/list': () => ({}),
     });
     const registry = createDshCapabilityRegistry({ call });
 
@@ -304,7 +304,7 @@ describe('createDshCapabilityRegistry — probeAll independence', () => {
     expect(paths).not.toContain('terminal/environment');
     expect(paths).not.toContain('workspaceFiles/list');
     expect(paths).not.toContain('account/getProfile');
-    expect(paths).not.toContain('session/fileReferences/list');
+    expect(paths).not.toContain('fileReferences/list');
     expect(registry.getState('models')).toBe('supported');
   });
 
@@ -337,7 +337,7 @@ describe('createDshCapabilityRegistry — probeAll independence', () => {
 
   it('never yields supported from a rejected probe', async () => {
     const failures: unknown[] = [
-      new DshRpcNotFoundError({ method: 'session/skills/list', rpcId: 'r' }),
+      new DshRpcNotFoundError({ method: 'skills/list', rpcId: 'r' }),
       new DshRpcUnauthorizedError({ method: 'x/y', rpcId: 'r' }),
       new DshRpcNetworkError('x/y', 'r', new Error('boom')),
       buildError('gateway/input-invalid', 'bad wire'),
@@ -504,4 +504,15 @@ describe('dsh capability state union', () => {
     const states: DshCapabilityState[] = ['unknown', 'supported', 'unsupported', 'gated'];
     expect(new Set(states).size).toBe(4);
   });
+});
+
+ it('accepts installed plugin and session skill schemas with the actual RPC arguments', async () => {
+  const { call, calls } = recordingCall({
+    'skills/list': () => ({ skills: [{ name: 'review', description: 'Review', modelInvocable: true }] }),
+    'pluginManager/listPlugins': () => [{ entryId: 'plugin', moduleName: 'dsh-mcp-resources', enabled: true }],
+  });
+  const registry = createDshCapabilityRegistry({ call });
+  const result = await registry.refresh(FULL_CONTEXT);
+  expect(result.states).toMatchObject({ skills: 'supported', plugins: 'supported' });
+  expect(calls.find((entry) => entry.path === 'skills/list')?.args).toEqual({ request: { sessionId: FULL_CONTEXT.agentId } });
 });

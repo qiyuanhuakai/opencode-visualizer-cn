@@ -123,6 +123,7 @@ function dshRowDotClass(root: HTMLElement, label: string): string | undefined {
 async function mountDshModal(
   status: DshStatusSnapshot | undefined,
   activeBackendKind: 'dsh' | 'opencode' = 'dsh',
+  initialTab?: 'plugins' | 'skills' | 'mcp',
 ) {
   const root = document.createElement('div');
   document.body.appendChild(root);
@@ -135,6 +136,8 @@ async function mountDshModal(
             open: open.value,
             preload: false,
             activeBackendKind,
+            initialTab,
+            sessionId: 'selected-session',
             codexApi: useCodexApi(),
             ...(status === undefined ? {} : { dshStatus: status }),
           } as never);
@@ -324,15 +327,36 @@ describe('StatusMonitorModal dsh usage mapping', () => {
 });
 
 describe('StatusMonitorModal dsh capability navigation', () => {
-  it('omits unsupported or unknown status surfaces from navigation', async () => {
+  it('opens an explicitly requested plugin tab and renders its runtime entries', async () => {
+    adapterMock.getAdapter.mockReturnValue({
+      ...dshAdapter(),
+      getPluginStatus: async () => [{ id: 'mcp', name: 'dsh-mcp-resources', enabled: true, installed: true, accessible: true }],
+    });
+    const { root, app } = await mountDshModal({}, 'dsh', 'plugins');
+    await vi.waitFor(() => expect(root.querySelector('.status-monitor-content')?.textContent).toContain('dsh-mcp-resources'));
+    expect(root.querySelector('#status-monitor-tab-plugins')?.getAttribute('aria-selected')).toBe('true');
+    app.unmount();
+  });
+
+  it('passes the selected session to the skill reader and renders its inventory', async () => {
+    const getSkillStatus = vi.fn(async () => [{ name: 'review', path: '/skills/review' }]);
+    adapterMock.getAdapter.mockReturnValue({ ...dshAdapter(), getSkillStatus });
+    const { root, app } = await mountDshModal({ probes: { skills: 'supported' } }, 'dsh', 'skills');
+    await vi.waitFor(() => expect(root.querySelector('.status-monitor-content')?.textContent).toContain('review'));
+    expect(getSkillStatus).toHaveBeenCalledWith('selected-session');
+    app.unmount();
+  });
+
+  it('retains unsupported and unknown status surfaces in navigation', async () => {
     const { root, app } = await mountDshModal({});
     expect([...root.querySelectorAll('[role="tab"]')].map((tab) => tab.id)).toEqual([
-      'status-monitor-tab-server', 'status-monitor-tab-token', 'status-monitor-tab-acp',
+      'status-monitor-tab-server', 'status-monitor-tab-mcp', 'status-monitor-tab-lsp',
+      'status-monitor-tab-plugins', 'status-monitor-tab-skills', 'status-monitor-tab-token', 'status-monitor-tab-acp',
     ]);
     app.unmount();
   });
 
-  it('reveals skills only when the runtime probe confirms support', async () => {
+  it('keeps the selected skills tab when the runtime probe becomes unknown', async () => {
     const status = reactive<DshStatusSnapshot>({ probes: { skills: 'supported' } });
     const { root, app } = await mountDshModal(status);
     clickTab(root, 'Skills');
@@ -340,8 +364,8 @@ describe('StatusMonitorModal dsh capability navigation', () => {
     expect(root.querySelector('#status-monitor-tab-skills')?.getAttribute('aria-selected')).toBe('true');
     status.probes = { skills: 'unknown' };
     await nextTick();
-    expect(root.querySelector('#status-monitor-tab-skills')).toBeNull();
-    expect(root.querySelector('#status-monitor-tab-server')?.getAttribute('aria-selected')).toBe('true');
+    expect(root.querySelector('#status-monitor-tab-skills')).not.toBeNull();
+    expect(root.querySelector('#status-monitor-tab-skills')?.getAttribute('aria-selected')).toBe('true');
     app.unmount();
   });
 });
@@ -382,16 +406,16 @@ describe('StatusMonitorModal dsh live version', () => {
 });
 
 describe('StatusMonitorModal dsh connection switch', () => {
-  it('keeps unconfirmed skills hidden after connection invalidation', async () => {
+  it('keeps skills available after connection invalidation', async () => {
     const registry = createDshCapabilityRegistry({ call: async () => ({ ok: true }) });
     registry.markUnsupported('skills');
     setActiveDshCapabilityRegistry(registry);
     try {
       const { root, app } = await mountDshModal({});
-      expect(root.querySelector('#status-monitor-tab-skills')).toBeNull();
+      expect(root.querySelector('#status-monitor-tab-skills')).not.toBeNull();
       registry.invalidate('connection-switch');
       await nextTick();
-      expect(root.querySelector('#status-monitor-tab-skills')).toBeNull();
+      expect(root.querySelector('#status-monitor-tab-skills')).not.toBeNull();
       app.unmount();
     } finally {
       setActiveDshCapabilityRegistry(null);
@@ -410,7 +434,7 @@ describe('StatusMonitorModal dsh account', () => {
       },
     });
     await vi.waitFor(() => expect(dshRowMeta(root, 'Account')).toBe('Signed out'));
-    expect(dshRowMeta(root, 'Sign-in guidance')).toContain('dsh CLI');
+    expect(dshRowMeta(root, 'Account sign-in')).toContain('API-key');
     // Account sign-in is explicitly OUT of scope: no credential input renders.
     expect(root.querySelector('input[type="password"]')).toBeNull();
     app.unmount();
@@ -423,6 +447,20 @@ describe('StatusMonitorModal dsh account', () => {
     });
     await vi.waitFor(() => expect(dshRowMeta(root, 'Gateway health')).toBe('Unreachable'));
     expect(dshRowDotClass(root, 'Gateway health')).toContain('status-dot-error');
+    app.unmount();
+  });
+});
+
+describe('DSH session permission status', () => {
+  it('keeps the monitor read-only while showing the current preset', async () => {
+    const selectPermissionPreset = vi.fn(async () => undefined);
+    adapterMock.getAdapter.mockReturnValue({ ...dshAdapter(), selectPermissionPreset,
+      getPermissionPresetOptions: async () => [{ value: 'read-only', name: 'Read only' }, { value: 'workspace-write', name: 'Workspace' }],
+    });
+    const { root, app } = await mountDshModal({ permissions: { permissionPreset: 'workspace-write' } });
+    await vi.waitFor(() => expect(dshRowMeta(root, 'Permission preset')).toBe('workspace-write'));
+    expect(root.querySelector('[aria-label="Permission preset"]')).toBeNull();
+    expect(selectPermissionPreset).not.toHaveBeenCalled();
     app.unmount();
   });
 });

@@ -54,6 +54,19 @@ function entryOf(projects: Record<string, ProjectState>, sessionId: string): Ses
   return entry;
 }
 
+it('places a discovered child in its parent sandbox during live delivery and replay', () => {
+  for (const origin of ['live', 'snapshot-rebuild'] as const) {
+    const projects = projectsFixture();
+    const change = normalizeDshSessionEvent({ kind: 'subagent-discovered', parentSessionId: 's1',
+      childSessionId: 'actual-child', mode: 'one-shot', title: 'Tiny task', createdAt: 42 }, { origin });
+    expect(change).toBeDefined();
+    if (!change) throw Error('catalog discovery missing');
+    applyDshSessionEvent(projects, change);
+    expect(entryOf(projects, 'actual-child')).toMatchObject({ parentID: 's1', title: 'Tiny task', timeCreated: 42 });
+    expect(projects['ws-1'].sandboxes['/repo'].rootSessions).not.toContain('actual-child');
+  }
+});
+
 function turnOp(
   sessionId: string,
   phase: 'started' | 'ended',

@@ -33,6 +33,7 @@ import type { DshMuxClient, DshMuxStreamHandle } from '../../utils/dshMux';
 import type { ProjectState } from '../../types/worker-state';
 import {
   mapDshSessionsToProjects,
+  readDshSessionSnapshot,
   upsertDshSessionIntoProjects,
   type DshMappedSession,
 } from './dshAdapter';
@@ -95,7 +96,7 @@ export type DshHistoryPageFetcher = (request: DshHistoryPageRequest) => Promise<
  * so the bridge ATTACHES to that live stream instead of opening a second one.
  */
 export type DshBootstrapBridge = {
-  attachFollow(handle: DshMuxStreamHandle, sessionId?: string): void;
+  attachFollow(handle: DshMuxStreamHandle, sessionId?: string, snapshot?: DshJsonValue): void;
   applyHistory(entries: unknown[]): void;
   stop(): void;
 };
@@ -212,6 +213,7 @@ function dshDefaultEntry(sessions: readonly DshMappedSession[]): DshMappedSessio
 }
 
 export async function bootstrapDshWorkspace(options: {
+  preferredSessionId?: string;
   adapter: DshBootstrapSessionSource;
   mux: DshMuxClient;
   createBridge: () => DshBootstrapBridge;
@@ -225,7 +227,8 @@ export async function bootstrapDshWorkspace(options: {
   if (!options.isCurrent()) return { tree };
 
   const projects = mapDshSessionsToProjects(sessions);
-  const entry = dshDefaultEntry(sessions);
+  const entry = sessions.find((session) => session.id === options.preferredSessionId
+    && !session.parentID && !session.time?.archived) ?? dshDefaultEntry(sessions);
 
   let follow: DshMuxStreamHandle | undefined;
   let bridge: DshBootstrapBridge | undefined;
@@ -255,6 +258,8 @@ export async function bootstrapDshWorkspace(options: {
         return { tree };
       }
       const { cursor, entries } = options.normalize.normalizeSnapshot(snapshot);
+      const title = readDshSessionSnapshot(snapshot).title;
+      if (title) upsertDshSessionIntoProjects(projects, { ...entry, title });
       const history = await backfillDshHistory({
         sessionId: entry.id,
         cursor,
@@ -269,7 +274,7 @@ export async function bootstrapDshWorkspace(options: {
       // The join-time binding: this stream's snapshot was consumed above, so
       // the bridge cannot learn the session from it (handleFollowFrame resolves
       // later frames through streamSessions / primarySessionId).
-      bridge.attachFollow(follow, entry.id);
+      bridge.attachFollow(follow, entry.id, snapshot);
       bridge.applyHistory([...entries, ...history.entries]);
       if (!options.isCurrent()) {
         dispose();

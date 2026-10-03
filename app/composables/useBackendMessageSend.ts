@@ -1,4 +1,5 @@
 import { watch } from 'vue';
+import { createDshSlashDispatcher } from './backendMessageSend.dshSlash';
 import { createKimiWebSlashDispatcher } from './backendMessageSend.kimiSlash';
 import { createBackendRequestFence } from '../utils/backendRequestFence';
 import { runDshSend, type DshSendExecutionResult } from '../backends/dsh/sessionSend';
@@ -25,6 +26,7 @@ function assertNever(value: never): never {
 export function useBackendMessageSend(params: BackendMessageSendParams) {
   const dispatchCodexSlash = createCodexSlashDispatcher(params);
   const dispatchKimiWebSlash = createKimiWebSlashDispatcher(params);
+  const dispatchDshSlash = createDshSlashDispatcher(params);
   const requestFence = createBackendRequestFence(() => params.activeBackendKind.value);
   let sendingOwner: object | null = null;
   let openingForge = false;
@@ -116,6 +118,16 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
   ) {
     if (!guard.isCurrent() || result.kind === 'stale') return;
     switch (result.kind) {
+      case 'command':
+        if (result.result.kind === 'error') {
+          params.messageInput.value = preflight.text;
+          params.persistComposerDraftForCurrentContext();
+          params.setSendStatusKey('app.error.sendFailed', { message: result.result.text ?? 'DSH command failed.' });
+        } else {
+          params.setSendStatusText(result.result.text ?? preflight.text);
+          params.clearComposerDraftForCurrentContext();
+        }
+        return;
       case 'pending':
         // No session existed: the text stays pending with a padded EMPTY
         // identity — never a success, never a silent drop.
@@ -219,6 +231,7 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
       return;
     if (!params.ensureConnectionReady(params.translate('app.actions.sending'))) return;
     if (params.activeBackendKind.value === 'kimi-web' && await dispatchKimiWebSlash()) return;
+    if (params.activeBackendKind.value === 'dsh' && await dispatchDshSlash()) return;
     if (!params.canSend.value) return;
     const preflight = prepareSendPreflight(params);
     if (!preflight || preflight.backend !== params.activeBackendKind.value) return;
