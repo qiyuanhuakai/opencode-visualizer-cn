@@ -26,4 +26,3 @@ export function providerHarness() {
   });
   return { call, writes, profile, bumpRevision: () => { revision += 1; } };
 }
-
