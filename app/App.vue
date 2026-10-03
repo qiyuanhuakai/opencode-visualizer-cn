@@ -8538,7 +8538,7 @@ function dshAdoptFollow(
   if (!bridge) throw new Error('dsh message bridge is unavailable.');
   bridge.attachFollow(handle, sessionId, snapshot);
   if (!snapshot) return;
-  dshPermissions.ingestSnapshot(snapshot);
+  if (sessionId === selectedSessionId.value) dshPermissions.ingestSnapshot(snapshot);
   const normalized = dshBootstrapNormalizer().normalizeSnapshot(snapshot);
   if (normalized.entries.length > 0) bridge.applyHistory([...normalized.entries]);
 }
@@ -8609,7 +8609,7 @@ function dshCreateMessageBridge(mux: DshMuxClient): DshMessageBridge {
         const mode = op.mode === 'one-shot' || op.mode === 'continuable' ? op.mode : 'unknown';
         dshSubagentModes.set(op.childSessionId, mode);
       }
-      dshPermissions.handleSessionEvent(op);
+      if (context.sessionId === selectedSessionId.value) dshPermissions.handleSessionEvent(op);
       dshSessionEvents.emitSessionEvent(op, context);
     },
   });
@@ -8781,7 +8781,7 @@ const dshPlanGoal = useDshPlanGoal(() => {
 const dshPermissionControls = useDshComposerPermissions({
   client: dshComposerClient,
   sessionId: selectedSessionId,
-  current: computed(() => dshPermissions.state.permissionPreset),
+  current: computed(() => dshMessageBridge.value?.sessionState(selectedSessionId.value)?.permissionPreset ?? ''),
   preset: dshCurrentPreset,
   disabled: computed(() => connectionState.value !== 'ready' || isThinking.value),
   onError: setSendStatusErrorText,

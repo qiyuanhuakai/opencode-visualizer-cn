@@ -534,6 +534,8 @@ describe('bootstrapDshWorkspace (Todo 33 dsh bridge construction)', () => {
       sessionId: 'session-entry',
     });
     expect(harness.sandbox.dshPermissions.state.permissionPreset).toBe('danger-full-access');
+    (bridgeOptions.onSessionEvent as (op: DshNormalizeOp, context: unknown) => void)({ ...policyOp, value: 'read-only' }, { origin: 'live', sessionId: 'child-session' });
+    expect(harness.sandbox.dshPermissions.state.permissionPreset).toBe('danger-full-access');
     expect(harness.sandbox.dshPermissions.state.agentPreset).toBe('standard');
     expect(harness.sandbox.dshPermissions.isApprovalUiEnabled()).toBe(true);
 
@@ -992,6 +994,7 @@ describe('dshSessionApi (Todo 27 session action routing)', () => {
         dshPopupBridge: dshPopupBridgeDouble(),
         upsertDshSessionIntoProjects,
         serverState: { projects: {} },
+        selectedSessionId: { value: 'session-forked' },
       },
     ) as SessionSandbox;
     // Install the doubles through the wiring's own refs (the program's

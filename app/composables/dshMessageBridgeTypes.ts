@@ -161,6 +161,7 @@ export type DshBridgeSessionState = {
   /** Turn running (`turn/start` seen without its `turn/end`). */
   readonly busy?: boolean;
   readonly agentPreset?: string;
+  readonly permissionPreset?: string;
   readonly presetLocked?: boolean;
   readonly planGoalRevision?: number;
   /** Authoritative completion from `turn/end.reason`. */

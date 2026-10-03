@@ -395,6 +395,7 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
         }
       }
       if (op.kind === 'model-selection' && authoritative) mergeSession(sessionId, { modelSelection: op.selection });
+      if (op.kind === 'policy' && op.policy === 'permission-preset' && authoritative) mergeSession(sessionId, { permissionPreset: op.value });
       if (op.kind === 'request' && op.phase === 'context' && authoritative) {
         const previous = sessionStates.get(sessionId)?.usage;
         const model = dshModelLabel(op.provider, op.model);
@@ -468,7 +469,9 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
     const header = isRecord(value.header) ? value.header : {};
     const preset = projections.agentPreset ?? header.agentPreset;
     const modelSelection = isRecord(projections.modelSelection) ? projections.modelSelection : {};
+    const permissions = isRecord(projections.permissions) ? projections.permissions : {};
     mergeSession(sessionId, {
+      permissionPreset: typeof permissions.currentValue === 'string' ? permissions.currentValue : sessionStates.get(sessionId)?.permissionPreset,
       modelSelection: readDshModelRef(modelSelection.next ?? modelSelection.lastUsed),
       agentPreset: typeof preset === 'string' ? preset : undefined,
       planGoalRevision: (sessionStates.get(sessionId)?.planGoalRevision ?? 0) + 1,

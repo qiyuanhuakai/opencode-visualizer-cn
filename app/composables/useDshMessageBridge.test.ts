@@ -322,6 +322,23 @@ it('refreshes plan and goal controls after authoritative records and activation 
   bridge.stop();
 });
 
+it('keeps parent and child permissions separate across events and reconnect snapshots', () => {
+  const { bridge } = createHarness();
+  const parent = new FakeStream('parent-policy');
+  const child = new FakeStream('child-policy');
+  bridge.attachFollow(parent, 'parent');
+  bridge.attachFollow(child, 'child');
+  parent.emit(snapshot('parent', [record('permission/preset', 1, { preset: 'read-only' })], 1));
+  child.emit(snapshot('child', [record('permission/preset', 1, { preset: 'workspace-write' })], 1));
+  child.emit(record('permission/preset', 2, { preset: 'danger-full-access' }));
+  expect(bridge.sessionState('parent')?.permissionPreset).toBe('read-only');
+  expect(bridge.sessionState('child')?.permissionPreset).toBe('danger-full-access');
+  parent.emit({ type: 'snapshot', header: { id: 'parent' }, records: [], cursor: 3, projections: { values: { permissions: { currentValue: 'workspace-write' } } } });
+  expect(bridge.sessionState('parent')?.permissionPreset).toBe('workspace-write');
+  expect(bridge.sessionState('child')?.permissionPreset).toBe('danger-full-access');
+  bridge.stop();
+});
+
 /** Emit a waterfall frame the way the host would: the turn blocks on it. */
 function emitWaterfall(
   harness: Harness,
