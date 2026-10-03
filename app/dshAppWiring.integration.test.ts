@@ -945,6 +945,7 @@ describe('dshSessionApi (Todo 27 session action routing)', () => {
   ].join('\n');
 
   type SessionSandbox = {
+    dshPermissions: { state: { permissionPreset: string } };
     dshSessionApi: {
       renameSession: (sessionId: string, title: string) => Promise<unknown>;
       archiveSession: (sessionId: string) => Promise<unknown>;
@@ -975,7 +976,7 @@ describe('dshSessionApi (Todo 27 session action routing)', () => {
     Object.setPrototypeOf(adapter, DshAdapterDouble.prototype);
     const sandbox = runInNewContext(
       transpile(
-        `${DECLARATIONS}\n;({ dshSessionApi, dshFollowStreams, dshMessageBridge, dshMuxClient });`,
+        `${DECLARATIONS}\n;({ dshSessionApi, dshFollowStreams, dshMessageBridge, dshMuxClient, dshPermissions });`,
       ),
       {
         shallowRef: shallowRefDouble(),
@@ -1054,6 +1055,13 @@ describe('dshSessionApi (Todo 27 session action routing)', () => {
     expect(harness.bridge.history).toHaveLength(1);
     // The fork's archive flag is restored from the authoritative session list.
     expect(outcome).toEqual({ archived: true });
+  });
+
+  it('does not ingest child snapshots into the selected session permissions', async () => {
+    const harness = createSandbox();
+    harness.sandbox.dshPermissions.state.permissionPreset = 'read-only';
+    await harness.sandbox.dshSessionApi.followSession('child-session');
+    expect(harness.sandbox.dshPermissions.state.permissionPreset).toBe('read-only');
   });
 
   it('disposes a session follow stream on request', () => {
@@ -1174,7 +1182,7 @@ describe('dsh lifecycle wiring (Todo 33)', () => {
       `${appVariableDeclaration('dshStatusSnapshot')};dshStatusSnapshot.value;`,
     );
     const bridge = {
-      sessionState: () => ({ busy: true }),
+      sessionState: () => ({ busy: true, permissionPreset: 'workspace-write', sandboxMode: 'workspace-write', approvalPolicy: 'ask' }),
       syncState: () => ({ kind: 'live' }),
       pendingApprovals: () => [{}, {}],
     };

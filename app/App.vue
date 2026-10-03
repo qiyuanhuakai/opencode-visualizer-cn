@@ -8443,7 +8443,7 @@ function dshBootstrapNormalizer(): DshBootstrapNormalizer {
     normalizeSnapshot(snapshot) {
       sessionId = dshSnapshotSessionId(snapshot);
       // The snapshot is also the preset/projection source for Todo 28.
-      dshPermissions.ingestSnapshot(snapshot);
+      if (!selectedSessionId.value || sessionId === selectedSessionId.value) dshPermissions.ingestSnapshot(snapshot);
       const page = readDshHistoryPage(snapshot, address());
       const normalized = normalizeDshHistoryPage({ records: page.records, address: address() });
       return { cursor: page.cursor ?? -1, entries: normalized.entries ?? [] };
@@ -9048,9 +9048,9 @@ const dshStatusSnapshot = computed<DshStatusSnapshot | undefined>(() => {
     followHealth: bridge.syncState(sessionId).kind,
     pendingApprovals: bridge.pendingApprovals().length,
     permissions: {
-      permissionPreset: dshPermissions.state.permissionPreset,
-      sandboxMode: dshPermissions.state.sandboxMode,
-      approvalPolicy: dshPermissions.state.approvalPolicy,
+      permissionPreset: state?.permissionPreset ?? '',
+      sandboxMode: state?.sandboxMode ?? '',
+      approvalPolicy: state?.approvalPolicy ?? '',
     },
     ...(dshStatusDiagnostic.value?.health ? { health: dshStatusDiagnostic.value.health } : {}),
     ...(dshStatusDiagnostic.value?.healthError ? { healthError: dshStatusDiagnostic.value.healthError } : {}),

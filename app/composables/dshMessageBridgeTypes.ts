@@ -162,6 +162,8 @@ export type DshBridgeSessionState = {
   readonly busy?: boolean;
   readonly agentPreset?: string;
   readonly permissionPreset?: string;
+  readonly sandboxMode?: string;
+  readonly approvalPolicy?: string;
   readonly presetLocked?: boolean;
   readonly planGoalRevision?: number;
   /** Authoritative completion from `turn/end.reason`. */

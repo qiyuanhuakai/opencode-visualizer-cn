@@ -396,6 +396,8 @@ export function useDshMessageBridge(options: DshMessageBridgeOptions): DshMessag
       }
       if (op.kind === 'model-selection' && authoritative) mergeSession(sessionId, { modelSelection: op.selection });
       if (op.kind === 'policy' && op.policy === 'permission-preset' && authoritative) mergeSession(sessionId, { permissionPreset: op.value });
+      if (op.kind === 'policy' && op.policy === 'sandbox-mode' && authoritative) mergeSession(sessionId, { sandboxMode: op.value });
+      if (op.kind === 'policy' && op.policy === 'approval-policy' && authoritative) mergeSession(sessionId, { approvalPolicy: op.value });
       if (op.kind === 'request' && op.phase === 'context' && authoritative) {
         const previous = sessionStates.get(sessionId)?.usage;
         const model = dshModelLabel(op.provider, op.model);
