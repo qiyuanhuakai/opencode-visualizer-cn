@@ -36,6 +36,7 @@ export interface UpdateRuntime {
   readonly automaticAppUpdateTarget: AutomaticUpdateTarget | null;
   readonly updater: DesktopAutoUpdater;
   getLatestRelease(): Promise<StableRelease>;
+  prepareAppUpdate?(currentVersion: string | null): Promise<string | null>;
   getBridgeVersion(): Promise<string | null>;
   resolveBridgeLinuxFormat(): Promise<BridgeLinuxFormat>;
   downloadAppUpdate(): Promise<readonly string[]>;

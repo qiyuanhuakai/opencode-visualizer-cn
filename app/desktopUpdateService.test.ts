@@ -128,13 +128,14 @@ describe('desktop update service', () => {
   });
 
   it.each([
-    { platform: 'linux' as const, arch: 'x64' as const, channel: null },
+    { platform: 'linux' as const, arch: 'x64' as const, channel: 'latest' },
     { platform: 'win32' as const, arch: 'arm64' as const, channel: 'latest-arm64' },
   ])(
     'disables downgrade after assigning the real updater channel setter for $platform $arch',
     async ({ platform, arch, channel }) => {
       // Given: electron-updater's real channel setter, which enables downgrades on assignment.
       const updater = new SetterBackedUpdater();
+      updater.channel = 'latest';
 
       // When: the desktop service configures the platform channel.
       createDesktopUpdates(

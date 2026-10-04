@@ -1,3 +1,5 @@
+import { parseUpdateVersion } from './updateVersion.js';
+
 const DEFAULTS = Object.freeze({
   locale: 'en',
   minimizeToTray: false,
@@ -62,15 +64,18 @@ function parseBridgeVersionReport(payload) {
       version: null,
     };
   }
-  const match =
-    typeof payload.version === 'string' && payload.version.length <= MAX_BRIDGE_VERSION_LENGTH
-      ? BRIDGE_VERSION_PATTERN.exec(payload.version)
-      : null;
-  if (!match) throw new TypeError('Invalid bridge version');
-  const version = match[1]
-    .split('.')
-    .map((part) => BigInt(part).toString())
-    .join('.');
+  if (typeof payload.version !== 'string' || payload.version.length > MAX_BRIDGE_VERSION_LENGTH) {
+    throw new TypeError('Invalid bridge version');
+  }
+  const match = BRIDGE_VERSION_PATTERN.exec(payload.version);
+  let version;
+  try {
+    version = match
+      ? match[1].split('.').map((part) => BigInt(part).toString()).join('.')
+      : parseUpdateVersion(payload.version).version;
+  } catch {
+    throw new TypeError('Invalid bridge version');
+  }
   return {
     connectionId: payload.connectionId,
     endpointLocality: payload.endpointLocality,
