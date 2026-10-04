@@ -56,6 +56,51 @@ describe('vis_bridge terminal updater command', () => {
     expect(dependencies.transport.downloadAsset).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['0.8.19', '0.8.20-alpha.1', 'available'],
+    ['0.8.20-alpha.1', '0.8.20-alpha.2', 'available'],
+    ['0.8.20-alpha.2', '0.8.20-alpha.10', 'available'],
+    ['0.8.20-alpha.10', '0.8.20-alpha.2', 'current'],
+    ['0.8.20-alpha.1', '0.8.20', 'available'],
+    ['0.8.20', '0.8.20-alpha.1', 'current'],
+    ['0.8.20-alpha.1', '0.8.20-alpha.1', 'current'],
+    ['0.8.20-alpha.1+build.1', '0.8.20-alpha.1+build.2', 'current'],
+  ])('checks %s against %s without staging an installer', async (currentVersion, latestVersion, kind) => {
+    const release = {
+      version: latestVersion,
+      assets: [{ ...RELEASE.assets[0], name: `VisBridge-${latestVersion}-x64-Linux.deb` }],
+    };
+    const dependencies = { ...harness({ release, interactive: false }), currentVersion };
+
+    await expect(runBridgeUpdate(
+      { command: 'update', check: true, help: false, yes: false }, dependencies,
+    )).resolves.toEqual({ kind, currentVersion, latestVersion });
+
+    expect(dependencies.transport.downloadAsset).not.toHaveBeenCalled();
+    expect(dependencies.assertInstallAllowed).not.toHaveBeenCalled();
+    expect(dependencies.transport.dispose).toHaveBeenCalledOnce();
+  });
+
+  it('downloads and verifies the exact prerelease installer before handoff', async () => {
+    const release = {
+      version: '0.8.20-alpha.2',
+      assets: [{ ...RELEASE.assets[0], name: 'VisBridge-0.8.20-alpha.2-x64-Linux.deb' }],
+    };
+    const dependencies = { ...harness({ release }), currentVersion: '0.8.20-alpha.1' };
+
+    await expect(runBridgeUpdate(
+      { command: 'update', check: false, help: false, yes: true }, dependencies,
+    )).resolves.toEqual({
+      kind: 'handed-off', currentVersion: '0.8.20-alpha.1', latestVersion: '0.8.20-alpha.2',
+    });
+
+    expect(dependencies.transport.downloadAsset).toHaveBeenCalledWith(release.assets[0], expect.any(Function));
+    expect(dependencies.transport.verifyAsset).toHaveBeenCalledWith(
+      '/private/staging/update.deb', release.assets[0], 'a'.repeat(64), 'sha256',
+    );
+    expect(dependencies.handoff).toHaveBeenCalledOnce();
+  });
+
   it('requires --yes for an available update in a non-interactive client before download', async () => {
     const dependencies = harness({ interactive: false });
 

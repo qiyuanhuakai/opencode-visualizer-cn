@@ -282,7 +282,7 @@ vis_bridge config --config /path/to/bridge.json
 在 bridge 所在主机的外部终端中手动更新：
 
 ```bash
-vis_bridge update --check  # 仅查询最新正式版本，不下载或安装
+vis_bridge update --check  # 查询最新公开版本（包含预发布版本），不下载或安装
 vis_bridge update          # 显示更新信息并确认后安装
 vis_bridge upgrade --yes   # update 的别名；非交互使用需显式确认
 ```
@@ -634,7 +634,7 @@ Older configs without `nativeServices` keep the original three services enabled.
 Update manually from an external terminal on the bridge host:
 
 ```bash
-vis_bridge update --check  # Query the latest stable release without downloading or installing
+vis_bridge update --check  # Query the latest published release, including prereleases, without installing
 vis_bridge update          # Show the offer, then confirm installation
 vis_bridge upgrade --yes   # Alias for update; explicit consent for non-interactive use
 ```
