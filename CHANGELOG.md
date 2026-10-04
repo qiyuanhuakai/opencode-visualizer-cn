@@ -4,6 +4,16 @@
 
 ---
 
+## [v0.8.20-alpha.2 released]
+
+### 桌面版与 vis_bridge 预发布更新
+
+- [x] 更新检查支持已公开的 `alpha`、`beta`、`rc` 等预发布版本，排除草稿；按完整 SemVer 比较版本与数字后缀，禁止降级，构建元数据变化不触发更新。
+- [x] 桌面端读取选定发布的 `latest*.yml` 清单，校验清单版本、平台、架构及摘要；修复通道重复设置和关闭后的迟到更新检查。
+- [x] bridge 原生版本探测与桌面 IPC 保留预发布后缀，修复预发布版本无法检查更新及连接版本上报失败（[#159](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/159)）。
+
+---
+
 ## [v0.8.20-alpha.1 released]
 
 ### DSH 会话、文件与模型修复
