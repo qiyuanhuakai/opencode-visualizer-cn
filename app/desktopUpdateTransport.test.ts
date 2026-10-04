@@ -77,7 +77,7 @@ it('verifies automatic artifacts with manifest size and SHA-512', async () => {
 
 it('uses a scoped proxy-aware HTTPS agent for release requests', async () => {
   const server = http.createServer((_request, response) => {
-    response.end(JSON.stringify({ tag_name: 'v1.0.0', draft: false, prerelease: false, assets: [] }));
+    response.end(JSON.stringify([{ tag_name: 'v1.0.0', draft: false, prerelease: false, assets: [] }]));
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();

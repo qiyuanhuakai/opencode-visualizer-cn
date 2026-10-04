@@ -17,6 +17,7 @@ import {
 const COMPONENTS = ['app', 'bridge'];
 const DISPOSE_WAIT_MS = 5_000;
 
+// allow: SIZE_OK — One update transaction coordinates admission, revisions, disposal, and installer handoff.
 export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, injectedRuntime) {
   const runtime = injectedRuntime ?? createUpdateRuntime();
   const automaticApp = app.isPackaged && runtime.automaticAppUpdates;
@@ -60,6 +61,7 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
   const automaticAppCheck = createAutomaticAppCheck({
     automaticUpdate,
     currentVersion: () => state.app.currentVersion,
+    isDisposed: () => disposed,
     publish,
     runtime,
   });
@@ -72,9 +74,9 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
   );
   runtime.updater.autoDownload = false;
   runtime.updater.autoInstallOnAppQuit = false;
-  runtime.updater.allowPrerelease = false;
+  runtime.updater.allowPrerelease = true;
   runtime.updater.channel =
-    runtime.platform === 'win32' && runtime.arch === 'arm64' ? 'latest-arm64' : null;
+    runtime.platform === 'win32' && runtime.arch === 'arm64' ? 'latest-arm64' : 'latest';
   runtime.updater.allowDowngrade = false;
 
   const manualUpdate = createManualUpdate({

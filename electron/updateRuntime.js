@@ -6,7 +6,8 @@ import electronUpdater from 'electron-updater';
 import { detectLinuxPackageFormat } from '../bridge/updatePlatform.js';
 import { bridgeVersionPaths } from './bridgeVersionPaths.js';
 import { findLocalWslBridge, openWslBridgeTerminal } from './updateWsl.js';
-import { automaticAppUpdateTarget, parseInstalledVersion } from './updatePolicy.js';
+import { automaticAppUpdateTarget, isNewerVersion, parseInstalledVersion } from './updatePolicy.js';
+import { automaticUpdateFeed } from './updateFeed.js';
 import { createUpdateTransport, isAllowedUpdateUrl } from './updateTransport.js';
 
 const execFileAsync = promisify(execFile);
@@ -54,6 +55,18 @@ export function createUpdateRuntime() {
     getLatestRelease: () => {
       assertActive();
       return transport.getLatestRelease();
+    },
+    prepareAppUpdate: async (currentVersion) => {
+      assertActive();
+      const release = await transport.getLatestRelease();
+      assertActive();
+      if (!isNewerVersion(release.version, currentVersion)) return null;
+      const feed = automaticUpdateFeed(release, process.platform, process.arch);
+      autoUpdater.setFeedURL(feed);
+      autoUpdater.channel = feed.channel;
+      autoUpdater.allowPrerelease = true;
+      autoUpdater.allowDowngrade = false;
+      return release.version;
     },
     getBridgeVersion: () => {
       assertActive();

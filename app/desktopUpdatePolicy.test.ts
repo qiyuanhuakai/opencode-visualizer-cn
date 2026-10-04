@@ -142,14 +142,18 @@ describe('desktop update release policy', () => {
     );
   });
 
-  it('rejects prerelease versions and ambiguous automatic file lists', () => {
+  it('accepts exact prerelease artifacts and rejects ambiguous automatic file lists', () => {
     // Given: an exact artifact paired with unstable or extra manifest metadata.
     const exact = automaticInfo(['Vis-1.2.3-x64-Windows.exe']);
 
-    // When/Then: neither a prerelease version nor an adjacent bridge file is accepted.
-    expect(() =>
-      selectAutomaticAppFile({ ...exact, version: '1.2.3-rc.1' }, 'win32', 'x64', 'nsis'),
-    ).toThrow('stable');
+    // When/Then: a prerelease requires matching filenames and valid integrity metadata.
+    const prerelease = { ...exact, version: '1.2.3-rc.1', files: exact.files.map((file) => ({
+      ...file, url: 'Vis-1.2.3-rc.1-x64-Windows.exe',
+    })) };
+    expect(selectAutomaticAppFile(prerelease, 'win32', 'x64', 'nsis').name)
+      .toBe('Vis-1.2.3-rc.1-x64-Windows.exe');
+    expect(() => selectAutomaticAppFile({ ...exact, version: '1.2.3-rc.1' }, 'win32', 'x64', 'nsis'))
+      .toThrow(/automatic update artifact/iu);
     expect(() =>
       selectAutomaticAppFile(
         { ...exact, files: [...exact.files, exact.files[0]] },

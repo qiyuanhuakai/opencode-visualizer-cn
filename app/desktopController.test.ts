@@ -138,7 +138,7 @@ describe('desktop controller', () => {
         {
           connectionId: 'connection-1',
           endpointLocality: 'local',
-          version: '1.2.3-rc.1',
+          version: '1.2.3-rc.01',
         },
       ),
     ).rejects.toThrow('Invalid bridge version');
@@ -166,6 +166,16 @@ describe('desktop controller', () => {
       [{ connectionId: 'connection-2', endpointLocality: 'unknown', version: null }],
     ]);
   });
+
+  it.each(['v0.8.20-alpha.1', '0.8.20-rc.2+build.7'])(
+    'preserves prerelease bridge version %s through the desktop controller', async (version) => {
+      const { controller, updates } = setup();
+      await controller.reportBridgeVersion({ connectionId: 'alpha', endpointLocality: 'local', version });
+      expect(updates.reportBridgeVersion).toHaveBeenCalledWith({
+        connectionId: 'alpha', endpointLocality: 'local', version: version.replace(/^v/u, ''),
+      });
+    },
+  );
 
   it('rejects bridge reports without explicit endpoint locality', async () => {
     const { controller, updates } = setup();

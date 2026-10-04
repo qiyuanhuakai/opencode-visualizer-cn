@@ -31,7 +31,7 @@ export function updateUsage() {
   vis_bridge upgrade [--check] [--yes|-y]
 
 Options:
-  --check              Check the latest stable release without downloading or installing.
+  --check              Check the latest release, including prereleases, without downloading or installing.
   --yes, -y            Confirm an available update without prompting.
   --help, -h           Show this help.`;
 }
@@ -41,14 +41,14 @@ export async function runBridgeUpdate(options, injected = {}) {
   let stagedPath = null;
   let handedOff = false;
   try {
-    dependencies.output('Checking the latest stable vis_bridge release...');
+    dependencies.output('Checking the latest vis_bridge release (including prereleases)...');
     const release = await dependencies.transport.getLatestRelease();
     const result = {
       currentVersion: dependencies.currentVersion,
       latestVersion: release.version,
     };
     if (!isNewerVersion(release.version, dependencies.currentVersion)) {
-      dependencies.output(`vis_bridge ${dependencies.currentVersion} is current; latest stable is ${release.version}.`);
+      dependencies.output(`vis_bridge ${dependencies.currentVersion} is current; latest release is ${release.version}.`);
       return { kind: 'current', ...result };
     }
     const previewLinuxFormat = await resolveLinuxFormat(dependencies, false);
