@@ -26,6 +26,7 @@ type InputPanelEventProps = {
   onStatusError?: (message: string) => void;
   onTogglePlan?: (enabled: boolean) => void;
   'onUpdate:messageInput'?: (value: string) => void;
+  'onUpdate:selectedMode'?: (value: string) => void;
 };
 type InputPanelMountProps = InputPanelProps & InputPanelEventProps;
 export type InputPanelTestOverrides = Partial<InputPanelMountProps>;

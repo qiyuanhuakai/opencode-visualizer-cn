@@ -228,3 +228,15 @@ it('resolves all Codex collaboration receiver threads without requiring OpenCode
     { sessionId: 'child-b', label: 'child-b' },
   ]);
 });
+
+it('keeps DSH subagent tools on their original card across later turns', () => {
+  const first = makeTaskPart('first', undefined, 'pending');
+  first.tool = 'subagent';
+  first.metadata = { source: 'dsh-web', sessionIds: ['child-a'] };
+  const second = makeTaskPart('second', undefined, 'pending');
+  second.tool = 'subagent';
+  second.metadata = { source: 'dsh-web', sessionIds: ['child-b'] };
+  const meta = { 'child-a': { parentID: CURRENT_SESSION, label: 'A' }, 'child-b': { parentID: CURRENT_SESSION, label: 'B' } };
+  expect(resolveThreadSubagentSessions([first], CURRENT_SESSION, meta).map(x => x.sessionId)).toEqual(['child-a']);
+  expect(resolveChildOwners([{ rootId: 'first', parts: [first] }, { rootId: 'second', parts: [second] }], CURRENT_SESSION, meta)).toEqual({});
+});

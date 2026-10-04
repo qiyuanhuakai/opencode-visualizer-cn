@@ -37,7 +37,7 @@ export function resolveThreadSubagentSessions(
   if (!sessionId) return [];
   const seen = new Map<string, string>();
   for (const part of threadParts) {
-    if (part.type !== 'tool' || part.tool !== 'task') continue;
+    if (part.type !== 'tool' || (part.tool !== 'task' && !(part.tool === 'subagent' && part.metadata?.source === 'dsh-web'))) continue;
     const state = part.state;
     if (
       state.status === 'pending' &&
@@ -87,8 +87,9 @@ export function resolveChildOwners(
   const ownersByDescription = new Map<string, Set<string>>();
   threads.forEach(({ rootId, parts }) => {
     parts.forEach((part) => {
-      if (part.type !== 'tool' || part.tool !== 'task') return;
-      const metadata = 'metadata' in part.state ? part.state.metadata : undefined;
+      if (part.type !== 'tool' || (part.tool !== 'task' && !(part.tool === 'subagent' && part.metadata?.source === 'dsh-web'))) return;
+      const metadata = part.metadata?.source === 'dsh-web'
+        ? part.metadata : 'metadata' in part.state ? part.state.metadata : undefined;
       const ids = Array.isArray(metadata?.sessionIds) ? metadata.sessionIds : [metadata?.sessionId];
       for (const id of ids) {
         if (typeof id === 'string' && id.trim()) exactIds.add(id.trim());

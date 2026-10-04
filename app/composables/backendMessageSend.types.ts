@@ -132,6 +132,8 @@ export type BackendMessageSendParams = {
   readonly dshSendApi?: DshSendApi;
   /** Optimistic busy-dot dispatch after a dsh prompt is accepted (mirrors onKimiWebPromptRunning). */
   readonly onDshPromptRunning?: (sessionId: string) => void;
+  readonly onDshExportSession?: (sessionId: string, signal: AbortSignal) => Promise<void>;
+  readonly onDshFeedback?: (sessionId: string) => void;
   readonly ensureConnectionReady: (action: string) => boolean;
   readonly translate: (key: string, params?: Record<string, unknown>) => string;
   readonly toErrorMessage: (error: unknown) => string;

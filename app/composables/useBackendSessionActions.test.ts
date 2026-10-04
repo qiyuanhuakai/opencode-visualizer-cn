@@ -456,6 +456,19 @@ function createDshApi(overrides: Partial<DshSessionActionApi> = {}) {
 }
 
 describe('useBackendSessionActions dsh', () => {
+  it('forks a DSH card at its prompt boundary and selects the returned session', async () => {
+    const { api } = createDshApi();
+    const resolveForkSeq = vi.fn(async () => 24);
+    const openCodeFork = vi.fn();
+    const { actions, params } = createSessionActionsFixture({ activeBackendKind: 'dsh',
+      dshSessionApi: { ...api, resolveForkSeq }, openCodeApi: { forkSession: openCodeFork } });
+    await actions.handleForkMessage({ sessionId: 'session-1', messageId: 'real-user-id' });
+    expect(resolveForkSeq).toHaveBeenCalledWith('session-1', 'real-user-id');
+    expect(api.forkSession).toHaveBeenCalledWith('session-1', 24);
+    expect(params.switchSessionSelection).toHaveBeenCalledWith('proj-1', 'fork-1');
+    expect(openCodeFork).not.toHaveBeenCalled();
+  });
+
   it('Given a dsh session, When renameSession runs, Then it writes the title through the dsh seam and not OpenCode', async () => {
     const projects = createDshProjects();
     const { api } = createDshApi();

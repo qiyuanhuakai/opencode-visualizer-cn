@@ -47,8 +47,8 @@ function createPreflight(overrides: Partial<SendPreflight> = {}): SendPreflight 
     selectedModel: 'deepseek-official/deepseek-flash',
     selectedMode: 'build',
     selectedThinking: undefined,
-    modelProvider: undefined,
-    modelId: undefined,
+    modelProvider: 'deepseek-official',
+    modelId: 'deepseek-flash',
     codexDirectory: '',
     slash: null,
     commandMatch: null,
@@ -62,6 +62,7 @@ function currentGuard(): RequestGuard {
 }
 
 type DshSendApiFake = DshSendApi & {
+  selectModel: ReturnType<typeof vi.fn>;
   prompt: ReturnType<typeof vi.fn>;
   abortSession: ReturnType<typeof vi.fn>;
   sessionIdForCwd?: ReturnType<typeof vi.fn>;
@@ -71,6 +72,7 @@ type DshSendApiFake = DshSendApi & {
 
 function createApi(): DshSendApiFake {
   return {
+    selectModel: vi.fn().mockResolvedValue({ selected: { provider: 'deepseek-official', model: 'deepseek-flash' } }),
     prompt: vi.fn().mockResolvedValue({ accepted: true }),
     abortSession: vi.fn().mockResolvedValue(undefined),
   };
@@ -327,59 +329,45 @@ describe('no available session', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// First user message: model.presetName is written as an EXPLICIT empty string
-// (the key is present, never omitted).
-// ---------------------------------------------------------------------------
-
-describe('first user message model.presetName', () => {
-  it('writes model.presetName as an explicit empty string on the first user message', async () => {
+describe('native model selection before prompt', () => {
+  it('waits for the exact provider, model and reasoning selection before sending', async () => {
     const api = createApi();
-
-    await runDshSend(createParams(), createPreflight(), currentGuard(), api, {
-      firstUserMessage: true,
-      newRequestId: () => 'req-first',
-    });
-
-    const model = emittedInner(api).model as Record<string, unknown>;
-    expect(model).toBeDefined();
-    expect(Object.hasOwn(model, 'presetName')).toBe(true);
-    expect(model.presetName).toBe('');
-    expect(model.provider).toBe('');
-  });
-
-  it('omits the model key entirely on follow-up messages', async () => {
-    const api = createApi();
-
-    await runDshSend(createParams(), createPreflight(), currentGuard(), api, {
-      firstUserMessage: false,
-      newRequestId: () => 'req-next',
-    });
-
+    const selection = deferred<unknown>();
+    api.selectModel.mockReturnValue(selection.promise);
+    const sending = runDshSend(createParams(), createPreflight({ selectedModel: 'gateway/vendor/model:latest', modelProvider: 'gateway', modelId: 'vendor/model:latest', selectedThinking: 'high' }), currentGuard(), api);
+    await vi.waitFor(() => expect(api.selectModel).toHaveBeenCalledWith({ sessionId: SESSION, provider: 'gateway', model: 'vendor/model:latest', reasoningEffort: 'high' }));
+    expect(api.prompt).not.toHaveBeenCalled();
+    selection.resolve({});
+    await sending;
+    expect(api.prompt).toHaveBeenCalledOnce();
     expect(Object.hasOwn(emittedInner(api), 'model')).toBe(false);
   });
 
-  it('asks the api whether the session is blank when the caller does not decide', async () => {
+  it('does not send with the old model when native selection fails', async () => {
     const api = createApi();
-    api.isBlankSession = vi.fn().mockResolvedValue(true);
-
-    await runDshSend(createParams(), createPreflight(), currentGuard(), api, {
-      newRequestId: () => 'req-blank',
-    });
-
-    expect(api.isBlankSession).toHaveBeenCalledWith(SESSION);
-    expect((emittedInner(api).model as Record<string, unknown>).presetName).toBe('');
+    api.selectModel.mockRejectedValue(new Error('Model unavailable'));
+    await expect(runDshSend(createParams(), createPreflight(), currentGuard(), api)).rejects.toThrow('Model unavailable');
+    expect(api.prompt).not.toHaveBeenCalled();
   });
 
-  it('omits the model key when the api reports a non-blank session', async () => {
+  it('does not send after the session changes while selection is pending', async () => {
     const api = createApi();
-    api.isBlankSession = vi.fn().mockResolvedValue(false);
+    const selection = deferred<unknown>();
+    api.selectModel.mockReturnValue(selection.promise);
+    let current = true;
+    const sending = runDshSend(createParams(), createPreflight(), { isCurrent: () => current }, api);
+    await vi.waitFor(() => expect(api.selectModel).toHaveBeenCalledOnce());
+    current = false;
+    selection.resolve({});
+    expect(await sending).toEqual({ kind: 'stale' });
+    expect(api.prompt).not.toHaveBeenCalled();
+  });
 
-    await runDshSend(createParams(), createPreflight(), currentGuard(), api, {
-      newRequestId: () => 'req-notblank',
-    });
-
-    expect(Object.hasOwn(emittedInner(api), 'model')).toBe(false);
+  it('rejects a missing selected route instead of silently using the native default', async () => {
+    const api = createApi();
+    await expect(runDshSend(createParams(), createPreflight({ modelProvider: undefined, modelId: undefined }), currentGuard(), api)).rejects.toThrow();
+    expect(api.selectModel).not.toHaveBeenCalled();
+    expect(api.prompt).not.toHaveBeenCalled();
   });
 });
 
@@ -470,4 +458,23 @@ describe('session/prompt wire shape', () => {
     expect(result).toEqual({ kind: 'stale' });
     expect(api.prompt).not.toHaveBeenCalled();
   });
+});
+
+
+describe('native DSH slash routing', () => {
+  it.each(['/plan', '/plan off', '/plan implement tests', '/goal show', '/goal edit ship tests', '/goal pause', '/goal resume', '/goal clear'])(
+    'executes %s as a command without submitting a prompt', async (line) => {
+      // Given: a selected session and a native command handler.
+      const api = createApi();
+      const executeCommand = vi.fn().mockResolvedValue({ kind: 'success', text: 'Updated' });
+      api.executeCommand = executeCommand;
+      const [name = '', ...args] = line.slice(1).split(' ');
+      // When: the composer submits the native slash command.
+      const result = await runDshSend(createParams(), createPreflight({ text: line, slash: { name, arguments: args.join(' ') } }), currentGuard(), api);
+      // Then: only command execution occurs, with feedback preserved.
+      expect(executeCommand).toHaveBeenCalledWith(SESSION, line);
+      expect(api.prompt).not.toHaveBeenCalled();
+      expect(result).toEqual({ kind: 'command', result: { kind: 'success', text: 'Updated' } });
+    },
+  );
 });

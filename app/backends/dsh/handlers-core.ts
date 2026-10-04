@@ -31,6 +31,7 @@ import {
 } from './parts';
 import type { DshNormalizeOp } from './ops';
 import type { DshSessionWireEvent } from './types';
+import { dshAttemptUsage, readDshTokenUsage } from './tokenUsage';
 
 export type DshHandler = (core: DshCore, event: DshSessionWireEvent, ops: DshNormalizeOp[]) => void;
 
@@ -40,6 +41,20 @@ const dataOf = (event: DshSessionWireEvent): Record<string, unknown> =>
 function handleTurnStart(core: DshCore, event: DshSessionWireEvent, ops: DshNormalizeOp[]) {
   const data = dataOf(event);
   const turn = asNumber(data.turn) ?? 0;
+  core.activeTurn = turn;
+  if (!core.turnPermissionPresets.has(turn)) core.turnPermissionPresets.set(turn, core.permissionPreset);
+  const queuedParent = core.pendingUserMessageIds[0];
+  if (!core.turnParents.has(turn)) {
+    const parent = core.pendingUserMessageIds.shift() ?? core.lastUserMessageId;
+    if (parent) core.turnParents.set(turn, parent);
+  }
+  const parentId = core.turnParents.get(turn);
+  const parentMessage = parentId ? core.userMessages.get(parentId) : undefined;
+  if (parentMessage && parentId === queuedParent && parentMessage.permissionPreset !== (core.turnPermissionPresets.get(turn) || undefined)) {
+    const message = { ...parentMessage, permissionPreset: core.turnPermissionPresets.get(turn) || undefined };
+    core.userMessages.set(message.id, message);
+    ops.push({ kind: 'message', message });
+  }
   ensureGroup(core, core.sessionId, turn, event.time, ops);
   ops.push({ kind: 'turn', phase: 'started', sessionId: core.sessionId, turn, time: event.time });
 }
@@ -108,6 +123,7 @@ function handleTurnEnd(core: DshCore, event: DshSessionWireEvent, ops: DshNormal
 
 function handleStepStart(core: DshCore, event: DshSessionWireEvent, ops: DshNormalizeOp[]) {
   const data = dataOf(event);
+  ensureGroup(core, core.sessionId, asNumber(data.turn) ?? 0, event.time, ops, asNumber(data.step) ?? 1);
   ops.push({
     kind: 'step',
     phase: 'started',
@@ -134,17 +150,26 @@ function handleStepEnd(core: DshCore, event: DshSessionWireEvent, ops: DshNormal
 function handleUserMessage(core: DshCore, event: DshSessionWireEvent, ops: DshNormalizeOp[]) {
   const data = dataOf(event);
   const messageId = asString(data.id);
-  if (!messageId || core.appliedMessages.has(messageId)) return;
-  core.appliedMessages.add(messageId);
+  if (!messageId) return;
   const source = isRecord(data.source) ? data.source : {};
   const sourceKind = asString(source.kind) || 'user';
+  if (sourceKind === 'user') {
+    core.lastUserMessageId = messageId;
+    core.pendingUserMessageIds = core.pendingUserMessageIds.filter((id) => id !== messageId);
+    core.turnParents.set(core.activeTurn, messageId);
+    for (const group of core.groups.values()) {
+      if (group.turn === core.activeTurn) ops.push({ kind: 'message', message: buildMessage(core, group) });
+    }
+  }
+  if (core.appliedMessages.has(messageId)) return;
+  core.appliedMessages.add(messageId);
   // dsh injects non-prompt `user/message` records (source.kind "runtime-context",
   // "skill-catalog") between the real prompt records. Only a genuine user
   // submission renders; the id stays recorded above so replay dedup is kept.
   if (sourceKind !== 'user') return;
   const content = asArray(data.content);
   const time = event.time;
-  ops.push({ kind: 'message', message: userMessageOf(core, core.sessionId, messageId, time) });
+  ops.push({ kind: 'message', message: userMessageOf(core, core.sessionId, messageId, time, core.turnPermissionPresets.get(core.activeTurn) ?? core.permissionPreset) });
   const part = {
     id: `${messageId}:text`,
     sessionID: core.sessionId,
@@ -201,10 +226,12 @@ function handleAssistantMessage(core: DshCore, event: DshSessionWireEvent, ops: 
   const unchanged = core.sealedGroups.has(key)
     && aggregate(group.text) === text
     && aggregate(group.reasoning) === reasoning;
+  const usage = dshAttemptUsage(data);
+  if (usage) group.usageByAttempt.set(group.usageAttempt, usage);
   group.text = { text, chunks: new Map(), extras: [] };
   group.reasoning = { text: reasoning, chunks: new Map(), extras: [] };
   core.sealedGroups.add(key);
-  if (unchanged) return;
+  if (unchanged && !usage) return;
   ops.push({ kind: 'message', message: buildMessage(core, group) });
   ops.push({ kind: 'part', part: textPartOf(core, group) });
   if (reasoning) ops.push({ kind: 'part', part: reasoningPartOf(core, group) });
@@ -220,7 +247,15 @@ function handleAssistantAttempt(core: DshCore, event: DshSessionWireEvent, ops: 
   const turn = asNumber(data.turn) ?? 0;
   const group = ensureGroup(core, core.sessionId, turn, event.time, ops, asNumber(data.step) ?? 1);
   applyStreamChunks(core, group, asArray(data.stream), event.time, ops);
+  const usage = dshAttemptUsage(data);
+  if (usage) group.usageByAttempt.set(group.usageAttempt, usage);
   ops.push({ kind: 'message', message: buildMessage(core, group) });
+}
+
+function handleRetryStarted(core: DshCore, event: DshSessionWireEvent, ops: DshNormalizeOp[]) {
+  const data = dataOf(event);
+  const group = ensureGroup(core, core.sessionId, asNumber(data.turn) ?? 0, event.time, ops, asNumber(data.step) ?? 1);
+  group.usageAttempt += 1;
 }
 
 function applyStreamChunks(
@@ -255,6 +290,14 @@ function applyChunk(
   const chunkKey = `${key}|${index}`;
   if (core.sealedGroups.has(key)) {
     core.stats.staleDeltaCount += 1;
+    return;
+  }
+  if (type === 'usage') {
+    const usage = readDshTokenUsage(chunk.usage);
+    if (usage) {
+      group.usageByAttempt.set(group.usageAttempt, usage);
+      ops.push({ kind: 'message', message: buildMessage(core, group) });
+    }
     return;
   }
   if (type === 'text-delta') {
@@ -413,7 +456,7 @@ export const CORE_HANDLERS: Record<string, DshHandler> = {
   'system/message': handleSystemMessage,
   'assistant/message': handleAssistantMessage,
   'assistant/attempt': handleAssistantAttempt,
+  'llm/retry-started': handleRetryStarted,
   'tool/call': handleToolCall,
   'tool/result': handleToolResult,
 };
-

@@ -1,8 +1,9 @@
 <template>
   <div ref="rootEl" class="code-renderer-content">
     <div ref="viewerBodyEl" class="viewer-body" @mousedown="onMouseDown" @scroll="onScroll">
-      <div v-if="streamError" class="stream-error">{{ streamError }}</div>
-      <div v-if="showLoading" class="viewer-loading">{{ t('common.loading') }}</div>
+      <div v-if="renderFailure" class="stream-error" role="alert">{{ renderFailure }}</div>
+      <pre v-if="renderFailure && !props.streaming" class="code-fallback" :class="{ 'wrap-soft': wrapsCode }">{{ props.fileContent }}</pre>
+      <div v-else-if="showLoading" class="viewer-loading">{{ t('common.loading') }}</div>
       <div v-else-if="props.streaming && streamingRenderParams && !streamDone" ref="streamContainerRef" class="code-scroll-content" />
       <div
         v-else-if="useVirtualScroll"
@@ -154,7 +155,7 @@ const streamingRenderParams = computed<StreamCodeRenderParams | null>(() => {
   };
 });
 
-const { html: renderedHtml } = useCodeRender(
+const { html: renderedHtml, error: renderError } = useCodeRender(
   computed(() => (props.streaming ? null : renderParams.value)),
 );
 
@@ -165,6 +166,8 @@ const {
   done: streamDone,
   error: streamError,
 } = useStreamCodeRender(streamingRenderParams);
+
+const renderFailure = computed(() => props.streaming ? streamError.value : renderError.value);
 
 watch(streamContainerRef, (el) => {
   streamContainer.value = el;
@@ -680,6 +683,7 @@ onBeforeUnmount(() => {
 });
 
 const showLoading = computed(() => {
+  if (renderFailure.value) return false;
   if (props.streaming) {
     if (streamDone.value || streamRenderedHtml.value) return false;
     if (streamingRenderParams.value) return false;
@@ -732,6 +736,17 @@ const showLoading = computed(() => {
 
 .code-renderer-content :deep(.code-row.line-highlight) {
   background: rgba(148, 163, 184, 0.15);
+}
+
+.code-fallback {
+  margin: 0;
+  font: inherit;
+  white-space: pre;
+}
+
+.code-fallback.wrap-soft {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .viewer-loading {

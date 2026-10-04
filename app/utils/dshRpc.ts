@@ -26,11 +26,9 @@
  *   - results containing `Uint8Array` fields arrive as `multipart/form-data`:
  *     a `metadata` part holding the envelope JSON plus raw `bytes-N` parts.
  *
- * Not probed / not integrated: no live multipart endpoint has been exercised.
- * `parseDshMultipartResponse` is a defensive parser validated against
- * SYNTHETIC fixtures only; when the first real attachment endpoint is wired
- * up, re-capture the wire body and extend `app/utils/dshRpc.test.ts` with the
- * real fixture (same convention as `app/backends/dsh/fixtures.ts`).
+ * `workspaceFiles/readBytes` is integrated and verified against live multipart
+ * metadata plus the raw bytes attachment. Parser boundary cases remain covered
+ * by synthetic fixtures in `app/utils/dshRpc.test.ts`.
  */
 
 import {
@@ -369,6 +367,14 @@ export function parseDshServerResponseValue(
   value: unknown,
   expectedRpcId?: string,
 ): DshServerResponse {
+  // DSH serializes successful void methods without a value property.
+  // Normalize that wire representation to the JSON null returned by this client.
+  if (value && typeof value === 'object' && !Array.isArray(value) && 'result' in value) {
+    const result = value.result;
+    if (result && typeof result === 'object' && !Array.isArray(result) && 'ok' in result && result.ok === true && !Object.hasOwn(result, 'value')) {
+      value = { ...value, result: { ...result, value: null } };
+    }
+  }
   if (!isDshServerResponse(value)) {
     throw new DshWireParseError(
       'bad-value',
@@ -680,7 +686,7 @@ export type DshRpcClient = {
     args?: Record<string, DshJsonValue>,
     options?: DshRpcCallOptions,
   ): Promise<DshJsonValue>;
-  /** Unary call for attachment endpoints: `{metadata, bytes}` (synthetic-fixture parser). */
+  /** Unary call for attachment endpoints: `{metadata, bytes}`. */
   callMultipart(
     namespace: string,
     method: string,

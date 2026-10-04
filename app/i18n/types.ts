@@ -453,6 +453,7 @@ export interface LocaleMessages {
       account: string;
       accountSignedOut: string;
       accountSignedIn: string;
+      permissionPresetGuidance: string;
       accountGuidanceLabel: string;
       accountGuidance: string;
       version: string;
@@ -668,6 +669,7 @@ export interface LocaleMessages {
     selectPermissionMode: string;
     selectVariant: string;
     agentTitle: string;
+    dshPresetLocked: string;
     modelTitle: string;
     permissionModeTitle: string;
     planModeTitle: string;
@@ -696,6 +698,42 @@ export interface LocaleMessages {
     suppressWindows: {
       suppressed: string;
       suppress: string;
+    };
+  };
+  dsh: {
+    providers: {
+      restoreModels: string;
+      reasoning: string;
+      reasoningEfforts: string;
+      inheritReasoning: string;
+      disableReasoning: string;
+      customReasoning: string;
+      reasoningHint: string;
+      reasoningWire: string;
+      offWire: string;
+      defaultModels: string;
+      discoverModels: string;
+      discoveringModels: string;
+      discoveryFailed: string;
+      searchModels: string;
+      noModels: string;
+      modelAdded: string;
+      selectModels: string;
+      addSelected: string;
+      modelDetails: string;
+      maxTokens: string;
+      inputTypes: string;
+      textRequired: string;
+      imageInput: string;
+      provider: string;
+      displayName: string;
+      protocol: string;
+      credentialRef: string;
+      default: string;
+      readonly: string;
+      invalidModels: string;
+      conflict: string;
+      key: { keep: string; replace: string; remove: string };
     };
   };
   kimiWeb: {

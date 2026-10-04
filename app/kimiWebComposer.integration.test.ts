@@ -181,13 +181,13 @@ describe('kimi-web composer integration', () => {
     expect(remember).toHaveBeenCalledWith('yolo');
     expect(persist).toHaveBeenCalledOnce();
   });
-  it('kimi mounts ready permission options and switches after thinking', () => {
+  it('kimi mounts ready permission options with independent modes after primary selection', () => {
     expect(APP_SOURCE).toContain('kimiWebAgentModeOptions()');
     expect(APP_SOURCE).toMatch(
-      /activeBackendKind === 'kimi-web'\s*\? kimiWebAgentOptions\s*:\s*agentOptions/,
+      /activeBackendKind === 'kimi-web'\s*\? kimiWebAgentOptions\s*:\s*dshComposerClient\s*\? dshPermissionControls\.agentOptions\.value\s*:\s*agentOptions/,
     );
     expect(APP_SOURCE).toMatch(
-      /<template #after-thinking>[\s\S]*v-if="activeBackendKind === 'codex'"[\s\S]*v-else-if="activeBackendKind === 'kimi-web'"[\s\S]*<KimiWebComposerModes/,
+      /<template #after-agent>[\s\S]*<KimiWebComposerModes[\s\S]*v-if="activeBackendKind === 'kimi-web'"[\s\S]*<\/template>\s*<template #after-thinking>/,
     );
     expect(APP_SOURCE).toMatch(/kimiWebAgentOptions\.value\.length > 0/);
     expect(APP_SOURCE).not.toContain('kimiWebAgentOptions.value.length === 3');
@@ -255,7 +255,9 @@ describe('kimi-web composer integration', () => {
     expect(APP_SOURCE).toMatch(
       /activeBackendKind === 'codex'\s*\? codexAgentOptions\s*:\s*activeBackendKind === 'kimi-web'/,
     );
-    expect(APP_SOURCE).toContain(':agent-picker-state="agentPickerState"');
+    expect(APP_SOURCE).toContain(
+      ':agent-picker-state="dshComposerClient ? (dshPermissionControls.loading.value ? \'loading\' : dshPermissionControls.agentOptions.value.length ? \'ready\' : \'unsupported\') : agentPickerState"',
+    );
   });
 
   it('tower switch is disabled without the experimental flag and enabled with it', async () => {

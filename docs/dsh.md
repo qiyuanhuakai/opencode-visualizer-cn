@@ -344,8 +344,10 @@ Host → 客户端：
 | `session/openWorkspacePath` | unary | `{request:{...}}` | ➖ |
 | `session/workspacePathApplications` | unary | 无参 | ➖ |
 | `session/projections` | unary | `{request:{...}}` | ➖ |
-| `session/skills/list` | unary | `{_request:{agentId?}}` | ❌ **404 not found**（agent 作用域服务未激活时端点不存在） |
-| `session/fileReferences/list` | unary | `{agentId, query}` | ❌ **404 not found**（同上） |
+| `skills/list` | unary | `{request:{sessionId}}` | ✅ 当前会话技能目录 `{skills:[{name,description,path?,modelInvocable}]}` |
+| `fileReferences/list` | unary | `{agentId, query}` | ✅ 文件引用数组 |
+| `pluginManager/listPlugins` | unary | `{}` | ✅ 插件数组，含 entryId、moduleName、enabled、fiberPhase、meta、patchId 或 readOnlyReason |
+| `pluginInventory/list` | unary | `{}` | ✅ entries、agentPresets、managementAvailable |
 
 ### 7.2 `workspace` + `directoryPicker`（14）
 
@@ -410,7 +412,7 @@ Host → 客户端：
 | `workspaceFiles/list` | unary | `{workspaceFileScopeId(=SessionId), path}` | ✅ `{path, entries:[{name,type,size}], truncated}` |
 | `workspaceFiles/stat` | unary | `{workspaceFileScopeId, path}` | ✅ `{absolutePath, version, bytes}` |
 | `workspaceFiles/read` | unary | `{workspaceFileScopeId, path, range:{offset?,limit?}}` | ✅ `{absolutePath, version, bytes, offset, text, lines, eof}` |
-| `workspaceFiles/readBytes` | unary | `{workspaceFileScopeId, path, options:{baseFile?, range?}}` | ➖ |
+| `workspaceFiles/readBytes` | unary | `{workspaceFileScopeId, path, options:{baseFile?, range?}}` | ✅ 完整文件通过 multipart 字节附件读取；Vis 文本预览保留 UTF-8 和末尾换行，二进制使用 base64 |
 | `workspaceFiles/changes` | **stream** | `{workspaceFileScopeId, ...}` | ⚠️ 形态订正（Task 6 实测）：经 HTTP 报 `signature-invalid`、经 mux 正常出帧，**是 stream 不是 unary**（初版未标形态） |
 
 ### 7.8 特殊端点
@@ -529,7 +531,7 @@ follow 流 records（seq 3→17）：
 | WS mux + `$events` + `session/follow` + `workspace/follow` | ✅ 可用 | ready/emit/waterfall 帧、快照+增量均验证；跨连接 streamId 可复用、clientId 每连接一新、`$events` 不补送（Todo 7，R8–R11） |
 | stream 方法经 HTTP 调用 | ❌ 不支持 | 必须走 mux；Task 6 对 `job/list`、`workspaceFiles/changes` 双向确认 |
 | 平铺 payload | ❌ 不支持（0.2.0-rc.2） | 必须 `{args:{...}}`；Task 6 全 `{args:{…}}` 复测通过，Todo 25 实测平铺直接 `gateway/arguments-invalid` |
-| `session/skills/list`、`session/fileReferences/list` | ❌ 404 | agent 作用域服务未激活（无活跃 agent 时端点不存在）；Task 6 复现 http-404 |
+| `session/skills/list`、`session/fileReferences/list` | ❌ 404 | 旧探测使用错误命名空间；正确端点为 `skills/list`、`fileReferences/list`，不可由此推断不支持 |
 | `workspace/initializeDefault` | ⚠️ 环境相关 | 无系统 Documents 目录时报 `gateway/internal`；Task 6 在 Linux 桌面环境实测 **200 ok**（初版结论分歧，属环境差异） |
 | `workspace/directoryPicker/list` | ❌ http-404 | Task 6 实测（初版未探测） |
 | `workspaceFiles/changes` | ⚠️ stream | 经 HTTP 报 `signature-invalid`、经 mux 出帧（Task 6 实测订正形态） |
@@ -645,16 +647,34 @@ dsh web                                        # 或 web-mount：GUI 与 /acp �
 | `credentials/set` 写入 API key 后重放 prompt | 已知限制（降级） | `DEEPSEEK_API_KEY` 缺席（`task-36/00-run-context.txt`、`degraded-items.md` 表头）；vis 不代用户写 DeepSeek 凭据，凭据由 dsh 运行环境提供；缺 key 的错误路径已实测：`live/18-missing-credential.txt`（L09/L10） | 在带 key 的环境发 1 条 prompt，断言 `turn/end.reason.kind="completed"` + `assistant/message` 全文 |
 | `terminal/create` + `terminal/follow`（dsh 自有 PTY 全链路） | 已排除（范围外） | Shell 走 bridge PTY（Metis #15），dsh `terminal/*` 端点不接；PTY 目录可达已实测：`live/20-terminal-shell.txt`（L13） | 若改为消费 dsh PTY，先补 `request` 结构探测 |
 | `session/control` 流语义 | 已实测（开流与 baseline）+ 已排除（上行控制帧） | Todo 6 探针打开 `session/control` 并捕获 baseline 帧（`.omo/evidence/dsh-web-adapt/task-6/degraded-capture-record.md` "What WAS verified"）；上行控制帧 vis 不发 | 需要远端控制会话时再补帧类型测量 |
-| `session/updateQueue` 参数 | 已排除（范围外） | wire 为 `gateway/input-invalid`，参数结构未补探测（§7.1）；前端 `updateSessionMode` / `listCommands` 抛 typed unsupported，不猜参数（Task 15 决策） | 读 `typert.host.js` schema 后重放 |
+| `session/updateQueue` 参数 | 已排除（范围外） | 此接口未接入；模式改用 `agentPresets/list` / `select`，命令改用会话级 `commands/list` / `execute`，不依赖队列接口 | 按对应原生接口操作 |
 | waterfall 应答闭环（`approval/request`、`user-questions/request`） | 已知限制（降级） | Todo 28 已实现并以单测 settle 断言钉死（`dshPermissions.test.ts` 19 例，`.omo/evidence/dsh-web-adapt/task-28.txt`）；真机未执行：审批由运行中的 agent 在 turn 内触发，无 turn 即无审批（`degraded-items.md` 行 8） | 凭据版 + bash 类工具调用触发审批，走通过与驳回各一次；应答词汇已钉死，见 §7.8 |
 | 多客户端 / 多 observe 同时 follow 同一 session | 已实测（受限） | Todo 7 探针以 2–3 条并发 mux 连接 follow 同一 session，snapshot 与增量均正常（`.omo/evidence/dsh-web-adapt/task-7/replay-boundary-contract.md` §3.1 第 6 条）；另测：同 streamId 跨连接可复用（R8）、`$events` clientId 每连接一新（R10） | 限制：单进程多连接，非独立第三方客户端的严格证明；跨连接广播另有 R11（`$events` 不补送） |
 | cookie 跨重启有效性 | 已知限制（未实测） | `degraded-items.md` 行 15：重启须由 supervisor 发起并重建 launch-token 交换，降级 run 观察不到端到端过程。已实测的是失效重交换：`injections/cookie-invalidation.txt`（F03/F04）。§4.1 的"跨重启有效"仍是源码推断（30 天 Max-Age + authority 键） | supervisor 重启 dsh 后用旧 cookie 打 `/api/account/getState` |
-| 大结果 multipart 响应 | 已知限制（未实测） | 解析逻辑已接面但只用合成 fixture 单测覆盖（`app/utils/dshRpc.ts` 模块注释明示 synthetic-fixture only），未做 live 探测 | 读一个二进制文件（`workspaceFiles/readBytes`）触发 multipart，比对 metadata + 字节 |
+| 文件 multipart 响应 | 已实测 | `workspaceFiles/readBytes` 使用必填 `options:{}` 返回 metadata 和 `bytes-0`；真实 `package.json` 已在文件窗口完整显示，文本和二进制保留完整字节 | 证据 `.omo/evidence/dsh-provider-mcp-20261003/file-package-green.png` |
 | SSE 传输 | 已排除（范围外） | 0.2.0-rc.2 只注册 `/api/remote.mux` 一条 upgrade 路由、无 `text/event-stream` 端点（本版实测）；`cordis.patch.yml` 里 "fetch/SSE client" 注释已过时 | 无需动作；若未来版本注册 SSE 路由再评估 |
 
 **仍欠的 live fixture**（Task 6 记录，需凭据版补测，缺一项就不写一项）：成功的 assistant 文本增量流、思考增量帧、工具调用/结果、审批 waterfall 帧（含 `sessionId`/`eventId` 身份与 resolve/cancel 生命周期）、子代理 child 的 `session/page` 记录、`turn/end.reason.kind="completed"` 的正常完成序列、`user-questions/request` waterfall 帧与安全拒绝应答。清单见 `.omo/evidence/dsh-web-adapt/task-6/degraded-capture-record.md`。
 
 ---
+
+## 15.1. 供应商模型配置与原生发现
+
+供应商二级编辑页使用模型卡片配置 ID、显示名称、上下文窗口、最大输出 Token 和图片输入；文本输入保留为必需项，不再提供模型 JSON 编辑框。未编辑的模型扩展字段原样保留。保存仍经 `settings/mutate` 的 `expectedRevision` 检查，恢复默认模型通过取消 `models` 覆盖实现。
+
+模型详细配置还支持 `reasoningEfforts`：继承模型目录时取消覆盖，关闭思考能力时写入 `false`，自定义时勾选模型支持的等级并填写接口对应值（如 `max: ultra`）。`off` 可不发送参数；其他等级必须填写值，且自定义至少选一项。提供商默认强度 `reasoning` 单独通过 schema 提供的下拉选项设置；取消选择恢复运行时默认值。保存后刷新原生目录，底部选择器使用模型实际返回的可选强度。预算、请求头、超时和其他高级配置不开放。
+
+“获取可用模型”调用原生 `llm/discoverModels`，参数为 `{settingsNs, request:{provider, baseURL?, api?, apiKey?}}`。其中 API key 仅在用户填写替换值时作为本次请求参数传递；已有凭据由 DSH 在服务端解析。原生已安装目录优先于网络探测；自定义端点由 DSH 访问其模型列表。返回的 `inputModalities` 按设置 schema 映射到 pi-ai 的 `input` 或 DeepSeek 的 `inputModalities`。
+
+发现结果支持搜索、全选和批量添加，已有模型按 ID 去重；添加仅改变草稿，点击保存才写入。提供加载、空结果、失败和重试状态，切换端点或关闭页面会中止请求并忽略旧结果，单次发现最多等待 30 秒。未提供发现能力的 DSH 插件会显示原生错误，仍可通过模型卡片手动添加。
+
+供应商配置保存后的刷新会重新读取原生模型目录，不再返回适配器的旧缓存；第三方模型名称更新、新模型加入都会进入共享模型选择器。模型显示名使用原生 `name`，调用仍使用独立的供应商 ID 和模型 ID。
+
+发送前必须等待原生 `session/selectModel` 确认本次选择的供应商、模型和推理档位，然后才调用 `session/prompt`。模型 ID 中的 `/`、`:` 原样保留；无法找到模型或同一裸 ID 对应多个供应商时拒绝发送，不回退到首个供应商或默认 DeepSeek。模型和推理设置写入按会话串行，发送阶段不再携带原生协议不支持的空 `model.presetName` 字段。
+
+原生验证脚本为 `.omo/evidence/dsh-models-discovery/native-probe.mjs`：使用临时 `DSH_HOME`，验证实际 Vis 配置客户端读取原生 schema、41 个 OpenAI 内置目录模型、本地兼容端点的成功／空结果／401，以及发现前后配置值与 revision 不变。独立的名称场景仅在该临时配置中创建测试供应商，验证模型 ID `vendor/vision-v2` 与显示名 `My custom vision model` 分开返回。结构化结果在同目录 `native-result.json`；没有改动用户配置，也没有访问付费推理接口。
+
+同一探针使用实际 Vis 发送逻辑和适配器，在两个临时会话中分别选择 `vendor/vision-v2` 和 `vendor/text:latest`，本地 OpenAI 兼容服务捕获的请求 `model` 与所选 ID 完全一致。移除已缓存模型后的原生拒绝场景也确认没有继续发送或默认模型回退。
 
 ## 16. 参考
 
@@ -667,3 +687,11 @@ dsh web                                        # 或 web-mount：GUI 与 /acp �
 - 上游仓库：`github.com/deepseek-ai/deepseek-harness`（`packages/bundle/web-app`、`packages/api/*-controller`）
 - 第三方交叉参考：`fufankeji/deepseek-harness-web`（rc.6 客户端）、`OpenNekoPaw/codex-dsh-web`（旧信封客户端）、`dushaobindoudou/dsh-acp`（ACP 插件与 dsh 内部服务考古）
 - 本项目既有文档：`docs/kimi.md`（最接近的适配范式）、`docs/omo.md`、`docs/testing.md`
+
+2026-10-03 MCP/LSP 接口复核（DSH 0.2.0-rc.2）：原生 `dsh-mcp-client` 支持 stdio 与 Streamable HTTP，并通过工具注册及资源服务向 agent 提供 MCP；该插件及 `dsh-mcp-resources` 没有 Remote 方法，不公开连接列表、状态、连接或断开接口。隔离运行时的 `mcp/list`、`mcp/status`、`mcp/getStatus`、`mcpClient/list`、`mcpClient/status` 均为 HTTP 404；`pluginManager/listPlugins` 正常返回，已有插件管理继续用于查看与切换 MCP 插件启用状态，不能把插件 active 宣称为 MCP connected。
+
+安装包未提供 LSP 服务或语言服务器插件，API 控制器中也没有 LSP 注册；隔离运行时 `lsp/list`、`lsp/status`、`lsp/getStatus` 均为 HTTP 404。状态监控保留 MCP/LSP 页签，明确写出当前版本不支持 MCP 连接监控接口及 LSP 接口，取代“尚未验证”的说明。此结论结合当前安装版的完整接口源码与运行时核对，不以单次 404 判定所有未知能力；升级 DSH 后需重新核对。
+
+2026-10-03 权限与账号复核：`permissionPresets/catalog {}` 返回当前部署的预设选项；`commands/list {agentId}` 确认 `permission` 命令后，可通过 `commands/execute {agentId,line:"/permission <preset>",submittedAttachments:[]}` 修改当前会话的权限预设。此命令同时改变沙箱与审批策略；未验证到分别修改这两项的远端入口。Vis 仅展示实时目录中存在的预设，命令失败时显示错误，不乐观伪造状态。
+
+`dsh --help` 没有 login 命令。账号 API 提供 `account/startSignIn`（client、callbackOrigin、loginSource:web|desktop）；官方 Web/桌面账号登录与提供商 API 密钥认证独立，账号 signed-out 不代表 API 密钥不可用。状态面板不启动账号登录或修改凭据。

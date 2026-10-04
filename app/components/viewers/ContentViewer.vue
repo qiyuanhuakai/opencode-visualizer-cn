@@ -23,7 +23,8 @@
         </button>
       </div>
     </div>
-    <div class="viewer-body">
+    <div v-if="loadError" class="viewer-load-error" role="alert">{{ loadError }}</div>
+    <div v-else class="viewer-body">
       <CodeMirrorEditor
         v-if="activeMode === 'edit'"
         v-model="editableContent"
@@ -102,6 +103,7 @@ const props = defineProps<{
   path?: string;
   absolutePath?: string;
   fileContent?: string;
+  loadError?: string;
   binaryBase64?: string;
   lang?: string;
   gutterMode?: 'default' | 'none' | 'grep-source';
@@ -492,6 +494,7 @@ function handleCancel() {
   border-bottom-color: color-mix(in srgb, var(--window-color, #3a4150) 50%, #60a5fa);
 }
 
+.viewer-load-error { padding: var(--space-3); color: var(--theme-status-error); overflow-wrap: anywhere; }
 .viewer-body {
   flex: 1;
   min-height: 0;

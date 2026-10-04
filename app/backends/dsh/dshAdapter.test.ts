@@ -6,6 +6,7 @@ import {
   DSH_CAPABILITIES,
   DshUnsupportedError,
   mapDshSessionsToProjects,
+  mapDshSessionItem,
   upsertDshSessionIntoProjects,
   type DshAdapterOptions,
   type DshBridgeFetcher,
@@ -20,6 +21,21 @@ import { DSH_WIRE_VERSION } from './types';
 import type { DshJsonValue } from './types';
 
 const DSH_BRIDGE_URL = 'ws://localhost:23004/dsh/ws';
+
+it('restores the durable projected title from real session/list items', () => {
+  const item = { sessionId: 'session-title', projections: { values: { title: 'Generated title' } } };
+  expect(mapDshSessionItem(item).title).toBe('Generated title');
+});
+
+it('keeps ordinary forks selectable as roots while nesting actual subagents', () => {
+  const fork = mapDshSessionItem({ sessionId: 'fork', parentSessionId: 'source', cwd: '/tmp/dsh' });
+  const child = mapDshSessionItem({ sessionId: 'child', parentSessionId: 'source', origin: 'subagent', cwd: '/tmp/dsh' });
+  expect(fork.parentID).toBeUndefined();
+  expect(child.parentID).toBe('source');
+  const sandbox = mapDshSessionsToProjects([fork, child])['dsh:/tmp/dsh']!.sandboxes['/tmp/dsh']!;
+  expect(sandbox.rootSessions).toContain('fork');
+  expect(sandbox.rootSessions).not.toContain('child');
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures (synthetic; the dsh wire contract is anchored in ./types.ts)
@@ -80,8 +96,9 @@ const SESSION_LIST_ITEMS = [
     sessionId: 'session-2',
     workspaceId: 'ws-git',
     cwd: '/tmp/dsh/repo',
-    title: 'Forked session',
+    title: 'Child session',
     parentSessionId: 'session-1',
+    origin: 'subagent',
   },
   {
     sessionId: 'session-archived',
@@ -151,7 +168,10 @@ function fakeRpcClient(responses: Record<string, unknown>) {
       if (response instanceof Error) throw response;
       return response as DshJsonValue;
     }),
-    callMultipart: vi.fn(async () => ({ metadata: {}, bytes: [] })),
+    callMultipart: vi.fn(async (namespace: string, method: string, args: Record<string, unknown> = {}) => {
+      calls.push({ namespace, method, args });
+      return { metadata: {}, bytes: [new TextEncoder().encode('abc')] };
+    }),
     nextRpcId: vi.fn(() => 'dsh-test-1'),
   } as unknown as DshRpcClient;
   return { client, calls };
@@ -337,10 +357,18 @@ describe('DshAdapter unbound-method regression (memory #1770)', () => {
     getVcsInfo: ['/tmp/dsh/repo'],
     listProviders: [],
     getGlobalConfig: [],
+    getPluginStatus: [],
+    getPluginManagementEntries: [],
+    setPluginEnabled: ['plugin', false],
+    getSkillStatus: [],
+    getPermissionPresetOptions: ['session-1'],
+    selectPermissionPreset: ['session-1', 'read-only'],
     updateSessionMode: ['session-1', { field: 'permissionMode', value: 'auto' }],
     syncSessionConfig: ['session-1', { model: 'deepseek-flash', mode: 'default' }],
     getSessionConfigOptions: [],
     listCommands: [],
+    listAgents: [],
+    executeCommand: ['session-1', '/goal show'],
     getSessionStatusMap: [],
     getGlobalHealth: [],
     abortSession: ['session-1'],
@@ -634,7 +662,7 @@ describe('DshAdapter session create + explicit model selection', () => {
     expect(rpc.calls[0]).toEqual({
       namespace: 'session',
       method: 'create',
-      args: { request: { workspaceId: 'ws-git', cwd: '/tmp/dsh/repo' } },
+      args: { request: { workspaceId: 'ws-git' } },
     });
     // 2. The model is written EXPLICITLY after creation (never assumed).
     expect(rpc.calls[2]).toEqual({
@@ -748,7 +776,7 @@ describe('DshAdapter typed RPC error passthrough', () => {
     await expect(
       adapter.updateSessionMode('session-1', { field: 'x', value: 'y' }),
     ).rejects.toThrow(/session mode/i);
-    await expect(adapter.listCommands()).rejects.toThrow(/command/i);
+    await expect(adapter.listCommands()).resolves.toEqual([]);
   });
 });
 
@@ -841,6 +869,70 @@ describe('DshAdapter session actions', () => {
 });
 
 describe('DshAdapter model + provider surface', () => {
+  it('serializes rapid model and reasoning writes before the send selection', async () => {
+    const rpc = fakeRpcClient(bridgeResponses());
+    const original = rpc.client.call;
+    let finish: (() => void) | undefined;
+    const writes: unknown[] = [];
+    rpc.client.call = async (namespace, method, args) => {
+      if (method === 'selectModel') {
+        writes.push(args?.request);
+        if (writes.length === 1) await new Promise<void>((resolve) => { finish = resolve; });
+      }
+      return original(namespace, method, args);
+    };
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+    const first = adapter.syncSessionConfig('session-1', { model: 'deepseek-official/deepseek-flash', mode: '', thoughtLevel: 'low' });
+    const second = adapter.syncSessionConfig('session-1', { model: 'deepseek-official/deepseek-flash', mode: '', thoughtLevel: 'high' });
+    const sendSelection = adapter.syncSessionConfig('session-1', { model: 'deepseek-official/deepseek-v4-pro', mode: '', thoughtLevel: 'max' });
+
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    finish?.();
+    await Promise.all([first, second, sendSelection]);
+
+    expect(writes).toEqual([
+      { sessionId: 'session-1', provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'low' },
+      { sessionId: 'session-1', provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'high' },
+      { sessionId: 'session-1', provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'max' },
+    ]);
+  });
+  it('selects the exact provider for a slash-bearing and colon-bearing model ID', async () => {
+    const rpc = fakeRpcClient({ ...bridgeResponses(), 'session/modelCatalog': { groups: [
+      { id: 'first', name: 'First gateway', models: [{ id: 'vendor/model:latest', name: 'First model' }] },
+      { id: 'second', name: 'Second gateway', models: [{ id: 'vendor/model:latest', name: 'Second model' }] },
+    ] } });
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+
+    await adapter.syncSessionConfig('session-1', { model: 'second/vendor/model:latest', mode: '', thoughtLevel: 'high' });
+
+    expect(rpc.calls.at(-1)).toEqual({ namespace: 'session', method: 'selectModel', args: { request: { sessionId: 'session-1', provider: 'second', model: 'vendor/model:latest', reasoningEffort: 'high' } } });
+  });
+  it.each(['missing', 'shared-model'])('rejects an unknown or ambiguous model %s without selecting a fallback', async (model) => {
+    const rpc = fakeRpcClient({ ...bridgeResponses(), 'session/modelCatalog': { groups: [
+      { id: 'first', name: 'First gateway', models: [{ id: 'shared-model', name: 'First model' }] },
+      { id: 'second', name: 'Second gateway', models: [{ id: 'shared-model', name: 'Second model' }] },
+    ] } });
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+
+    await expect(adapter.syncSessionConfig('session-1', { model, mode: '' })).rejects.toThrow();
+
+    expect(rpc.calls.some((call) => call.method === 'selectModel')).toBe(false);
+  });
+  it('refreshes third-party model display names and additions after provider settings change', async () => {
+    const responses: Record<string, unknown> = bridgeResponses();
+    responses['session/modelCatalog'] = { groups: [{ id: 'custom-gateway', name: 'My gateway', models: [{ id: 'vendor/model-v1', name: 'Old display name' }] }] };
+    const rpc = fakeRpcClient(responses);
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+    await adapter.listProviders();
+    responses['session/modelCatalog'] = { groups: [{ id: 'custom-gateway', name: 'My gateway', models: [{ id: 'vendor/model-v1', name: 'Edited model name' }, { id: 'vendor/vision-v2', name: 'My vision model' }] }] };
+
+    const result = await adapter.listProviders();
+
+    expect(result.all?.[0]?.models).toMatchObject({
+      'vendor/model-v1': { id: 'vendor/model-v1', name: 'Edited model name', providerID: 'custom-gateway' },
+      'vendor/vision-v2': { id: 'vendor/vision-v2', name: 'My vision model', providerID: 'custom-gateway' },
+    });
+  });
   it('builds the provider/model response from session/modelCatalog', async () => {
     const adapter = createDshAdapter(adapterOptions());
     const response = (await adapter.listProviders()) as any;
@@ -956,7 +1048,7 @@ describe('DshAdapter file surface', () => {
     expect(listCall.args).toEqual({ workspaceFileScopeId: 'session-1', path: '.' });
   });
 
-  it('reads text content through workspaceFiles/read', async () => {
+  it('reads full text through the required binary options and decodes it', async () => {
     const rpc = fakeRpcClient(bridgeResponses());
     const adapter = createDshAdapter({
       bridgeUrl: DSH_BRIDGE_URL,
@@ -973,9 +1065,9 @@ describe('DshAdapter file surface', () => {
       content: 'abc',
     });
     const readCall = rpc.calls.find(
-      (call) => call.namespace === 'workspaceFiles' && call.method === 'read',
+      (call) => call.namespace === 'workspaceFiles' && call.method === 'readBytes',
     )!;
-    expect(readCall.args).toMatchObject({ workspaceFileScopeId: 'session-1', path: 'a.txt' });
+    expect(readCall.args).toEqual({ workspaceFileScopeId: 'session-1', path: 'a.txt', options: {} });
   });
 });
 
@@ -1089,4 +1181,122 @@ describe('DshAdapter lifecycle', () => {
     expect(() => createDshAdapter({ bridgeUrl: 'not a url' })).toThrow();
     expect(() => createDshAdapter({ bridgeUrl: 'http://localhost:23004/dsh/ws' })).toThrow();
   });
+});
+
+ describe('DSH runtime status inventory', () => {
+  it('maps installed plugin entries including disabled plugins', async () => {
+    const rpc = fakeRpcClient({ 'pluginManager/listPlugins': [
+      { entryId: 'mcp', moduleName: 'dsh-mcp-resources', enabled: true, fiberPhase: 'active', meta: { title: 'MCP resources' } },
+      { entryId: 'off', moduleName: 'disabled-tool', enabled: false, fiberPhase: null },
+    ] });
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+    expect(await adapter.getPluginStatus()).toEqual([
+      { id: 'mcp', name: 'MCP resources', enabled: true, installed: true, accessible: true },
+      { id: 'off', name: 'disabled-tool', enabled: false, installed: true, accessible: true },
+    ]);
+  });
+  it('reads skills for the selected session with the installed request schema', async () => {
+    const rpc = fakeRpcClient({ 'skills/list': { skills: [{ name: 'review', path: '/skills/review', description: 'Review', modelInvocable: true }] } });
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+    expect(await adapter.getSkillStatus('selected-session')).toEqual([{ name: 'review', path: '/skills/review' }]);
+    expect(rpc.calls).toEqual([{ namespace: 'skills', method: 'list', args: { request: { sessionId: 'selected-session' } } }]);
+  });
+});
+
+describe('DSH permission preset controls', () => {
+  it('offers only live preset options when the session advertises its permission command', async () => {
+    const rpc = fakeRpcClient({ 'permissionPresets/catalog': { options: [{ value: 'workspace-write', name: 'Workspace' }] }, 'commands/list': [{ name: 'permission' }] });
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+    expect(await adapter.getPermissionPresetOptions('selected-session')).toEqual([{ value: 'workspace-write', name: 'Workspace' }]);
+  });
+  it('dispatches a supported preset through the session command endpoint', async () => {
+    const rpc = fakeRpcClient({ 'permissionPresets/catalog': { options: [{ value: 'read-only', name: 'Read only' }] }, 'commands/list': [{ name: 'permission' }], 'commands/execute': { commandId: 'cmd1', result: { kind: 'success' } } });
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+    await adapter.selectPermissionPreset('selected-session', 'read-only');
+    expect(rpc.calls.at(-1)).toEqual({ namespace: 'commands', method: 'execute', args: { agentId: 'selected-session', line: '/permission read-only', submittedAttachments: [] } });
+  });
+  it('refuses unadvertised values without dispatching a command', async () => {
+    const rpc = fakeRpcClient({ 'permissionPresets/catalog': { options: [] }, 'commands/list': [{ name: 'permission' }] });
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+    await expect(adapter.selectPermissionPreset('selected-session', 'invented')).rejects.toThrow();
+    expect(rpc.calls.some((call) => call.method === 'execute')).toBe(false);
+  });
+});
+
+describe('DSH plugin management', () => {
+  it('preserves writable and protected plugin metadata', async () => {
+    const rpc = fakeRpcClient({ 'pluginManager/listPlugins': [{ entryId: 'tool', moduleName: 'example/tool', enabled: false, fiberPhase: null, patchId: 'tool' }, { entryId: 'manager', moduleName: 'manager', enabled: true, fiberPhase: 'active', readOnlyReason: 'management-required' }] });
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+    expect(await adapter.getPluginManagementEntries()).toMatchObject([{ id: 'tool', enabled: false, writable: true }, { id: 'manager', writable: false, readOnlyReason: 'management-required' }]);
+  });
+  it('sends the entry ID and requested enabled value, preserving restart outcomes', async () => {
+    const rpc = fakeRpcClient({ 'pluginManager/listPlugins': [{ entryId: 'entry:tool', moduleName: 'tool', enabled: false, patchId: 'tool', fiberPhase: null }], 'pluginManager/setPluginEnabled': { changed: true, application: 'restart-required', stage: 'enable', target: 'entry:tool', enabled: true } });
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+    expect(await adapter.setPluginEnabled('entry:tool', true)).toEqual({ changed: true, application: 'restart-required' });
+    expect(rpc.calls.at(-1)).toEqual({ namespace: 'pluginManager', method: 'setPluginEnabled', args: { id: 'entry:tool', enabled: true } });
+  });
+  it('refuses protected entries without invoking mutation', async () => {
+    const rpc = fakeRpcClient({ 'pluginManager/listPlugins': [{ entryId: 'manager', moduleName: 'manager', enabled: true, readOnlyReason: 'management-required', fiberPhase: 'active' }] });
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+    await expect(adapter.setPluginEnabled('manager', false)).rejects.toThrow();
+    expect(rpc.calls.some((call) => call.method === 'setPluginEnabled')).toBe(false);
+  });
+  it('rejects an unsuccessful management result', async () => {
+    const rpc = fakeRpcClient({ 'pluginManager/listPlugins': [{ entryId: 'tool', moduleName: 'tool', enabled: false, patchId: 'tool', fiberPhase: null }], 'pluginManager/setPluginEnabled': { changed: false, application: 'failed', stage: 'enable', target: 'tool', error: { code: 'operation-error', diagnostic: 'cannot write profile' } } });
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+    await expect(adapter.setPluginEnabled('tool', true)).rejects.toThrow('cannot write profile');
+  });
+});
+
+it('rejects a malformed plugin management response instead of claiming success', async () => {
+  const rpc = fakeRpcClient({ 'pluginManager/listPlugins': [{ entryId: 'tool', moduleName: 'tool', enabled: false, patchId: 'tool', fiberPhase: null }], 'pluginManager/setPluginEnabled': { changed: true, application: 'applied' } });
+  const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+  await expect(adapter.setPluginEnabled('tool', true)).rejects.toThrow('Invalid DSH plugin change result');
+});
+
+
+describe('DSH runtime modes and commands', () => {
+  it('uses the preset catalog identities and skips broken presets', async () => {
+    const rpc = fakeRpcClient({ 'agentPresets/list': { presets: [
+      { id: 'standard', isDefault: true, name: 'Standard', description: 'Tools' },
+      { id: 'ptc', isDefault: false }, { id: 'minimal', isDefault: false }, { id: 'cordis', isDefault: false },
+      { id: 'broken', broken: { message: 'unavailable' } },
+    ] } });
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+    const agents = await adapter.listAgents();
+    expect(agents.map((agent) => agent.name)).toEqual(['standard', 'ptc', 'minimal', 'cordis']);
+    expect(agents[0]).toMatchObject({ label: 'Standard', description: 'Tools', isDefault: true });
+  });
+
+  it('selects the active session preset through the runtime', async () => {
+    const rpc = fakeRpcClient({ 'agentPresets/select': 'cordis' });
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+    await expect(adapter.updateSessionMode('own-session', { field: 'agentPreset', value: 'cordis' })).resolves.toBe('cordis');
+    expect(rpc.calls[0]?.args).toEqual({ agentId: 'own-session', agentPreset: 'cordis' });
+  });
+
+  it('fetches autocomplete for the exact session and includes argument hints', async () => {
+    const rpc = fakeRpcClient({ 'commands/list': [{ name: 'goal', description: 'Goal', input: { hint: 'show | edit' } }] });
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+    expect(await adapter.listCommands('own-session')).toEqual([{ name: 'goal', description: 'Goal · show | edit' }]);
+    expect(rpc.calls[0]?.args).toEqual({ agentId: 'own-session' });
+  });
+
+  it('preserves native command errors and uses the commands execution envelope', async () => {
+    const rpc = fakeRpcClient({ 'commands/execute': { commandId: 'cmd', result: { kind: 'error', text: 'No goal' } } });
+    const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+    await expect(adapter.executeCommand('own-session', '/goal resume')).resolves.toEqual({ kind: 'error', text: 'No goal' });
+    expect(rpc.calls[0]?.args).toEqual({ agentId: 'own-session', line: '/goal resume', submittedAttachments: [] });
+  });
+});
+
+
+it('reports an unresolved native command as an error', async () => {
+  // Given: the runtime returns void for an unknown command.
+  const rpc = fakeRpcClient({ 'commands/execute': null });
+  const adapter = createDshAdapter(adapterOptions({ rpcClient: rpc.client }));
+  // When: an unknown slash command is executed.
+  const result = await adapter.executeCommand('own-session', '/unknown');
+  // Then: the UI can retain the draft and show failure instead of false success.
+  expect(result.kind).toBe('error');
 });

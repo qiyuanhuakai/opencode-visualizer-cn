@@ -372,17 +372,26 @@ describe('useCredentials', () => {
     expect(credentials.dshBridgeUrl.value).toBe('ws://bridge.test:23004/dsh/ws');
     expect(credentials.dshBridgeToken.value).toBe('');
     expect(credentials.isConfigured.value).toBe(false);
+    vi.resetModules();
+    const restored = await importFresh();
+    restored.load();
+    expect(restored.isConfigured.value).toBe(false);
     expect(electronStore.get('opencode.auth.dshBridgeToken.v1')).toBeUndefined();
     expect(electronStore.get('opencode.auth.dshBridgeUrl.v1')).toBe(
       'ws://bridge.test:23004/dsh/ws',
     );
   });
 
-  it('requires both the dsh URL and token for isConfigured', async () => {
+  it('restores a saved local DSH connection without an optional bridge token', async () => {
     const credentials = await importFresh();
 
     credentials.saveDsh('ws://localhost:23004/dsh/ws', '');
-    expect(credentials.isConfigured.value).toBe(false);
+    expect(credentials.isConfigured.value).toBe(true);
+    vi.resetModules();
+    const restored = await importFresh();
+    restored.load();
+    expect(restored.backendKind.value).toBe('dsh');
+    expect(restored.isConfigured.value).toBe(true);
 
     credentials.saveDsh('ws://localhost:23004/dsh/ws', 'token');
     expect(credentials.isConfigured.value).toBe(true);
@@ -461,6 +470,7 @@ describe('useCredentials', () => {
     const written = [...electronStore.keys()].filter((key) => !before.has(key));
     expect(written.sort()).toEqual([
       'opencode.auth.backendKind.v1',
+      'opencode.auth.dshAutoConnect.v1',
       'opencode.auth.dshBridgeToken.v1',
       'opencode.auth.dshBridgeUrl.v1',
     ]);

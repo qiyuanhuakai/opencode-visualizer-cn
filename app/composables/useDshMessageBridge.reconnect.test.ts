@@ -564,6 +564,34 @@ describe('dsh message bridge — disconnect window recovery (Todo 23)', () => {
     expect(harness.bridge.cursor()).toBe(6);
     expect(harness.store.textOf(`${SESSION_ID}:t1`)).toBe('one two three four five six');
   });
+
+  it('waits for backoff when an authoritative snapshot repeatedly leaves the same gap', async () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+    try {
+      const follow = new FakeStream('gap-original');
+      harness.bridge.attachFollow(follow);
+      const full = wordLog(['one', 'two', 'three', 'four', 'five', 'six']);
+      follow.emit(snapshot(SESSION_ID, full.slice(0, 3), 2));
+      follow.emit(full[5]);
+      const fresh = harness.mux.followStreams()[0];
+      fresh.emit(snapshot(SESSION_ID, full.slice(0, 3), 2));
+      expect(harness.mux.followStreams()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(harness.mux.followStreams()).toHaveLength(2);
+      const retry = harness.mux.followStreams()[1];
+      retry.emit(snapshot(SESSION_ID, full, 6));
+      expect(fresh.cancelled).toBe(true);
+      expect(harness.bridge.syncState()).toEqual({ kind: 'live', cursor: 6 });
+      expect(harness.store.dump()).toEqual(goldenStore(full, 6));
+      harness.bridge.stop();
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(harness.mux.followStreams()).toHaveLength(2);
+    } finally {
+      harness.bridge.stop();
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

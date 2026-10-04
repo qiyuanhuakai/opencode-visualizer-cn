@@ -19,11 +19,9 @@
  *                 (`MISSING_CREDENTIAL`, HTTP 401/403, "capability required").
  *
  * ## 404-class endpoints
- * `session/skills/list` and `session/fileReferences/list` are agent-scoped and
- * legitimately return HTTP 404 when no agent/session is active (docs/dsh.md
- * §7.1, Task 6 probe). A 404 is therefore `unknown` — never `unsupported`
- * (it does not prove the feature absent) and never `supported`. This is the
- * explicit Todo 31 acceptance ("404 类端点判 unknown 不误报").
+ * HTTP 404 is inconclusive and remains `unknown`. The former probes used
+ * incorrect `session/skills/list` and `session/fileReferences/list` paths;
+ * current probes use the installed namespaces and require a session id.
  *
  * ## Static seed (Scope OUT)
  * `DSH_CAPABILITY_REGISTRY` in `./capabilities.ts` is the static Scope-OUT
@@ -76,6 +74,7 @@ export const DSH_PROBE_KEYS = [
   'terminal',
   'workspaceFiles',
   'skills',
+  'plugins',
   'profile',
   'fileReferences',
 ] as const;
@@ -203,16 +202,24 @@ export const DSH_CAPABILITY_PROBES: readonly DshCapabilityProbe[] = [
   },
   {
     key: 'skills',
-    namespace: 'session',
-    method: 'skills/list',
+    namespace: 'skills',
+    method: 'list',
     optional: false,
     agentScoped: true,
     buildArgs: (context) => {
       const agentId = context.agentId;
-      const request: Record<string, DshJsonValue> = nonEmptyString(agentId) ? { agentId } : {};
-      return { _request: request };
+      return nonEmptyString(agentId) ? { request: { sessionId: agentId } } : null;
     },
-    validate: (value) => isRecord(value) || Array.isArray(value),
+    validate: (value) => isRecord(value) && Array.isArray(value.skills) && value.skills.every((skill) => isRecord(skill) && nonEmptyString(skill.name)),
+  },
+  {
+    key: 'plugins',
+    namespace: 'pluginManager',
+    method: 'listPlugins',
+    optional: false,
+    agentScoped: false,
+    buildArgs: () => ({}),
+    validate: (value) => Array.isArray(value) && value.every((plugin) => isRecord(plugin) && nonEmptyString(plugin.entryId) && nonEmptyString(plugin.moduleName) && typeof plugin.enabled === 'boolean'),
   },
   {
     key: 'profile',
@@ -226,8 +233,8 @@ export const DSH_CAPABILITY_PROBES: readonly DshCapabilityProbe[] = [
   },
   {
     key: 'fileReferences',
-    namespace: 'session',
-    method: 'fileReferences/list',
+    namespace: 'fileReferences',
+    method: 'list',
     optional: false,
     agentScoped: true,
     buildArgs: (context) => {

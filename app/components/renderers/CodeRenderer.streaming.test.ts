@@ -14,6 +14,7 @@ const workerState = vi.hoisted(() => {
     constructor() {
       FakeWorker.instances.push(this);
     }
+    terminate() {}
     postMessage(message: unknown) {
       this.posted.push(message);
     }
@@ -393,5 +394,67 @@ describe('CodeRenderer streaming', () => {
     } finally {
       settings.appFontSizePx.value = previousFontSize;
     }
+  });
+});
+
+
+function pendingRenderFor(code: string) {
+  for (const worker of workerState.FakeWorker.instances) {
+    for (const request of worker.posted) {
+      if (typeof request === 'object' && request !== null && 'code' in request && request.code === code && 'id' in request && typeof request.id === 'string') {
+        return { worker, id: request.id };
+      }
+    }
+  }
+  throw new Error('Expected a render request for the file');
+}
+
+describe('CodeRenderer file render failures', () => {
+  it('replaces loading with readable escaped source when highlighting fails', async () => {
+    // Given: the file read completed and syntax highlighting is pending.
+    const code = '<script>file-content-failure</script>';
+    const mounted = mountCodeRenderer({ fileContent: code, lang: 'html' });
+    await settle();
+    expect(mounted.target.querySelector('.viewer-loading')).not.toBeNull();
+    const request = pendingRenderFor(code);
+    // When: the real worker transport receives a failure response.
+    request.worker.emit({ id: request.id, ok: false, error: 'Highlight failure' });
+    await settle();
+    // Then: loading terminates, the failure is announced, and source remains readable.
+    expect(mounted.target.querySelector('.viewer-loading')).toBeNull();
+    expect(mounted.target.querySelector('[role="alert"]')?.textContent).toContain('Highlight failure');
+    expect(mounted.target.querySelector('pre')?.textContent).toBe(code);
+    expect(mounted.target.querySelector('script')).toBeNull();
+  });
+
+  it('leaves loading when the renderer times out after a completed file read', async () => {
+    const code = 'file-content-timeout';
+    const mounted = mountCodeRenderer({ fileContent: code, lang: 'text' });
+    await settle();
+    // When: the worker never responds and its real timeout fires.
+    await vi.advanceTimersByTimeAsync(25_000);
+    await settle();
+    // Then: the file remains usable and does not claim to still be loading.
+    expect(mounted.target.querySelector('.viewer-loading')).toBeNull();
+    expect(mounted.target.querySelector('[role="alert"]')?.textContent).toContain('timed out');
+    expect(mounted.target.querySelector('pre')?.textContent).toBe(code);
+  });
+
+  it('clears the old failure when a new render starts and shows its result', async () => {
+    const mounted = mountCodeRenderer({ fileContent: 'file-retry-before', lang: 'text' });
+    await settle();
+    const failed = pendingRenderFor('file-retry-before');
+    failed.worker.emit({ id: failed.id, ok: false, error: 'Retryable failure' });
+    await settle();
+    // When: the refreshed file triggers another render.
+    mounted.props.fileContent = 'file-retry-after';
+    await settle();
+    expect(mounted.target.querySelector('[role="alert"]')).toBeNull();
+    expect(mounted.target.querySelector('.viewer-loading')).not.toBeNull();
+    const retried = pendingRenderFor('file-retry-after');
+    retried.worker.emit({ id: retried.id, ok: true, html: '<pre>file-retry-after</pre>' });
+    await settle();
+    expect(mounted.target.querySelector('.viewer-loading')).toBeNull();
+    expect(mounted.target.querySelector('pre')?.textContent).toBe('file-retry-after');
   });
 });

@@ -2,7 +2,7 @@
 import { computed } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useI18n } from 'vue-i18n';
-import Dropdown from '../Dropdown.vue';
+import ComposerDropdown from '../composer/ComposerDropdown.vue';
 import DropdownItem from '../Dropdown/Item.vue';
 import type { KimiWebPermissionMode } from '../../backends/kimiWeb/sessionModes';
 
@@ -53,13 +53,13 @@ function select(field: unknown) {
 
 <template>
   <div class="kimi-web-composer-modes">
-    <Dropdown
+    <ComposerDropdown
       :label="label"
       :disabled="disabled"
       :auto-close="false"
       menu-icon="lucide:chevron-up"
       button-class="kimi-web-mode-trigger"
-      :popup-style="{ top: 'auto', bottom: 'anchor(top)', left: 'clamp(8px, anchor(left), calc(100vw - 248px))', right: 'auto', marginTop: '0', marginBottom: '6px', minWidth: '240px' }"
+
       @select="select"
     >
       <DropdownItem v-for="mode in modes" :key="mode.field" :value="mode.field" :active="mode.active" :disabled="mode.disabled" :title="mode.description">
@@ -72,7 +72,7 @@ function select(field: unknown) {
           <span class="kimi-web-mode-description">{{ mode.description }}</span>
         </div>
       </DropdownItem>
-    </Dropdown>
+    </ComposerDropdown>
     <div v-if="error || confidence === 'stale'" class="kimi-web-mode-status">
       <span v-if="error" class="kimi-web-mode-error" role="alert">{{ errorText }}</span>
       <span v-if="confidence === 'stale'" role="status">{{ t('kimiWeb.composer.stale') }}</span>
@@ -93,5 +93,4 @@ function select(field: unknown) {
 .kimi-web-mode-error { color: var(--theme-status-error); }
 .kimi-web-mode-retry { padding: 0 6px; height: 20px; border: 1px solid var(--theme-input-border); border-radius: 6px; background: transparent; color: var(--theme-input-text-muted); font-family: inherit; cursor: pointer; }
 .kimi-web-mode-retry:focus-visible { outline: 2px solid var(--theme-input-accent); outline-offset: 2px; }
-:deep(.kimi-web-mode-trigger) { height: 28px; padding: 4px 8px; border-color: transparent; background: transparent; color: var(--theme-input-text-muted); font-size: var(--type-sm); }
 </style>

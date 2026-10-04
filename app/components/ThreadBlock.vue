@@ -132,6 +132,7 @@ import { useI18n } from 'vue-i18n';
 import MessageViewer from './MessageViewer.vue';
 import ThreadFooter from './ThreadFooter.vue';
 import ThreadTarget from './ThreadTarget.vue';
+import { dshPermissionColor } from './dsh/permissionPresentation';
 import { useMessages } from '../composables/useMessages';
 import type {
   HistoryEntry,
@@ -268,8 +269,10 @@ const kimiUsesDefaultPermission = computed(() =>
   ['manual', 'auto', 'yolo'].includes(props.kimiDefaultPermissionMode ?? ''),
 );
 const threadTarget = computed<ThreadTargetType>(() => buildThreadTarget(props.root));
+const threadPermissionColor = computed(() => props.backendKind === 'dsh'
+  ? dshPermissionColor(threadTarget.value.agent ?? '') : undefined);
 const threadTargetAgentStyle = computed(() => {
-  const color = (kimiUsesDefaultPermission.value ? props.kimiDefaultPermissionColor : undefined)
+  const color = threadPermissionColor.value ?? (kimiUsesDefaultPermission.value ? props.kimiDefaultPermissionColor : undefined)
     ?? props.resolveAgentColor?.(threadTarget.value.agent)
     ?? 'var(--theme-status-success, #86efac)';
   return { color };
@@ -456,7 +459,9 @@ function buildThreadTarget(root: MessageInfo): ThreadTargetType {
   const final = finalAnswer.value;
   const agent = props.backendKind === 'kimi-web'
     ? kimiAttributedPermission.value ?? (kimiUsesDefaultPermission.value ? props.kimiDefaultPermissionMode : undefined)
-    : root.agent ?? final?.agent;
+    : props.backendKind === 'dsh'
+      ? final?.permissionPreset ?? root.permissionPreset
+      : root.agent ?? final?.agent;
   const modelPath = getMessageModelPath(root) || getMessageModelPath(final);
   const modelMeta = props.resolveModelMeta?.(modelPath);
   const variant = getMessageVariant(root) ?? (final ? getMessageVariant(final) : undefined);
@@ -469,7 +474,7 @@ function buildThreadTarget(root: MessageInfo): ThreadTargetType {
 }
 
 function getUserBoxStyle() {
-  const color = (kimiUsesDefaultPermission.value ? props.kimiDefaultPermissionColor : undefined)
+  const color = threadPermissionColor.value ?? (kimiUsesDefaultPermission.value ? props.kimiDefaultPermissionColor : undefined)
     ?? props.resolveAgentColor?.(threadTarget.value.agent)
     ?? '#334155';
   if (color.startsWith('#') && color.length === 7) {

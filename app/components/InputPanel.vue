@@ -303,8 +303,11 @@
       </div>
       <div class="input-toolbar">
         <div class="input-selects">
+          <slot name="before-controls" />
           <div v-if="props.acpPermissionControls" class="input-field compact">
-            <Dropdown
+            <ComposerDropdown
+              control-role="primary"
+              :menu-width="320"
               v-model="permissionModeValue"
               :placeholder="$t('inputPanel.selectPermissionMode')"
               :disabled="props.disabled || props.permissionModeDisabled || permissionModeOptions.length < 2"
@@ -326,17 +329,19 @@
                   </DropdownItem>
                 </div>
               </template>
-            </Dropdown>
+            </ComposerDropdown>
           </div>
           <div v-else-if="!props.hideAgentPicker" class="input-field compact">
-            <Dropdown
+            <ComposerDropdown
+              control-role="primary"
+              :menu-width="320"
               v-model="modeValue"
               :placeholder="agentPickerPlaceholder"
-              :disabled="props.disabled || !hasAgentOptions"
+              :disabled="props.disabled || props.agentPickerDisabled || !hasAgentOptions"
               button-class="input-control input-dropdown-button"
               popup-class="input-dropdown-popup"
               auto-close
-              :title="$t('inputPanel.agentTitle')"
+              :title="props.agentPickerTitle ?? $t('inputPanel.agentTitle')"
               @update:open="handleModelDropdownOpenChange"
             >
               <template #value="{ value: id }">
@@ -350,33 +355,13 @@
                     {{ agentPickerEmptyCopy }}
                   </div>
                   <DropdownItem v-for="agent in agentOptions" :key="agent.id" :value="agent.id">
-                    <div
-                      class="agent-dropdown-item"
-                      :class="{ 'is-current': agent.id === props.selectedMode }"
-                    >
-                      <span class="agent-dropdown-name" :class="{ 'input-light-mode-color': props.lightPermissionColors }" :style="agentOptionNameStyle(agent)">
-                        {{ agent.label }}
-                      </span>
-                      <span
-                        v-if="agent.description"
-                        class="agent-dropdown-description"
-                        :title="agent.description"
-                      >
-                        {{ agent.description }}
-                      </span>
-                      <span
-                        v-if="agent.id === props.selectedMode"
-                        class="agent-dropdown-current-mark"
-                        :title="$t('common.selected')"
-                        aria-hidden="true"
-                        >✓</span
-                      >
-                    </div>
+                    <AgentChoice :name="agent.label" :description="agent.description" :selected="agent.id === props.selectedMode" :color="agentOptionNameStyle(agent)?.color" />
                   </DropdownItem>
                 </div>
               </template>
-            </Dropdown>
+            </ComposerDropdown>
           </div>
+          <slot name="after-agent" />
           <div v-if="!props.acpPermissionControls && permissionModeOptions.length > 1" class="input-field compact">
             <Dropdown
               v-model="permissionModeValue"
@@ -509,17 +494,15 @@
           </Dropdown>
         </div>
         <slot name="after-thinking" />
-        <button
+        <ComposerToggle
           v-if="props.planModeAvailable"
-          type="button"
           class="input-plan-toggle"
-          :class="{ 'is-active': props.selectedMode === 'plan' }"
+          :active="props.selectedMode === 'plan'"
           :aria-label="$t('inputPanel.planModeTitle')"
-          :aria-pressed="props.selectedMode === 'plan'"
           :title="$t('kimiWeb.composer.planDescription')"
           :disabled="props.disabled"
           @click="emit('toggle-plan', props.selectedMode !== 'plan')"
-        >{{ $t('kimiWeb.composer.plan') }}</button>
+        >{{ $t('kimiWeb.composer.plan') }}</ComposerToggle>
         <div class="input-actions">
           <button
             type="button"
@@ -583,6 +566,9 @@ import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import { FileIcon, FolderIcon } from '@vue-symbols/icons';
 import Dropdown from './Dropdown.vue';
+import ComposerDropdown from './composer/ComposerDropdown.vue';
+import ComposerToggle from './composer/ComposerToggle.vue';
+import AgentChoice from './AgentChoice.vue';
 import DropdownItem from './Dropdown/Item.vue';
 import DropdownLabel from './Dropdown/Label.vue';
 import DropdownSearch from './Dropdown/Search.vue';
@@ -644,12 +630,15 @@ const props = defineProps<{
   lightPermissionColors?: boolean;
   agentOptions: AgentOption[];
   subagentOptions?: AgentOption[];
+  mentionAgentOptions?: AgentOption[];
   mentionFiles?: string[];
   mentionDirectories?: string[];
   preferFileMentions?: boolean;
   hasAgentOptions: boolean;
   agentPickerState?: AgentPickerState;
   hideAgentPicker?: boolean;
+  agentPickerDisabled?: boolean;
+  agentPickerTitle?: string;
   hideThinkingPicker?: boolean;
   selectedModel: string;
   selectedThinking: string | undefined;
@@ -873,7 +862,7 @@ const userHistory = computed(() => {
     const text = visibleText.trim();
     if (!text) continue;
     const agent = 'agent' in msg ? (msg.agent as string | undefined) : undefined;
-    const agentOption = agent ? props.agentOptions.find((a) => a.id === agent) : undefined;
+    const agentOption = agent ? (props.mentionAgentOptions ?? props.agentOptions).find((a) => a.id === agent) : undefined;
     const resolvedAgentColor = props.resolveAgentColor?.(agent);
     const model = msg.model ? `${msg.model.providerID}/${msg.model.modelID}` : undefined;
     const variant = getMessageVariant(msg);
@@ -906,7 +895,7 @@ function bookmarkCurrentInput() {
   const text = messageValue.value.trim();
   if (!text) return;
   const agent = props.selectedMode || undefined;
-  const agentOption = agent ? props.agentOptions.find((a) => a.id === agent) : undefined;
+  const agentOption = agent ? (props.mentionAgentOptions ?? props.agentOptions).find((a) => a.id === agent) : undefined;
   const resolvedAgentColor = props.resolveAgentColor?.(agent);
   addFavorite({
     text,
@@ -1143,7 +1132,7 @@ const agentMatches = computed(() => {
   // If afterAt contains whitespace, the agent name is already complete
   if (/\s/.test(afterAt)) return [];
 
-  const primaryAgents = props.agentOptions ?? [];
+  const primaryAgents = props.mentionAgentOptions ?? props.agentOptions ?? [];
   const subagents = props.subagentOptions ?? [];
   const allAgents = [...primaryAgents, ...subagents];
   const matches = allAgents.filter(
@@ -1507,7 +1496,7 @@ function prevCyclicIndex(current: string | undefined, options: Array<string | un
 }
 
 function cycleAgent(direction: 'next' | 'prev') {
-  if (!props.hasAgentOptions) return false;
+  if (props.agentPickerDisabled || !props.hasAgentOptions) return false;
   const options = (props.agentOptions ?? []).map((option) => option.id);
   const nextIndex =
     direction === 'next'
@@ -1714,7 +1703,7 @@ function findAgent(id: unknown): AgentOption | undefined {
   if (id == null) return undefined;
   // Search in both primary agents and subagents
   return (
-    (props.agentOptions ?? []).find((a) => a.id === id) ??
+    (props.mentionAgentOptions ?? props.agentOptions ?? []).find((a) => a.id === id) ??
     (props.subagentOptions ?? []).find((a) => a.id === id)
   );
 }
@@ -1919,34 +1908,6 @@ const inputMessageStyle = computed(() => {
   min-width: 110px;
 }
 
-.input-plan-toggle {
-  height: 28px;
-  padding: 4px 8px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--theme-input-text-muted);
-  font: inherit;
-  font-size: var(--type-sm);
-  cursor: pointer;
-}
-
-.input-plan-toggle:hover:not(:disabled),
-.input-plan-toggle.is-active {
-  background: var(--theme-input-active-bg);
-  color: var(--theme-input-accent);
-}
-
-.input-plan-toggle:focus-visible {
-  outline: 2px solid var(--theme-input-accent);
-  outline-offset: 2px;
-}
-
-.input-plan-toggle:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 .input-dropdown-root {
   width: 100%;
 }
@@ -1986,7 +1947,8 @@ const inputMessageStyle = computed(() => {
 }
 
 :deep(.input-control):focus-visible {
-  outline: none;
+  outline: 2px solid var(--theme-input-accent, var(--theme-border-accent));
+  outline-offset: 2px;
 }
 
 :deep(.input-dropdown-button) {
@@ -2024,8 +1986,11 @@ const inputMessageStyle = computed(() => {
   outline: none;
 }
 
+:deep(.input-dropdown-popup:has(.agent-choice)),
 :deep(.input-dropdown-popup:has(.agent-dropdown-item)) {
-  min-width: 320px;
+  min-width: min(var(--input-choice-menu-width, 320px), calc(100vw - 16px));
+  max-width: calc(100vw - 16px);
+  left: clamp(8px, anchor(left), calc(100vw - min(var(--input-choice-menu-width, 320px), calc(100vw - 16px)) - 8px));
 }
 
 :deep(.input-dropdown-popup:has(.model-picker)) {

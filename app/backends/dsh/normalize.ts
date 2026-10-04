@@ -15,7 +15,7 @@
  *     of appending to them;
  *   - unknown/malformed input is counted and ignored, never fatal.
  */
-import { AGENT_HANDLERS } from './handlers-agent';
+import { AGENT_HANDLERS, discoverDshSubagent } from './handlers-agent';
 import { CORE_HANDLERS } from './handlers-core';
 import { applyLiveAssistantChunk, registerAssistantAttempt, type DshHandler } from './handlers-core';
 import { isRecord, asNumber, asString, type DshCore } from './parts';
@@ -40,8 +40,6 @@ const IGNORED_EVENTS = new Set<string>([
   'command/done',
   'image/offload',
   'todo/write',
-  'model/selection',
-  'subagent/catalog',
   'compaction/start',
   'compaction/summary',
   'compaction/end',
@@ -102,11 +100,19 @@ export function createDshNormalizer(options: DshNormalizerOptions = {}): DshNorm
     appliedSeqs: new Set(),
     appliedChunks: new Set(),
     appliedMessages: new Set(),
+    pendingUserMessageIds: [],
+    turnParents: new Map(),
+    activeTurn: 0,
+    lastUserMessageId: '',
+    sessionTitle: '',
     sealedGroups: new Set(),
     groups: new Map(),
     toolParts: new Map(),
     model: { providerID: '', modelID: '' },
     agentPreset: '',
+    permissionPreset: '',
+    turnPermissionPresets: new Map(),
+    userMessages: new Map(),
     records: [],
     attempts: new Map(),
   };
@@ -217,6 +223,21 @@ export function createDshNormalizer(options: DshNormalizerOptions = {}): DshNorm
     for (const record of records) {
       duplicateCount += applyRecord(record, ops).duplicateCount;
     }
+    const projections = isRecord(frame.projections) ? frame.projections : {};
+    const values = isRecord(projections.values) ? projections.values : {};
+    const permissions = isRecord(values.permissions) ? values.permissions : {};
+    const currentPermission = asString(permissions.currentValue);
+    if (currentPermission) core.permissionPreset = currentPermission;
+    const title = asString(values.title);
+    if (title && title !== core.sessionTitle) {
+      core.sessionTitle = title;
+      ops.push({ kind: 'session-title', sessionId: core.sessionId, title, messageSeqs: [], sourceKind: 'projection', time: core.now() });
+    }
+    if (Array.isArray(values.subagentCatalog)) {
+      for (const entry of values.subagentCatalog) {
+        if (isRecord(entry)) discoverDshSubagent(core, entry, ops);
+      }
+    }
     if (asNumber(frame.cursor) !== undefined) core.cursor = Math.max(core.cursor, asNumber(frame.cursor) ?? core.cursor);
     return { eventType: 'snapshot', sessionId: core.sessionId, duplicate: duplicateCount > 0, duplicateCount, ops };
   }
@@ -252,11 +273,17 @@ export function createDshNormalizer(options: DshNormalizerOptions = {}): DshNorm
     core.appliedSeqs.clear();
     core.appliedChunks.clear();
     core.appliedMessages.clear();
+    core.pendingUserMessageIds.length = 0;
+    core.turnParents.clear();
+    core.activeTurn = 0;
+    core.lastUserMessageId = '';
+    core.sessionTitle = '';
     core.sealedGroups.clear();
     core.groups.clear();
     core.toolParts.clear();
     core.attempts.clear();
     core.records.length = 0;
+    core.model = { providerID: '', modelID: '' };
     core.cursor = -1;
     core.sessionId = address?.kind === 'session'
       ? address.sessionId
@@ -264,6 +291,9 @@ export function createDshNormalizer(options: DshNormalizerOptions = {}): DshNorm
         ? address.childSessionId
         : '';
     core.agentPreset = '';
+    core.permissionPreset = '';
+    core.turnPermissionPresets.clear();
+    core.userMessages.clear();
     Object.assign(stats, newStats());
   }
 
