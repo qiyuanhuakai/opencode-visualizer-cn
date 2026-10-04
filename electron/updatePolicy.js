@@ -1,6 +1,6 @@
+import { parseUpdateVersion } from './updateVersion.js';
+export { isNewerVersion, parseInstalledVersion } from './updateVersion.js';
 const REPOSITORY_PATH = '/repos/qiyuanhuakai/opencode-visualizer-cn/';
-const VERSION_PATTERN = /^v?(\d+\.\d+\.\d+)$/u;
-const AUTOMATIC_VERSION_PATTERN = /^(\d+\.\d+\.\d+)$/u;
 const SHA256_PATTERN = /^sha256:([a-fA-F0-9]{64})$/u;
 const SHA512_PATTERN = /^[A-Za-z0-9+/]{86}==$/u;
 const SUPPORTED_ARCHITECTURES = new Set(['x64', 'arm64']);
@@ -17,12 +17,21 @@ export function parseStableRelease(value) {
   if (!isRecord(value) || value.draft !== false || value.prerelease !== false) {
     throw new DesktopUpdatePolicyError('GitHub did not return a stable release');
   }
-  const match = typeof value.tag_name === 'string' ? VERSION_PATTERN.exec(value.tag_name) : null;
-  if (!match || !Array.isArray(value.assets)) {
-    throw new DesktopUpdatePolicyError('GitHub returned invalid stable release metadata');
+  const release = parsePublishedRelease(value);
+  if (parseUpdateVersion(release.version).prerelease.length > 0) {
+    throw new DesktopUpdatePolicyError('GitHub did not return a stable release');
   }
+  return release;
+}
+
+export function parsePublishedRelease(value) {
+  if (!isRecord(value) || value.draft !== false || typeof value.prerelease !== 'boolean' ||
+    typeof value.tag_name !== 'string' || !Array.isArray(value.assets)) {
+    throw new DesktopUpdatePolicyError('GitHub returned invalid published release metadata');
+  }
+  const { version } = parseUpdateVersion(value.tag_name);
   return {
-    version: match[1],
+    version,
     assets: value.assets.map(parseAsset),
   };
 }
@@ -60,10 +69,11 @@ export function selectAutomaticAppFile(info, platform, arch, target) {
   if (
     !isRecord(info) ||
     typeof info.version !== 'string' ||
-    !AUTOMATIC_VERSION_PATTERN.test(info.version)
+    info.version.startsWith('v')
   ) {
-    throw new DesktopUpdatePolicyError('Automatic update metadata has no stable version');
+    throw new DesktopUpdatePolicyError('Automatic update metadata has no valid version');
   }
+  parseUpdateVersion(info.version);
   const expected = automaticAppNames(info.version, platform, arch, target);
   if (!Array.isArray(info.files) || info.files.length !== expected.names.size) {
     throw new DesktopUpdatePolicyError(
@@ -103,22 +113,6 @@ export function sha256FromDigest(asset) {
     throw new DesktopUpdatePolicyError(`Release asset ${asset.name} has no valid SHA-256 digest`);
   }
   return match[1].toLowerCase();
-}
-
-export function isNewerVersion(candidate, current) {
-  if (current === null) return true;
-  const candidateParts = parseVersionParts(candidate);
-  const currentParts = parseVersionParts(current);
-  for (let index = 0; index < candidateParts.length; index += 1) {
-    if (candidateParts[index] === currentParts[index]) continue;
-    return candidateParts[index] > currentParts[index];
-  }
-  return false;
-}
-
-export function parseInstalledVersion(output) {
-  const match = /(?:^|\s)v?(\d+\.\d+\.\d+)(?:\s|$)/u.exec(output.trim());
-  return match ? match[1] : null;
 }
 
 export function automaticAppUpdateSupported(platform, hasAppImage, packageType) {
@@ -212,12 +206,6 @@ function automaticAppNames(version, platform, arch, target) {
     return { names: new Set([appImage, deb]), selected: target === 'appimage' ? appImage : deb };
   }
   throw new DesktopUpdatePolicyError('Automatic app update target does not match the platform');
-}
-
-function parseVersionParts(version) {
-  const match = VERSION_PATTERN.exec(version);
-  if (!match) throw new DesktopUpdatePolicyError(`Invalid update version: ${version}`);
-  return match[1].split('.').map(BigInt);
 }
 
 function isRecord(value) {

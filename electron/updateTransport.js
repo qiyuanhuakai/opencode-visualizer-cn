@@ -5,9 +5,12 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { parseStableRelease } from './updatePolicy.js';
+import { isNewerVersion } from './updateVersion.js';
+import { selectLatestPublishedRelease } from './updateRelease.js';
 
-const API_URL = 'https://api.github.com/repos/qiyuanhuakai/opencode-visualizer-cn/releases/latest';
+const API_URL = 'https://api.github.com/repos/qiyuanhuakai/opencode-visualizer-cn/releases';
+const RELEASE_PAGE_SIZE = 30;
+const MAX_RELEASE_PAGES = 10;
 const REQUEST_TIMEOUT_MS = 15_000;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 const MAX_METADATA_BYTES = 2 * 1024 * 1024;
@@ -69,13 +72,27 @@ export function createUpdateTransport(options = {}) {
     return Buffer.concat(chunks);
   };
   const getLatestRelease = async () => {
-    const body = await requestBuffer(new URL(API_URL), 'application/vnd.github+json', MAX_METADATA_BYTES);
-    try {
-      return parseStableRelease(JSON.parse(body.toString('utf8')));
-    } catch (error) {
-      if (error instanceof SyntaxError) throw new Error('GitHub returned malformed release metadata');
-      throw error;
+    let latest = null;
+    for (let page = 1; page <= MAX_RELEASE_PAGES; page += 1) {
+      const url = new URL(API_URL);
+      url.searchParams.set('per_page', String(RELEASE_PAGE_SIZE));
+      url.searchParams.set('page', String(page));
+      const body = await requestBuffer(url, 'application/vnd.github+json', MAX_METADATA_BYTES);
+      let releases;
+      try {
+        releases = JSON.parse(body.toString('utf8'));
+      } catch (error) {
+        if (error instanceof SyntaxError) throw new Error('GitHub returned malformed release metadata');
+        throw error;
+      }
+      const candidate = selectLatestPublishedRelease(releases);
+      if (candidate && (latest === null || isNewerVersion(candidate.version, latest.version))) latest = candidate;
+      if (releases.length < RELEASE_PAGE_SIZE) {
+        if (latest === null) throw new Error('GitHub returned no published versioned releases');
+        return latest;
+      }
     }
+    throw new Error('GitHub release list exceeded the page limit');
   };
   const downloadAsset = async (asset, onProgress = () => undefined) => {
     assertActive();

@@ -13,6 +13,7 @@ export interface ReleaseAsset {
 
 export interface StableRelease {
   readonly version: string;
+  readonly tagName?: string;
   readonly assets: readonly ReleaseAsset[];
 }
 
@@ -24,6 +25,7 @@ export interface AutomaticUpdateFile {
 }
 
 export declare function parseStableRelease(value: unknown): StableRelease;
+export declare function parsePublishedRelease(value: unknown): StableRelease;
 export declare function selectManualAsset(
   release: StableRelease,
   component: UpdateComponent,
