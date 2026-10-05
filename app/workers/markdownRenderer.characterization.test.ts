@@ -89,6 +89,35 @@ describe('markdown renderer characterization (markdown-it + shiki)', () => {
     expect(html).toContain('>vis</a>');
   });
 
+  it('routes absolute markdown file links to previews even without a file listing', async () => {
+    const html = await renderMarkdown('[完整计划](/home/qiyuaner/apps/vis_app/vis/.omo/plans/vis-v090-unified-runtime.md)');
+    expect(html).toContain('data-file-ref="/home/qiyuaner/apps/vis_app/vis/.omo/plans/vis-v090-unified-runtime.md"');
+    expect(html).toContain('>完整计划</a>');
+    expect(html).not.toContain('target="_blank"');
+  });
+
+  it('decodes local link paths and forwards line references', async () => {
+    const html = await renderMarkdown('[报告](</tmp/中文 report.md:12-14>) [source](src/lib.ts:20)', ['src/lib.ts']);
+    expect(html).toContain('data-file-ref="/tmp/中文 report.md"');
+    expect(html).toContain('data-file-lines="12-14"');
+    expect(html).toContain('data-file-ref="src/lib.ts"');
+    expect(html).toContain('data-file-lines="20"');
+  });
+
+  it('keeps network links and fragment links out of file previews', async () => {
+    const html = await renderMarkdown('[network](//example.com/a.md) [section](#intro) [web](https://example.com/a.md)', ['a.md']);
+    expect(html).not.toContain('data-file-ref');
+    expect(html.match(/target="_blank"/g)).toHaveLength(3);
+  });
+
+  it('supports file line fragments while leaving malformed URL escapes alone', async () => {
+    const html = await renderMarkdown('[range](/tmp/source.ts#L3-L5) [bad](/tmp/bad%FF.md)');
+    expect(html).toContain('data-file-ref="/tmp/source.ts"');
+    expect(html).toContain('data-file-lines="3-5"');
+    expect(html).not.toContain('data-file-ref="/tmp/bad');
+    expect(html).toContain('target="_blank"');
+  });
+
   it('does not auto-linkify bare URLs (linkify disabled)', async () => {
     const html = content(await renderMarkdown('Visit https://example.com/a?b=1 now.'));
     expect(html).toContain('https://example.com/a?b=1');

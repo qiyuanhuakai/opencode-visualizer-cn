@@ -32,6 +32,7 @@ const filePopup = reactive({
 
 function resolveFileRef(ref: string): string[] {
   if (!ref) return [];
+  if (/^\/(?!\/)/.test(ref) || /^[a-z]:[\\/]/i.test(ref)) return [ref];
   if (ref.includes('/')) {
     return props.files.filter((path) => path === ref || path.endsWith(`/${ref}`));
   }
@@ -79,6 +80,7 @@ function handleContentClick(event: MouseEvent) {
   const lines = fileRefEl.dataset.fileLines?.trim() || undefined;
   const candidates = resolveFileRef(ref);
   if (candidates.length === 0) return;
+  event.preventDefault();
   if (candidates.length === 1) {
     emit('open-file', candidates[0], lines);
     return;
