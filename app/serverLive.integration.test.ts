@@ -1,6 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { get as httpGet, createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { connect } from 'node:net';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -108,42 +107,29 @@ function stopServer(child: ChildProcess): Promise<void> {
   });
 }
 
-function probePort(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = connect({ host: '127.0.0.1', port });
-    const cleanup = () => {
-      socket.removeListener('connect', onConnect);
-      socket.removeListener('error', onError);
-      socket.removeListener('timeout', onTimeout);
-      socket.destroy();
-    };
-    const onConnect = () => {
-      cleanup();
-      resolve(true);
-    };
-    const onError = () => {
-      cleanup();
-      resolve(false);
-    };
-    const onTimeout = () => {
-      // Could not prove the port is closed; report as listening.
-      cleanup();
-      resolve(true);
-    };
-    socket.setTimeout(2_000);
-    socket.once('connect', onConnect);
-    socket.once('error', onError);
-    socket.once('timeout', onTimeout);
+function canBindPort(port: number): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') resolve(false);
+      else reject(error);
+    });
+    server.listen({ host: '127.0.0.1', port, exclusive: true }, () => {
+      server.close((error) => {
+        if (error) reject(error);
+        else resolve(true);
+      });
+    });
   });
 }
 
 async function expectPortReleased(port: number): Promise<void> {
   const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
-    if (!(await probePort(port))) return;
+    if (await canBindPort(port)) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  expect(await probePort(port)).toBe(false);
+  expect(await canBindPort(port)).toBe(true);
 }
 
 function startFixture(): Promise<{ server: Server; port: number }> {
@@ -295,7 +281,7 @@ describe('server.js live contract', () => {
 
       expect(host).toBe('127.0.0.1');
       expect(port).toBeGreaterThan(0);
-      expect(await probePort(port)).toBe(true);
+      expect(await canBindPort(port)).toBe(false);
 
       await stopServer(child);
       await expectPortReleased(port);
@@ -308,8 +294,8 @@ describe('server.js live contract', () => {
         `http://127.0.0.1:${fixture.port}`,
       ]);
 
-      expect(await probePort(port)).toBe(true);
-      expect(await probePort(fixture.port)).toBe(true);
+      expect(await canBindPort(port)).toBe(false);
+      expect(await canBindPort(fixture.port)).toBe(false);
 
       await stopServer(child);
       await expectPortReleased(port);
