@@ -4,6 +4,16 @@
 
 ---
 
+## [Unreleased]
+
+### 文件链接与本地开发连接
+
+- [x] Markdown 本地文件链接复用 Vis 文件预览，支持绝对路径、已知相对路径、中文与空格路径、行号范围和 `#L` 行号片段；保留网页链接、行内代码引用与重名文件选择行为。
+- [x] vis_bridge 的 HTTP 与 WebSocket 允许本机 `localhost`、`127.0.0.1`、`[::1]` 页面在 `5173` 或 `10000–65535` 端口免 Token 连接，修复高端口开发页面被来源白名单拒绝的问题；已配置 Token 时仍需认证。
+- [x] 服务退出测试改用重新绑定原地址与端口验证释放，避免 WSL Consomme 的主机转发仍接受 TCP 连接造成误报；保留运行期间端口占用检查（[#160](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/160)）。
+
+---
+
 ## [v0.8.20-alpha.2 released]
 
 ### 桌面版与 vis_bridge 预发布更新
