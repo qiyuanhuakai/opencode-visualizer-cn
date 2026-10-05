@@ -57,7 +57,14 @@ export function isAllowedOrigin(origin, bridgeToken) {
   if (bridgeToken) return true;
   if (TOKENLESS_VIS_ORIGINS.has(origin)) return true;
   try {
-    return TOKENLESS_VIS_ORIGINS.has(new URL(origin).origin);
+    const parsed = new URL(origin);
+    if (TOKENLESS_VIS_ORIGINS.has(parsed.origin)) return true;
+    const port = Number(parsed.port);
+    return (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      isLoopbackHostname(parsed.hostname) &&
+      (port === 5173 || (port >= 10000 && port <= 65535))
+    );
   } catch {
     return false;
   }

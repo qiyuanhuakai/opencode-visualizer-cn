@@ -607,6 +607,8 @@ vis_bridge stop
 vis_bridge restart
 ```
 
+Without a bridge token, HTTP and WebSocket requests from local `http://` / `https://` pages are allowed on port `5173` and ports `10000–65535` for `localhost`, `127.0.0.1`, and `[::1]`. The Electron and official GitHub Pages origins remain allowed. Other browser origins require a bridge token; when a token is configured, clients must supply it even for local pages.
+
 Open the bridge's active config file with `$EDITOR` (the file is created on first use):
 
 ```bash

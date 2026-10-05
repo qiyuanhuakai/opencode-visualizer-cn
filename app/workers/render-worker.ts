@@ -80,6 +80,24 @@ function parseInlineFileRef(rawRef: string, fileSet: Set<string>): ParsedInlineF
   return { path, lines };
 }
 
+function parseMarkdownFileLink(href: string, fileSet: Set<string>): ParsedInlineFileRef | null {
+  if (/^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(href) && !/^[a-z]:[\\/]/i.test(href)) return null;
+  let ref: string;
+  try {
+    ref = decodeURIComponent(href);
+  } catch (error) {
+    if (error instanceof URIError) return null;
+    throw error;
+  }
+  const known = parseInlineFileRef(ref, fileSet);
+  if (known) return known;
+  const match = /^(.*?)(?::(\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)|#L(\d+)(?:-L?(\d+))?)$/.exec(ref);
+  const path = match?.[1] ?? ref;
+  if (!/^\/(?!\/)/.test(path) && !/^[a-z]:[\\/]/i.test(path) && !fileSet.has(path)) return null;
+  const lines = match?.[2] ?? (match?.[3] ? `${match[3]}${match[4] ? `-${match[4]}` : ''}` : undefined);
+  return { path, lines };
+}
+
 type HighlighterContext = {
   highlighter: Highlighter;
   languageState: LanguageCacheState;
@@ -705,10 +723,20 @@ function getMarkdownIt(highlighter: Highlighter, theme: string) {
         return self.renderToken(tokens, idx, options);
       };
 
-    cachedMd.renderer.rules.link_open = function (tokens, idx, options, _env, self) {
-      tokens[idx].attrSet('target', '_blank');
-      tokens[idx].attrSet('rel', 'noopener noreferrer');
-      return defaultLinkOpen(tokens, idx, options, _env, self);
+    cachedMd.renderer.rules.link_open = function (tokens, idx, options, env, self) {
+      const token = tokens[idx];
+      const fileSet = (env as MarkdownRenderEnv | undefined)?.fileSet ?? new Set<string>();
+      const href = token.attrGet('href');
+      const parsed = typeof href === 'string' ? parseMarkdownFileLink(href, fileSet) : null;
+      if (parsed) {
+        token.attrSet('data-file-ref', parsed.path);
+        if (parsed.lines) token.attrSet('data-file-lines', parsed.lines);
+        token.attrJoin('class', 'file-ref');
+      } else {
+        token.attrSet('target', '_blank');
+        token.attrSet('rel', 'noopener noreferrer');
+      }
+      return defaultLinkOpen(tokens, idx, options, env, self);
     };
 
     const defaultCodeInline =

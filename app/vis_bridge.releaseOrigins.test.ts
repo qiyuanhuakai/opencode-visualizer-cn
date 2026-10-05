@@ -7,8 +7,28 @@ import { createVisBridgeServer } from '../vis_bridge';
 
 type TestServer = ReturnType<typeof createVisBridgeServer>;
 
-const RELEASE_ORIGINS = ['app://index.html', 'https://qiyuanhuakai.github.io'] as const;
-const UNTRUSTED_ORIGINS = ['null', 'app://other.html', 'https://example.com'] as const;
+const RELEASE_ORIGINS = [
+  'app://index.html',
+  'https://qiyuanhuakai.github.io',
+  'http://127.0.0.1:5173',
+  'http://localhost:10000',
+  'http://127.0.0.1:45757',
+  'http://[::1]:65535',
+  'https://localhost:45757',
+] as const;
+const UNTRUSTED_ORIGINS = [
+  'null',
+  'app://other.html',
+  'https://example.com',
+  'http://localhost:9999',
+  'http://127.0.0.1:5174',
+  'http://[::1]:80',
+  'http://198.18.0.1:45757',
+  'http://localhost.example.com:45757',
+  'http://127.0.0.1.example.com:45757',
+  'ftp://localhost:45757',
+  'http://localhost:65536',
+] as const;
 const servers: TestServer[] = [];
 
 afterEach(async () => {
