@@ -1,0 +1,13 @@
+{
+  "seed": "090",
+  "profiles": [10000, 100000],
+  "sources": ["opencode", "codex", "acp", "kimi-web", "dsh"],
+  "worktrees": 200,
+  "chunkBytes": 65536,
+  "bodyBytes": 2048,
+  "attachmentEvery": 100,
+  "attachmentBytes": 1048576,
+  "largeBodyBytes": 16777216,
+  "largeAttachmentBytes": 67108864,
+  "timestamp": 1791158400000
+}
