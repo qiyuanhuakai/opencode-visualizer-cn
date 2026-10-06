@@ -77,6 +77,7 @@ process.on('message', (message) => {
         result = row ? JSON.parse(row.result) : null; break;
       }
       case 'get': result = queries.get(params); break;
+      case 'getControl': assertOwner(); result = queries.get(params); break;
       case 'page': result = queries.page(params); break;
       case 'readChunk': result = queries.readChunk(params); break;
       case 'snapshot': result = queries.snapshot(params); break;
