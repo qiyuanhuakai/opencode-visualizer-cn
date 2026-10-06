@@ -47,6 +47,7 @@ export function createRuntimeStore(input) {
     mutate: (params) => dispatch('mutate', params),
     mutateControl: (params) => dispatch('mutateControl', params, true),
     readIntent: (params) => dispatch('readIntent', params, true),
+    getControl: (params) => dispatch('getControl', params, true),
     get: (params) => dispatch('get', params), page: (params) => dispatch('page', params),
     snapshot: (params) => dispatch('snapshot', params), replay: (params) => dispatch('replay', params), readChunk: (params) => dispatch('readChunk', params),
     inspect: () => dispatch('inspect', {}, true),
