@@ -3,6 +3,10 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 
+if (workerData.mode === 'legacy-export') {
+  const { serveLegacyExportWorker } = await import('./legacyExportSource.mjs');
+  serveLegacyExportWorker(parentPort, workerData.filePath);
+} else {
 const historyPrefix = 'opencode.state.codexAuxiliaryHistory.v1.';
 const namespace = 'legacy-thread-id';
 const legacyFile = workerData.filePath;
@@ -233,3 +237,5 @@ parentPort.on('message', ({ id, method, payload }) => {
   catch (error) { parentPort.postMessage({ id, ok: false, error: { name: error.name, message: error.message } }); }
   if (method === 'close') parentPort.close();
 });
+
+}
