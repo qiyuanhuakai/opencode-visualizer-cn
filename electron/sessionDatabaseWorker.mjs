@@ -7,6 +7,10 @@ if (workerData.mode === 'legacy-export') {
   const { serveLegacyExportWorker } = await import('./legacyExportSource.mjs');
   serveLegacyExportWorker(parentPort, workerData.filePath);
 } else {
+  serveSessionDatabaseWorker();
+}
+
+function serveSessionDatabaseWorker() {
 const historyPrefix = 'opencode.state.codexAuxiliaryHistory.v1.';
 const namespace = 'legacy-thread-id';
 const legacyFile = workerData.filePath;
