@@ -178,7 +178,8 @@
             <InputPanel
               ref="inputPanelRef"
               :codex-commands-enabled="activeBackendKind === 'codex'"
-              :disabled="connectionState !== 'ready' || (!!dshComposerClient && isSending)"
+              :read-only="migrationStoragePaused"
+              :disabled="migrationStoragePaused || connectionState !== 'ready' || (!!dshComposerClient && isSending)"
               :current-session-id="selectedSessionId"
               :session-parent-by-id="sessionParentById"
               :can-send="canSend"
@@ -670,6 +671,7 @@
 </template>
 
 <script lang="ts" setup>
+import { assertLegacyEditAdmission, legacyEditingPaused, onLegacyWriterPhase, retainFrozenLegacyWrite } from './runtime/migration/writerFreeze';
 import {
   computed,
   defineAsyncComponent,
@@ -2382,6 +2384,7 @@ const kimiWebServerDefaultPermissionMode = ref<KimiWebPermissionMode>('manual');
 const kimiTurnPermissions = createKimiWebTurnPermissionStore();
 function rememberKimiPermissionMode(value: KimiWebPermissionMode) {
   lastKimiPermissionMode.value = value;
+  if (retainFrozenLegacyWrite({ channel: 'storage', key: KIMI_PERMISSION_STORAGE_KEY, value })) return;
   try { window.localStorage.setItem(KIMI_PERMISSION_STORAGE_KEY, value); } catch { /* unavailable storage */ }
 }
 const selectedAcpPermissionMode = ref('normal');
@@ -2393,6 +2396,8 @@ const providerConfig = ref<ProviderConfigState | null>(null);
 const projectError = ref('');
 const worktreeError = ref('');
 const sessionError = ref('');
+const migrationStoragePaused = ref(legacyEditingPaused());
+const stopMigrationPhase = onLegacyWriterPhase(() => { migrationStoragePaused.value = legacyEditingPaused(); });
 const messageInput = ref('');
 const attachments = ref<Attachment[]>([]);
 const sendStatus = ref<LocalizedStatusState>({ mode: 'i18n', key: 'app.status.ready' });
@@ -3725,14 +3730,9 @@ function writeHiddenModelsToStorage(nextHiddenModels: string[]) {
         Boolean(entry),
       ),
   ];
-  window.localStorage.setItem(
-    MODEL_VISIBILITY_STORAGE_KEY,
-    JSON.stringify({
-      ...store,
-      user: nextUser,
-    }),
-  );
-  window.localStorage.removeItem(LEGACY_DISABLED_MODELS_STORAGE_KEY);
+  const value = JSON.stringify({ ...store, user: nextUser });
+  if (!retainFrozenLegacyWrite({ channel: 'storage', key: MODEL_VISIBILITY_STORAGE_KEY, value })) window.localStorage.setItem(MODEL_VISIBILITY_STORAGE_KEY, value);
+  if (!retainFrozenLegacyWrite({ channel: 'storage', key: LEGACY_DISABLED_MODELS_STORAGE_KEY, value: null })) window.localStorage.removeItem(LEGACY_DISABLED_MODELS_STORAGE_KEY);
 }
 
 function isModelAvailable(modelId: string) {
@@ -4365,6 +4365,7 @@ function clearComposerDraftForCurrentContext() {
 }
 
 function handleMessageInputUpdate(value: string) {
+  assertLegacyEditAdmission();
   messageInput.value = value;
   scheduleComposerDraftPersistence();
 }
@@ -11899,6 +11900,8 @@ onMounted(() => {
   );
 });
 onBeforeUnmount(() => {
+  stopMigrationPhase();
+  composerDraftPersistence.dispose();
   stopRecordingOpenCodeHistory();
   window.removeEventListener('pagehide', flushOpenCodeSubagentHistory);
   flushOpenCodeSubagentHistory();

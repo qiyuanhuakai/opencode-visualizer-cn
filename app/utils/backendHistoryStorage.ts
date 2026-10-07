@@ -1,3 +1,4 @@
+import { registerLegacyWriter, retainFrozenLegacyWrite } from '../runtime/migration/writerFreeze';
 import type { MessageInfo, MessagePart } from '../types/sse';
 import { storageKey, storageRead, storageSet } from './storageKeys';
 
@@ -141,6 +142,7 @@ async function indexedHistory(key: string, sessionID: string, incoming?: readonl
 }
 
 async function persist(key: string, sessionID: string, incoming?: readonly BackendHistoryEntry[]) {
+  if (incoming && retainFrozenLegacyWrite({ channel: 'backend-history', key, value: JSON.stringify(incoming) })) return [...incoming];
   const native = typeof window === 'undefined' ? undefined : window.electronAPI?.sessionDatabase;
   if (native) {
     const namespace = `backend-history-v1:${key.split('.')[3]}`;
@@ -205,7 +207,7 @@ export function createBackendHistoryStorage({ backend, scope }: { readonly backe
       }
     });
   }
-  return {
+  const api = {
     read: (sessionID: string) => update(sessionID),
     merge: (sessionID: string, entries: readonly BackendHistoryEntry[]) => update(sessionID, entries),
     async flush(): Promise<void> {
@@ -219,4 +221,6 @@ export function createBackendHistoryStorage({ backend, scope }: { readonly backe
       await window.electronAPI?.sessionDatabase?.flush();
     },
   };
+  registerLegacyWriter(api.flush);
+  return api;
 }
