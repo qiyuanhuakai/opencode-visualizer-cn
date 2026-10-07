@@ -9,7 +9,7 @@ export function createAcpStdoutForwarder(options) {
 
   async function handleMessage(entry, message, line) {
     if (entries.get(entry.agent.id) !== entry || entry.status.state === 'stopping') return;
-    handleClientRequest?.observeAgentMessage?.(message, { agentId: entry.agent.id });
+    if (!entry.runtimeOwned) handleClientRequest?.observeAgentMessage?.(message, { agentId: entry.agent.id });
     if (typeof message.method !== 'string' && message.id !== undefined && message.id !== null) {
       const pending = entry.pendingAgentResponses.get(message.id);
       if (pending) {
@@ -24,6 +24,7 @@ export function createAcpStdoutForwarder(options) {
       }
     }
     if (
+      entry.runtimeOwned ||
       !handleClientRequest ||
       typeof message.method !== 'string' ||
       !('id' in message) ||
@@ -68,6 +69,7 @@ export function createAcpStdoutForwarder(options) {
           entry.stdoutBuffer = '';
           entry.discardingOversizedFrame = true;
           entry.status.droppedFrames += 1;
+          if (entry.runtimeOwned) entry.client?.close(1009, 'Native JSON-RPC frame too large.');
         }
         return;
       }
@@ -76,6 +78,7 @@ export function createAcpStdoutForwarder(options) {
       if (!line) continue;
       if (line.length > MAX_STDOUT_FRAME_CHARS) {
         entry.status.droppedFrames += 1;
+        if (entry.runtimeOwned) entry.client?.close(1009, 'Native JSON-RPC frame too large.');
         continue;
       }
       let message;
@@ -83,6 +86,17 @@ export function createAcpStdoutForwarder(options) {
         message = JSON.parse(line);
       } catch {
         entry.status.droppedFrames += 1;
+        if (entry.runtimeOwned) entry.client?.close(1003, 'Invalid native JSON-RPC payload.');
+        continue;
+      }
+      if (entry.runtimeOwned) {
+        if (entries.get(entry.agent.id) === entry && entry.status.state !== 'stopping') {
+          try { entry.client?.send(line); }
+          catch {
+            entry.status.droppedFrames += 1;
+            entry.client?.close(1003, 'Invalid native JSON-RPC message.');
+          }
+        }
         continue;
       }
       entry.stdoutQueue = entry.stdoutQueue
