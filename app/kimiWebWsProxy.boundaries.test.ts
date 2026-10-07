@@ -1,12 +1,13 @@
 import { once } from 'node:events';
+import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
-import { createConnection, createServer, type Server, type Socket } from 'node:net';
+import { createConnection, createServer, Socket, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Duplex } from 'node:stream';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createKimiWebTokenProvider } from '../bridge/kimiWebToken.js';
 import { handleKimiWebUpgrade } from '../bridge/kimiWebWsProxy.js';
@@ -87,7 +88,8 @@ async function startFakeUpstream(
   upstreamSockets.push(sockets);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('Fake upstream address unavailable.');
+  if (!address || typeof address === 'string')
+    throw new Error('Fake upstream address unavailable.');
   return { connections, target: `ws://127.0.0.1:${address.port}/api/v1/ws` };
 }
 
@@ -352,21 +354,69 @@ describe('kimi web WebSocket upgrade proxy boundaries', () => {
   });
 
   it('times out a stalled upstream handshake and destroys the upstream socket', async () => {
-    const upstream = await startFakeUpstream(() => {});
-    const bridge = await startBridge({
-      target: upstream.target,
-      bridgeToken: BRIDGE_TOKEN,
-      handshakeTimeoutMs: 40,
-      getUpstreamAuthorization: () => UPSTREAM_BEARER,
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    const handle = realSetTimeout(() => {}, 0);
+    realClearTimeout(handle);
+    let fire: (() => void) | undefined;
+    let remaining = 40;
+    let cancelled = false;
+    const timer = vi
+      .spyOn(globalThis, 'setTimeout')
+      .mockImplementation((callback, delay, ...args) => {
+        if (delay !== 40 || fire) return realSetTimeout(callback, delay, ...args);
+        fire = () => callback(...args);
+        return handle;
+      });
+    const clear = vi.spyOn(globalThis, 'clearTimeout').mockImplementation((value) => {
+      if (value === handle) cancelled = true;
+      realClearTimeout(value);
     });
-
-    const client = await openRawClient(bridge.port, `${KIMI_PATH}?token=${BRIDGE_TOKEN}`);
-
-    await waitFor(() => client.text().includes('502 Bad Gateway'), '502 after timeout');
-    await waitFor(
-      () => upstream.connections[0]?.socket.destroyed === true,
-      'upstream socket destroyed',
-    );
+    const advance = (milliseconds: number) => {
+      remaining -= milliseconds;
+      if (remaining <= 0 && !cancelled) fire?.();
+    };
+    const nativeClients = new Set<Socket>();
+    const capture = (message: unknown) => {
+      if (
+        message &&
+        typeof message === 'object' &&
+        'socket' in message &&
+        message.socket instanceof Socket
+      )
+        nativeClients.add(message.socket);
+    };
+    subscribe('net.client.socket', capture);
+    try {
+      let handshakeReceived = false;
+      const upstream = await startFakeUpstream(() => {
+        handshakeReceived = true;
+      });
+      const bridge = await startBridge({
+        target: upstream.target,
+        bridgeToken: BRIDGE_TOKEN,
+        handshakeTimeoutMs: 40,
+        getUpstreamAuthorization: () => UPSTREAM_BEARER,
+      });
+      const client = await openRawClient(bridge.port, `${KIMI_PATH}?token=${BRIDGE_TOKEN}`);
+      await waitFor(() => handshakeReceived, 'real upstream handshake');
+      const remote = upstream.connections[0].socket;
+      const native = [...nativeClients].find((socket) => socket.remotePort === remote.localPort);
+      if (!native) throw new Error('Owned native upstream client was not observed.');
+      expect(fire).toBeDefined();
+      advance(39);
+      expect([native.destroyed, remote.destroyed]).toEqual([false, false]);
+      expect(client.text()).not.toContain('502 Bad Gateway');
+      advance(1);
+      await waitFor(() => client.text().includes('502 Bad Gateway'), '502 after timeout');
+      await waitFor(() => native.destroyed && remote.destroyed, 'both upstream sockets destroyed');
+      expect([native.destroyed, remote.destroyed]).toEqual([true, true]);
+    } finally {
+      unsubscribe('net.client.socket', capture);
+      timer.mockRestore();
+      clear.mockRestore();
+      realClearTimeout(handle);
+    }
   });
 
   it('declines non-kimi paths so the upgrade chain can continue', async () => {
