@@ -1,3 +1,4 @@
+import { registerLegacyWriter, retainFrozenLegacyWrite } from '../../runtime/migration/writerFreeze';
 type Entry = {
   readonly info: Record<string, unknown> & { readonly id: string };
   readonly parts: readonly (Record<string, unknown> & { readonly id: string })[];
@@ -139,7 +140,7 @@ export function writeNativeAuxiliarySnapshot(threadId: string, snapshot: unknown
     }
   }
   histories.set(threadId, history);
-  if (changed.length) enqueue(threadId, () => database.upsertHistory({ threadId, entries: changed }));
+  if (changed.length && !retainFrozenLegacyWrite({ channel: 'native-history', key: threadId, value: JSON.stringify({ entries: changed }) })) enqueue(threadId, () => database.upsertHistory({ threadId, entries: changed }));
 }
 
 export function clearNativeAuxiliaryHistory(threadId: string) {
@@ -150,7 +151,7 @@ export function clearNativeAuxiliaryHistory(threadId: string) {
   }
   histories.set(threadId, null);
   reads.delete(threadId);
-  enqueue(threadId, () => database.clearHistory({ threadId }));
+  if (!retainFrozenLegacyWrite({ channel: 'native-history', key: threadId, value: null })) enqueue(threadId, () => database.clearHistory({ threadId }));
 }
 
 export async function flushNativeAuxiliaryStorage() {
@@ -164,5 +165,7 @@ export async function flushNativeAuxiliaryStorage() {
   if (failure) throw failure;
   await nativeAuxiliaryDatabase()?.flush();
 }
+
+registerLegacyWriter(flushNativeAuxiliaryStorage);
 
 if (import.meta.hot) import.meta.hot.dispose(() => { unsubscribe?.(); listeners.clear(); });

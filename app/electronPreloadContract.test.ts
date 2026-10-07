@@ -45,6 +45,9 @@ interface ElectronApiSchema {
     migrate: (entries: Record<string, string>) => unknown;
   };
   sessionDatabase: {
+    exportBinding: (payload: unknown) => Promise<unknown>;
+    exportOpen: () => Promise<unknown>;
+    exportPage: (payload: unknown) => Promise<unknown>;
     readHistory: (payload: { threadId: string }) => Promise<unknown>;
     upsertHistory: (payload: { threadId: string; entries: unknown[] }) => Promise<unknown>;
     clearHistory: (payload: { threadId: string }) => Promise<unknown>;
@@ -161,7 +164,7 @@ function loadPreloadWithMocks(): LoadedPreload {
 describe('electron preload contract', () => {
   it('routes native database methods and unsubscribes identity-only invalidations', async () => {
     const { api, ipcRenderer } = loadPreloadWithMocks();
-    expect(Object.keys(api.sessionDatabase).sort()).toEqual(['clearHistory', 'flush', 'onHistoryChanged', 'readHistory', 'upsertHistory']);
+    expect(Object.keys(api.sessionDatabase).sort()).toEqual(['clearHistory', 'exportBinding', 'exportOpen', 'exportPage', 'flush', 'onHistoryChanged', 'readHistory', 'upsertHistory']);
     await api.sessionDatabase.readHistory({ threadId: 'thread' });
     await api.sessionDatabase.upsertHistory({ threadId: 'thread', entries: [] });
     await api.sessionDatabase.clearHistory({ threadId: 'thread' });
@@ -178,6 +181,23 @@ describe('electron preload contract', () => {
     unsubscribe();
     ipcRenderer.emit('session-database-history-changed', {}, 'second');
     expect(listener.mock.calls).toEqual([['thread']]);
+  });
+
+  it('routes legacy export requests through fixed IPC channels', async () => {
+    // Given: the actual preload running with an observable transport.
+    const { api, ipcRenderer } = loadPreloadWithMocks();
+    const payload = { token: { offset: 1 }, limit: 2 };
+    // When: the renderer opens and resumes an export.
+    const opened = await api.sessionDatabase.exportOpen();
+    const page = await api.sessionDatabase.exportPage(payload);
+    const binding = await api.sessionDatabase.exportBinding({ sourceKey: 'a'.repeat(64) });
+    // Then: each call preserves its IPC response and payload.
+    expect(ipcRenderer.invoke.mock.calls).toEqual([
+      ['session-database-exportOpen'],
+      ['session-database-exportPage', payload],
+      ['session-database-exportBinding', { sourceKey: 'a'.repeat(64) }],
+    ]);
+    expect([opened, page, binding]).toEqual(['invoked', 'invoked', 'invoked']);
   });
 
   it('exposes exactly the trusted top-level api names', () => {
