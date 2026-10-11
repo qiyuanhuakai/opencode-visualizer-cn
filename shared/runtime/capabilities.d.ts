@@ -8,12 +8,16 @@ export class ProtocolError extends TypeError {
   constructor(code: ErrorCode, field: string);
 }
 export type Method = 'runtime.inspect' | 'runtime.snapshot' | 'runtime.replay'
+  | 'runtime.target.attach' | 'runtime.target.detach' | 'runtime.snapshot.chunk' | 'runtime.entity.resolve'
+  | 'runtime.observer.open' | 'runtime.observer.read' | 'runtime.observer.resume' | 'runtime.observer.close'
+  | 'runtime.channel.open' | 'runtime.channel.ack' | 'runtime.channel.finish' | 'runtime.channel.cancel'
+  | 'runtime.pty.create' | 'runtime.pty.read' | 'runtime.pty.write' | 'runtime.pty.resize' | 'runtime.pty.detach'
   | 'session.list' | 'session.get' | 'session.history' | 'session.create' | 'session.send'
   | 'session.cancel' | 'interaction.respond' | 'session.subscribe' | 'session.close'
   | 'session.rename' | 'session.archive' | 'session.delete' | 'session.fork' | 'session.revert'
   | 'session.compact' | 'harness.models' | 'harness.providers' | 'harness.auth' | 'harness.settings'
   | 'harness.skills' | 'harness.mcp' | 'harness.commands' | 'harness.usage' | 'native.extension';
-export const METHODS: Readonly<Record<Method, 'read' | 'mutation'>>;
+export const METHODS: Readonly<Record<Method, 'read' | 'control' | 'mutation'>>;
 export type NativeExtension = {
   readonly owner: HarnessInstanceId;
   readonly name: string;

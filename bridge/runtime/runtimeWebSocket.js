@@ -39,26 +39,42 @@ export async function handleRuntimeUpgrade(request, socket, head, options) {
         '',
       ].join('\r\n'),
     );
-    const hello = connection.hello();
+    let dispatcher;
+    const canSend = (size) => !socket.destroyed && socket.writableLength + size <= LIMITS.outboundBytes;
     const send = (frame) => {
       const bytes = encodeWebSocketFrame(encodeFrame(frame));
-      if (socket.writableLength + bytes.length > LIMITS.outboundBytes) {
+      if (!canSend(bytes.length)) {
         socket.destroy();
         return;
       }
       socket.write(bytes);
     };
+    const sendBinary = (data) => {
+      const bytes = encodeWebSocketFrame(Buffer.from(data), 2);
+      if (!canSend(bytes.length)) { socket.destroy(); return; }
+      socket.write(bytes);
+    };
+    dispatcher = connection.openRuntime?.({ send, sendBinary, canSend });
+    const hello = dispatcher?.hello() ?? connection.hello();
     send(hello);
     let buffer = Buffer.alloc(0);
+    let fragmented;
     const consume = (chunk) => {
       try {
-        if (buffer.length + chunk.length > LIMITS.jsonBytes + 14)
+        if (buffer.length + chunk.length + (fragmented?.payload.length ?? 0) > LIMITS.outboundBytes)
           throw new ProtocolError('invalid_request', 'frame.size');
         buffer = Buffer.concat([buffer, chunk]);
         const decoded = decodeWebSocketFrames(buffer, { maxPayloadBytes: LIMITS.jsonBytes });
+        const encoded = buffer;
         buffer = decoded.remaining;
+        let frameOffset = 0;
         for (const frame of decoded.frames) {
-          if (!frame.masked || !frame.fin) throw new ProtocolError('invalid_request', 'frame');
+          const reserved = encoded[frameOffset] & 0x70;
+          const lengthTag = encoded[frameOffset + 1] & 0x7f;
+          frameOffset += 2 + (lengthTag === 126 ? 2 : lengthTag === 127 ? 8 : 0) + (frame.masked ? 4 : 0) + frame.payload.length;
+          if (reserved || !frame.masked) throw new ProtocolError('invalid_request', 'frame');
+          if (frame.opcode >= 8 && (!frame.fin || frame.payload.length > 125))
+            throw new ProtocolError('invalid_request', 'frame.control');
           if (frame.opcode === 8) {
             socket.end(encodeWebSocketFrame(frame.payload, 8));
             return;
@@ -67,10 +83,29 @@ export async function handleRuntimeUpgrade(request, socket, head, options) {
             socket.write(encodeWebSocketFrame(frame.payload, 10));
             continue;
           }
-          if (frame.opcode !== 1) throw new ProtocolError('unsupported', 'frame.binary');
-          const requestFrame = decodeFrame(frame.payload.toString('utf8'));
+          if (frame.opcode === 10) continue;
+          let opcode = frame.opcode, payload = frame.payload;
+          if (opcode === 0) {
+            if (!fragmented || fragmented.length + payload.length > fragmented.payload.length)
+              throw new ProtocolError('invalid_request', 'frame.continuation');
+            payload.copy(fragmented.payload, fragmented.length); fragmented.length += payload.length;
+            if (!frame.fin) continue;
+            opcode = fragmented.opcode; payload = fragmented.payload.subarray(0, fragmented.length); fragmented = undefined;
+          } else {
+            if (fragmented || (opcode !== 1 && opcode !== 2)) throw new ProtocolError('invalid_request', 'frame.opcode');
+            const maximum = opcode === 1 ? LIMITS.jsonBytes : 24 + LIMITS.binaryBytes;
+            if (payload.length > maximum) throw new ProtocolError('invalid_request', 'frame.size');
+            if (!frame.fin) {
+              fragmented = { opcode, payload: Buffer.allocUnsafe(maximum), length: payload.length };
+              payload.copy(fragmented.payload); continue;
+            }
+          }
+          if (opcode === 2 && dispatcher) { dispatcher.binary(payload); continue; }
+          if (opcode !== 1) throw new ProtocolError('unsupported', 'frame.binary');
+          const requestFrame = decodeFrame(payload.toString('utf8'));
           if (requestFrame.kind !== 'request')
             throw new ProtocolError('invalid_request', 'request');
+          if (dispatcher) { void dispatcher.request(requestFrame).catch(() => socket.destroy()); continue; }
           const base = {
             version: 1,
             kind: 'result',
