@@ -12,6 +12,8 @@ const rawResultFirst = /^\s*\{\s*"(?:result|error)"/u;
  * line buffer and 4 MiB bound, so an oversized history frame is bounded downstream instead of assembled.
  * An id absent from the frame prefix is still routed (the frame starts with `result`/`error`) and the
  * client correlates the real id from the full frame. Every other frame keeps the existing parser.
+ * An early raw `return()` (bounded cancellation) abandons the sink, resumes the shared stdout, and
+ * discards only the remainder of the in-flight frame up to its newline, so a later RPC is not blocked.
  */
 export function createCodexProcess({
   executable = 'codex',
@@ -68,6 +70,15 @@ export function createCodexProcess({
         const waiter = state.waiter;
         state.waiter = null;
         waiter?.reject(error);
+      },
+      abandon() {
+        if (state.ended || state.error) return;
+        state.ended = true;
+        const waiter = state.waiter;
+        state.waiter = null;
+        waiter?.resolve({ value: undefined, done: true });
+        state.queue.length = 0;
+        state.bytes = 0;
       },
       next() {
         if (state.error) return Promise.reject(state.error);
@@ -152,8 +163,10 @@ export function createCodexProcess({
       const end = newline < 0 ? chunk.length : newline;
       const segment = chunk.subarray(start, end);
       if (mode === 'raw') {
-        rawSink.push(segment);
-        if (rawSink.state.bytes >= RAW_HIGH_WATER) child.stdout.pause();
+        if (rawSink) {
+          rawSink.push(segment);
+          if (rawSink.state.bytes >= RAW_HIGH_WATER) child.stdout.pause();
+        }
         if (newline < 0) {
           start = end;
           continue;
@@ -176,8 +189,10 @@ export function createCodexProcess({
       prefix = Buffer.alloc(0);
       if (buffer.length === 0 && pendingRawId !== null && classify(candidate) === 'raw') {
         mode = 'raw';
-        rawSink.push(candidate);
-        if (rawSink.state.bytes >= RAW_HIGH_WATER) child.stdout.pause();
+        if (rawSink) {
+          rawSink.push(candidate);
+          if (rawSink.state.bytes >= RAW_HIGH_WATER) child.stdout.pause();
+        }
         if (newline < 0) {
           start = end;
           continue;
@@ -218,6 +233,12 @@ export function createCodexProcess({
           const result = sink.next();
           resumeRaw();
           return result;
+        },
+        return() {
+          sink.abandon();
+          if (rawSink === sink) rawSink = null;
+          if (child.stdout.isPaused()) child.stdout.resume();
+          return Promise.resolve({ value: undefined, done: true });
         },
       };
       return { [Symbol.asyncIterator]() { return iterator; } };
