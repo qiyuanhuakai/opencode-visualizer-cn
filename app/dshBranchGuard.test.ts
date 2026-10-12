@@ -122,7 +122,8 @@ type ManualEntry = {
 // INVENTORY (mirrors task-17/branch-inventory.md) — 270 auto-detected rows.
 // ---------------------------------------------------------------------------
 const BRANCHES: BranchEntry[] = [
-  { file: "App.vue", fp: "? 'opencode'", n: 2, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 33, sym: "active backend / composer / identity" },
+  { file: "App.vue", fp: "? 'opencode'", n: 2, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 33, sym: "active backend / composer / identity; task 24 activeHarnessKind fallback reuses this site so a workspace scope is never built for an unknown source" },
+  { file: "App.vue", fp: ": 'opencode',", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 24, sym: "task 24 activeHarnessKind fallback: an unknown active kind resolves to opencode so a harness scope is never built for a source the runtime does not know" },
   { file: "App.vue", fp: "@click=\"loginBackendKind = 'acp'\"", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 32, sym: "login surface" },
   { file: "App.vue", fp: "@click=\"loginBackendKind = 'codex'\"", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 32, sym: "login surface" },
   { file: "App.vue", fp: "@click=\"loginBackendKind = 'dsh'\"", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 35, sym: "login surface dsh backend button (Todo 35)" },
