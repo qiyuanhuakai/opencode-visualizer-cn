@@ -37,6 +37,7 @@ class WireSocket extends EventTarget {
     return request ? Promise.resolve(request) : new Promise(resolve => { this.waiter = resolve; });
   }
   frame(value: unknown) { this.dispatchEvent(new MessageEvent('message', { data: encodeFrame(value) })); }
+  raw(data: string) { this.dispatchEvent(new MessageEvent('message', { data })); }
   reply(request: Request, result: unknown, phase = 'read') {
     this.frame({ version: 1, kind: 'result', target: request.target, epoch: request.epoch, generation: request.generation, id: request.id, ok: true, phase, result });
   }
@@ -170,6 +171,50 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     await Promise.all(held);
     await expect(cancel.executed).rejects.toMatchObject({ uncertain: true });
   });
+  it('admits history close under a read flood while denying more history opens and reads', async () => {
+    const { client, socket, connection } = await fixture();
+    const held = Array.from({ length: 496 }, () => client.request(target, 'runtime.pty.read', { ptyId: 'bulk' }).then(undefined, () => undefined));
+    const historyId = '77777777-7777-4777-8777-777777777777';
+    await expect(client.request(target, 'runtime.history.open', { historyId, session: native.session })).rejects.toMatchObject({ code: 'source_unavailable' });
+    await expect(client.request(target, 'runtime.history.read', { historyId, after: 0 })).rejects.toMatchObject({ code: 'source_unavailable' });
+    const recovery = Array.from({ length: 12 }, (_, offset) => client.request(target, 'runtime.channel.ack', { channelId: 1, offset, length: 1 }).then(undefined, () => undefined));
+    const closed = client.request(target, 'runtime.history.close', { historyId });
+    const request = socket.sent.at(-1); if (!request) throw new TypeError('Missing close request');
+    expect(request.method).toBe('runtime.history.close'); socket.reply(request, { closed: true });
+    await expect(closed).resolves.toEqual({ closed: true }); connection.disconnect(); await Promise.all([...held, ...recovery]);
+  });
+  it.each(['abort', 'timeout'] as const)('keeps drainage pending after %s until the correctly bound late terminal reply', async (kind) => {
+    vi.useFakeTimers(); const { client, socket, connection } = await fixture(); const controller = new AbortController(); let drained = 0;
+    const pending = client.request(target, 'session.get', native, { signal: controller.signal, onDrained: () => { drained++; } });
+    const request = await socket.next(); const rejected = expect(pending).rejects.toMatchObject({ code: kind === 'abort' ? 'cancelled' : 'timeout' });
+    if (kind === 'abort') controller.abort(); else await vi.advanceTimersByTimeAsync(15000);
+    await rejected; expect(drained).toBe(0);
+    socket.reply({ ...request, target: other }, {}); expect(drained).toBe(0);
+    socket.reply(request, { late: true }); expect(drained).toBe(1);
+    socket.reply(request, { duplicate: true }); connection.disconnect(); expect(drained).toBe(1);
+  });
+  it('settles drainage once for validation rejection before pending allocation', async () => {
+    const { client, socket } = await fixture(); let drained = 0;
+    await expect(client.request(target, 'session.get', { ...native, args: { permissions: ['forged'] } }, { onDrained: () => { drained++; } })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(drained).toBe(1); expect(socket.sent).toHaveLength(0);
+  });
+  it('retires an ambiguous throwing send before reporting drainage', async () => {
+    const { client, socket, connection } = await fixture(); let drained = 0; const states: string[] = []; const send = socket.send.bind(socket);
+    vi.spyOn(socket, 'send').mockImplementationOnce(data => { send(data); throw new TypeError('after enqueue'); });
+    await expect(client.request(target, 'session.get', native, { onDrained: () => { drained++; states.push(connection.status.state); } })).rejects.toThrow();
+    expect(socket.sent).toHaveLength(1); expect(drained).toBe(1); expect(states).toEqual(['error']); expect(connection.status.state).toBe('disconnected');
+  });
+  it('isolates throwing drainage notifications while invalidating all pending requests', async () => {
+    const { client, connection } = await fixture(); let drained = 0;
+    const first = client.request(target, 'session.get', native, { onDrained: () => { drained++; throw new TypeError('caller notification'); } });
+    const second = client.request(target, 'session.get', native, { onDrained: () => { drained++; } });
+    connection.disconnect(); await expect(first).rejects.toThrow(); await expect(second).rejects.toThrow(); connection.disconnect(); expect(drained).toBe(2);
+  });
+  it('drains malformed terminal responses after retiring their binding', async () => {
+    const { client, socket, connection } = await fixture(); let drained = 0;
+    const request = client.request(target, 'runtime.history.open', { historyId: '77777777-7777-4777-8777-777777777777', session: native.session }, { onDrained: () => { drained++; } });
+    socket.reply(await socket.next(), {}); await expect(request).rejects.toThrow(); expect(drained).toBe(1); expect(connection.status.state).toBe('disconnected');
+  });
   it('delivers out-of-order control hints without advancing the contiguous cursor', async () => {
     const { client, socket } = await fixture();
     const received: number[] = [];
@@ -278,5 +323,79 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     const pending = client.request(target, 'runtime.entity.resolve', { event: event(1) });
     socket.reply(await socket.next(), { collection: 'session_summaries', key: '1', revision: 11, chunked: true, bytes: 100000 });
     await expect(pending).rejects.toMatchObject({ code: 'replay_required' });
+  });
+});
+
+describe('RuntimeClient pre-decode history memory guard', () => {
+  const historyId = '77777777-7777-4777-8777-777777777777';
+  const tiny = (count: number) => '[' + '{},'.repeat(count).slice(0, -1) + ']';
+  const historyResult = (id: string, count: number) => `{"version":1,"kind":"result","target":"${target}","epoch":"epoch","generation":1,"id":${JSON.stringify(id)},"ok":true,"phase":"read","result":${tiny(count)}}`;
+  const nonHistoryResult = (id: string, count: number) => `{"version":1,"kind":"result","target":"${target}","epoch":"epoch","generation":1,"id":${JSON.stringify(id)},"ok":true,"phase":"read","result":${tiny(count)}}`;
+
+  it('rejects a 522160B/174000-object history.page frame before JSON.parse and body freeze, exactly once', async () => {
+    const { client, socket, connection } = await fixture();
+    let drained = 0;
+    const pending = client.request(target, 'runtime.history.page', { historyId }, { onDrained: () => { drained++; } });
+    const request = await socket.next();
+    const hostile = historyResult(request.id, 174000);
+    expect(Buffer.byteLength(hostile)).toBeLessThanOrEqual(1048576);
+    const parse = vi.spyOn(JSON, 'parse');
+    const freeze = vi.spyOn(Object, 'freeze');
+    const rejected = expect(pending).rejects.toMatchObject({ code: 'reconcile_required' });
+    parse.mockClear(); freeze.mockClear();
+    socket.raw(hostile);
+    await rejected;
+    expect(parse.mock.calls.some(([arg]) => typeof arg === 'string' && arg.length > 500000)).toBe(false);
+    expect(freeze.mock.calls.length).toBeLessThan(1000);
+    parse.mockRestore(); freeze.mockRestore();
+    expect(drained).toBe(1);
+    expect(connection.status.state).toBe('error');
+  });
+
+  it('accepts a matched non-history session.get 174000-object result within 1MiB', async () => {
+    const { client, socket } = await fixture();
+    const pending = client.request(target, 'session.get', native);
+    const request = await socket.next();
+    socket.raw(nonHistoryResult(request.id, 174000));
+    await expect(pending).resolves.toBeDefined();
+  });
+
+  it('classifies an aborted-but-pending history entry as history and still rejects its huge frame preparse', async () => {
+    const { client, socket } = await fixture();
+    const controller = new AbortController();
+    const pending = client.request(target, 'runtime.history.page', { historyId }, { signal: controller.signal });
+    const request = await socket.next();
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' });
+    const parse = vi.spyOn(JSON, 'parse');
+    parse.mockClear();
+    socket.raw(historyResult(request.id, 174000));
+    expect(parse.mock.calls.some(([arg]) => typeof arg === 'string' && arg.length > 500000)).toBe(false);
+    parse.mockRestore();
+  });
+
+  it('drops unmatched and stale results preparse without draining a legitimate outstanding entry', async () => {
+    const { client, socket } = await fixture();
+    let drained = 0;
+    const pending = client.request(target, 'session.get', native, { onDrained: () => { drained++; } });
+    const request = await socket.next();
+    socket.raw(`{"version":1,"kind":"result","target":"${target}","epoch":"epoch","generation":1,"id":"999:999","ok":true,"phase":"read","result":[1]}`);
+    await Promise.resolve();
+    expect(drained).toBe(0);
+    socket.raw(`{"version":1,"kind":"result","target":"${target}","epoch":"epoch","generation":22,"id":${JSON.stringify(request.id)},"ok":true,"phase":"read","result":[1]}`);
+    await Promise.resolve();
+    expect(drained).toBe(0);
+    socket.reply(request, { title: 'ok' });
+    await expect(pending).resolves.toEqual({ title: 'ok' });
+    expect(drained).toBe(1);
+  });
+
+  it('rejects a matched history result with an unknown envelope field before parse', async () => {
+    const { client, socket, connection } = await fixture();
+    const pending = client.request(target, 'runtime.history.page', { historyId });
+    const request = await socket.next();
+    socket.raw(historyResult(request.id, 4).replace('"phase":"read"', '"phase":"read","surprise":[1,2,3]'));
+    await expect(pending).rejects.toMatchObject({ code: 'reconcile_required' });
+    expect(connection.status.state).toBe('error');
   });
 });

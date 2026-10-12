@@ -1,3 +1,4 @@
+import type { HistoryOpenParams, HistoryOpenResult, HistoryPageParams, HistoryPage, HistoryChunkParams, HistoryChunk, HistoryReadParams, HistoryChange, HistoryCloseParams } from './historyPage.js';
 import type { Capabilities, JsonValue } from './capabilities.js';
 import type { EnvironmentId, ConnectionProfileId, HarnessInstanceId, SessionRef, WorkspaceKey } from './identity.js';
 import type { Hello, RuntimeEvent, Snapshot, Replay } from './protocol.js';
@@ -25,6 +26,11 @@ type ObserverRef = { readonly observerId: string };
 type PtyRef = { readonly ptyId: string };
 type ChannelRef = { readonly channelId: number };
 export interface RuntimeParams {
+  readonly 'runtime.history.open': HistoryOpenParams;
+  readonly 'runtime.history.page': HistoryPageParams;
+  readonly 'runtime.history.chunk': HistoryChunkParams;
+  readonly 'runtime.history.read': HistoryReadParams;
+  readonly 'runtime.history.close': HistoryCloseParams;
   readonly 'runtime.inspect': Empty;
   readonly 'runtime.target.attach': { readonly target: EnvironmentId };
   readonly 'runtime.target.detach': { readonly target: EnvironmentId };
@@ -54,6 +60,11 @@ export interface RuntimeParams {
   readonly 'interaction.respond': NativeCall;
 }
 export interface RuntimeResults {
+  readonly 'runtime.history.open': HistoryOpenResult;
+  readonly 'runtime.history.page': HistoryPage;
+  readonly 'runtime.history.chunk': HistoryChunk;
+  readonly 'runtime.history.read': HistoryChange;
+  readonly 'runtime.history.close': { readonly closed: true };
   readonly 'runtime.inspect': RuntimeInspection;
   readonly 'runtime.target.attach': { readonly hello: Hello; readonly grant: TargetGrant };
   readonly 'runtime.target.detach': { readonly detached: true };

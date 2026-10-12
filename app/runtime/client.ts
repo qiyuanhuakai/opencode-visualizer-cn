@@ -2,6 +2,8 @@ import { METHODS, ProtocolError, requireValue } from '../../shared/runtime/capab
 import type { ErrorCode } from '../../shared/runtime/capabilities.js';
 import { createProtocolState } from '../../shared/runtime/protocol.js';
 import type { Binding, Hello, Result, Snapshot } from '../../shared/runtime/protocol.js';
+import type { FramePreflightDecision, RawFrameSummary } from '../../shared/runtime/rawFrame.js';
+import { HISTORY_LIMITS } from '../../shared/runtime/historyPage.js';
 import type { ProtocolState } from '../../shared/runtime/protocolState.js';
 import type { EnvironmentId } from '../../shared/runtime/identity.js';
 import type { NativeMutationResult, ObserverDelivery, RuntimeMethod, RuntimeParams, RuntimeResults, TargetGrant } from '../../shared/runtime/runtimeWire.js';
@@ -10,7 +12,7 @@ import type { RuntimeConnection, RuntimeConnectionEvent } from './connection';
 
 export type MutationMethod = 'session.create' | 'session.send' | 'session.cancel' | 'interaction.respond';
 export type RequestMethod = Exclude<RuntimeMethod, MutationMethod>;
-export type RequestOptions = { readonly signal?: AbortSignal; readonly selectionCurrent?: () => boolean };
+export type RequestOptions = { readonly signal?: AbortSignal; readonly selectionCurrent?: () => boolean; readonly onDrained?: () => void };
 export type RuntimeScope = { readonly binding: Binding; readonly generation: number; readonly isCurrent: () => boolean };
 type Collection = RuntimeParams['runtime.snapshot']['collection'];
 type Target = { readonly hello: Hello; readonly state: ProtocolState; readonly generation: number; paging: boolean };
@@ -19,11 +21,11 @@ type Pending = {
   readonly slot: 'normal' | 'reserved';
   readonly resolve: (value: unknown) => void; readonly reject: (error: Error) => void;
   readonly accept?: (receipt: { readonly operationId: string }) => void;
-  readonly clean: () => void; receipt?: string;
+  readonly clean: () => void; readonly drain: () => void; receipt?: string;
 };
 function bindingOf({ target, epoch, generation }: Binding): Binding { return { target, epoch, generation }; }
 function reserved(method: RuntimeMethod) {
-  return method === 'session.cancel' || method === 'interaction.respond' || method === 'runtime.channel.ack' || method === 'runtime.channel.cancel' || method === 'runtime.observer.resume' || method === 'runtime.observer.close' || method === 'runtime.target.detach';
+  return method === 'runtime.history.close' || method === 'session.cancel' || method === 'interaction.respond' || method === 'runtime.channel.ack' || method === 'runtime.channel.cancel' || method === 'runtime.observer.resume' || method === 'runtime.observer.close' || method === 'runtime.target.detach';
 }
 
 export class RuntimeRequestError extends ProtocolError {
@@ -62,7 +64,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       if (entry.target !== value) continue;
       entry.clean();
       entry.reject(new RuntimeRequestError('reconcile_required', id, METHODS[entry.method] === 'mutation', entry.receipt));
-      pending.delete(id);
+      pending.delete(id); entry.drain();
     }
     for (const listener of detachListeners) listener(target);
   }
@@ -89,7 +91,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       if (!entry.current()) {
         if (frame.ok && frame.phase === 'durable-accepted') { entry.receipt = frame.result.operationId; return; }
         entry.reject(new RuntimeRequestError('cancelled', frame.id, METHODS[entry.method] === 'mutation', entry.receipt));
-        entry.clean(); pending.delete(frame.id); return;
+        entry.clean(); pending.delete(frame.id); entry.drain(); return;
       }
       if (!frame.ok) throw new RuntimeRequestError(frame.typedError.code, frame.id, METHODS[entry.method] === 'mutation', entry.receipt);
       switch (frame.phase) {
@@ -112,7 +114,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       if (!(error instanceof RuntimeRequestError)) { clear(); connection.disconnect(); }
     }
     entry.clean();
-    pending.delete(frame.id);
+    pending.delete(frame.id); entry.drain();
   }
   function receive(event: RuntimeConnectionEvent) {
     if (disposed || event.generation !== connection.status.generation) return;
@@ -133,6 +135,21 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       default: event satisfies never;
     }
   }
+  // The method is trusted from this client's pending map (never server-supplied),
+  // so aborted/timed-out but physically pending history entries still classify as history.
+  function classifyFrame(summary: RawFrameSummary): FramePreflightDecision {
+    if (summary.kind !== 'result') return 'accept';
+    const entry = pending.get(summary.id ?? '');
+    if (!entry || !current(entry.target)) return 'drop';
+    const binding = entry.target.hello;
+    if (summary.target !== binding.target || summary.epoch !== binding.epoch || summary.generation !== binding.generation) return 'drop';
+    if (entry.method.startsWith('runtime.history.') && summary.ok === true && summary.phase !== 'durable-accepted') {
+      if (summary.unknownFields) throw new ProtocolError('invalid_request', 'history.fields');
+      if (summary.result.nodes > HISTORY_LIMITS.nodes || summary.result.depth > HISTORY_LIMITS.depth || summary.result.utf8Bytes > HISTORY_LIMITS.encodedResultBytes) throw new ProtocolError('invalid_request', 'history.structure');
+    }
+    return 'accept';
+  }
+  const unregisterPreflight = connection.setFramePreflight(classifyFrame);
   const unsubscribe = connection.subscribe(receive);
 
   function start(input: { readonly target: EnvironmentId; readonly method: RuntimeMethod; readonly params: unknown; readonly options: RequestOptions; readonly idempotencyKey?: string; readonly accept?: Pending['accept'] }) {
@@ -141,8 +158,8 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     requireValue(!input.options.signal?.aborted && (input.options.selectionCurrent?.() ?? true), 'request.selection', 'cancelled');
     const normalCount = [...pending.values()].filter((entry) => entry.slot === 'normal').length;
     const slot = normalCount < 496 ? 'normal' : 'reserved';
-    const priorityMutation = input.method === 'session.cancel' || input.method === 'interaction.respond';
-    if (slot === 'reserved') requireValue(reserved(input.method) && pending.size - normalCount < (priorityMutation ? 16 : 12), 'request.capacity', 'source_unavailable');
+    const priorityControl = input.method === 'runtime.history.close' || input.method === 'session.cancel' || input.method === 'interaction.respond';
+    if (slot === 'reserved') requireValue(reserved(input.method) && pending.size - normalCount < (priorityControl ? 16 : 12), 'request.capacity', 'source_unavailable');
     if (nextId === 65536) {
       clear();
       connection.disconnect();
@@ -162,27 +179,37 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       const abort = () => abandon('cancelled');
       const timer = setTimeout(() => abandon('timeout'), 15000);
       const clean = () => { clearTimeout(timer); input.options.signal?.removeEventListener('abort', abort); };
-      const entry: Pending = { target, method: input.method, slot, current: () => !abandoned && current(target) && (input.options.selectionCurrent?.() ?? true), resolve, reject, accept: input.accept, clean };
+      const entry: Pending = { target, method: input.method, slot, current: () => !abandoned && current(target) && (input.options.selectionCurrent?.() ?? true), resolve, reject, accept: input.accept, clean, drain: input.options.onDrained ?? (() => {}) };
       pending.set(id, entry);
       input.options.signal?.addEventListener('abort', abort, { once: true });
       try { connection.send(frame); }
       catch (error) {
         clean();
+        // A transport may throw after enqueueing; retire its binding before releasing caller accounting.
+        connection.disconnect(); clear();
         if (!(error instanceof Error)) throw error;
         reject(new RuntimeRequestError('reconcile_required', id, METHODS[input.method] === 'mutation'));
       }
     });
   }
   function request<M extends RequestMethod>(target: EnvironmentId, method: M, params: RuntimeParams[M], options: RequestOptions = {}): Promise<RuntimeResults[M]> {
+    let drained = false;
+    const drain = () => {
+      if (drained) return;
+      drained = true;
+      try { options.onDrained?.(); }
+      // The caller owns this notification; its exception cannot interrupt request retirement.
+      catch { return; }
+    };
     try {
       const attached = getTarget(target);
       requireValue(METHODS[method] !== 'mutation', 'request.mutation', 'invalid_request');
-      return start({ target, method, params, options }).then((value) => {
+      return start({ target, method, params, options: { ...options, onDrained: drain } }).then((value) => {
         requireValue(current(attached) && (options.selectionCurrent?.() ?? true) && !options.signal?.aborted, 'request.selection', 'cancelled');
         if (method === 'runtime.entity.resolve') requireValue(!parseRuntimeResult('runtime.entity.resolve', value).chunked, 'entity.resnapshot', 'replay_required');
         return parseRuntimeResult(method, value);
       });
-    } catch (error) { return Promise.reject(error); }
+    } catch (error) { drain(); return Promise.reject(error); }
   }
   function mutate(target: EnvironmentId, method: MutationMethod, params: RuntimeParams[MutationMethod], options: { readonly idempotencyKey: string; readonly selectionCurrent?: () => boolean }) {
     let accept: (value: { readonly operationId: string }) => void = () => {};
@@ -330,7 +357,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       return { binding: bindingOf(attached.hello), generation: attached.generation, isCurrent: () => current(attached) };
     },
     onDetach(listener: (target: EnvironmentId) => void) { detachListeners.add(listener); return () => { detachListeners.delete(listener); }; },
-    dispose() { if (disposed) return; clear(); disposed = true; unsubscribe(); detachListeners.clear(); },
+    dispose() { if (disposed) return; clear(); disposed = true; unregisterPreflight(); unsubscribe(); detachListeners.clear(); },
   };
 }
 export type RuntimeClient = ReturnType<typeof createRuntimeClient>;

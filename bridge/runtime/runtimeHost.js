@@ -18,6 +18,12 @@ export function createRuntimeHost({ environmentId, role, sources = [], cachedTop
   const connections = createConnectionScope();
   const resources = createResourceOwnership();
   const dispatchers = new Set();
+  const pendingCloses = new Set();
+  function closeDispatcher(dispatcher) {
+    const closing = dispatcher.close(); pendingCloses.add(closing);
+    void closing.then(() => pendingCloses.delete(closing), () => pendingCloses.delete(closing));
+    return closing;
+  }
   const states = sources.map(({ id }) => ({ id, state: 'starting' }));
   let state = 'idle';
   let sourcesReady = Promise.resolve();
@@ -57,7 +63,7 @@ export function createRuntimeHost({ environmentId, role, sources = [], cachedTop
     let dispatcher;
     return {
       ...scope,
-      disconnect() { scope.disconnect(); if (dispatcher) { dispatchers.delete(dispatcher); void dispatcher.close(); } },
+      disconnect() { scope.disconnect(); if (dispatcher) { dispatchers.delete(dispatcher); void closeDispatcher(dispatcher); } },
       openRuntime(transport) {
         scope.assertCurrent();
         if (!services) return null;
@@ -97,7 +103,7 @@ export function createRuntimeHost({ environmentId, role, sources = [], cachedTop
     if (state !== 'stopped') state = 'stopping';
     startupController.abort();
     connections.close();
-    for (const dispatcher of dispatchers) void dispatcher.close();
+    for (const dispatcher of dispatchers) void closeDispatcher(dispatcher);
   }
   function stop() {
     if (stopPromise) return stopPromise;
@@ -105,7 +111,7 @@ export function createRuntimeHost({ environmentId, role, sources = [], cachedTop
     stopPromise = (async () => {
       await mutations;
       await sourcesReady;
-      await Promise.allSettled([...dispatchers].map(dispatcher => dispatcher.close()));
+      await Promise.allSettled([...dispatchers].map(closeDispatcher).concat([...pendingCloses]));
       dispatchers.clear();
       try {
         await resources.release();

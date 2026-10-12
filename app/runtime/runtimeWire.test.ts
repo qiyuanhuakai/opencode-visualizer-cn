@@ -11,7 +11,7 @@ describe('closed runtime wire DTO validation', () => {
     expect(parseRuntimeParams('session.send', { harnessInstanceId, session, args: { content: [{ type: 'text', text: 'hello' }] } })).toMatchObject({ session });
   });
   it('keeps the allowed index surface and channel budgets bounded', () => {
-    expect(Object.keys(RUNTIME_WIRE_METHODS)).toHaveLength(27);
+    expect(Object.keys(RUNTIME_WIRE_METHODS)).toHaveLength(32);
     expect(() => parseRuntimeParams('runtime.snapshot', { collection: 'imports' })).toThrow();
     expect(() => parseRuntimeParams('runtime.snapshot', { collection: 'workspaces', limit: 201 })).toThrow();
     expect(() => parseRuntimeParams('runtime.channel.ack', { channelId: 0, offset: 0, length: 1 })).toThrow();

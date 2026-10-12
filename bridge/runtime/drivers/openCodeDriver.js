@@ -10,6 +10,7 @@ import { OPEN_CODE_OPERATIONS, nativeRoute, supportsNativeRoute, cancelOwnedOper
 import { createSseDecoder, createEventSubscriptions } from '../../../shared/runtime/native/opencode/sse.js';
 import { createOpenCodeStoreReader } from './openCodeStoreReader.mjs';
 import { createOpenCodeDiscovery } from './openCodeDiscovery.js';
+import { createOpenCodeHistory, OPEN_CODE_HISTORY_LIMITS } from './openCodeHistory.js';
 
 export async function createOpenCodeDriver(options) {
   const identity = { environmentId: parseEnvironmentId(options.environmentId), harnessInstanceId: parseHarnessInstanceId(options.harnessInstanceId) };
@@ -68,6 +69,32 @@ export async function createOpenCodeDriver(options) {
       if (error instanceof Error) throw new ProtocolError((controller.aborted || headerDeadline.signal.aborted) ? lifetime.signal.aborted ? 'cancelled' : 'timeout' : 'source_unavailable', 'opencode.http');
       throw error;
     } finally { if (headerTimer) clearTimeout(headerTimer); if (control) controlRequests--; else ordinaryRequests--; }
+  }
+  /** Raw native history pull: same origin/authorization/redirect/deadline as `request`, but the body stays unparsed and the admission slot is held until the caller releases it on cancel, drain or body close. */
+  function pullHistoryPage(session) {
+    return async ({ before, signal }) => {
+      requireValue(processCurrent(), 'opencode.generation', 'reconcile_required');
+      requireValue(ordinaryRequests < 16, 'opencode.http_queue', 'source_unavailable');
+      ordinaryRequests++;
+      let released = false;
+      const release = () => { if (released) return; released = true; ordinaryRequests--; };
+      const controller = AbortSignal.any([lifetime.signal, ...(signal ? [signal] : []), AbortSignal.timeout(options.requestTimeoutMs ?? 15000)]);
+      const url = new URL(`session/${encodeURIComponent(session.nativeSessionId)}/message`, origin.href.endsWith('/') ? origin : new URL(`${origin.href}/`));
+      url.searchParams.set('limit', String(OPEN_CODE_HISTORY_LIMITS.page));
+      if (before !== null && before !== undefined) url.searchParams.set('before', before);
+      try {
+        const response = await fetch(url, { method: 'GET', headers: { Accept: 'application/json', ...(options.authorization ? { Authorization: options.authorization } : {}) }, signal: controller, redirect: 'error' });
+        requireValue(processCurrent(), 'opencode.generation', 'reconcile_required');
+        if (!response.ok) { await response.body?.cancel(); throw new ProtocolError(response.status === 401 || response.status === 403 ? 'unauthorized' : response.status === 404 ? 'source_unavailable' : 'invalid_request', `opencode.http_${response.status}`); }
+        requireValue(response.body, 'opencode.history_body', 'source_unavailable');
+        return { body: response.body, cursor: response.headers.get('x-next-cursor'), release: () => { release(); void response.body?.cancel().catch(() => {}); } };
+      } catch (error) {
+        release();
+        if (error instanceof ProtocolError) throw error;
+        if (error instanceof Error) throw new ProtocolError(controller.aborted ? lifetime.signal.aborted ? 'cancelled' : 'timeout' : 'source_unavailable', 'opencode.http');
+        throw error;
+      }
+    };
   }
   async function bind(session) {
     const key = encodeSessionKey(session);
@@ -185,6 +212,13 @@ export async function createOpenCodeDriver(options) {
       let cursor = null;
       if (nextCursor !== null) { textValue(nextCursor, 'opencode.history_native_cursor'); requireValue(nextCursor !== before && items.length > 0, 'opencode.history_repeated_cursor', 'reconcile_required'); for (const [key, entry] of historyCursors) if (entry.expiresAt <= Date.now()) historyCursors.delete(key); requireValue(historyCursors.size < 32, 'opencode.history_snapshots', 'reconcile_required'); cursor = randomUUID(); historyCursors.set(cursor, { key: encodeSessionKey(session), before: nextCursor, expiresAt: Date.now() + 60000 }); }
       await fence(); return { session, items, cursor, completeness: cursor ? 'partial' : 'complete', ...current() };
+    },
+    async openHistory(input) {
+      const { session, params } = context(input, true);
+      requireValue(params.epoch === options.epoch && params.processGeneration === options.processGeneration, 'opencode.request_generation', 'reconcile_required');
+      await fence();
+      requireValue(sourceState === 'ready', 'opencode.stream_unavailable', 'reconcile_required');
+      return createOpenCodeHistory({ session, authority: Object.freeze({ epoch: options.epoch, processGeneration: options.processGeneration }), current: processCurrent, assertCurrent: fence, subscribe: (predicate) => subscriptions.subscribe(predicate), pull: pullHistoryPage(session), randomUUID });
     },
     async createSession(input) { const { params } = context(input); const result = await instanceMutation('createSession', params, { path: '/session', method: 'POST' }); const item = summary(result.result); const session = sessionRef(item.id); await instances.bindResult(result.operationId, session); return { ...result, result: { session, summary: item } }; },
     async send(input) { const { session, params } = context(input, true); return sessionMutation('send', session, params, { path: `/session/${encodeURIComponent(session.nativeSessionId)}/prompt_async`, method: 'POST' }, true); },

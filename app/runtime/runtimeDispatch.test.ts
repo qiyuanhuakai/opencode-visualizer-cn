@@ -11,8 +11,10 @@ import { createRuntimeHost } from '../../bridge/runtime/runtimeHost.js';
 import { createVisBridgeServer } from '../../vis_bridge.js';
 import { createBridgeRuntime } from '../../bridge/bridgeRuntime.js';
 import { createBridgeConfigStore } from '../../bridge/bridgeConfig.js';
-import { encodeBinary, type Frame, type Hello, type Result } from '../../shared/runtime/protocol.js';
+import { encodeBinary, type Frame, type Hello, type Result, type Request } from '../../shared/runtime/protocol.js';
 import type { RuntimeMethod } from '../../shared/runtime/runtimeWire.js';
+import { createHarnessRegistry, unsupported } from '../../shared/runtime/harnessContract.js';
+import type { InternalNativeHistoryHandle } from '../../bridge/runtime/historyService.js';
 import { encodeSessionKey, parseSessionRef } from '../../shared/runtime/identity.js';
 import { decodeWebSocketFrames } from '../../bridge/webSocketFrames.js';
 
@@ -55,6 +57,25 @@ async function client(host: ReturnType<typeof createRuntimeHost>) {
 async function runtime(role: 'local' | 'manager' = 'local') {
   const context = await graph(role); const host = createRuntimeHost({ environmentId: context.services.target, role, services: context.services }); host.start(); cleanups.push(() => host.stop()); return { ...context, host, connection: await client(host) };
 }
+async function historyRuntime(options: { readonly openGate?: Promise<void>; readonly closeGate?: Promise<void> } = {}) {
+  const { services } = await graph(); const registry = createHarnessRegistry();
+  const session = parseSessionRef({ environmentId: services.target, harnessInstanceId: randomUUID(), nativeSessionId: 'controlled-history' });
+  const no = unsupported('controlled fixture only'); let generation = 1, opened = 0, closed = 0;
+  const producer: InternalNativeHistoryHandle = {
+    capabilities: { archive: 'paged', recordStream: false, live: 'invalidate' },
+    async open() { opened++; await options.openGate; return { fence: { id: randomUUID(), sourceGeneration: generation } }; },
+    async page() { return { pageId: randomUUID(), items: [{ recordId: 'record', kind: 'inline', value: { nativeUnknown: 'preserved' } }], cursor: null, completeness: 'complete' }; },
+    async chunk() { throw new TypeError('No stream in controlled wire fixture'); },
+    async read({ after }) { return { through: after + 1, changed: true, status: 'current' }; },
+    async close() { closed++; await options.closeGate; },
+  };
+  registry.register({ manifest: { kind: 'codex', environmentId: session.environmentId, harnessInstanceId: session.harnessInstanceId, protocolVersion: 1, core: { inspect: no, listSessionPage: no, getSession: no, readHistoryPage: { state: 'supported' }, openHistory: { state: 'supported' }, createSession: no, send: no, cancel: no, respondInteraction: no, subscribe: no, close: no }, extensions: [], capabilities: {} }, driver: { core: { openHistory: () => producer, readHistoryPage: () => ({ legacy: true }) }, native: {} } });
+  await services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key: encodeSessionKey(session), value: { session, workspaceKey: services.workspace.workspaces[0].key } }] });
+  const configured = { ...services, registry, authority: () => ({ epoch: services.epoch, processGeneration: generation }) };
+  const host = createRuntimeHost({ environmentId: services.target, role: 'local', services: configured }); host.start(); cleanups.push(() => host.stop());
+  return { services, host, session, counts: () => ({ opened, closed }), changeGeneration: () => generation++ };
+}
+
 async function rawClient(url: string) {
   const frames: Frame[] = []; const controls: number[] = []; let buffer = Buffer.alloc(0);
   const socket = await new Promise<Duplex>((resolve, reject) => {
@@ -215,6 +236,7 @@ describe('runtime real WebSocket dispatch', () => {
       expect(await connection.request('runtime.observer.read', observer.result as object)).toMatchObject({ ok: true });
       recovery = chunks.slice(0, 12).map(chunk => connection.request('runtime.channel.ack', chunk));
       expect(await connection.request('runtime.channel.ack', chunks[12])).toMatchObject({ ok: false, typedError: { code: 'source_unavailable' } });
+      expect(await connection.request('runtime.history.close', { historyId: randomUUID() })).toMatchObject({ ok: true, result: { closed: true } });
       controls = Array.from({ length: 4 }, () => connection.request('session.cancel', { harnessInstanceId: session.harnessInstanceId, session, args: {} }));
       await expect.poll(() => cancel).toBe(4);
       expect(await connection.request('session.cancel', { harnessInstanceId: session.harnessInstanceId, session, args: {} })).toMatchObject({ ok: false, typedError: { code: 'source_unavailable' } });
@@ -250,4 +272,80 @@ describe('runtime real WebSocket dispatch', () => {
     expect(seen[0].result).toMatchObject({ ok: true }); expect(seen[1].result).toMatchObject({ ok: true });
     if (seen[0].result.ok && seen[1].result.ok) { const first = seen[0].result.result as { connectionProfileId: string; harnesses: unknown[] }; const second = seen[1].result.result as typeof first; expect(first.connectionProfileId).toBe(second.connectionProfileId); expect(first.harnesses).toEqual(second.harnesses); }
   });
+});
+
+describe('history wire through real RuntimeHost, WebSocket and SQLite scope checks', () => {
+  it('routes the five additive history methods with repeated source and workspace authorization', async () => {
+    const context = await historyRuntime(), connection = await client(context.host), foreign = await client(context.host);
+    const historyId = randomUUID(), params = { historyId, session: context.session };
+    expect(await connection.request('runtime.history.open', params)).toMatchObject({ ok: true, result: { historyId, session: context.session, capabilities: { archive: 'paged' } } });
+    expect(await foreign.request('runtime.history.page', { historyId })).toMatchObject({ ok: false, typedError: { code: 'replay_required' } });
+    expect(await connection.request('runtime.history.page', { historyId })).toMatchObject({ ok: true, result: { items: [{ value: { nativeUnknown: 'preserved' } }] } });
+    expect(await connection.request('runtime.history.read', { historyId, after: 0 })).toMatchObject({ ok: true, result: { through: 1, changed: true } });
+    expect(await connection.request('session.history', { harnessInstanceId: context.session.harnessInstanceId, session: context.session, args: {} })).toMatchObject({ ok: true, result: { legacy: true } });
+    context.changeGeneration();
+    expect(await connection.request('runtime.history.page', { historyId })).toMatchObject({ ok: false, typedError: { code: 'replay_required' } });
+    expect(context.counts().closed).toBe(1);
+    const reopened = { ...params, historyId: randomUUID() }; expect(await connection.request('runtime.history.open', reopened)).toMatchObject({ ok: true });
+    await context.services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key: encodeSessionKey(context.session), value: { session: context.session } }] });
+    expect(await connection.request('runtime.history.page', { historyId: reopened.historyId })).toMatchObject({ ok: false, typedError: { code: 'unauthorized' } });
+    expect(context.counts().closed).toBe(2);
+  });
+  it('closes a held native open before any late result can publish a handle', async () => {
+    const held = gate(), context = await historyRuntime({ openGate: held.promise }), connection = await client(context.host);
+    const historyId = randomUUID(); const opening = connection.request('runtime.history.open', { historyId, session: context.session });
+    try {
+      await expect.poll(() => context.counts().opened).toBe(1);
+      const closing = connection.request('runtime.history.close', { historyId });
+      await expect.poll(() => context.counts().closed).toBe(1); held.release();
+      expect(await opening).toMatchObject({ ok: false, typedError: { code: 'cancelled' } });
+      expect(await closing).toMatchObject({ ok: true, result: { closed: true } });
+      expect(await connection.request('runtime.history.open', { historyId, session: context.session })).toMatchObject({ ok: false, typedError: { code: 'cancelled' } });
+    } finally { held.release(); await opening; }
+  });
+  it('retains disconnected dispatcher cleanup until Host.stop has awaited native close', async () => {
+    const held = gate(), context = await historyRuntime({ closeGate: held.promise });
+    const scope = context.host.connect('history-cleanup'); const frames: Result[] = [];
+    const dispatcher = scope.openRuntime({ send: frame => frames.push(frame), sendBinary() {}, canSend: () => true });
+    if (!dispatcher) throw new TypeError('Missing dispatcher'); const hello = dispatcher.hello();
+    await dispatcher.request({ version: 1, kind: 'request', target: hello.target, epoch: hello.epoch, generation: hello.generation, id: 'history-open', method: 'runtime.history.open', params: { historyId: randomUUID(), session: context.session } });
+    expect(frames[0]).toMatchObject({ ok: true }); scope.disconnect();
+    let stopped = false; const stopping = context.host.stop().then(() => { stopped = true; });
+    try { await expect.poll(() => context.counts().closed).toBe(1); expect(stopped).toBe(false); }
+    finally { held.release(); await stopping; }
+    expect(stopped).toBe(true); expect(context.counts().closed).toBe(1);
+  });
+});
+
+it('physically retires only the exhausted history socket after awaited producer cleanup', async () => {
+  const held = gate(), context = await historyRuntime({ closeGate: held.promise }), connection = await client(context.host), survivor = await client(context.host);
+  const historyId = randomUUID(); expect(await connection.request('runtime.history.open', { historyId, session: context.session })).toMatchObject({ ok: true });
+  for (let index = 0; index < 1023; index++) expect(await connection.request('runtime.history.close', { historyId: randomUUID() })).toMatchObject({ ok: true });
+  let closed = false; const socketClosed = new Promise<void>(resolve => connection.socket.addEventListener('close', () => { closed = true; resolve(); }, { once: true }));
+  try {
+    expect(await connection.request('runtime.history.close', { historyId: randomUUID() })).toMatchObject({ ok: false, typedError: { code: 'reconcile_required' } });
+    await expect.poll(() => context.counts().closed).toBe(1); expect(closed).toBe(false);
+    held.release(); await socketClosed; expect(context.counts().closed).toBe(1);
+    expect(await survivor.request('runtime.inspect', {})).toMatchObject({ ok: true });
+    await expect.poll(() => context.host.inspect().subscribers).toBe(1);
+  } finally { held.release(); }
+});
+
+it('retires once and surfaces awaited cleanup failure after making the dispatcher inactive', async () => {
+  const held = Promise.withResolvers<void>(), context = await historyRuntime({ closeGate: held.promise });
+  const scope = context.host.connect('history-retire-failure'); const frames: Result[] = []; let retired = 0;
+  const dispatcher = scope.openRuntime({ send: frame => frames.push(frame), sendBinary() {}, canSend: () => true, retire: () => { retired++; } });
+  if (!dispatcher) throw new TypeError('Missing dispatcher'); const hello = dispatcher.hello(); let serial = 0;
+  const request = (method: RuntimeMethod, params: Request['params']) => dispatcher.request({ version: 1, kind: 'request', target: hello.target, epoch: hello.epoch, generation: hello.generation, id: 'retire-' + ++serial, method, params });
+  await request('runtime.history.open', { historyId: randomUUID(), session: context.session }); expect(frames.at(-1)).toMatchObject({ ok: true });
+  for (let index = 0; index < 1023; index++) await request('runtime.history.close', { historyId: randomUUID() });
+  const exhaustion = request('runtime.history.close', { historyId: randomUUID() });
+  const failure = expect(exhaustion).rejects.toThrow('Runtime connection cleanup failed');
+  try {
+    await expect.poll(() => context.counts().closed).toBe(1); expect(retired).toBe(0);
+    expect(frames.at(-1)).toMatchObject({ ok: false, typedError: { code: 'reconcile_required' } });
+    const count = frames.length; await request('runtime.inspect', {}); expect(frames).toHaveLength(count);
+  } finally { held.reject(new Error('Controlled producer close failure')); await failure; }
+  expect(retired).toBe(1); await expect(dispatcher.close()).rejects.toThrow('Runtime connection cleanup failed');
+  expect(retired).toBe(1); expect(context.counts().closed).toBe(1); scope.disconnect();
 });

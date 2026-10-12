@@ -1,3 +1,4 @@
+import { parseHistoryOpen, parseHistoryPage, parseHistoryChunk, parseHistoryChange } from './historyPage.js';
 import { METHODS, ProtocolError, requireValue, objectFields, jsonValue, textValue, integerValue, parseCapabilities } from './capabilities.js';
 import { parseEnvironmentId, parseConnectionProfileId, parseHarnessInstanceId, parseSessionRef, decodeWorkspaceKey } from './identity.js';
 import { validateFrame, validateChunk, LIMITS } from './protocol.js';
@@ -5,6 +6,11 @@ import { validateHarnessManifest, INSPECTION_STATES } from './harnessContract.js
 
 export const INDEX_COLLECTIONS = Object.freeze(['harnesses', 'workspaces', 'session_summaries', 'interactions', 'operations']);
 const fields = {
+  'runtime.history.open': [['historyId', 'session'], ['agentId']],
+  'runtime.history.page': [['historyId'], ['cursor', 'releasePageIds']],
+  'runtime.history.chunk': [['historyId', 'pageId', 'descriptorId', 'offset'], []],
+  'runtime.history.read': [['historyId', 'after'], []],
+  'runtime.history.close': [['historyId'], []],
   'runtime.inspect': [[], []],
   'runtime.target.attach': [['target'], []], 'runtime.target.detach': [['target'], []],
   'runtime.snapshot': [['collection'], ['token', 'cursor', 'limit']],
@@ -40,8 +46,25 @@ export function parseTargetGrant(input) {
   value.workspaceKeys.forEach(key => requireValue(decodeWorkspaceKey(key).environmentId === value.target, 'wire.workspace_target'));
   return value;
 }
+function ownData(object) {
+  requireValue(Object.getPrototypeOf(object) === Object.prototype || Object.getPrototypeOf(object) === null, 'history.object');
+  requireValue(Reflect.ownKeys(object).every(key => typeof key === 'string' && Object.getOwnPropertyDescriptor(object, key)?.enumerable && Object.hasOwn(Object.getOwnPropertyDescriptor(object, key), 'value')), 'history.fields');
+}
 export function parseRuntimeParams(method, input) {
   requireValue(Object.hasOwn(RUNTIME_WIRE_METHODS, method), 'wire.method', 'unsupported');
+  if (method.startsWith('runtime.history.')) {
+    const value = objectFields(input, ...fields[method]);
+    ownData(value);
+    for (const key of ['historyId', 'pageId', 'descriptorId', 'cursor']) if (value[key] !== undefined) parseHarnessInstanceId(value[key]);
+    if (method === 'runtime.history.open') { objectFields(value.session, ['environmentId', 'harnessInstanceId', 'nativeSessionId']); ownData(value.session); parseSessionRef(value.session); textValue(value.session.nativeSessionId, 'history.nativeSessionId'); }
+    if (value.agentId !== undefined) textValue(value.agentId, 'history.agentId');
+    for (const key of ['offset', 'after']) if (value[key] !== undefined) integerValue(value[key], `history.${key}`);
+    if (value.releasePageIds !== undefined) {
+      requireValue(Array.isArray(value.releasePageIds) && value.releasePageIds.length <= 3 && new Set(value.releasePageIds).size === value.releasePageIds.length, 'history.release');
+      value.releasePageIds.forEach(parseHarnessInstanceId);
+    }
+    return bounded(value);
+  }
   const value = bounded(input);
   if (native.includes(method)) {
     objectFields(value, ['harnessInstanceId', 'args'], ['session', 'workspaceKey']);
@@ -86,6 +109,12 @@ export function parseRuntimeParams(method, input) {
 }
 export function parseRuntimeResult(method, input) {
   requireValue(Object.hasOwn(RUNTIME_WIRE_METHODS, method), 'wire.method', 'unsupported');
+  switch (method) {
+    case 'runtime.history.open': return parseHistoryOpen(input);
+    case 'runtime.history.page': return parseHistoryPage(input);
+    case 'runtime.history.chunk': return parseHistoryChunk(input);
+    case 'runtime.history.read': return parseHistoryChange(input);
+  }
   const value = bounded(input);
   switch (method) {
     case 'runtime.inspect':
@@ -130,7 +159,7 @@ export function parseRuntimeResult(method, input) {
       objectFields(value, ['operationId', 'value']); textValue(value.operationId, 'operationId'); break;
     case 'session.list': case 'session.get': case 'session.history': break;
     default: {
-      const key = { 'runtime.target.detach': 'detached', 'runtime.observer.resume': 'resumed', 'runtime.observer.close': 'closed', 'runtime.channel.cancel': 'closed', 'runtime.pty.write': 'written', 'runtime.pty.resize': 'resized', 'runtime.pty.detach': 'detached' }[method];
+      const key = { 'runtime.target.detach': 'detached', 'runtime.observer.resume': 'resumed', 'runtime.observer.close': 'closed', 'runtime.history.close': 'closed', 'runtime.channel.cancel': 'closed', 'runtime.pty.write': 'written', 'runtime.pty.resize': 'resized', 'runtime.pty.detach': 'detached' }[method];
       requireValue(key !== undefined, 'wire.result'); objectFields(value, [key]); requireValue(value[key] === true, 'wire.result');
     }
   }

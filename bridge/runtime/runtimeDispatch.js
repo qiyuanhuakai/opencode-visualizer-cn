@@ -3,10 +3,11 @@ import { ProtocolError, requireValue } from '../../shared/runtime/capabilities.j
 import { validateFrame } from '../../shared/runtime/protocol.js';
 import { encodeSessionKey, decodeWorkspaceKey } from '../../shared/runtime/identity.js';
 import { INDEX_COLLECTIONS, RUNTIME_WIRE_METHODS, parseRuntimeParams, parseRuntimeResult, parseTargetGrant } from '../../shared/runtime/runtimeWire.js';
+import { createHistoryService } from './historyService.js';
 import { createRuntimeChannels } from './runtimeChannels.js';
 
 const operations = { 'session.list': 'listSessionPage', 'session.get': 'getSession', 'session.history': 'readHistoryPage', 'session.create': 'createSession', 'session.send': 'send', 'session.cancel': 'cancel', 'interaction.respond': 'respondInteraction' };
-const critical = new Set(['session.cancel', 'interaction.respond', 'runtime.channel.ack', 'runtime.channel.cancel', 'runtime.pty.detach', 'runtime.observer.read', 'runtime.observer.resume', 'runtime.observer.close', 'runtime.target.detach']);
+const critical = new Set(['runtime.history.close', 'session.cancel', 'interaction.respond', 'runtime.channel.ack', 'runtime.channel.cancel', 'runtime.pty.detach', 'runtime.observer.read', 'runtime.observer.resume', 'runtime.observer.close', 'runtime.target.detach']);
 const publicKinds = new Set(['operation', 'acp-operation', 'opencode-instance-operation', 'opencode-cancellation', 'codex-instance-operation', 'codex-cancel-operation', 'kimi-instance', 'kimi-control', 'dsh-operation', 'interaction']);
 function project(collection, row) {
   if (!['operations', 'interactions'].includes(collection)) return row;
@@ -14,13 +15,14 @@ function project(collection, row) {
   const allowed = ['kind', 'scope', 'method', 'phase', 'outcome', 'session', 'parent', 'parentOperationId'];
   return { key: row.key, revision: row.revision, value: Object.fromEntries(allowed.filter(key => row.value[key] !== undefined).map(key => [key, row.value[key]])) };
 }
-export function createRuntimeDispatch({ management, targets = [], grants, binding, assertCurrent, inspect, send, sendBinary, canSend }) {
+export function createRuntimeDispatch({ management, targets = [], grants, binding, assertCurrent, inspect, send, sendBinary, canSend, retire }) {
   const graphs = new Map([management, ...targets].map(graph => [graph.target, graph]));
   const allowed = new Map((grants ?? [...graphs.values()].map(graph => graph.grant)).map(grant => [grant.target, parseTargetGrant(grant)]));
   const attached = new Map(), used = new Set();
   const channels = createRuntimeChannels({ canSend });
   const lifetime = new AbortController();
-  let generation = binding.generation, active = true, normal = 0, reserved = 0, closing;
+  let historyOwner;
+  let generation = binding.generation, active = true, normal = 0, reserved = 0, closing, retirement;
   function current() { requireValue(active, 'runtime.connection', 'reconcile_required'); assertCurrent(); }
   function grantFor(target) {
     const graph = graphs.get(target), grant = allowed.get(target);
@@ -57,10 +59,28 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
     requireValue(entry.graph.grant.workspaceKeys.every(key => entry.grant.workspaceKeys.includes(key)), 'runtime.index_scope', 'unauthorized');
   }
   async function snapshots(entry) { entry.snapshots ??= entry.graph.snapshots.connect(entry.binding, entry.isCurrent); return entry.snapshots; }
+  function history(entry) {
+    entry.history ??= createHistoryService({
+      binding: entry.binding,
+      async authorize(params) {
+        entry.current(); grantFor(entry.binding.target); permission(entry, 'session:read');
+        requireValue(params.session.environmentId === entry.binding.target, 'runtime.history_target', 'unauthorized');
+        const manifest = entry.graph.registry.list().find(item => item.harnessInstanceId === params.session.harnessInstanceId);
+        requireValue(manifest && manifest.environmentId === entry.binding.target, 'runtime.harness', 'unauthorized');
+        const summary = await entry.graph.store.get({ collection: 'session_summaries', key: encodeSessionKey(params.session) });
+        requireValue(summary?.value?.workspaceKey, 'runtime.session_workspace', 'unauthorized'); workspaceKey(entry, summary.value.workspaceKey);
+        entry.current(); return entry.graph.authority(params.session.harnessInstanceId);
+      },
+      openProducer: (params, authority) => entry.graph.registry.invoke({ environmentId: entry.binding.target, harnessInstanceId: params.session.harnessInstanceId, session: params.session, channel: 'core', operation: 'openHistory', params: { ...authority, ...(params.agentId === undefined ? {} : { agentId: params.agentId }) } }),
+    });
+    return entry.history;
+  }
   async function detach(entry) {
+    if (historyOwner?.entry === entry) historyOwner = undefined;
     entry.active = false; attached.delete(entry.binding.target); channels.detach(entry.binding.target); entry.observer?.value?.close();
-    if (entry.snapshots) await (await entry.snapshots).close();
-    await entry.workspace?.disconnect();
+    const cleanup = await Promise.allSettled([entry.history?.dispose(), entry.snapshots ? Promise.resolve(entry.snapshots).then(snapshot => snapshot.close()) : undefined, entry.workspace?.disconnect()]);
+    const failures = cleanup.filter(result => result.status === 'rejected');
+    if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Runtime target cleanup failed');
   }
   async function native(entry, frame, params, accepted, signal) {
     const mutation = RUNTIME_WIRE_METHODS[frame.method] === 'mutation';
@@ -100,6 +120,19 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
     const graph = entry.graph;
     if (operations[frame.method]) return native(entry, frame, params, accepted, signal);
     switch (frame.method) {
+      case 'runtime.history.open': {
+        const old = historyOwner, owner = { entry, historyId: params.historyId }; historyOwner = owner;
+        if (old && old.entry !== entry) {
+          try { await history(old.entry).close({ historyId: old.historyId }); }
+          catch (error) { if (!(error instanceof ProtocolError) || !['unauthorized', 'reconcile_required', 'replay_required'].includes(error.code)) throw error; }
+        }
+        requireValue(historyOwner === owner, 'history.superseded', 'cancelled');
+        return history(entry).open(params);
+      }
+      case 'runtime.history.page': return history(entry).page(params);
+      case 'runtime.history.chunk': return history(entry).chunk(params);
+      case 'runtime.history.read': return history(entry).read(params);
+      case 'runtime.history.close': return history(entry).close(params);
       case 'runtime.inspect': permission(entry, 'runtime:read'); return graph.inspect(inspect(), [...allowed.values()]);
       case 'runtime.target.attach': {
         requireValue(entry.graph === management, 'runtime.management', 'unauthorized');
@@ -155,6 +188,19 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
       default: throw new ProtocolError('unsupported', 'runtime.method');
     }
   }
+  function closeConnection() {
+    closing ??= (async () => {
+      active = false; lifetime.abort(); channels.close();
+      const cleanup = await Promise.allSettled([...attached.values()].map(detach));
+      const failures = cleanup.filter(result => result.status === 'rejected');
+      if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Runtime connection cleanup failed');
+    })();
+    return closing;
+  }
+  function retireConnection() {
+    retirement ??= (async () => { try { await closeConnection(); } finally { retire?.(); } })();
+    return retirement;
+  }
   return {
     hello: () => hello(attached.get(management.target)),
     binary(bytes) { current(); channels.binary(bytes); },
@@ -168,7 +214,7 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
         entry = match(frame); requireValue(!used.has(frame.id) && used.size < 65536, 'runtime.request_id', 'conflict'); used.add(frame.id);
         requireValue(entry.grant.capabilities.methods.includes(frame.method), 'runtime.method', 'unsupported');
         reservedAdmission = normal >= 496;
-        const reserveLimit = frame.method === 'session.cancel' || frame.method === 'interaction.respond' ? 16 : 12;
+        const reserveLimit = frame.method === 'runtime.history.close' || frame.method === 'session.cancel' || frame.method === 'interaction.respond' ? 16 : 12;
         requireValue(!reservedAdmission || (priority && reserved < reserveLimit), 'runtime.admission', 'source_unavailable');
         if (reservedAdmission) reserved++; else normal++; admitted = true;
         const params = parseRuntimeParams(frame.method, frame.params);
@@ -180,8 +226,9 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
       } catch (error) {
         const codes = new Set(['invalid_request', 'unauthorized', 'unsupported', 'version_mismatch', 'conflict', 'reconcile_required', 'replay_required', 'source_unavailable', 'timeout', 'cancelled']);
         if (active) send({ ...base, ok: false, typedError: { code: codes.has(error?.code) ? error.code : 'source_unavailable', message: codes.has(error?.code) ? error.message : 'Runtime request failed.' } });
+        if (error?.field === 'history.tombstones_exhausted') await retireConnection();
       } finally { clearTimeout(timer); controller.abort(); if (admitted) { if (reservedAdmission) reserved--; else normal--; } }
     },
-    close() { closing ??= (async () => { active = false; lifetime.abort(); channels.close(); await Promise.allSettled([...attached.values()].map(detach)); })(); return closing; },
+    close: closeConnection,
   };
 }

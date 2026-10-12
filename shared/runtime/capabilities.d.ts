@@ -7,7 +7,7 @@ export class ProtocolError extends TypeError {
   readonly field: string;
   constructor(code: ErrorCode, field: string);
 }
-export type Method = 'runtime.inspect' | 'runtime.snapshot' | 'runtime.replay'
+export type Method = 'runtime.history.open' | 'runtime.history.page' | 'runtime.history.chunk' | 'runtime.history.read' | 'runtime.history.close' | 'runtime.inspect' | 'runtime.snapshot' | 'runtime.replay'
   | 'runtime.target.attach' | 'runtime.target.detach' | 'runtime.snapshot.chunk' | 'runtime.entity.resolve'
   | 'runtime.observer.open' | 'runtime.observer.read' | 'runtime.observer.resume' | 'runtime.observer.close'
   | 'runtime.channel.open' | 'runtime.channel.ack' | 'runtime.channel.finish' | 'runtime.channel.cancel'

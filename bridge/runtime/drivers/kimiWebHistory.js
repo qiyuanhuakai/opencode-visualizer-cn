@@ -1,4 +1,4 @@
-import { ProtocolError } from '../../../shared/runtime/capabilities.js';
+import { ProtocolError, requireValue, integerValue } from '../../../shared/runtime/capabilities.js';
 import { nativeInteger, nativeText, record, updateDurableCursor, recoverSnapshotFrames } from '../../../shared/runtime/native/kimiWeb/protocol.js';
 import { transcriptPage, transcriptSnapshot, applyTranscriptOps, mergeOlderTranscript } from '../../../shared/runtime/native/kimiWeb/transcript.js';
 
@@ -134,4 +134,153 @@ export function createKimiWebHistory({ transport, onRecovered = () => {} }) {
     },
     clear: () => sessions.clear(),
   };
+}
+
+export const KIMI_WEB_HISTORY_LIMITS = Object.freeze({ page: 200, chunkBytes: 65536 });
+/** Native events that change the selected session's transcript inventory or its settled content. */
+const INVALIDATION = Object.freeze(['transcript.reset', 'transcript.ops', 'replay_required', 'resynchronized']);
+
+/** Raw native transcript producer for one selected session and agent. The trusted driver injects request
+ * admission, the current fence, the captured authority, the native subscription bus and the owner release;
+ * this module never builds an endpoint, holds credentials or observes any other session.
+ */
+export function createKimiWebHistoryProducer(options) {
+  const { session, authority, current, assertCurrent, pull, subscribe, releaseOwner, sessionEpoch, randomUUID } = options;
+  const nativeSessionId = nativeText(session.nativeSessionId, 'kimi.history_session', 512);
+  let store, observer, pump, opened = false, closed = false, through = 0, nativeCursor = null, failure;
+  const pages = new Set();
+  let change = Promise.withResolvers();
+  const wake = () => { const previous = change; change = Promise.withResolvers(); previous.resolve(); };
+  function alive(signal) {
+    requireValue(!closed, 'kimi.history_closed', 'cancelled');
+    requireValue(!signal?.aborted, 'kimi.history_cancelled', 'cancelled');
+    requireValue(current(), 'kimi.generation', 'reconcile_required');
+  }
+  async function fenced(signal) { alive(signal); await assertCurrent(); alive(signal); }
+  let envelope;
+  const grammar = Object.freeze({
+    records: Object.freeze([Object.freeze({
+      path: Object.freeze(['items', '*']),
+      fields: Object.freeze([
+        Object.freeze({ name: 'turnId', path: Object.freeze(['turnId']) }),
+        Object.freeze({ name: 'markerId', path: Object.freeze(['markerId']) }),
+        Object.freeze({ name: 'refId', path: Object.freeze(['refId']) }),
+      ]),
+      validate(metadata) {
+        if (metadata.turnId !== undefined) return `turn:${nativeText(metadata.turnId, 'kimi.history_turn_id', 512)}`;
+        if (metadata.markerId !== undefined) return `marker:${nativeText(metadata.markerId, 'kimi.history_marker_id', 512)}`;
+        if (metadata.refId !== undefined) return `ref:${nativeText(metadata.refId, 'kimi.history_ref_id', 512)}`;
+        throw new ProtocolError('replay_required', 'kimi.history_record_identity');
+      },
+    })]),
+    fields: Object.freeze([
+      Object.freeze({ name: 'hasMore', path: Object.freeze(['has_more']) }),
+      Object.freeze({ name: 'seq', path: Object.freeze(['seq']) }),
+      Object.freeze({ name: 'epoch', path: Object.freeze(['epoch']) }),
+    ]),
+    validate(metadata) {
+      requireValue(typeof metadata.hasMore === 'boolean', 'kimi.history_has_more');
+      integerValue(metadata.seq, 'kimi.history_native_seq');
+      const epoch = metadata.epoch === undefined ? undefined : nativeText(metadata.epoch, 'kimi.history_native_epoch', 512);
+      const known = sessionEpoch();
+      if (epoch !== undefined && known !== undefined && known !== epoch) throw new ProtocolError('replay_required', 'kimi.history_epoch_changed');
+      envelope = Object.freeze({ hasMore: metadata.hasMore, seq: metadata.seq, epoch: epoch ?? null });
+    },
+  });
+  async function open({ signal, streamStore }) {
+    requireValue(!opened && !closed, 'kimi.history_open', 'conflict');
+    await fenced(signal);
+    opened = true; store = streamStore;
+    observer = subscribe((event) => event?.type !== undefined && INVALIDATION.includes(event.type) && event.session?.nativeSessionId === nativeSessionId);
+    pump = (async () => {
+      try {
+        for (;;) {
+          const next = await observer.next();
+          if (next.done) { failure ??= new ProtocolError('source_unavailable', 'kimi.history_observer_closed'); break; }
+          if (next.value !== undefined) { through++; wake(); }
+        }
+      } catch (error) { failure ??= error instanceof ProtocolError ? error : new ProtocolError('replay_required', 'kimi.history_observer'); }
+      finally { wake(); }
+    })();
+    return { fence: { id: randomUUID(), sourceGeneration: authority.epoch } };
+  }
+  async function page({ cursor, releasePageIds = [], signal }) {
+    await fenced(signal);
+    requireValue(opened && store, 'kimi.history_open', 'replay_required');
+    requireValue(Array.isArray(releasePageIds), 'kimi.history_release');
+    for (const id of releasePageIds) {
+      nativeText(id, 'kimi.history_page', 512);
+      requireValue(pages.has(id), 'kimi.history_page_owner', 'unauthorized');
+      await store.release(id); pages.delete(id);
+    }
+    await fenced(signal);
+    const before = cursor === undefined || cursor === null ? null : nativeText(cursor, 'kimi.history_cursor', 512);
+    requireValue(before === null || before === nativeCursor, 'kimi.history_cursor', 'replay_required');
+    envelope = undefined;
+    let pulled;
+    try {
+      pulled = await pull({ before, signal });
+      await fenced(signal);
+      let released = false;
+      const release = () => { if (released) return; released = true; pulled?.release(); };
+      const source = (async function* () {
+        try { for await (const piece of pulled.body) yield piece; }
+        finally { release(); }
+      })();
+      const output = await store.ingest({ source, cancel: () => release(), grammar, signal });
+      await fenced(signal);
+      requireValue(envelope !== undefined, 'kimi.history_envelope', 'replay_required');
+      const boundary = output.records.find((record) => record.recordId.startsWith('turn:'));
+      if (envelope.hasMore) {
+        requireValue(boundary !== undefined, 'kimi.history_cursor', 'replay_required');
+        requireValue(boundary.recordId.slice(5) !== before, 'kimi.history_repeated_cursor', 'replay_required');
+      }
+      pages.add(output.id);
+      nativeCursor = envelope.hasMore ? boundary.recordId.slice(5) : null;
+      return {
+        pageId: output.id,
+        items: output.records.map((record) => ({ recordId: record.recordId, kind: 'stream', descriptor: { id: record.id, format: record.format, totalBytes: record.totalBytes, sha256: record.sha256 } })),
+        document: { id: output.document.id, format: output.document.format, totalBytes: output.document.totalBytes, sha256: output.document.sha256 },
+        cursor: nativeCursor,
+        completeness: nativeCursor === null ? 'complete' : 'partial',
+        reason: 'native-transcript-page',
+      };
+    } catch (error) { pulled?.release(); throw error; }
+  }
+  async function chunk({ pageId, descriptorId, offset, signal }) {
+    await fenced(signal);
+    requireValue(opened && store, 'kimi.history_open', 'replay_required');
+    nativeText(pageId, 'kimi.history_page', 512);
+    nativeText(descriptorId, 'kimi.history_descriptor', 512);
+    integerValue(offset, 'kimi.history_offset');
+    requireValue(pages.has(pageId), 'kimi.history_page_owner', 'replay_required');
+    const output = await store.read({ pageId, descriptorId, offset });
+    await fenced(signal);
+    return output;
+  }
+  async function read({ after, signal }) {
+    await fenced(signal);
+    requireValue(opened, 'kimi.history_open', 'replay_required');
+    integerValue(after, 'kimi.history_after');
+    for (;;) {
+      if (failure) return { through, changed: false, status: failure.code === 'replay_required' ? 'replay_required' : 'source_unavailable' };
+      if (through > after) return { through, changed: true, status: 'current' };
+      if (closed || signal?.aborted) throw new ProtocolError('cancelled', 'kimi.history_read');
+      await change.promise;
+      await fenced(signal);
+    }
+  }
+  async function close() {
+    if (closed) return;
+    closed = true; wake();
+    const iterator = observer, task = pump;
+    observer = undefined; pump = undefined;
+    try { await iterator?.return?.(); } catch (error) { if (!(error instanceof TypeError)) throw error; }
+    if (task) await task.catch(() => {});
+    const owned = [...pages]; pages.clear();
+    for (const id of owned) { try { await store?.release(id); } catch (error) { if (!(error instanceof TypeError)) throw error; } }
+    store = undefined;
+    await releaseOwner?.();
+  }
+  return Object.freeze({ capabilities: Object.freeze({ archive: 'paged', recordStream: true, live: 'invalidate' }), open, page, chunk, read, close });
 }

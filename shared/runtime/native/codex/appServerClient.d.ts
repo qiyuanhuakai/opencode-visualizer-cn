@@ -7,10 +7,25 @@ export interface NativeMessage {
 export interface NativeTransport {
   send(value: string): void;
   subscribe(message: (raw: string) => void, close: () => void): () => void;
+  requestRaw?(raw: string, requestId: number): AsyncIterable<Uint8Array>;
   close(): void;
 }
 export interface AppServerClient {
   request(method: string, params: JsonValue): Promise<JsonValue>;
+  requestHistory(
+    method: string,
+    params: JsonValue,
+  ): {
+    readonly id: number;
+    readonly stream: AsyncIterable<Uint8Array>;
+    readonly settled: boolean;
+    envelope(): {
+      readonly id: number | null;
+      readonly kind: 'result' | 'error' | 'unknown';
+      readonly errorCode: number | null;
+      readonly nextCursor: string | null;
+    };
+  };
   notify(method: string, params?: JsonValue): void;
   reply(id: string | number, result: JsonValue): void;
   reject(id: string | number, code: number): void;

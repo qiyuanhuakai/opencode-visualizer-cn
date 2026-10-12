@@ -1,4 +1,4 @@
-import { decodeBinary, decodeFrame, encodeFrame, LIMITS, type Frame, type Hello, type Request } from '../../shared/runtime/protocol.js';
+import { decodeBinary, decodeFrame, encodeFrame, LIMITS, type Frame, type Hello, type RawFramePreflight, type Request } from '../../shared/runtime/protocol.js';
 import type { ErrorCode } from '../../shared/runtime/capabilities.js';
 import { connectionError, parseConnectionReference, RuntimeConnectionError, type ConnectionReference, type RuntimeAuthentication } from './connectionProfile';
 
@@ -14,6 +14,7 @@ export type RuntimeConnection = Readonly<{
   connect(): Promise<Hello>; send(frame: Request | Uint8Array): void;
   subscribe(listener: (event: RuntimeConnectionEvent) => void): () => void;
   reserveOutbound(bytes: number): () => void;
+  setFramePreflight(preflight: RawFramePreflight): () => void;
   disconnect(): void; dispose(): void;
   status: RuntimeConnectionStatus; bufferedAmount: number;
 }>;
@@ -35,6 +36,7 @@ export function createRuntimeConnection(options: RuntimeConnectionOptions): Runt
   let socket: RuntimeSocket | undefined;
   let hello: Hello | undefined;
   let disposed = false;
+  let preflight: RawFramePreflight | undefined;
   let retained = 0;
   let budgetOwner = {};
   let retries = 0;
@@ -93,7 +95,8 @@ export function createRuntimeConnection(options: RuntimeConnectionOptions): Runt
             const bytes = new Uint8Array(data); decodeBinary(bytes);
             emit({ kind: 'binary', bytes, generation }); return;
           }
-          const frame = decodeFrame(data);
+          const frame = hello && preflight ? decodeFrame(data, preflight) : decodeFrame(data);
+          if (frame === undefined) return;
           if (!hello) {
             if (frame.kind !== 'hello') throw new RuntimeConnectionError('invalid_request');
             if (reference.expectedEnvironmentId && reference.expectedEnvironmentId !== frame.target) throw new RuntimeConnectionError('conflict');
@@ -156,11 +159,17 @@ export function createRuntimeConnection(options: RuntimeConnectionOptions): Runt
       let released = false;
       return () => { if (!released && generation === status.generation && owner === budgetOwner) retained -= bytes; released = true; };
     },
+    setFramePreflight(hook) {
+      if (preflight !== undefined && preflight !== hook) throw new RuntimeConnectionError('conflict');
+      preflight = hook;
+      let released = false;
+      return () => { if (!released && preflight === hook) preflight = undefined; released = true; };
+    },
     subscribe(listener) {
       if (disposed) throw new RuntimeConnectionError('cancelled');
       listeners.add(listener); return () => { listeners.delete(listener); };
     },
     disconnect() { if (!disposed) { end(); status = Object.freeze({ state: 'disconnected', generation: status.generation + 1 }); } },
-    dispose() { if (!disposed) { end(); disposed = true; status = Object.freeze({ state: 'disconnected', generation: status.generation + 1 }); listeners.clear(); } },
+    dispose() { if (!disposed) { end(); preflight = undefined; disposed = true; status = Object.freeze({ state: 'disconnected', generation: status.generation + 1 }); listeners.clear(); } },
   };
 }

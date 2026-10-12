@@ -54,7 +54,7 @@ export async function handleRuntimeUpgrade(request, socket, head, options) {
       if (!canSend(bytes.length)) { socket.destroy(); return; }
       socket.write(bytes);
     };
-    dispatcher = connection.openRuntime?.({ send, sendBinary, canSend });
+    dispatcher = connection.openRuntime?.({ send, sendBinary, canSend, retire: () => socket.destroy() });
     const hello = dispatcher?.hello() ?? connection.hello();
     send(hello);
     let buffer = Buffer.alloc(0);

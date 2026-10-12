@@ -2,6 +2,7 @@ import { parseHarnessInstanceId } from './identity.js';
 
 export const ERROR_CODES = Object.freeze(['invalid_request', 'unsupported', 'version_mismatch', 'unauthorized', 'conflict', 'cancelled', 'timeout', 'source_unavailable', 'reconcile_required', 'replay_required']);
 export const METHODS = Object.freeze({
+  'runtime.history.open': 'control', 'runtime.history.page': 'read', 'runtime.history.chunk': 'read', 'runtime.history.read': 'read', 'runtime.history.close': 'control',
   'runtime.target.attach': 'control', 'runtime.target.detach': 'control',
   'runtime.snapshot.chunk': 'read', 'runtime.entity.resolve': 'read',
   'runtime.observer.open': 'control', 'runtime.observer.read': 'control',

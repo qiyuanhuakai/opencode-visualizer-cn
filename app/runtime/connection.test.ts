@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { encodeBinary, encodeFrame, LIMITS, type Hello, type Request } from '../../shared/runtime/protocol.js';
+import { encodeBinary, encodeFrame, LIMITS, type Hello, type RawFramePreflight, type Request } from '../../shared/runtime/protocol.js';
 import { parseEnvironmentId, parseInstanceId } from '../../shared/runtime/identity.js';
 import { createRuntimeConnection, type RuntimeConnectionEvent, type RuntimeSocket } from './connection';
 
@@ -153,5 +153,77 @@ describe('Runtime management connection', () => {
     socket.dispatchEvent(new Event('close')); await vi.advanceTimersByTimeAsync(10000);
     expect(fixture.factory).toHaveBeenCalledTimes(4); expect(fixture.sockets.reduce((sum, item) => sum + item.send.mock.calls.length, 0)).toBe(1);
     expect(vi.getTimerCount()).toBe(0); fixture.connection.dispose();
+  });
+});
+
+describe('Runtime connection frame preflight', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+  const errorResult = (generation = hello.generation) => ({ version: 1 as const, kind: 'result' as const, target: hello.target, epoch: hello.epoch, generation, id: 'r-1', ok: false as const, typedError: { code: 'cancelled' as const, message: 'bounded' } });
+
+  it('consults the preflight only after Hello readiness and returns on a drop', async () => {
+    const fixture = setup();
+    const socket = await fixture.ready();
+    const seen: Array<string | undefined> = [];
+    const unregister = fixture.connection.setFramePreflight(summary => { seen.push(summary.kind); return 'drop'; });
+    const before = fixture.events.length;
+    socket.message(encodeFrame(errorResult()));
+    expect(seen).toEqual(['result']);
+    expect(fixture.events).toHaveLength(before);
+    expect(fixture.connection.status.state).toBe('ready');
+    unregister(); unregister(); fixture.connection.dispose();
+  });
+
+  it('emits a validated frame the preflight accepts', async () => {
+    const fixture = setup();
+    const socket = await fixture.ready();
+    fixture.connection.setFramePreflight(() => 'accept');
+    socket.message(encodeFrame(errorResult()));
+    expect(fixture.events.at(-1)).toMatchObject({ kind: 'frame', frame: { id: 'r-1', typedError: { code: 'cancelled' } } });
+    fixture.connection.dispose();
+  });
+
+  it('never runs the preflight before Hello and rejects a pre-Hello non-hello frame', async () => {
+    const fixture = setup();
+    let consulted = false;
+    fixture.connection.setFramePreflight(() => { consulted = true; return 'accept'; });
+    const connecting = fixture.connection.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    fixture.sockets[0].message(encodeFrame(errorResult()));
+    await expect(connecting).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(consulted).toBe(false); fixture.connection.dispose();
+  });
+
+  it('rejects a second owner with a conflict instead of composing, but tolerates the same owner', async () => {
+    const fixture = setup();
+    await fixture.ready();
+    const hook: RawFramePreflight = () => 'accept';
+    const unregister = fixture.connection.setFramePreflight(hook);
+    expect(() => fixture.connection.setFramePreflight(() => 'drop')).toThrow(expect.objectContaining({ code: 'conflict' }));
+    expect(() => fixture.connection.setFramePreflight(hook)).not.toThrow();
+    unregister(); fixture.connection.dispose();
+  });
+
+  it('identity-fences unregister so a stale release cannot clear a later owner', async () => {
+    const fixture = setup();
+    const socket = await fixture.ready();
+    const releaseA = fixture.connection.setFramePreflight(() => 'drop');
+    releaseA();
+    const releaseB = fixture.connection.setFramePreflight(() => 'drop');
+    releaseA();
+    const before = fixture.events.length;
+    socket.message(encodeFrame(errorResult()));
+    expect(fixture.events).toHaveLength(before);
+    releaseB(); fixture.connection.dispose();
+  });
+
+  it('allows a later owner after unregister and after dispose', async () => {
+    const fixture = setup();
+    await fixture.ready();
+    const releaseA = fixture.connection.setFramePreflight(() => 'accept');
+    releaseA();
+    expect(() => fixture.connection.setFramePreflight(() => 'drop')).not.toThrow();
+    fixture.connection.dispose();
+    expect(() => fixture.connection.setFramePreflight(() => 'accept')).not.toThrow();
   });
 });

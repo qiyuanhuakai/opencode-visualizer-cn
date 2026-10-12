@@ -6,6 +6,7 @@ export interface RuntimeTransport {
   send(frame: Result): void;
   sendBinary(bytes: Uint8Array): void;
   canSend(bytes: number): boolean;
+  retire?(): void;
 }
 export interface RuntimeDispatch {
   hello(): Hello;
