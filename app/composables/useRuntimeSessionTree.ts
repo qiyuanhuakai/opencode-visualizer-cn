@@ -85,8 +85,33 @@ export type UnifiedSearchState = Readonly<{
   scanned: number;
   pages: number;
   matches: readonly UnifiedSessionRow[];
+  totalMatched: number;
+  hasMore: boolean;
+  cursor: string | null;
   error: ErrorCode | null;
 }>;
+
+/**
+ * Hard retention budget for the full-index search path.
+ *
+ * Task 20 bounds the entity cache to ENTITY_LIMITS (2000 entries / 16 MiB); the
+ * search path must keep the same bounded-resident property instead of
+ * accumulating every match for a large index (a broad query over a 100k-row
+ * index previously retained all 100000 rows in `searchState.matches`).
+ * `maxRetained` is one tenth of ENTITY_LIMITS.entries and four times the 50
+ * rows the tree renders, so a result page and its cursor stay bounded
+ * independently of index size. The remainder stays reachable through
+ * `searchMore()` via `hasMore`/`cursor`, so the full index is still searchable
+ * (a hit outside the visible/LRU window is found) without holding the whole
+ * result set.
+ */
+export const SEARCH_LIMITS = Object.freeze({ maxRetained: 200 });
+
+type SearchScan = { retained: UnifiedSessionRow[]; totalMatched: number; scanned: number; pages: number };
+
+function idleSearchState(): UnifiedSearchState {
+  return { status: 'idle', query: '', scanned: 0, pages: 0, matches: [], totalMatched: 0, hasMore: false, cursor: null, error: null };
+}
 
 function asRecord(value: unknown): Readonly<Record<string, unknown>> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Readonly<Record<string, unknown>>) : null;
@@ -340,7 +365,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   const childScans = shallowRef<ReadonlySet<string>>(new Set<string>());
   const expanded = shallowRef<ReadonlySet<string>>(new Set<string>());
   const filterKinds = shallowRef<ReadonlySet<SessionHarness>>(new Set<SessionHarness>([...HARNESS_KINDS, 'unknown']));
-  const search = shallowRef<UnifiedSearchState>({ status: 'idle', query: '', scanned: 0, pages: 0, matches: [], error: null });
+  const search = shallowRef<UnifiedSearchState>(idleSearchState());
   const retrying = shallowRef<ReadonlySet<string>>(new Set());
   const selection = shallowRef(state.capture());
   const usage = shallowRef(state.usage());
@@ -350,6 +375,9 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   let unsubscribe: (() => void) | undefined;
   let readChain: Promise<unknown> = Promise.resolve();
   let previousWindowKeys: ReadonlySet<string> = new Set<string>();
+  let searchGeneration = 0;
+  let searchController: AbortController | undefined;
+  let clearingSelection = false;
 
   function serialize<T>(work: () => Promise<T>): Promise<T> {
     const next = readChain.then(work, work);
@@ -376,11 +404,22 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
       view.release();
     }
     const captured = selection.value;
-    if (captured && viewStatus.value !== 'loading') {
-      const key = encodeSessionKey(captured.selection.session);
-      if (previousWindowKeys.has(key) && !windowKeys.has(key)) void state.select(null).catch(() => {});
-    }
+    const clearKey = captured && viewStatus.value !== 'loading' ? encodeSessionKey(captured.selection.session) : null;
+    const shouldClear = clearKey !== null && previousWindowKeys.has(clearKey) && !windowKeys.has(clearKey);
+    // Advance the local window markers BEFORE clearing. `state.select(null)`
+    // notifies synchronously and re-enters this callback; the re-entrant call
+    // must observe the already-advanced markers, so the clear can run at most
+    // once. `clearingSelection` makes that single-clear contract explicit and
+    // bounds the callback even if the markers were ever to regress.
     previousWindowKeys = windowKeys;
+    if (shouldClear && !clearingSelection) {
+      clearingSelection = true;
+      try {
+        void state.select(null).catch(() => {});
+      } finally {
+        clearingSelection = false;
+      }
+    }
     selection.value = state.capture();
     usage.value = state.usage();
   }
@@ -433,35 +472,93 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     await serialize(readTopology);
     refreshFromState();
   }
+  /**
+   * Stream every session_summaries page and retain at most
+   * SEARCH_LIMITS.maxRetained matches starting after `skip` matches. `scanned`
+   * and `totalMatched` count the whole traversal without retaining rows, so the
+   * caller still knows the full-index population. The `signal` aborts a
+   * superseded traversal mid-flight.
+   */
+  async function scanSearch(query: string, skip: number, signal: AbortSignal, accumulator: SearchScan): Promise<void> {
+    const result = await client.snapshot(target, 'session_summaries', {
+      signal,
+      onPage: (_collection, page) => {
+        if (signal.aborted) return;
+        accumulator.pages += 1;
+        for (const item of page.items) {
+          accumulator.scanned += 1;
+          const record = asRecord(item);
+          if (!record || typeof record.key !== 'string') continue;
+          const session = asRecord(record.value)?.session;
+          const parsed = parseUnifiedSessionRow(record.key, record.value, kindById.get(asText(asRecord(session)?.harnessInstanceId, 64) ?? '') ?? 'unknown');
+          if (!parsed || !matchesQuery(parsed, query) || !filterKinds.value.has(parsed.harness)) continue;
+          accumulator.totalMatched += 1;
+          if (accumulator.totalMatched > skip && accumulator.retained.length < SEARCH_LIMITS.maxRetained) accumulator.retained.push(parsed);
+        }
+      },
+    });
+    await result.observer.close();
+  }
   /** Full-index search: traverses every session_summaries page, not the LRU window. */
   async function searchAll(query: string): Promise<UnifiedSearchState> {
-    search.value = { status: 'searching', query, scanned: 0, pages: 0, matches: [], error: null };
+    const generation = ++searchGeneration;
+    searchController?.abort();
+    const controller = new AbortController();
+    searchController = controller;
+    search.value = { status: 'searching', query, scanned: 0, pages: 0, matches: [], totalMatched: 0, hasMore: false, cursor: null, error: null };
     return serialize(async () => {
-      const matches: UnifiedSessionRow[] = [];
-      let scanned = 0;
-      let pages = 0;
+      const accumulator: SearchScan = { retained: [], totalMatched: 0, scanned: 0, pages: 0 };
       try {
-        const result = await client.snapshot(target, 'session_summaries', {
-          onPage: (_collection, page) => {
-            pages += 1;
-            for (const item of page.items) {
-              scanned += 1;
-              const record = asRecord(item);
-              if (!record || typeof record.key !== 'string') continue;
-              const session = asRecord(record.value)?.session;
-              const parsed = parseUnifiedSessionRow(record.key, record.value, kindById.get(asText(asRecord(session)?.harnessInstanceId, 64) ?? '') ?? 'unknown');
-              if (!parsed || !matchesQuery(parsed, query) || !filterKinds.value.has(parsed.harness)) continue;
-              matches.push(parsed);
-            }
-          },
-        });
-        await result.observer.close();
-        const complete: UnifiedSearchState = { status: 'complete', query, scanned, pages, matches: Object.freeze(matches), error: null };
+        await scanSearch(query, 0, controller.signal, accumulator);
+        if (generation !== searchGeneration) return search.value;
+        const hasMore = accumulator.totalMatched > accumulator.retained.length;
+        const complete: UnifiedSearchState = { status: 'complete', query, scanned: accumulator.scanned, pages: accumulator.pages,
+          matches: Object.freeze(accumulator.retained), totalMatched: accumulator.totalMatched,
+          hasMore, cursor: hasMore ? String(accumulator.retained.length) : null, error: null };
         search.value = complete;
         return complete;
       } catch (error) {
+        if (generation !== searchGeneration) return search.value;
         const code = error instanceof Error && 'code' in error ? String((error as { code: unknown }).code) : 'source_unavailable';
-        const failed: UnifiedSearchState = { status: 'error', query, scanned, pages, matches: Object.freeze(matches), error: code as ErrorCode };
+        const failed: UnifiedSearchState = { status: 'error', query, scanned: accumulator.scanned, pages: accumulator.pages,
+          matches: Object.freeze(accumulator.retained), totalMatched: accumulator.totalMatched, hasMore: false, cursor: null, error: code as ErrorCode };
+        search.value = failed;
+        return failed;
+      }
+    });
+  }
+  /**
+   * Cursor page for the full-index search: the next bounded window of matches
+   * after the current one. Re-scans the index (streaming, bounded retention)
+   * rather than holding every result, and is superseded by any newer query.
+   */
+  async function searchMore(): Promise<UnifiedSearchState> {
+    const current = search.value;
+    if (current.status !== 'complete' || !current.hasMore || current.cursor === null) return current;
+    const skip = Number(current.cursor);
+    if (!Number.isSafeInteger(skip) || skip < 0) return current;
+    const query = current.query;
+    const generation = searchGeneration;
+    searchController?.abort();
+    const controller = new AbortController();
+    searchController = controller;
+    search.value = { ...current, status: 'searching' };
+    return serialize(async () => {
+      const accumulator: SearchScan = { retained: [], totalMatched: 0, scanned: 0, pages: 0 };
+      try {
+        await scanSearch(query, skip, controller.signal, accumulator);
+        if (generation !== searchGeneration) return search.value;
+        const nextOffset = skip + accumulator.retained.length;
+        const hasMore = accumulator.totalMatched > nextOffset;
+        const complete: UnifiedSearchState = { status: 'complete', query, scanned: accumulator.scanned, pages: accumulator.pages,
+          matches: Object.freeze(accumulator.retained), totalMatched: accumulator.totalMatched,
+          hasMore, cursor: hasMore ? String(nextOffset) : null, error: null };
+        search.value = complete;
+        return complete;
+      } catch (error) {
+        if (generation !== searchGeneration) return search.value;
+        const code = error instanceof Error && 'code' in error ? String((error as { code: unknown }).code) : 'source_unavailable';
+        const failed: UnifiedSearchState = { ...current, status: 'error', hasMore: false, cursor: null, error: code as ErrorCode };
         search.value = failed;
         return failed;
       }
@@ -548,6 +645,10 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   async function dispose(): Promise<void> {
     if (disposed) return;
     disposed = true;
+    searchGeneration += 1;
+    searchController?.abort();
+    searchController = undefined;
+    search.value = idleSearchState();
     unsubscribe?.();
     unsubscribe = undefined;
     sessions.value = Object.freeze([]);
@@ -562,7 +663,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     rows, tree, sessions, workspaces, harnesses, nativeChildren, childScans,
     viewStatus, viewLoaded, viewError, selection, usage, failure, started,
     expanded, toggleExpand, filterKinds, setFilterKinds,
-    search: searchAll, searchState: search, loadMoreChildren, retrySource, retrying,
+    search: searchAll, searchState: search, searchMore, loadMoreChildren, retrySource, retrying,
     select, selectByKey,
     state,
   };

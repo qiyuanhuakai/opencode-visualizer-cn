@@ -4,6 +4,7 @@ import { createI18n } from 'vue-i18n';
 import SessionTree from '../SessionTree.vue';
 import {
   HARNESS_KINDS,
+  SEARCH_LIMITS,
   buildUnifiedTree,
   flattenUnifiedTree,
   parseUnifiedSessionRow,
@@ -74,6 +75,7 @@ class FakeClient {
   readonly rows = new Map<string, AnyRecord[]>();
   readonly snapshots = new Map<string, number>();
   readonly listCalls = new Map<string, number>();
+  abortedSnapshots = 0;
   private tokens = 0;
   private readonly revision = 200000;
   constructor(readonly environment: string = ENV) {}
@@ -86,13 +88,17 @@ class FakeClient {
     return { binding: { target: this.environment as EnvironmentId, epoch: 'epoch', generation: 1 }, generation: 1, isCurrent: () => true };
   }
   onDetach(): () => void { return () => {}; }
-  async snapshot(target: EnvironmentId, collections: string | readonly string[], options: { onPage: (collection: string, page: SnapshotPage) => Promise<void> | void; onDelivery?: unknown }): Promise<{ token: string; revision: number; watermark: number; observer: { read(): Promise<null>; close(): Promise<void> } }> {
+  async snapshot(target: EnvironmentId, collections: string | readonly string[], options: { onPage: (collection: string, page: SnapshotPage) => Promise<void> | void; onDelivery?: unknown; signal?: AbortSignal }): Promise<{ token: string; revision: number; watermark: number; observer: { read(): Promise<null>; close(): Promise<void> } }> {
     const names = typeof collections === 'string' ? [collections] : collections;
     const token = `snapshot-${++this.tokens}`;
     for (const name of names) {
       const rows = this.rows.get(name) ?? [];
       this.snapshots.set(name, (this.snapshots.get(name) ?? 0) + 1);
       for (let offset = 0; offset === 0 || offset < rows.length; offset += 200) {
+        if (options.signal?.aborted) {
+          this.abortedSnapshots += 1;
+          throw Object.assign(new Error('snapshot cancelled'), { code: 'cancelled' });
+        }
         const page = rows.slice(offset, offset + 200);
         await options.onPage(name, {
           collection: name, items: page, cursor: offset + 200 < rows.length ? String(offset + 200) : null,
@@ -318,9 +324,86 @@ describe('task 21 — unified session tree acceptance', () => {
     expect(result.matches).toHaveLength(1);
     expect(result.matches[0]?.key).toBe(deepKey);
     expect(result.matches[0]?.nativeSessionId).toBe(`session-${deepIndex}`);
+    expect(result.totalMatched).toBe(1);
+    expect(result.hasMore).toBe(false);
+    expect(result.cursor).toBeNull();
     const allResult = await tree.search('title-');
-    expect(allResult.matches).toHaveLength(total);
+    expect(allResult.matches).toHaveLength(SEARCH_LIMITS.maxRetained);
+    expect(allResult.totalMatched).toBe(total);
+    expect(allResult.hasMore).toBe(true);
+    expect(allResult.cursor).toBe(String(SEARCH_LIMITS.maxRetained));
     expect(allResult.scanned).toBe(total);
+
+    const nextPage = await tree.searchMore();
+    expect(nextPage.matches).toHaveLength(SEARCH_LIMITS.maxRetained);
+    expect(nextPage.totalMatched).toBe(total);
+    expect(nextPage.matches[0]?.key).not.toBe(allResult.matches[0]?.key);
+    await tree.dispose();
+  });
+
+  it('bounds retained search results for a 100k all-match index (search budget)', async () => {
+    // Reviewer round-2 finding (P2): a broad query over a large paginated index
+    // retained EVERY match in composable state (100000 rows measured on a
+    // controlled 500x200 input), bypassing the task-20 bounded-resident budget.
+    // This reproduces that exact shape: 500 pages x 200 rows, every row matching.
+    const pages = 500;
+    const pageSize = 200;
+    const total = pages * pageSize;
+    const client = new FakeClient();
+    seedTopology(client);
+    for (let index = 0; index < total; index += 1) {
+      const kind = HARNESS_KINDS[index % HARNESS_KINDS.length]!;
+      client.add('session_summaries', canonical('session_summaries', sessionKey(index, kind), index + 1, summaryValue(index, kind)));
+    }
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV });
+    await tree.start();
+    const ledgerBefore = tree.state.usage().entities;
+
+    const result = await tree.search('title-');
+    expect(result.status).toBe('complete');
+    expect(result.scanned).toBe(total);
+    expect(result.pages).toBe(pages);
+    expect(result.totalMatched).toBe(total);
+    expect(result.matches).toHaveLength(SEARCH_LIMITS.maxRetained);
+    expect(result.hasMore).toBe(true);
+    expect(result.cursor).toBe(String(SEARCH_LIMITS.maxRetained));
+
+    const ledgerAfter = tree.state.usage().entities;
+    expect(ledgerAfter.entries).toBe(ledgerBefore.entries);
+    expect(ledgerAfter.residentBytes).toBe(ledgerBefore.residentBytes);
+
+    const nextPage = await tree.searchMore();
+    expect(nextPage.matches).toHaveLength(SEARCH_LIMITS.maxRetained);
+    expect(nextPage.totalMatched).toBe(total);
+    expect(nextPage.matches[0]?.key).not.toBe(result.matches[0]?.key);
+
+    const residualAtDispose = result.matches.length;
+    await tree.dispose();
+    expect(tree.searchState.value.matches).toHaveLength(0);
+    expect(residualAtDispose).toBeLessThanOrEqual(SEARCH_LIMITS.maxRetained);
+  });
+
+  it('a superseded query cannot land its results in the state (search generation fence)', async () => {
+    const total = 600;
+    const client = new FakeClient();
+    seedTopology(client);
+    for (let index = 0; index < total; index += 1) {
+      const kind = HARNESS_KINDS[index % HARNESS_KINDS.length]!;
+      client.add('session_summaries', canonical('session_summaries', sessionKey(index, kind), index + 1, summaryValue(index, kind)));
+    }
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV });
+    await tree.start();
+
+    const first = tree.search('title-1');
+    const second = tree.search('title-2');
+    await Promise.all([first, second]);
+
+    const settled = tree.searchState.value;
+    expect(settled.status).toBe('complete');
+    expect(settled.query).toBe('title-2');
+    expect(settled.matches.length).toBeGreaterThan(0);
+    for (const row of settled.matches) expect(row.title).toContain('title-2');
+    expect(client.abortedSnapshots).toBeGreaterThanOrEqual(1);
     await tree.dispose();
   });
 
@@ -387,5 +470,57 @@ describe('task 21 — unified session tree acceptance', () => {
     scroller.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await nextTick();
     expect(mountedTree.emitted.get('select-key')).toEqual([rows[3]?.key]);
+  });
+
+  it('clicking a native sub-session row selects the session by its canonical key and highlights it', async () => {
+    const client = new FakeClient();
+    seedTopology(client);
+    const hostKey = sessionKey(1, 'opencode');
+    const childKey = sessionKey(11, 'opencode');
+    client.add('session_summaries', canonical('session_summaries', hostKey, 1, summaryValue(1, 'opencode')));
+    client.add('session_summaries', canonical('session_summaries', childKey, 2, summaryValue(11, 'opencode', { parent: 'opencode', parentIndex: 1 })));
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV });
+    await tree.start();
+
+    const expanded = new Set<string>();
+    expandGroups(tree.tree.value, expanded);
+    expanded.add(hostKey);
+    tree.expanded.value = expanded;
+    await nextTick();
+
+    const nativeRow = tree.rows.value.find((row) => row.node.kind === 'native');
+    expect(nativeRow?.node.kind).toBe('native');
+    const decoratedKey = nativeRow?.key ?? '';
+    const canonicalKey = nativeRow?.node.kind === 'native' ? nativeRow.node.session.key : '';
+    expect(decoratedKey.startsWith('native:')).toBe(true);
+    expect(decoratedKey).not.toBe(canonicalKey);
+
+    // Reviewer reproduction against the real module: the DECORATED tree key cannot
+    // be decoded, while the same session's CANONICAL key selects successfully.
+    expect(await tree.selectByKey(decoratedKey)).toBe(false);
+    expect(await tree.selectByKey(canonicalKey)).toBe(true);
+    const capture = tree.selection.value;
+    expect(capture ? encodeSessionKey(capture.selection.session) : null).toBe(canonicalKey);
+
+    // The selection highlight must use the same canonical identity as the selection
+    // call, so the highlighted row and the selected session always agree.
+    const mountedTree = await mountTree({
+      treeRows: tree.rows.value,
+      expandedPaths: [...expanded],
+      sources: tree.harnesses.value,
+      viewStatus: 'complete',
+      viewLoaded: 2,
+      selectedKey: canonicalKey,
+    });
+    mounted.push(mountedTree);
+    const nativeElement = mountedTree.root.querySelector(`[data-tree-row][data-row-key="${decoratedKey}"]`);
+    expect(nativeElement).not.toBeNull();
+    expect(nativeElement?.getAttribute('data-selected')).toBe('true');
+
+    // Clicking the native row emits the canonical session key, never the decorated key.
+    (nativeElement as HTMLElement).click();
+    await nextTick();
+    expect(mountedTree.emitted.get('select-key')).toEqual([canonicalKey]);
+    await tree.dispose();
   });
 });
