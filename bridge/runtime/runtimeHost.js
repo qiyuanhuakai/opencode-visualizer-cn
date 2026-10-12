@@ -3,8 +3,9 @@ import { parseEnvironmentId } from '../../shared/runtime/identity.js';
 import { ProtocolError, validateFrame } from '../../shared/runtime/protocol.js';
 import { createConnectionScope } from './connectionScope.js';
 import { createResourceOwnership } from './resourceOwnership.js';
+import { createRuntimeDispatch } from './runtimeDispatch.js';
 
-export function createRuntimeHost({ environmentId, role, sources = [], cachedTopology = [] }) {
+export function createRuntimeHost({ environmentId, role, sources = [], cachedTopology = [], services, targets = [], grants }) {
   const target = parseEnvironmentId(environmentId);
   if (!['local', 'manager', 'execution'].includes(role))
     throw new ProtocolError('invalid_request', 'role');
@@ -12,10 +13,11 @@ export function createRuntimeHost({ environmentId, role, sources = [], cachedTop
     throw new ProtocolError('invalid_request', 'manager.sources');
   if (new Set(sources.map((source) => source.id)).size !== sources.length)
     throw new ProtocolError('conflict', 'source.id');
-  const instanceId = randomUUID();
-  const epoch = randomUUID();
+  const instanceId = services?.instanceId ?? randomUUID();
+  const epoch = services?.epoch ?? randomUUID();
   const connections = createConnectionScope();
   const resources = createResourceOwnership();
+  const dispatchers = new Set();
   const states = sources.map(({ id }) => ({ id, state: 'starting' }));
   let state = 'idle';
   let sourcesReady = Promise.resolve();
@@ -52,8 +54,18 @@ export function createRuntimeHost({ environmentId, role, sources = [], cachedTop
   function connect(id) {
     if (state !== 'ready') throw new ProtocolError('cancelled', 'runtime.closed');
     const scope = connections.connect(id);
+    let dispatcher;
     return {
       ...scope,
+      disconnect() { scope.disconnect(); if (dispatcher) { dispatchers.delete(dispatcher); void dispatcher.close(); } },
+      openRuntime(transport) {
+        scope.assertCurrent();
+        if (!services) return null;
+        if (dispatcher) throw new ProtocolError('conflict', 'runtime.transport');
+        dispatcher = createRuntimeDispatch({ management: services, targets, grants, binding: { target, epoch, generation: scope.generation }, assertCurrent: scope.assertCurrent, inspect, ...transport });
+        dispatchers.add(dispatcher);
+        return dispatcher;
+      },
       hello() {
         scope.assertCurrent();
         return validateFrame({
@@ -63,7 +75,7 @@ export function createRuntimeHost({ environmentId, role, sources = [], cachedTop
           epoch,
           instanceId,
           generation: scope.generation,
-          capabilities: { methods: ['runtime.inspect'], extensions: [] },
+          capabilities: services?.capabilities ?? { methods: ['runtime.inspect'], extensions: [] },
         });
       },
       inspect() {
@@ -85,6 +97,7 @@ export function createRuntimeHost({ environmentId, role, sources = [], cachedTop
     if (state !== 'stopped') state = 'stopping';
     startupController.abort();
     connections.close();
+    for (const dispatcher of dispatchers) void dispatcher.close();
   }
   function stop() {
     if (stopPromise) return stopPromise;
@@ -92,6 +105,8 @@ export function createRuntimeHost({ environmentId, role, sources = [], cachedTop
     stopPromise = (async () => {
       await mutations;
       await sourcesReady;
+      await Promise.allSettled([...dispatchers].map(dispatcher => dispatcher.close()));
+      dispatchers.clear();
       try {
         await resources.release();
       } finally {
