@@ -91,7 +91,7 @@
           :data-harness="entry.row.node.kind === 'session' || entry.row.node.kind === 'native' ? entry.row.node.session.harness : undefined"
           :data-depth="entry.row.depth"
           :data-focused="focusIndex === entry.index ? 'true' : undefined"
-          :data-selected="selectedKeys.has(entry.row.key) ? 'true' : undefined"
+          :data-selected="selectedKeys.has(selectionKey(entry.row)) ? 'true' : undefined"
           :class="{
             'is-group': entry.row.node.kind === 'repo' || entry.row.node.kind === 'worktree' || entry.row.node.kind === 'section',
             'is-session': entry.row.node.kind === 'session',
@@ -413,9 +413,12 @@ function toggleKind(kind: SessionHarness): void {
 function isExpanded(key: string): boolean {
   return props.expandedPaths.includes(key);
 }
+function selectionKey(row: UnifiedFlatRow): string {
+  return row.node.kind === 'session' || row.node.kind === 'native' ? row.node.session.key : row.key;
+}
 function onRowClick(row: UnifiedFlatRow): void {
   if (row.node.kind === 'session' || row.node.kind === 'native') {
-    emit('select-key', row.key);
+    emit('select-key', row.node.session.key);
     return;
   }
   emit('toggle-key', row.key);
