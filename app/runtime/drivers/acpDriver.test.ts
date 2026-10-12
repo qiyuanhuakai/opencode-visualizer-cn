@@ -348,6 +348,7 @@ import {
   createHistoryDiskBudget,
   HISTORY_STREAM_LIMITS,
 } from '../../../bridge/runtime/historyStream.js';
+import { createHistoryService } from '../../../bridge/runtime/historyService.js';
 import type { InternalNativeHistoryHandle } from '../../../bridge/runtime/historyService.js';
 
 const historyOwner = '22222222-2222-4222-8222-222222222222';
@@ -656,6 +657,81 @@ describe('ACP native selected-history producer over a controlled stdio fixture',
       await producer.close();
       await streamStore.close();
       await manager.stopAll();
+    }
+  });
+});
+
+describe('ACP history read cancellation and frame-boundary capture', () => {
+  test('releases the exclusive read waiter when a poll times out with no native event', async () => {
+    vi.useFakeTimers();
+    let rawTap: ((chunk: Uint8Array) => void) | undefined;
+    const producer = createAcpHistory({
+      session: selected,
+      authority: { epoch: binding.epoch, processGeneration: 1 },
+      current: () => true,
+      assertCurrent: async () => {},
+      attachRaw: (tap) => { rawTap = tap; },
+    });
+    const service = createHistoryService({
+      binding: { target: selected.environmentId, epoch: binding.epoch, generation: 1 },
+      async authorize() { return { epoch: binding.epoch, processGeneration: 1 }; },
+      async openProducer() { return producer; },
+    });
+    const historyId = randomUUID();
+    try {
+      await service.open({ historyId, session: selected });
+      const first = service.read({ historyId, after: 0 });
+      const firstRejected = expect(first).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(10000);
+      await firstRejected;
+      // A timed-out poll with no native event must release the read waiter so retry=poll can start.
+      const second = service.read({ historyId, after: 0 });
+      await vi.advanceTimersByTimeAsync(0);
+      if (!rawTap) throw new TypeError('missing raw tap');
+      rawTap(Buffer.from(`${updateFrame('sel', 'after-timeout')}\n`));
+      await expect(second).resolves.toMatchObject({ through: 1, changed: true, status: 'current' });
+    } finally {
+      vi.useRealTimers();
+      await service.dispose();
+    }
+  });
+
+  test('switches the capture only at a complete frame boundary when stdout splits the next frame', async () => {
+    let rawTap: ((chunk: Uint8Array) => void) | undefined;
+    const producer = createAcpHistory({
+      session: selected,
+      authority: { epoch: binding.epoch, processGeneration: 1 },
+      current: () => true,
+      assertCurrent: async () => {},
+      attachRaw: (tap) => { rawTap = tap; },
+    });
+    const streamStore = await historyStore(JSON.stringify([binding, selected]));
+    try {
+      await producer.open({ signal: new AbortController().signal, streamStore });
+      if (!rawTap) throw new TypeError('missing raw tap');
+      const first = updateFrame('sel', 'first-complete');
+      const second = updateFrame('sel', 'second-complete');
+      const split = Math.floor(second.length / 2);
+      // The page must land on a complete frame boundary while the second frame is half-written.
+      rawTap(Buffer.from(`${first}\n${second.slice(0, split)}`));
+      const pageA = await producer.page({ signal: new AbortController().signal });
+      if (!pageA.document) throw new TypeError('missing document');
+      const documentA = await drainDescriptor(producer, pageA.pageId, pageA.document.id);
+      expect(documentA.toString('utf8')).toBe(`[${first}]`);
+      expect(createHash('sha256').update(documentA).digest('hex')).toBe(pageA.document.sha256);
+      // The retained half-frame completes after the switch and must open a fresh page.
+      rawTap(Buffer.from(`${second.slice(split)}\n`));
+      const pageB = await producer.page({ signal: new AbortController().signal });
+      if (!pageB.document) throw new TypeError('missing document');
+      expect((await drainDescriptor(producer, pageB.pageId, pageB.document.id)).toString('utf8')).toBe(`[${second}]`);
+      const third = updateFrame('sel', 'third-complete');
+      rawTap(Buffer.from(`${third}\n`));
+      const pageC = await producer.page({ signal: new AbortController().signal });
+      if (!pageC.document) throw new TypeError('missing document');
+      expect((await drainDescriptor(producer, pageC.pageId, pageC.document.id)).toString('utf8')).toBe(`[${third}]`);
+    } finally {
+      await producer.close();
+      await streamStore.close();
     }
   });
 });

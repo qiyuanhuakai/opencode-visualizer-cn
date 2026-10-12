@@ -34,6 +34,14 @@ export function createAcpSessions({ rpc, mutations, capabilities, queue, cwd, em
     return value;
   }
   async function create(input) {
+    // This ACP process and its reverse-call scope are bound to one root (the factory's
+    // firstRoot). A session/new for any other granted workspace would run the native agent
+    // outside the connection's grant while the reverse tools remain scoped to the bound
+    // root, so a non-bound workspace is refused BEFORE the native call rather than being
+    // silently created in the bound root. `cwd` is what dispatch resolves from the request
+    // workspaceKey; `directory` is the equivalent field used by direct driver callers.
+    const requested = input.cwd ?? input.directory;
+    requireValue(requested === undefined || requested === cwd, 'acp.workspace', 'unauthorized');
     return queue(async () => {
       const result = await mutations.run(
         {
@@ -184,6 +192,21 @@ export function createAcpHistory(options) {
   const pages = new Set();
   let change = Promise.withResolvers();
   const wake = () => { const previous = change; change = Promise.withResolvers(); previous.resolve(); };
+  // Settle when the native session advances or the caller aborts, and drop the abort listener once
+  // either wins so a timed-out read cannot strand the owner or the exclusive read waiter.
+  function awaitChange(signal) {
+    const pending = change.promise;
+    if (!signal) return pending;
+    if (signal.aborted) return Promise.reject(new ProtocolError('cancelled', 'acp.history_read'));
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(new ProtocolError('cancelled', 'acp.history_read'));
+      signal.addEventListener('abort', onAbort, { once: true });
+      pending.then(
+        () => { signal.removeEventListener('abort', onAbort); resolve(); },
+        (error) => { signal.removeEventListener('abort', onAbort); reject(error); },
+      );
+    });
+  }
   function alive(signal) {
     requireValue(!closed, 'acp.history_closed', 'cancelled');
     requireValue(!signal?.aborted, 'acp.history_cancelled', 'cancelled');
@@ -262,18 +285,22 @@ export function createAcpHistory(options) {
         const boundary = frameText.indexOf('\n');
         const limit = Math.min(boundary < 0 ? frameText.length : boundary, ACP_HISTORY_LIMITS.headerBytes);
         const verdict = decide(frameText.slice(0, limit));
-        if (verdict === 'selected') {
-          if (!capture && !openCapture()) { discarding = true; continue; }
-          if (capture.frames > 0) capture.source.push(Uint8Array.of(0x2c));
-          selected = true;
-        } else {
+        if (verdict === 'selected') selected = true;
+        else {
           if (boundary >= 0) { frameText = frameText.slice(boundary + 1); if (!frameText) return; continue; }
           if (verdict === 'foreign') { discarding = true; continue; }
           return;
         }
       }
+      // A frame is committed to the capture only once its newline arrives; a half-frame is retained
+      // so a page switch always lands on a complete frame boundary instead of a synthetic `]`.
       const boundary = frameText.indexOf('\n');
-      if (boundary < 0) { pushText(capture.source, frameText); frameText = ''; return; }
+      if (boundary < 0) {
+        if (frameText.length > maxBytes) failure = new ProtocolError('source_unavailable', 'acp.history_frame');
+        return;
+      }
+      if (!capture && !openCapture()) { discarding = true; continue; }
+      if (capture.frames > 0) capture.source.push(Uint8Array.of(0x2c));
       pushText(capture.source, frameText.slice(0, boundary));
       frameText = frameText.slice(boundary + 1);
       capture.frames += 1; selected = null; through += 1; wake();
@@ -332,7 +359,7 @@ export function createAcpHistory(options) {
       if (failure) return { through, changed: false, status: failure.code === 'replay_required' ? 'replay_required' : 'source_unavailable' };
       if (through > after) return { through, changed: true, status: 'current' };
       if (closed || signal?.aborted) throw new ProtocolError('cancelled', 'acp.history_read');
-      await change.promise;
+      await awaitChange(signal);
       await fenced(signal);
     }
   }

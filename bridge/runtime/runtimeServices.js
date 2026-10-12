@@ -32,11 +32,20 @@ export async function createRuntimeServices(options) {
     const catalog = createWorkspaceCatalog({ store, git: createGitService({ command }) });
     const acceptance = createRuntimeAcceptance({ store });
     cleanup.push(() => acceptance.close());
+    // Authorization resolves a directory to the granted root that contains it (an existing
+    // root resolves to itself). A workspaceKey is therefore always one of the grant's roots,
+    // so discovery, the grant and dispatch all agree on the same authorized root scope even
+    // when a native session lives in a subdirectory. realpath() collapses symlinks first, so
+    // an adjacent sibling or a symlink escape finds no containing root and is refused.
     const authorizeDirectory = async (directory) => {
       const canonical = await realpath(directory);
-      const grant = workspace.workspaces.find(entry => canonical === entry.root || (!path.relative(entry.root, canonical).startsWith('..') && !path.isAbsolute(path.relative(entry.root, canonical))));
-      requireValue(grant, 'runtime.workspace', 'unauthorized');
-      return { environmentId: options.environmentId, canonicalPath: canonical, pathPolicy: grant.pathPolicy };
+      const root = workspace.workspaces.find(entry => entry.root === canonical)
+        ?? workspace.workspaces.find(entry => {
+          const relative = path.relative(entry.root, canonical);
+          return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+        });
+      requireValue(root, 'runtime.workspace', 'unauthorized');
+      return { environmentId: options.environmentId, canonicalPath: root.root, pathPolicy: root.pathPolicy };
     };
     const drivers = createRuntimeDriverFactories({ ...options, epoch, workspace, store: acceptance.store, registrations: registrations.harnesses, isCurrent: () => active, authorizeDirectory });
     cleanup.push(() => drivers.close());

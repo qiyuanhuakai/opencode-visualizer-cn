@@ -17,6 +17,19 @@ export function createOpenCodeHistory(options) {
   const pages = new Set();
   let change = Promise.withResolvers();
   const wake = () => { const previous = change; change = Promise.withResolvers(); previous.resolve(); };
+  function awaitChange(signal) {
+    const pending = change.promise;
+    if (!signal) return pending;
+    if (signal.aborted) return Promise.reject(new ProtocolError('cancelled', 'opencode.history_read'));
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(new ProtocolError('cancelled', 'opencode.history_read'));
+      signal.addEventListener('abort', onAbort, { once: true });
+      pending.then(
+        () => { signal.removeEventListener('abort', onAbort); resolve(); },
+        (error) => { signal.removeEventListener('abort', onAbort); reject(error); },
+      );
+    });
+  }
   function alive(signal) {
     requireValue(!closed, 'opencode.history_closed', 'cancelled');
     requireValue(!signal?.aborted, 'opencode.history_cancelled', 'cancelled');
@@ -133,7 +146,7 @@ export function createOpenCodeHistory(options) {
       if (failure) return { through, changed: false, status: failure.code === 'replay_required' ? 'replay_required' : 'source_unavailable' };
       if (through > after) return { through, changed: true, status: 'current' };
       if (closed || signal?.aborted) throw new ProtocolError('cancelled', 'opencode.history_read');
-      await change.promise;
+      await awaitChange(signal);
       await fenced(signal);
     }
   }
