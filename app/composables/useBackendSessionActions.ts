@@ -12,6 +12,7 @@ import { isBatchSessionAction, normalizeBatchSessionTargets } from '../utils/bat
 import type { KimiWebSessionApiLike } from './useBackendSessionLifecycle';
 import type { KimiWebSession } from '../utils/kimiWeb';
 import { mapKimiWebSession, upsertKimiWebSessionIntoProjects } from '../backends/kimiWeb/kimiWebAdapter';
+import { bindRuntimeAction, type RuntimeSessionRuntime } from './useRuntimeSessionActions';
 import {
   archiveDshSession,
   deleteDshSession,
@@ -140,6 +141,7 @@ export function useBackendSessionActions(params: {
     undoSessionFromMessage?: (sessionId: string, messageId: string) => Promise<void>;
   };
   dshSessionApi?: DshSessionActionApi;
+  runtime?: RuntimeSessionRuntime;
 }) {
   type MutationRollback = () => void;
   type SessionOperationHints = { projectId?: string; directory?: string };
@@ -269,6 +271,8 @@ export function useBackendSessionActions(params: {
   }
 
   async function deleteSession(sessionId: string, hints?: SessionOperationHints) {
+    const bound = bindRuntimeAction(params.runtime);
+    if (bound && params.runtime) { await params.runtime.router.delete(bound); return; }
     await runSessionMutation({
       sessionId,
       actionLabel: 'app.actions.deletingSession',
@@ -328,6 +332,8 @@ export function useBackendSessionActions(params: {
   }
 
   async function archiveSession(sessionId: string, hints?: SessionOperationHints) {
+    const bound = bindRuntimeAction(params.runtime);
+    if (bound && params.runtime) { await params.runtime.router.archive(bound); return; }
     await runSessionMutation({
       sessionId,
       actionLabel: 'app.actions.archivingSession',
@@ -393,6 +399,8 @@ export function useBackendSessionActions(params: {
   }
 
   async function unarchiveSession(sessionId: string, hints?: SessionOperationHints) {
+    const bound = bindRuntimeAction(params.runtime);
+    if (bound && params.runtime) { await params.runtime.router.unarchive(bound); return; }
     await runSessionMutation({
       sessionId,
       actionLabel: 'app.actions.unarchivingSession',
@@ -458,6 +466,8 @@ export function useBackendSessionActions(params: {
       if (params.activeBackendKind.value !== backendKind) return;
       const trimmedTitle = nextTitle.trim();
       if (!trimmedTitle || trimmedTitle === currentTitle) return;
+      const bound = bindRuntimeAction(params.runtime);
+      if (bound && params.runtime) { await params.runtime.router.rename(bound, trimmedTitle); return; }
       if (backendKind === 'codex') {
         await params.codexApi.setThreadName(sessionId, trimmedTitle);
         return;
@@ -635,6 +645,8 @@ export function useBackendSessionActions(params: {
   }
 
   async function handleForkSession(sessionId: string) {
+    const bound = bindRuntimeAction(params.runtime);
+    if (bound && params.runtime) { await params.runtime.router.fork(bound, {}); return; }
     await runSessionMutation({
       sessionId,
       actionLabel: 'app.actions.fork',
@@ -664,6 +676,8 @@ export function useBackendSessionActions(params: {
   }
 
   async function handleCompactSession(sessionId: string) {
+    const bound = bindRuntimeAction(params.runtime);
+    if (bound && params.runtime) { await params.runtime.router.compact(bound); return; }
     await runSessionMutation({
       sessionId,
       actionLabel: 'codex.compactThread',
@@ -681,6 +695,8 @@ export function useBackendSessionActions(params: {
   const pendingCardMutations = new Set<string>();
 
   async function handleForkMessage(payload: { sessionId: string; messageId: string }) {
+    const bound = bindRuntimeAction(params.runtime);
+    if (bound && params.runtime) { await params.runtime.router.fork(bound, { messageId: payload.messageId }); return; }
     if (pendingCardMutations.has(payload.sessionId)) return;
     if (!params.ensureConnectionReady(params.translate('app.actions.fork'))) return;
     const requestBackend = params.activeBackendKind.value;
@@ -740,6 +756,8 @@ export function useBackendSessionActions(params: {
   }
 
   async function handleRevertMessage(payload: { sessionId: string; messageId: string }) {
+    const bound = bindRuntimeAction(params.runtime);
+    if (bound && params.runtime) { await params.runtime.router.revert(bound, { messageId: payload.messageId }); return; }
     if (pendingCardMutations.has(payload.sessionId)) return;
     if (!params.ensureConnectionReady(params.translate('app.actions.revert'))) return;
     const requestBackend = params.activeBackendKind.value;
