@@ -223,4 +223,48 @@ describe('runtime state through production client and frame codecs', () => {
     scope.stop(); await composed.dispose(); expect(composed.page.value).toBeNull();
     expect(composed.usage.value.entities).toEqual({ residentBytes: 0, reservedBytes: 0, entries: 0 });
   });
+
+  it('admits a first session into an empty visible window without losing completion', async () => {
+    const { state, wire } = await fixture(0); await state.start(target);
+    expect(read(state)).toMatchObject({ status: 'complete', loaded: 0, items: [] });
+    wire.event(5, { title: 'first' });
+    await vi.advanceTimersByTimeAsync(25);
+    const view = read(state);
+    expect(view.status).toBe('complete');
+    expect(view.items).toHaveLength(1);
+    expect(view.items[0]?.key).toBe(encodeSessionKey(session(5)));
+    expect(state.usage().entities.entries).toBeLessThanOrEqual(2000);
+  });
+
+  it('shows a session added to a not yet full visible page', async () => {
+    const { state, wire } = await fixture(5); await state.start(target);
+    expect(read(state).items).toHaveLength(5);
+    const snapshots = wire.methods.get('runtime.snapshot');
+    wire.event(9, { title: 'added' });
+    await vi.advanceTimersByTimeAsync(25);
+    const view = read(state);
+    expect(view.status).toBe('complete');
+    expect(view.items).toHaveLength(6);
+    expect(view.items.some(item => item.key === encodeSessionKey(session(9)))).toBe(true);
+    expect(wire.methods.get('runtime.snapshot')).toBe(snapshots);
+    expect(state.usage().entities.entries).toBeLessThanOrEqual(2000);
+  });
+
+  it('backfills the visible window when a shown session is deleted', async () => {
+    const { state, wire } = await fixture(300); await state.start(target);
+    const removed = read(state);
+    expect(removed.items).toHaveLength(200);
+    const removedKey = removed.items[0]?.key;
+    expect(removedKey).toBe(encodeSessionKey(session(0)));
+    const snapshots = wire.methods.get('runtime.snapshot');
+    wire.event(0, null);
+    await vi.advanceTimersByTimeAsync(25);
+    const view = read(state);
+    expect(view.status).toBe('complete');
+    expect(view.items).toHaveLength(200);
+    expect(view.items.some(item => item.key === removedKey)).toBe(false);
+    expect(view.items.some(item => item.key === encodeSessionKey(session(200)))).toBe(true);
+    expect(wire.methods.get('runtime.snapshot')).toBe(snapshots);
+    expect(state.usage().entities.entries).toBeLessThanOrEqual(2000);
+  });
 });

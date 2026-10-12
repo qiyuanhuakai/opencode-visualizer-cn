@@ -56,11 +56,13 @@ export function createRuntimeState(options: RuntimeStateOptions) {
   const listeners = new Map<() => void, MemoryLease>();
   let visible: Readonly<{ target: EnvironmentId; collection: IndexCollection }> | undefined;
   let window: EntityLease[] = [];
+  // Bounded one-page backfill source; never a server re-fetch, so refreshes cannot clone the project.
+  let lookahead: EntityLease[] = [];
   let generation = 0;
   let disposed = false;
   let disposing: Promise<void> | undefined;
   const notify = () => { for (const listener of listeners.keys()) listener(); };
-  const clearWindow = () => { for (const lease of window) lease.release(); window = []; };
+  const clearWindow = () => { for (const lease of window) lease.release(); window = []; for (const lease of lookahead) lease.release(); lookahead = []; };
   const current = (entry: TargetState) => !disposed && !entry.controller.signal.aborted && targets.get(entry.target) === entry && entry.scope.isCurrent();
   const check = (entry: TargetState) => requireValue(current(entry), 'state.scope', 'cancelled');
   const address = (entry: TargetState, item: CanonicalEntity) => ({ profileId, target: entry.target, collection: item.collection, key: item.key });
@@ -95,6 +97,9 @@ export function createRuntimeState(options: RuntimeStateOptions) {
         requireValue(result !== 'budget', 'state.entity_budget', 'source_unavailable');
         if (show && position.loaded + index >= offset && item.value !== null) {
           const lease = cache.get(address(entry, item)); requireValue(lease !== null, 'state.view_budget', 'source_unavailable'); window.push(lease);
+        } else if (entry.visibleCaptured && visible?.target === entry.target && visible.collection === name
+          && lookahead.length < ENTITY_LIMITS.page && item.value !== null) {
+          const lease = cache.get(address(entry, item)); requireValue(lease !== null, 'state.view_budget', 'source_unavailable'); lookahead.push(lease);
         }
       }
       if (show) entry.visibleCaptured = true;
@@ -102,6 +107,36 @@ export function createRuntimeState(options: RuntimeStateOptions) {
       entry.pendingCollection = page.cursor === null ? INDEX_COLLECTIONS[INDEX_COLLECTIONS.indexOf(name) + 1] ?? name : name;
       notify();
     } finally { retained.release(); }
+  }
+  function holds(lease: EntityLease, entry: TargetState, canonical: CanonicalEntity) {
+    const at = lease.entity.address;
+    return at.target === entry.target && at.collection === canonical.collection && at.key === canonical.key;
+  }
+  function reconcile(entry: TargetState, canonical: CanonicalEntity) {
+    const index = window.findIndex(lease => holds(lease, entry, canonical));
+    if (index >= 0) {
+      window[index].release(); window.splice(index, 1);
+      if (canonical.value !== null) {
+        const lease = cache.get(address(entry, canonical)); requireValue(lease !== null, 'state.view_budget', 'replay_required'); window.splice(index, 0, lease);
+      } else {
+        const backfill = lookahead.shift(); if (backfill !== undefined) window.splice(index, 0, backfill);
+      }
+      return;
+    }
+    const pending = lookahead.findIndex(lease => holds(lease, entry, canonical));
+    if (pending >= 0) {
+      lookahead[pending].release(); lookahead.splice(pending, 1);
+      if (canonical.value !== null) {
+        const lease = cache.get(address(entry, canonical)); requireValue(lease !== null, 'state.view_budget', 'replay_required'); lookahead.splice(pending, 0, lease);
+      }
+      return;
+    }
+    if (canonical.value !== null) {
+      const lease = cache.get(address(entry, canonical)); requireValue(lease !== null, 'state.view_budget', 'replay_required');
+      if (window.length < ENTITY_LIMITS.page) window.push(lease);
+      else if (lookahead.length < ENTITY_LIMITS.page) lookahead.push(lease);
+      else lease.release();
+    }
   }
   async function deliver(entry: TargetState, delivery: ObserverDelivery) {
     check(entry);
@@ -124,13 +159,7 @@ export function createRuntimeState(options: RuntimeStateOptions) {
     const result = cache.admit({ ...canonical, address: address(entry, canonical), fence: entry.fence });
     requireValue(result !== 'budget', 'state.event_budget', 'replay_required');
     if (result === 'applied') {
-      const index = window.findIndex(item => item.entity.address.target === entry.target && item.entity.address.collection === canonical.collection && item.entity.address.key === canonical.key);
-      if (index >= 0) {
-        window[index].release(); window.splice(index, 1);
-        if (canonical.value !== null) {
-          const lease = cache.get(address(entry, canonical)); requireValue(lease !== null, 'state.view_budget', 'replay_required'); window.splice(index, 0, lease);
-        }
-      }
+      if (visible?.target === entry.target && visible.collection === canonical.collection) reconcile(entry, canonical);
       const captured = selection.capture();
       if (captured && captured.selection.session.environmentId === entry.target && encodeSessionKey(captured.selection.session) === canonical.key) {
         await options.history?.invalidate?.(captured); check(entry);
