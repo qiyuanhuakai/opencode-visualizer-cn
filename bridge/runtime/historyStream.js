@@ -13,6 +13,16 @@ const matchPath = (pattern, path) => pattern.length === path.length && pattern.e
 const startToken = token => token.kind === 'start' || token.kind === 'string-start' || token.kind === 'scalar';
 const endToken = token => token.kind === 'end' || token.kind === 'string-end' || token.kind === 'scalar';
 const sizeValue = value => Number.isSafeInteger(value) && value >= 0;
+// Windows has no POSIX permission bits: lstat synthesises st_mode from the file's read-only
+// attribute (writable 0666 / read-only 0444), never the POSIX 0700, so a mode comparison is
+// unsatisfiable. The owned mkdtemp root inherits the user's private temp ACL, so on win32 the
+// meaningful check is that it is a writable directory we created rather than a read-only or
+// reparse substitute. POSIX keeps the exact owner-only mode/uid enforcement.
+function ownedDirectoryFailure(info, host) {
+  if (!info.isDirectory() || info.isSymbolicLink()) return true;
+  if (host === 'win32') return (info.mode & 0o200) === 0;
+  return (info.mode & 0o777) !== 0o700 || (typeof process.getuid === 'function' && info.uid !== process.getuid());
+}
 
 export function createHistoryDiskBudget(maxBytes = HISTORY_STREAM_LIMITS.globalDiskBytes) {
   requireValue(sizeValue(maxBytes), 'history.disk_limit');
@@ -37,7 +47,7 @@ function validateGrammar(grammar) {
   for (const field of [...grammar.fields, ...grammar.records.flatMap(rule => rule.fields)]) requireValue(typeof field.name === 'string' && field.name.length <= 128 && Array.isArray(field.path) && field.path.length <= 64 && field.path.every(part => typeof part === 'string' && part.length <= 4096 || Number.isSafeInteger(part) && part >= 0), 'history.field');
 }
 
-export function createHistoryStream({ scope, createDirectory, globalDisk, secrets = [] }) {
+export function createHistoryStream({ scope, createDirectory, globalDisk, secrets = [], platform = process.platform }) {
   requireValue(typeof scope === 'string' && scope.length > 0 && scope.length <= 4096 && typeof createDirectory === 'function', 'history.owner');
   const pages = new Map(), lifetime = new AbortController(), reads = new Set(), failedSpools = new Set();
   let directory, directoryWork, pending, closing, active = true, diskBytes = 0, reservedDiskBytes = 0, working = 0, peakMemoryBytes = 0, fileHandles = 0, pendingWrites = 0, outputs = 0, outputBytes = 0, readingBytes = 0;
@@ -56,7 +66,7 @@ export function createHistoryStream({ scope, createDirectory, globalDisk, secret
       const path = await createDirectory();
       requireValue(typeof path === 'string' && isAbsolute(path), 'history.directory');
       const info = await lstat(path);
-      requireValue(info.isDirectory() && !info.isSymbolicLink() && (info.mode & 0o777) === 0o700 && (typeof process.getuid !== 'function' || info.uid === process.getuid()) && (await readdir(path)).length === 0, 'history.directory_owner', 'unauthorized');
+      requireValue(!ownedDirectoryFailure(info, platform) && (await readdir(path)).length === 0, 'history.directory_owner', 'unauthorized');
       directory = path; return path;
     })();
     return directoryWork;

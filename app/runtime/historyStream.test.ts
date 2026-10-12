@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdir, readdir, stat } from 'node:fs/promises';
+import { chmod, mkdir, readdir, rmdir, stat } from 'node:fs/promises';
 import { appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,11 +13,21 @@ const writes = vi.hoisted(() => {
   return { set(value: (() => Promise<void>) | undefined) { before = value; }, run: () => before?.() };
 });
 const deletions = vi.hoisted(() => ({ fail: false }));
+// Simulates the Windows lstat result: on win32 Node/libuv synthesises st_mode from the
+// file's read-only attribute (writable 0666 / read-only 0444) instead of the POSIX mode bits.
+const synthesizedMode = vi.hoisted(() => {
+  let mode: number | undefined;
+  return { set(value: number | undefined) { mode = value; }, get() { return mode; } };
+});
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return { ...actual, unlink: async (...args: Parameters<typeof actual.unlink>) => {
     if (deletions.fail) throw Object.assign(new Error('Injected unlink failure'), { code: 'EACCES' });
     return actual.unlink(...args);
+  }, lstat: async (...args: Parameters<typeof actual.lstat>) => {
+    const mode = synthesizedMode.get();
+    if (mode === undefined) return actual.lstat(...args);
+    return { isDirectory: () => true, isSymbolicLink: () => false, mode, uid: typeof process.getuid === 'function' ? process.getuid() : 0 } as unknown as Awaited<ReturnType<typeof actual.lstat>>;
   }, open: async (...args: Parameters<typeof actual.open>) => {
     const handle = await actual.open(...args), original = handle.write;
     Object.defineProperty(handle, 'write', { value: async (...parameters: readonly unknown[]) => { await writes.run(); return Reflect.apply(original, handle, parameters); } });
@@ -30,11 +40,11 @@ const grammar: HistoryGrammar = {
   fields: [{ name: 'ok', path: ['ok'] }], validate(fields) { if (fields.ok !== true) throw new TypeError('Native error envelope'); },
 };
 async function* source(raw: string) { const bytes = new TextEncoder().encode(raw); for (let offset = 0; offset < bytes.length; offset += 65536) yield bytes.slice(offset, offset + 65536); }
-function fixture(globalDisk = createHistoryDiskBudget()) {
+function fixture(globalDisk = createHistoryDiskBudget(), platform?: string) {
   const directory = join(tmpdir(), `vis-history-substrate-${randomUUID()}`);
   const evidence = process.env.HISTORY_EVIDENCE_DIR;
   if (evidence) appendFileSync(join(evidence, 'directories.jsonl'), JSON.stringify({ directory, phase: 'registered-before-mkdir', owner: process.pid }) + '\n');
-  const stream = createHistoryStream({ scope: 'profile/session/generation', globalDisk, createDirectory: async () => { await mkdir(directory, { mode: 0o700 }); return directory; } });
+  const stream = createHistoryStream({ scope: 'profile/session/generation', globalDisk, createDirectory: async () => { await mkdir(directory, { mode: 0o700 }); return directory; }, ...(platform ? { platform } : {}) });
   return { stream, globalDisk, directory };
 }
 describe('owned raw history spool', () => {
@@ -180,5 +190,40 @@ describe('owned raw history spool', () => {
     expect(stream.usage().outputs).toBe(1); expect(stream.usage().memoryBytes).toBeGreaterThan(0);
     await expect(stream.read({ pageId: page.id, descriptorId: page.document.id, offset: 0 })).rejects.toMatchObject({ code: 'cancelled' });
     chunk.release(); chunk.release(); expect(stream.usage().memoryBytes).toBe(0);
+  });
+});
+describe('platform-aware owned spool directory', () => {
+  it('accepts the Windows synthesised writable mode and spools the first page', async () => {
+    // Given the win32 platform where lstat synthesises mode 0666 instead of the POSIX 0700.
+    const { stream, globalDisk } = fixture(undefined, 'win32');
+    synthesizedMode.set(0o666);
+    try {
+      // When the first history page is ingested; then the owned spool is accepted.
+      const page = await stream.ingest({ source: source('{"items":[],"ok":true}'), cancel() {}, grammar });
+      expect(page.document.totalBytes).toBeGreaterThan(0);
+      expect(globalDisk.usage()).toBeGreaterThan(0);
+    } finally { synthesizedMode.set(undefined); await stream.close(); }
+    expect(globalDisk.usage()).toBe(0);
+  });
+  it('rejects a Windows synthesised read-only directory', async () => {
+    // Given the win32 platform where lstat synthesises the read-only mode 0444.
+    const { stream, directory } = fixture(undefined, 'win32');
+    synthesizedMode.set(0o444);
+    try {
+      // When a page is ingested; then the non-writable owned directory is refused.
+      await expect(stream.ingest({ source: source('{"items":[],"ok":true}'), cancel() {}, grammar })).rejects.toMatchObject({ code: 'unauthorized' });
+    } finally { synthesizedMode.set(undefined); await stream.close(); }
+    await rmdir(directory);
+  });
+  it('rejects a POSIX spool root whose mode is not 0700', async () => {
+    // Given a real directory widened beyond the owner-only mode.
+    const directory = join(tmpdir(), `vis-history-substrate-${randomUUID()}`);
+    await mkdir(directory, { mode: 0o700 }); await chmod(directory, 0o755);
+    const stream = createHistoryStream({ scope: 'profile/session/generation', globalDisk: createHistoryDiskBudget(), createDirectory: async () => directory });
+    try {
+      // When a page is ingested; then the non-private POSIX directory is refused.
+      await expect(stream.ingest({ source: source('{"items":[],"ok":true}'), cancel() {}, grammar })).rejects.toMatchObject({ code: 'unauthorized' });
+    } finally { await stream.close(); }
+    await rmdir(directory);
   });
 });

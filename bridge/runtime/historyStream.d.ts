@@ -27,6 +27,7 @@ export function createHistoryStream(options: Readonly<{
   createDirectory(): Promise<string>;
   globalDisk: HistoryDiskBudget;
   secrets?: readonly string[];
+  platform?: string;
 }>): Readonly<{
   ingest(input: Readonly<{
     source: AsyncIterable<Uint8Array>;
