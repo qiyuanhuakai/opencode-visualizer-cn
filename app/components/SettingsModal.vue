@@ -712,7 +712,13 @@
                 autocomplete="off"
                 :placeholder="$t('settings.editor.localApplication.placeholder')"
               />
-              <button type="button" class="font-system-button" @click="browseLocalApplication">
+              <button
+                type="button"
+                class="font-system-button"
+                :disabled="!workspaceControlAvailable('readFileContent')"
+                :title="workspaceControlAvailable('readFileContent') ? undefined : workspaceControlSourceLine('readFileContent')"
+                @click="browseLocalApplication"
+              >
                 {{ $t('settings.editor.localApplication.browse') }}
               </button>
               <button
@@ -726,6 +732,13 @@
             </div>
             <div v-if="localApplicationError" class="theme-import-error">
               {{ localApplicationError }}
+            </div>
+            <div
+              v-if="!workspaceControlAvailable('readFileContent')"
+              class="theme-import-error"
+              data-testid="workspace-control-source"
+            >
+              {{ workspaceControlSourceLine('readFileContent') }}
             </div>
           </SettingRow>
         </template>
@@ -945,6 +958,9 @@ import ToggleSettingRow from './ToggleSettingRow.vue';
 import DesktopSettings from './settings/DesktopSettings.vue';
 import type { ConnectedBridgeVersion } from '../composables/useConnectedBridgeVersion';
 import { useSettings } from '../composables/useSettings';
+import { describeControlSupport, resolveControlSupport } from '../composables/useRuntimeCapabilities';
+import type { ControlScope } from '../composables/useRuntimeCapabilities';
+import type { EnvironmentId } from '../../shared/runtime/identity.js';
 import { getTextTransformerTriggerIssue, textTransformerSequence } from '../utils/textTransformers';
 import {
   mergeTextTransformers,
@@ -1029,6 +1045,13 @@ const props = defineProps<{
   initialPage?: SettingsPage;
   connectedBridgeState?: ConnectedBridgeVersion | null;
   refreshBridgeVersion?: () => Promise<boolean>;
+  /**
+   * Task 23: the workspace scope the workspace-level settings controls resolve
+   * against. These controls never derive their behaviour from the active
+   * backend kind; absent scope → the control reports the workspace as missing.
+   */
+  workspaceEnvironmentId?: string;
+  workspacePath?: string;
 }>();
 
 const emit = defineEmits<{
@@ -1067,6 +1090,31 @@ const isImportingTheme = ref(false);
 const isElectron = computed(() => Boolean(window.electronAPI?.localFile));
 const desktopAvailable = Boolean(window.electronAPI?.desktop);
 const localApplicationError = ref('');
+/**
+ * Task 23: workspace controls resolve against the workspace scope alone. This
+ * gate is deliberately free of `activeBackendKind` — the settings surfaces it
+ * guards (local editor, local application, font discovery) are workspace-level
+ * capabilities, so switching the active backend kind cannot enable or disable
+ * them. A workspace control is only unavailable when its workspace scope is
+ * absent, and then it reports the workspace as the source.
+ */
+const workspaceScope = computed<ControlScope | null>(() => {
+  const environmentId = props.workspaceEnvironmentId;
+  const canonicalPath = props.workspacePath;
+  if (typeof environmentId !== 'string' || typeof canonicalPath !== 'string' || canonicalPath.length === 0) return null;
+  return { kind: 'workspace', environmentId: environmentId as EnvironmentId, canonicalPath };
+});
+function workspaceControlAvailable(control: string): boolean {
+  const scope = workspaceScope.value;
+  if (!scope) return false;
+  return resolveControlSupport({ control, scope, manifests: [] }).state === 'supported';
+}
+function workspaceControlSourceLine(control: string): string {
+  const scope = workspaceScope.value;
+  if (!scope) return 'Workspace: no workspace is selected for this session';
+  const support = resolveControlSupport({ control, scope, manifests: [] });
+  return support.state === 'unsupported' ? describeControlSupport(support) : '';
+}
 const {
   enterToSend,
   showMinimizeButtons,

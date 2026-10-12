@@ -209,6 +209,9 @@ import KimiAccountUsage from './kimiWeb/KimiAccountUsage.vue';
 import AcpManagerPanel from './AcpManagerPanel.vue';
 import KimiWebPluginManager from './kimiWeb/KimiWebPluginManager.vue';
 import { createKimiWebPluginsClient } from '../utils/kimiWebPlugins';
+import type { HarnessManifest } from '../../shared/runtime/harnessContract.js';
+import { describeControlSupport, resolveControlSupport } from '../composables/useRuntimeCapabilities';
+import type { ControlScope, ControlSupport } from '../composables/useRuntimeCapabilities';
 
 type CodexApi = ReturnType<typeof useCodexApi>;
 
@@ -238,11 +241,50 @@ const props = defineProps<{
    * snapshot it is handed. Absent → no dsh rows, never a guessed status.
    */
   dshStatus?: DshStatusSnapshot;
+  /**
+   * Task 23: the scope every backend-specific monitor control is entered for —
+   * the CURRENT SESSION or an explicit Harness instance. Absent keeps the
+   * legacy adapter-shape behaviour (the task-22 delegation seam pattern).
+   */
+  harnessScope?: ControlScope;
+  /** The harness manifests visible to this modal; only the target instance resolves. */
+  harnessManifests?: readonly HarnessManifest[];
 }>();
 const emit = defineEmits<{ close: [] }>();
 
 const { t, locale } = useI18n();
 const popoverRef = ref<HTMLDivElement | null>(null);
+
+/**
+ * Task 23: resolve one backend-specific monitor control against the harness
+ * manifest of the current scope. Returns `null` when no scope was supplied, so
+ * the legacy adapter-shape path stays the fallback until App.vue binds one.
+ */
+function monitorControlSupport(control: string): ControlSupport | null {
+  if (!props.harnessScope || !props.harnessManifests) return null;
+  return resolveControlSupport({
+    control,
+    scope: props.harnessScope,
+    manifests: props.harnessManifests,
+    activeBackendKind: props.activeBackendKind,
+  });
+}
+
+function monitorControlSourceLine(control: string): string {
+  const support = monitorControlSupport(control);
+  if (!support || support.state !== 'unsupported') return '';
+  return describeControlSupport(support);
+}
+
+function monitorControlUnavailable(control: string): boolean {
+  const support = monitorControlSupport(control);
+  return support !== null && support.state === 'unsupported';
+}
+
+function monitorControlAvailable(control: string): boolean {
+  const support = monitorControlSupport(control);
+  return support === null || support.state === 'supported';
+}
 const msg = useMessages();
 const codexApi = props.codexApi;
 const codexSessionUsage = computed(() => props.activeBackendKind === 'codex' && props.sessionId
@@ -324,11 +366,13 @@ const mcpUnsupportedText = computed(() => {
   if (isDshBackend.value) return t('statusMonitor.mcp.unsupportedDsh');
   return t(isAcpBackend.value ? 'statusMonitor.mcp.unsupportedAcp' : 'statusMonitor.mcp.unsupported');
 });
+const mcpUnsupportedSource = computed(() => monitorControlSourceLine('getMcpStatus'));
 const lspUnsupportedText = computed(() => {
   if (isKimiWebBackend.value) return t('statusMonitor.lsp.unsupportedKimiWeb');
   if (isDshBackend.value) return t('statusMonitor.lsp.unsupportedDsh');
   return t(isAcpBackend.value ? 'statusMonitor.lsp.unsupportedAcp' : 'statusMonitor.lsp.unsupported');
 });
+const lspUnsupportedSource = computed(() => monitorControlSourceLine('getLspStatus'));
 const skillUnsupportedText = computed(() => {
   if (isKimiWebBackend.value) return t('statusMonitor.skills.unsupportedKimiWeb');
   if (isDshBackend.value) {
@@ -340,6 +384,7 @@ const skillUnsupportedText = computed(() => {
     isAcpBackend.value ? 'statusMonitor.skills.unsupportedAcp' : 'statusMonitor.skills.unsupported',
   );
 });
+const skillUnsupportedSource = computed(() => monitorControlSourceLine('getSkillStatus'));
 const pluginUnsupportedText = computed(() => {
   if (isKimiWebBackend.value) return t('statusMonitor.plugins.unsupportedKimiWeb');
   if (isDshBackend.value) return t('statusMonitor.plugins.unsupportedDsh');
@@ -349,6 +394,7 @@ const pluginUnsupportedText = computed(() => {
       : 'statusMonitor.plugins.unsupported',
   );
 });
+const pluginUnsupportedSource = computed(() => monitorControlSourceLine('getPluginStatus'));
 const configData = ref<Record<string, unknown> | null>(null);
 const codexPluginData = ref<CodexPlugin[]>([]);
 const backendPluginData = ref<Array<{
@@ -564,6 +610,14 @@ async function refresh() {
       : typeof activeBackend.getPluginStatus !== 'function' &&
         typeof activeBackend.getGlobalConfig !== 'function';
   }
+  // Task 23: when a harness scope is supplied, the manifest decides. An
+  // unsupported or undeclared capability is reported unsupported and carries
+  // its source, so it never masquerades as available.
+  if (monitorControlUnavailable('getMcpStatus')) mcpUnsupported.value = true;
+  if (monitorControlUnavailable('getLspStatus')) lspUnsupported.value = true;
+  if (monitorControlUnavailable('getSkillStatus')) skillUnsupported.value = true;
+  if (monitorControlUnavailable('getPluginStatus')) pluginUnsupported.value = true;
+  if (monitorControlUnavailable('getGlobalHealth')) serverHealth.value = null;
 
   const currentRefresh = (async () => {
     try {
@@ -1119,6 +1173,10 @@ const skillEntries = computed(() => {
 });
 
 async function handleSkillToggle(name: string, currentEnabled: boolean | undefined, path: string | undefined) {
+  if (!monitorControlAvailable('updateSkill')) {
+    errorMessage.value = t('statusMonitor.skills.toggleFailed');
+    return;
+  }
   const updateSkill = backend().updateSkill;
   if (typeof updateSkill !== 'function') {
     errorMessage.value = t('statusMonitor.skills.toggleFailed');
@@ -1155,6 +1213,10 @@ async function handleSkillToggle(name: string, currentEnabled: boolean | undefin
 }
 
 async function handleMcpToggle(name: string, currentStatus: string) {
+  if (!monitorControlAvailable('updateMcp')) {
+    errorMessage.value = t('statusMonitor.mcp.toggleFailed');
+    return;
+  }
   const nextEnabled = currentStatus === 'disabled';
   const mcpConfigs = configData.value?.mcp_servers ?? configData.value?.mcp;
   const baseConfig =
@@ -1795,6 +1857,9 @@ watch(tabs, (available) => {
           </div>
           <div v-else-if="mcpUnsupported && mcpEntries.length === 0" class="status-monitor-empty">
             {{ mcpUnsupportedText }}
+            <span v-if="mcpUnsupportedSource" class="status-monitor-source" data-testid="monitor-control-source">{{
+              mcpUnsupportedSource
+            }}</span>
           </div>
           <div v-else-if="mcpEntries.length === 0" class="status-monitor-empty">
             {{ $t('statusMonitor.mcp.noData') }}
@@ -1849,6 +1914,9 @@ watch(tabs, (available) => {
           </div>
           <div v-else-if="lspUnsupported && (lspData || []).length === 0" class="status-monitor-empty">
             {{ lspUnsupportedText }}
+            <span v-if="lspUnsupportedSource" class="status-monitor-source" data-testid="monitor-control-source">{{
+              lspUnsupportedSource
+            }}</span>
           </div>
           <div v-else-if="(lspData || []).length === 0" class="status-monitor-empty">
             {{ $t('statusMonitor.lsp.noData') }}
@@ -1881,6 +1949,9 @@ watch(tabs, (available) => {
           </div>
           <div v-else-if="pluginUnsupported" class="status-monitor-empty">
             {{ pluginUnsupportedText }}
+            <span v-if="pluginUnsupportedSource" class="status-monitor-source" data-testid="monitor-control-source">{{
+              pluginUnsupportedSource
+            }}</span>
           </div>
           <div v-else-if="activeBackendKind === 'codex'" class="status-monitor-summary-grid">
             <div class="status-monitor-summary-chip">
@@ -1939,6 +2010,9 @@ watch(tabs, (available) => {
           </div>
           <div v-else-if="skillStatusUnsupported && skillEntries.length === 0" class="status-monitor-empty">
             {{ skillUnsupportedText }}
+            <span v-if="skillUnsupportedSource" class="status-monitor-source" data-testid="monitor-control-source">{{
+              skillUnsupportedSource
+            }}</span>
           </div>
           <div v-else-if="skillEntries.length === 0" class="status-monitor-empty">
             {{ $t('statusMonitor.skills.noData') }}
@@ -2704,6 +2778,15 @@ watch(tabs, (available) => {
   font-size: 13px;
   color: var(--theme-empty-state-text, var(--theme-modal-text-muted, #94a3b8));
   text-align: center;
+}
+
+.status-monitor-source {
+  display: block;
+  margin-top: 6px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--theme-status-warning, #fcd34d);
+  word-break: break-word;
 }
 
 .status-dot {

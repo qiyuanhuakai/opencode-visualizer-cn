@@ -340,10 +340,21 @@
                       type="button"
                       class="ghost-action danger"
                       :disabled="!canDisconnectProvider(provider) || busyProviderId === provider.id"
+                      :title="
+                        canDisconnectProvider(provider)
+                          ? undefined
+                          : providerControlSourceLine('deleteProviderAuth')
+                      "
                       @click="disconnectProvider(provider)"
                     >
                       {{ $t('providerManager.actions.disconnect') }}
                     </button>
+                    <span
+                      v-if="providerControlUnavailable('deleteProviderAuth')"
+                      class="provider-control-source"
+                      data-testid="provider-control-source"
+                      >{{ providerControlSourceLine('deleteProviderAuth') }}</span
+                    >
                   </div>
                 </article>
               </div>
@@ -424,11 +435,18 @@
                         v-if="isProviderDisconnected(provider)"
                         type="button"
                         class="ghost-action provider-mini-row-action"
-                        :disabled="busyProviderId === provider.id"
+                        :disabled="busyProviderId === provider.id || !canConnectProvider(provider)"
+                        :title="canConnectProvider(provider) ? undefined : providerControlSourceLine('setProviderAuth')"
                         @click="connectProvider(provider)"
                       >
                         {{ $t('providerManager.actions.connect') }}
                       </button>
+                      <span
+                        v-if="isProviderDisconnected(provider) && providerControlUnavailable('setProviderAuth')"
+                        class="provider-control-source"
+                        data-testid="provider-control-source"
+                        >{{ providerControlSourceLine('setProviderAuth') }}</span
+                      >
                     </div>
                   </article>
                 </ProviderDiscoveryList>
@@ -577,6 +595,9 @@ import type { DshRpcClient } from '../utils/dshRpc';
 import type { DshProviderConfiguration } from '../backends/dsh/dshProviderConfig';
 import ProviderDiscoveryList from './ProviderDiscoveryList.vue';
 import type { BackendKind } from '../backends/types';
+import type { HarnessManifest } from '../../shared/runtime/harnessContract.js';
+import { describeControlSupport, resolveControlSupport } from '../composables/useRuntimeCapabilities';
+import type { ControlScope, ControlSupport } from '../composables/useRuntimeCapabilities';
 import {
   buildProviderDisabledPatch,
   normalizeProviderIds,
@@ -731,6 +752,14 @@ const props = defineProps<{
   providerConfig: ProviderConfigState | null;
   backendKind?: BackendKind;
   dshRpcClient?: DshRpcClient;
+  /**
+   * Task 23: the scope every backend-specific provider control is entered for —
+   * the CURRENT SESSION or an explicit Harness instance. Absent keeps the
+   * legacy global-adapter behaviour (the task-22 delegation seam pattern).
+   */
+  harnessScope?: ControlScope;
+  /** The harness manifests visible to this modal; only the target instance resolves. */
+  harnessManifests?: readonly HarnessManifest[];
 }>();
 
 const emit = defineEmits<{
@@ -967,6 +996,10 @@ function removeCustomHeader(index: number) {
 
 async function fetchAuthMethods() {
   try {
+    if (!providerControlAvailable('listProviderAuthMethods')) {
+      authMethods.value = {};
+      return;
+    }
     const listProviderAuthMethods = backend().listProviderAuthMethods;
     if (!listProviderAuthMethods) {
       authMethods.value = {};
@@ -1016,20 +1049,81 @@ function isBackendManagedProvider(provider: ProviderInfo) {
   return props.backendKind === 'dsh' || provider.source === 'codex-app-server';
 }
 
+/**
+ * Task 23: resolve one backend-specific provider control against the harness
+ * manifest of the current scope. Returns `null` when no scope was supplied, so
+ * the legacy global-adapter path stays the fallback until App.vue binds one.
+ */
+function providerControlSupport(control: string): ControlSupport | null {
+  if (!props.harnessScope || !props.harnessManifests) return null;
+  return resolveControlSupport({
+    control,
+    scope: props.harnessScope,
+    manifests: props.harnessManifests,
+    activeBackendKind: props.backendKind,
+  });
+}
+
+/** Source information line for an unsupported control (which source, what is missing). */
+function providerControlSourceLine(control: string): string {
+  const support = providerControlSupport(control);
+  if (!support || support.state !== 'unsupported') return '';
+  return describeControlSupport(support);
+}
+
+/** Whether a provider control is available. Never true when unsupported or unknown. */
+function providerControlAvailable(control: string): boolean {
+  const support = providerControlSupport(control);
+  return support === null ? legacyProviderControlAvailable(control) : support.state === 'supported';
+}
+
+function legacyProviderControlAvailable(control: string): boolean {
+  const active = backend();
+  switch (control) {
+    case 'listProviderAuthMethods':
+      return Boolean(active.listProviderAuthMethods);
+    case 'setProviderAuth':
+      return Boolean(active.setProviderAuth);
+    case 'deleteProviderAuth':
+      return Boolean(active.deleteProviderAuth);
+    case 'updateGlobalConfig':
+      return Boolean(active.updateGlobalConfig);
+    default:
+      return false;
+  }
+}
+
+/** Whether a provider control shows its source-information line. */
+function providerControlUnavailable(control: string): boolean {
+  const support = providerControlSupport(control);
+  return support !== null && support.state === 'unsupported';
+}
+
+function canConnectProvider(provider: ProviderInfo) {
+  if (!isProviderDisconnected(provider)) return false;
+  // Backend-managed providers (DSH, codex-app-server) route to their own
+  // settings surface instead of the generic auth write, so the generic
+  // capability gate must not disable that route.
+  if (isBackendManagedProvider(provider)) return true;
+  if (!providerControlAvailable('setProviderAuth')) return false;
+  return true;
+}
+
+function canDisconnectProvider(provider: ProviderInfo) {
+  if (isProviderDisconnected(provider)) return false;
+  if (provider.source === 'env') return false;
+  if (isBackendManagedProvider(provider)) return false;
+  if (!providerControlAvailable('deleteProviderAuth')) return false;
+  return true;
+}
+
 function supportsProviderConfigUpdates() {
+  if (!providerControlAvailable('updateGlobalConfig')) return false;
   const active = backend();
   if (active.kind === 'codex') return Boolean(active.updateGlobalConfig);
   // Kimi Web providers (managed:kimi-code) are owned by kimi itself, not editable here.
   if (active.kind === 'kimi-web') return false;
   return Boolean(active.updateGlobalConfig && active.setProviderAuth);
-}
-
-function canDisconnectProvider(provider: ProviderInfo) {
-  return (
-    !isProviderDisconnected(provider) &&
-    provider.source !== 'env' &&
-    !isBackendManagedProvider(provider)
-  );
 }
 
 function isConfigBackedProvider(provider: ProviderInfo) {
@@ -1645,6 +1739,15 @@ async function disconnectProvider(provider: ProviderInfo) {
   border-radius: 10px;
   font-size: 12px;
   border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
+}
+
+.provider-control-source {
+  display: block;
+  flex-basis: 100%;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--theme-status-warning, #fcd34d);
+  word-break: break-word;
 }
 
 .provider-manager-feedback.is-info {
