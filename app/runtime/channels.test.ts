@@ -205,4 +205,46 @@ describe('RuntimeChannels with production connection and fault-injected wire', (
     for (let index = 0; index < 16; index++) { const request = await f.socket.next(); f.socket.reply(request, request.params); }
     expect((await outcomes).every(outcome => outcome.status === 'fulfilled')).toBe(true);
   });
+  it('keeps an admission-blocked finish retryable and lets cancel reclaim the server upload slot', async () => {
+    const f = await fixture();
+    const handle = await file(f, 0);
+    // 496 mirrors client.ts normalCount admission before a non-reserved method is refused.
+    const suspended = Array.from({ length: 496 }, () => f.client.request(target, 'runtime.inspect', {}));
+    for (const pending of suspended) void pending.catch(() => undefined);
+    expect(f.socket.requests.filter(request => request.method === 'runtime.inspect')).toHaveLength(496);
+    await expect(handle.finish()).rejects.toMatchObject({ code: 'source_unavailable' });
+    expect(f.socket.requests.some(request => request.method === 'runtime.channel.finish')).toBe(false);
+    // An active handle is refused again; a released handle rejects with a binding error instead.
+    await expect(handle.finish()).rejects.toMatchObject({ code: 'source_unavailable' });
+    const cancelling = handle.cancel();
+    const cancel = f.socket.requests.find(request => request.method === 'runtime.channel.cancel');
+    if (!cancel) throw new TypeError('cancel was not sent to the server');
+    f.socket.reply(cancel, { closed: true });
+    await cancelling;
+  });
+  it('keeps an admission-blocked cancel cancellable instead of silently releasing the handle', async () => {
+    const f = await fixture();
+    const handle = await file(f, 0);
+    // 496 ordinary plus 12 reserved mirrors both client.ts admission ceilings.
+    const suspended = [
+      ...Array.from({ length: 496 }, () => f.client.request(target, 'runtime.inspect', {})),
+      ...Array.from({ length: 12 }, (_, index) => f.client.request(target, 'runtime.channel.ack', { channelId: 1, offset: index, length: 1 })),
+    ];
+    for (const pending of suspended) void pending.catch(() => undefined);
+    await expect(handle.cancel()).rejects.toMatchObject({ code: 'source_unavailable' });
+    await expect(handle.cancel()).rejects.toMatchObject({ code: 'source_unavailable' });
+  });
+  it('retires the connection when a finish outcome cannot be confirmed', async () => {
+    vi.useFakeTimers();
+    const f = await fixture();
+    const handle = await file(f, 0);
+    const finishing = handle.finish();
+    const request = await f.socket.next();
+    expect(request.method).toBe('runtime.channel.finish');
+    const rejected = expect(finishing).rejects.toMatchObject({ code: 'timeout' });
+    await vi.advanceTimersByTimeAsync(15000);
+    await rejected;
+    expect(f.connection.status.state).toBe('disconnected');
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

@@ -2,7 +2,8 @@ import { ProtocolError, requireValue } from '../../shared/runtime/capabilities.j
 import { decodeBinary, encodeBinary, LIMITS, validateChunk } from '../../shared/runtime/protocol.js';
 import type { BinaryChunk, Chunk } from '../../shared/runtime/protocol.js';
 import type { EnvironmentId } from '../../shared/runtime/identity.js';
-import type { ChannelDescriptor, RuntimeParams } from '../../shared/runtime/runtimeWire.js';
+import type { ChannelDescriptor, RuntimeParams, RuntimeResults } from '../../shared/runtime/runtimeWire.js';
+import { RuntimeRequestError } from './client';
 import type { RuntimeClient, RuntimeScope } from './client';
 import type { RuntimeConnection } from './connection';
 
@@ -40,6 +41,12 @@ export function createRuntimeChannels({ client, connection }: { readonly client:
     const current = channel.scope.isCurrent();
     release(channel);
     if (current) connection.disconnect();
+  }
+  // A pre-enqueue ProtocolError means the server never saw the request, so its
+  // slot is untouched and the handle must stay retryable; any other rejection
+  // leaves the server outcome unknown and needs explicit cleanup.
+  function knownUncommitted(error: unknown) {
+    return error instanceof ProtocolError && !(error instanceof RuntimeRequestError) && connection.status.state === 'ready';
   }
   const detach = client.onDetach((target) => {
     for (const channel of channels.values()) if (channel.target === target) release(channel);
@@ -114,9 +121,14 @@ export function createRuntimeChannels({ client, connection }: { readonly client:
   }
   async function cancel(channel: Channel) {
     if (!channel.active) return;
+    if (!channel.scope.isCurrent()) { release(channel); return; }
     try {
-      if (channel.scope.isCurrent()) await client.request(channel.target, 'runtime.channel.cancel', { channelId: channel.descriptor.channelId });
-    } finally { release(channel); }
+      await client.request(channel.target, 'runtime.channel.cancel', { channelId: channel.descriptor.channelId });
+    } catch (error) {
+      if (!knownUncommitted(error)) retire(channel);
+      throw error;
+    }
+    release(channel);
   }
   async function openFile(target: EnvironmentId, params: FileParams) {
     const channel = await open(target, { ...params, service: 'file' });
@@ -139,13 +151,18 @@ export function createRuntimeChannels({ client, connection }: { readonly client:
       async finish() {
         active(channel);
         requireValue(channel.inflight.size === 0 && channel.offset === params.size, 'channel.incomplete', 'conflict');
+        let result: RuntimeResults['runtime.channel.finish'];
         try {
-          const result = await client.request(target, 'runtime.channel.finish', { channelId: channel.descriptor.channelId });
+          result = await client.request(target, 'runtime.channel.finish', { channelId: channel.descriptor.channelId });
+        } catch (error) {
+          if (!knownUncommitted(error)) retire(channel);
+          throw error;
+        }
+        try {
           active(channel);
           requireValue(result.size === params.size && result.sha256 === params.sha256, 'channel.finished_identity', 'reconcile_required');
           return result;
-        }
-        finally { release(channel); }
+        } finally { release(channel); }
       },
       cancel: () => cancel(channel),
     };
