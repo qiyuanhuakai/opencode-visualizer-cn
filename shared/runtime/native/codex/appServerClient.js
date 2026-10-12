@@ -285,7 +285,8 @@ export function createAppServerClient({
       const scanner = createEnvelopeScanner();
       let envelope,
         failure,
-        done = false;
+        done = false,
+        cancelled = false;
       const frame = transport.requestRaw(JSON.stringify({ id, method, params }), id);
       async function* stream() {
         try {
@@ -293,6 +294,7 @@ export function createAppServerClient({
             scanner.push(chunk);
             yield chunk;
           }
+          if (cancelled) return;
           const value = scanner.envelope();
           if (value.id !== id)
             throw new ProtocolError('reconcile_required', 'codex.history_correlation');
@@ -320,6 +322,11 @@ export function createAppServerClient({
       return {
         id,
         stream: stream(),
+        cancel() {
+          if (cancelled) return;
+          cancelled = true;
+          frame.cancel?.();
+        },
         envelope() {
           if (failure) throw failure;
           if (!envelope) throw new ProtocolError('reconcile_required', 'codex.history_incomplete');

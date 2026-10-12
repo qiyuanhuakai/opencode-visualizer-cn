@@ -7,7 +7,7 @@ export interface NativeMessage {
 export interface NativeTransport {
   send(value: string): void;
   subscribe(message: (raw: string) => void, close: () => void): () => void;
-  requestRaw?(raw: string, requestId: number): AsyncIterable<Uint8Array>;
+  requestRaw?(raw: string, requestId: number): AsyncIterable<Uint8Array> & { cancel?(): void };
   close(): void;
 }
 export interface AppServerClient {
@@ -19,6 +19,7 @@ export interface AppServerClient {
     readonly id: number;
     readonly stream: AsyncIterable<Uint8Array>;
     readonly settled: boolean;
+    cancel(): void;
     envelope(): {
       readonly id: number | null;
       readonly kind: 'result' | 'error' | 'unknown';

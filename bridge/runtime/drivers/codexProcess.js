@@ -12,8 +12,10 @@ const rawResultFirst = /^\s*\{\s*"(?:result|error)"/u;
  * line buffer and 4 MiB bound, so an oversized history frame is bounded downstream instead of assembled.
  * An id absent from the frame prefix is still routed (the frame starts with `result`/`error`) and the
  * client correlates the real id from the full frame. Every other frame keeps the existing parser.
- * An early raw `return()` (bounded cancellation) abandons the sink, resumes the shared stdout, and
- * discards only the remainder of the in-flight frame up to its newline, so a later RPC is not blocked.
+ * An explicit raw `cancel()` (or an early `return()`) abandons the sink and wakes a pending `next()`
+ * directly, resumes the shared stdout, and discards the in-flight frame up to its newline, so a later
+ * RPC is not blocked; the raw slot is freed immediately and the abandoned frame's id is retained so
+ * its late bytes are dropped rather than parsed as the cancelled read's data.
  */
 export function createCodexProcess({
   executable = 'codex',
@@ -38,7 +40,8 @@ export function createCodexProcess({
   let mode = 'ordinary',
     prefix = Buffer.alloc(0),
     pendingRawId = null,
-    rawSink = null;
+    rawSink = null,
+    abandonedRawId = null;
   const exited = new Promise((resolve) =>
     child.once('close', (code, signal) => resolve({ code, signal, pid: child.pid })),
   );
@@ -97,9 +100,30 @@ export function createCodexProcess({
   function classify(segment) {
     const head = segment.subarray(0, RAW_PREFIX_BYTES).toString('latin1');
     const idMatch = rawIdFirst.exec(head);
-    if (idMatch) return Number(idMatch[1]) === pendingRawId ? 'raw' : 'ordinary';
-    if (rawResultFirst.test(head)) return 'raw';
+    if (idMatch) {
+      const id = Number(idMatch[1]);
+      if (id === pendingRawId) return 'raw';
+      if (id === abandonedRawId) return 'abandoned';
+      return 'ordinary';
+    }
+    if (rawResultFirst.test(head)) {
+      if (abandonedRawId === null && pendingRawId !== null) return 'raw';
+      if (abandonedRawId !== null) return 'abandoned';
+      if (pendingRawId !== null) return 'raw';
+    }
     return 'ordinary';
+  }
+  /** Direct cancellation: wake a parked `next()` with done, free the raw slot immediately, and
+   * retain the id so a late frame is discarded to its newline instead of parsed as live data. */
+  function cancelRaw(sink, id) {
+    if (sink.state.ended || sink.state.error) return;
+    sink.abandon();
+    if (rawSink === sink) rawSink = null;
+    if (pendingRawId === id) pendingRawId = null;
+    if (mode === 'raw' || buffer.length > 0 || prefix.length > 0) mode = 'discard';
+    else abandonedRawId = id;
+    prefix = Buffer.alloc(0);
+    if (child.stdout.isPaused()) child.stdout.resume();
   }
   function resumeRaw() {
     if (rawSink && child.stdout.isPaused() && rawSink.state.bytes <= RAW_LOW_WATER) child.stdout.resume();
@@ -162,6 +186,15 @@ export function createCodexProcess({
       const newline = chunk.indexOf(10, start);
       const end = newline < 0 ? chunk.length : newline;
       const segment = chunk.subarray(start, end);
+      if (mode === 'discard') {
+        if (newline < 0) {
+          start = end;
+          continue;
+        }
+        mode = 'ordinary';
+        start = end + 1;
+        continue;
+      }
       if (mode === 'raw') {
         if (rawSink) {
           rawSink.push(segment);
@@ -175,9 +208,10 @@ export function createCodexProcess({
         start = end + 1;
         continue;
       }
+      const tracking = pendingRawId !== null || abandonedRawId !== null;
       if (
         buffer.length === 0 &&
-        pendingRawId !== null &&
+        tracking &&
         newline < 0 &&
         prefix.length + segment.length < RAW_PREFIX_BYTES
       ) {
@@ -187,19 +221,33 @@ export function createCodexProcess({
       }
       const candidate = prefix.length ? Buffer.concat([prefix, segment]) : segment;
       prefix = Buffer.alloc(0);
-      if (buffer.length === 0 && pendingRawId !== null && classify(candidate) === 'raw') {
-        mode = 'raw';
-        if (rawSink) {
-          rawSink.push(candidate);
-          if (rawSink.state.bytes >= RAW_HIGH_WATER) child.stdout.pause();
-        }
-        if (newline < 0) {
-          start = end;
+      if (buffer.length === 0 && tracking) {
+        const classification = classify(candidate);
+        if (classification === 'raw') {
+          mode = 'raw';
+          if (rawSink) {
+            rawSink.push(candidate);
+            if (rawSink.state.bytes >= RAW_HIGH_WATER) child.stdout.pause();
+          }
+          if (newline < 0) {
+            start = end;
+            continue;
+          }
+          finishRaw();
+          start = end + 1;
           continue;
         }
-        finishRaw();
-        start = end + 1;
-        continue;
+        if (classification === 'abandoned') {
+          abandonedRawId = null;
+          mode = 'discard';
+          if (newline < 0) {
+            start = end;
+            continue;
+          }
+          mode = 'ordinary';
+          start = end + 1;
+          continue;
+        }
       }
       if (buffer.length + candidate.length > maxFrameBytes) {
         fail();
@@ -228,6 +276,7 @@ export function createCodexProcess({
       pendingRawId = id;
       rawSink = sink;
       send(raw);
+      const cancel = () => cancelRaw(sink, id);
       const iterator = {
         next() {
           const result = sink.next();
@@ -235,13 +284,11 @@ export function createCodexProcess({
           return result;
         },
         return() {
-          sink.abandon();
-          if (rawSink === sink) rawSink = null;
-          if (child.stdout.isPaused()) child.stdout.resume();
+          cancel();
           return Promise.resolve({ value: undefined, done: true });
         },
       };
-      return { [Symbol.asyncIterator]() { return iterator; } };
+      return { [Symbol.asyncIterator]() { return iterator; }, cancel };
     },
     send,
     subscribe(message, ending) {

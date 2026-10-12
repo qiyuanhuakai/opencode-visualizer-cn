@@ -1124,3 +1124,144 @@ describe('Codex stdio app-server raw history routing', () => {
     }
   });
 });
+
+describe('Codex history cancellation before the first byte (upper client/producer)', () => {
+  // Controlled stdio app-server stand-in reproducing the reviewer's finding 2 restatement:
+  // `thread/turns/list` answers normally, `thread/items/list` is held with NO response, and `echo`
+  // answers normally. The held raw frame never delivers a byte, so the pending iterator.next() can
+  // only be woken by an explicit cancel at the raw layer.
+  const HELD_FIXTURE = [
+    "let buffer = '';",
+    "process.stdin.on('data', (chunk) => {",
+    "  buffer += chunk.toString('utf8');",
+    '  for (;;) {',
+    "    const index = buffer.indexOf('\\n');",
+    '    if (index < 0) break;',
+    '    const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);',
+    '    if (!line.trim()) continue;',
+    '    const message = JSON.parse(line);',
+    "    if (message.method === 'thread/turns/list') {",
+    "      process.stdout.write(JSON.stringify({ id: message.id, result: { data: [{ id: 't1', status: 'completed', items: [], startedAtMs: 0, completedAtMs: 3 }], nextCursor: null } }) + '\\n');",
+    "    } else if (message.method === 'thread/items/list') {",
+    "      process.stderr.write('items-held\\n');",
+    "    } else if (message.method === 'echo') {",
+    "      process.stdout.write(JSON.stringify({ id: message.id, result: { ok: true } }) + '\\n');",
+    '    }',
+    '  }',
+    '});',
+  ].join('\n');
+
+  const environmentId = parseEnvironmentId('11111111-1111-4111-8111-111111111111');
+  const harnessInstanceId = parseHarnessInstanceId('2222' + '2222-2222-4222-8222-222222222222');
+  const epoch = '33333333-3333-4333-8333-333333333333';
+  const session = parseSessionRef({ environmentId, harnessInstanceId, nativeSessionId: 'thr_held' });
+
+  async function spawnHeldFixture() {
+    const { createCodexProcess } =
+      await import('../../../bridge/runtime/drivers/codexProcess.js');
+    const dir = await mkdtemp(path.join(tmpdir(), 'vis-codex-held-'));
+    const script = path.join(dir, 'app-server.mjs');
+    await writeFile(script, HELD_FIXTURE, 'utf8');
+    const proc = createCodexProcess({ executable: process.execPath, args: [script] });
+    return { proc, dir };
+  }
+
+  async function waitFor(predicate: () => boolean, deadlineMs = 8000): Promise<void> {
+    const deadline = Date.now() + deadlineMs;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error('native condition was not reached');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  function settled(work: Promise<unknown>, ms = 1500): Promise<'settled' | 'pending'> {
+    return Promise.race([
+      work.then(
+        () => 'settled' as const,
+        () => 'settled' as const,
+      ),
+      new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), ms)),
+    ]);
+  }
+
+  it('settles the page and close when items/list is held and the read is cancelled before its first byte', async () => {
+    const { proc, dir } = await spawnHeldFixture();
+    const { createAppServerClient } =
+      await import('../../../shared/runtime/native/codex/appServerClient.js');
+    const { createCodexHistoryStream } =
+      await import('../../../bridge/runtime/drivers/codexHistory.js');
+    const { createHistoryStream, createHistoryDiskBudget } =
+      await import('../../../bridge/runtime/historyStream.js');
+    // Observe when the producer is parked on the raw next(); the held fixture never answers it.
+    let pendingNext = 0;
+    const transport = {
+      subscribe: proc.subscribe.bind(proc),
+      send: proc.send.bind(proc),
+      close: proc.close.bind(proc),
+      requestRaw(raw: string, id: number) {
+        const frame = proc.requestRaw?.(raw, id);
+        if (!frame) throw new TypeError('missing raw transport');
+        const iterator = frame[Symbol.asyncIterator]();
+        return {
+          [Symbol.asyncIterator]() {
+            return {
+              next(...args: [] | [undefined]) {
+                pendingNext += 1;
+                return iterator.next(...args);
+              },
+              return(...args: [] | [undefined]) {
+                return iterator.return?.(...args) ?? Promise.resolve({ value: undefined, done: true });
+              },
+            };
+          },
+          cancel() {
+            frame.cancel?.();
+          },
+        };
+      },
+    };
+    const client = createAppServerClient({ transport, onMessage() {} });
+    const store = createHistoryStream({
+      scope: 'codex-held-test',
+      createDirectory: () => mkdtemp(path.join(tmpdir(), 'vis-codex-history-spool-')),
+      globalDisk: createHistoryDiskBudget(),
+    });
+    const handle = createCodexHistoryStream({
+      session,
+      request: (method, params) => client.request(method, params),
+      requestHistory: (method, params) => client.requestHistory(method, params),
+      processGeneration: 1,
+      epoch,
+      assertCurrent() {},
+      randomUUID,
+      secrets: [],
+    });
+    const controller = new AbortController();
+    let page: Promise<unknown> | undefined;
+    try {
+      await handle.open({ signal: controller.signal, streamStore: store });
+      page = handle.page({ signal: controller.signal });
+      void page.catch(() => {});
+      await waitFor(() => proc.inspection().stderrBytes > 0 && pendingNext > 0, 5000);
+      controller.abort();
+      expect(await settled(page)).toBe('settled');
+      expect(await settled(handle.close())).toBe('settled');
+      // And the shared connection is usable again for an ordinary RPC.
+      const echoed = await Promise.race([
+        client.request('echo', {}),
+        new Promise<never>((_resolve, reject) =>
+          setTimeout(() => reject(new Error('echo timed out')), 4000),
+        ),
+      ]);
+      expect(echoed).toEqual({ ok: true });
+      expect(proc.inspection().failed).toBe(false);
+      expect(proc.inspection().rawPending).toBe(false);
+    } finally {
+      void page?.catch(() => {});
+      await settled(proc.close(), 3000);
+      await settled(handle.close(), 3000);
+      await settled(store.close(), 3000);
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  }, 20000);
+});

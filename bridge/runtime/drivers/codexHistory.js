@@ -350,6 +350,7 @@ export function createCodexHistoryStream(options) {
     const output = await store.ingest({
       source: redactedSource(raw.stream, signal),
       cancel: () => {
+        raw.cancel?.();
         void raw.stream.return?.();
       },
       grammar: RAW_ITEM_GRAMMAR,
