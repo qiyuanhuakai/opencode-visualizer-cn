@@ -1,55 +1,161 @@
 import { ProtocolError, requireValue } from '../../capabilities.js';
 
 const bytes = (value) => new TextEncoder().encode(value).byteLength;
-const HEAD_BYTES = 65536;
-const TAIL_BYTES = 65536;
-const idFirstPattern = /^\s*\{\s*"id"\s*:\s*(-?\d+)/u;
-const idLastPattern = /"id"\s*:\s*(-?\d+)\s*\}\s*$/u;
-const codePattern = /"code"\s*:\s*(-?\d+)/u;
-const resultPattern = /"result"\s*:\s*\{/u;
-const errorPattern = /"error"\s*:\s*\{/u;
-const cursorPattern = /"nextCursor"\s*:\s*(null|"(?:[^"\\]|\\.)*")/u;
+const STRING_CAP_BYTES = 4096;
+const SCALAR_CAP_BYTES = 64;
+const isDigit = (byte) => byte >= 0x30 && byte <= 0x39;
+const isAlpha = (byte) => (byte >= 0x41 && byte <= 0x5a) || (byte >= 0x61 && byte <= 0x7a);
+const isSpace = (byte) => byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d;
+const isNumberByte = (byte) =>
+  isDigit(byte) || byte === 0x2d || byte === 0x2b || byte === 0x2e || byte === 0x65 || byte === 0x45;
+const INTEGER = /^-?\d+$/u;
 
-/** Bounded head/tail window over one JSON-RPC frame. The frame is a single object whose small envelope
- * keys (`id`, `result`/`error`, `nextCursor`) sit at the start or the end, so the id is correlated even
- * when the server emits it after a large result without materialising the payload in memory.
+/** Bounded, JSON-layer-aware envelope scanner over one JSON-RPC frame. It reads ONLY the depth-1
+ * `id`/`result`/`error` members and the depth-2 `nextCursor` / `error.code` members, so a legitimate
+ * nested `error` inside `result.data[].item` (a rejected or failed tool call) is never mistaken for a
+ * top-level RPC error, and a nested `nextCursor` never shadows the result-level cursor. Memory is O(1):
+ * bytes below the envelope are counted for depth, never buffered, so a >4 MiB result stays bounded.
  */
-function createFrameWindow() {
-  const head = [];
-  let headBytes = 0,
-    tail = Buffer.alloc(0);
+function createEnvelopeScanner() {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let capturing = false;
+  let overflowed = false;
+  let stringDepth = 0;
+  let stringBytes = null;
+  let closed = null;
+  let key = null;
+  let number = null;
+  let literal = null;
+  let resultDepth = null;
+  let errorDepth = null;
+  let kind = 'unknown';
+  let id = null;
+  let errorCode = null;
+  let nextCursor = null;
+  const capture = (byte) => {
+    if (overflowed) return;
+    if (stringBytes.length >= STRING_CAP_BYTES) {
+      overflowed = true;
+      stringBytes = null;
+      return;
+    }
+    stringBytes.push(byte);
+  };
+  const finishScalar = (buffered) => {
+    const owner = buffered.key;
+    key = null;
+    if (!owner || buffered.truncated) return;
+    const text = Buffer.from(buffered.bytes).toString('utf8');
+    if (owner.depth === 1 && owner.name === 'id' && INTEGER.test(text)) id = Number(text);
+    else if (owner.depth === errorDepth && owner.name === 'code' && INTEGER.test(text))
+      errorCode = Number(text);
+  };
+  const step = (byte) => {
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        if (capturing) capture(byte);
+      } else if (byte === 0x5c) {
+        escaped = true;
+        if (capturing) capture(byte);
+      } else if (byte === 0x22) {
+        inString = false;
+        closed = capturing
+          ? {
+              value: overflowed ? null : Buffer.from(stringBytes).toString('utf8'),
+              overflow: overflowed,
+              depth: stringDepth,
+            }
+          : null;
+        capturing = false;
+        stringBytes = null;
+      } else if (capturing) capture(byte);
+      return;
+    }
+    if (number) {
+      if (isNumberByte(byte)) {
+        if (number.bytes.length < SCALAR_CAP_BYTES) number.bytes.push(byte);
+        else number.truncated = true;
+        return;
+      }
+      finishScalar(number);
+      number = null;
+    }
+    if (literal) {
+      if (isAlpha(byte)) {
+        if (literal.bytes.length < SCALAR_CAP_BYTES) literal.bytes.push(byte);
+        else literal.truncated = true;
+        return;
+      }
+      finishScalar(literal);
+      literal = null;
+    }
+    if (isSpace(byte)) return;
+    if (closed) {
+      const string = closed;
+      closed = null;
+      if (byte === 0x3a) {
+        key = { name: string.value, depth: string.depth };
+        return;
+      }
+      const owner = key;
+      key = null;
+      if (
+        owner &&
+        !string.overflow &&
+        string.value !== null &&
+        owner.depth === 2 &&
+        resultDepth === 2 &&
+        owner.name === 'nextCursor'
+      )
+        nextCursor = JSON.parse(`"${string.value}"`);
+    }
+    if (byte === 0x22) {
+      inString = true;
+      escaped = false;
+      capturing = depth <= 2;
+      overflowed = false;
+      stringDepth = depth;
+      stringBytes = capturing ? [] : null;
+      return;
+    }
+    if (byte === 0x7b || byte === 0x5b) {
+      if (key) {
+        if (key.depth === 1 && key.name === 'result' && kind !== 'error') {
+          kind = 'result';
+          resultDepth = depth + 1;
+        } else if (key.depth === 1 && key.name === 'error') {
+          kind = 'error';
+          errorDepth = depth + 1;
+        }
+        key = null;
+      }
+      depth += 1;
+      return;
+    }
+    if (byte === 0x7d || byte === 0x5d) {
+      depth -= 1;
+      if (resultDepth !== null && depth < resultDepth) resultDepth = null;
+      if (errorDepth !== null && depth < errorDepth) errorDepth = null;
+      return;
+    }
+    if (byte === 0x2c || byte === 0x3a) return;
+    if (isDigit(byte) || byte === 0x2d) {
+      number = { bytes: [byte], key, truncated: false };
+      return;
+    }
+    if (byte === 0x6e || byte === 0x74 || byte === 0x66) {
+      literal = { bytes: [byte], key, truncated: false };
+    }
+  };
   return {
     push(chunk) {
-      if (headBytes < HEAD_BYTES) {
-        const take = Math.min(HEAD_BYTES - headBytes, chunk.length);
-        head.push(Buffer.from(chunk.subarray(0, take)));
-        headBytes += take;
-      }
-      tail = Buffer.concat([tail, chunk.subarray(Math.max(0, chunk.length - TAIL_BYTES))]);
-      if (tail.length > TAIL_BYTES) tail = tail.subarray(tail.length - TAIL_BYTES);
+      for (let index = 0; index < chunk.length; index += 1) step(chunk[index]);
     },
     envelope() {
-      const front = Buffer.concat(head).toString('utf8');
-      const rear = tail.toString('utf8');
-      const idMatch = idFirstPattern.exec(front) ?? idLastPattern.exec(rear);
-      const codeMatch = codePattern.exec(front) ?? codePattern.exec(rear);
-      const cursorMatch = cursorPattern.exec(rear) ?? cursorPattern.exec(front);
-      const kind =
-        errorPattern.test(front) || errorPattern.test(rear)
-          ? 'error'
-          : resultPattern.test(front) || resultPattern.test(rear)
-            ? 'result'
-            : 'unknown';
-      return {
-        id: idMatch ? Number(idMatch[1]) : null,
-        kind,
-        errorCode: codeMatch ? Number(codeMatch[1]) : null,
-        nextCursor: cursorMatch
-          ? cursorMatch[1] === 'null'
-            ? null
-            : JSON.parse(cursorMatch[1])
-          : null,
-      };
+      return { id, kind, errorCode, nextCursor };
     },
   };
 }
@@ -176,7 +282,7 @@ export function createAppServerClient({
       requireValue(method === 'thread/items/list', 'codex.history_method', 'unsupported');
       requireValue(typeof transport.requestRaw === 'function', 'codex.history_transport', 'unsupported');
       const id = ++nextId;
-      const window = createFrameWindow();
+      const scanner = createEnvelopeScanner();
       let envelope,
         failure,
         done = false;
@@ -184,10 +290,10 @@ export function createAppServerClient({
       async function* stream() {
         try {
           for await (const chunk of frame) {
-            window.push(chunk);
+            scanner.push(chunk);
             yield chunk;
           }
-          const value = window.envelope();
+          const value = scanner.envelope();
           if (value.id !== id)
             throw new ProtocolError('reconcile_required', 'codex.history_correlation');
           if (value.kind === 'error') {

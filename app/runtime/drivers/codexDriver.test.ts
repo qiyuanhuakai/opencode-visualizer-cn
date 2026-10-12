@@ -697,6 +697,7 @@ describe('Codex native selected-history raw producer', () => {
   async function producerFor(
     buildFrame: (id: number) => string,
     secrets: readonly string[] = [],
+    chunkBytes?: number,
   ): Promise<InternalNativeHistoryHandle> {
     const { createCodexHistoryStream } =
       await import('../../../bridge/runtime/drivers/codexHistory.js');
@@ -710,7 +711,13 @@ describe('Codex native selected-history raw producer', () => {
       close() {},
       requestRaw(_raw: string, id: number): AsyncIterable<Uint8Array> {
         return (async function* () {
-          yield Buffer.from(buildFrame(id), 'utf8');
+          const frame = Buffer.from(buildFrame(id), 'utf8');
+          if (!chunkBytes) {
+            yield frame;
+            return;
+          }
+          for (let offset = 0; offset < frame.length; offset += chunkBytes)
+            yield frame.subarray(offset, offset + chunkBytes);
         })();
       },
     };
@@ -909,6 +916,75 @@ describe('Codex native selected-history raw producer', () => {
         nativeCode: -32601,
       });
       expect(store.usage()).toMatchObject({ diskBytes: 0, pages: 0 });
+    } finally {
+      await handle.close();
+      await store.close();
+    }
+  });
+  it('parses a successful page whose items carry a nested tool error as success', async () => {
+    const element = {
+      turnId: 't1',
+      item: {
+        id: 'tool-1',
+        type: 'mcpToolCall',
+        status: 'failed',
+        error: { code: -32601, message: 'tool execution rejected' },
+      },
+      startedAtMs: 1,
+      completedAtMs: 2,
+    };
+    const handle = await producerFor((id) =>
+      JSON.stringify({ id, result: { data: [element], nextCursor: null } }),
+    );
+    const store = await storeFor();
+    try {
+      await handle.open({ signal: signal(), streamStore: store });
+      const page = await handle.page({ signal: signal() });
+      expect(page.items.map((item) => item.recordId)).toEqual(['tool-1']);
+      expect(page).toMatchObject({ completeness: 'complete', cursor: null });
+    } finally {
+      await handle.close();
+      await store.close();
+    }
+  });
+  it('reads nextCursor from the result envelope and ignores a same-named nested field', async () => {
+    const element = {
+      turnId: 't1',
+      item: { id: 'item-1', nextCursor: 'nested-should-be-ignored', aggregatedOutput: 'x' },
+      startedAtMs: 1,
+      completedAtMs: 2,
+    };
+    const handle = await producerFor((id) =>
+      JSON.stringify({ id, result: { data: [element], nextCursor: 'page-2' } }),
+    );
+    const store = await storeFor();
+    try {
+      await handle.open({ signal: signal(), streamStore: store });
+      const page = await handle.page({ signal: signal() });
+      expect(page).toMatchObject({ completeness: 'partial', cursor: 'page-2' });
+    } finally {
+      await handle.close();
+      await store.close();
+    }
+  });
+  it('parses a nested tool error and result cursor when the frame arrives one byte per chunk', async () => {
+    const element = {
+      turnId: 't1',
+      item: { id: 'tool-x', type: 'mcpToolCall', error: { code: -32601, message: 'rejected' } },
+      startedAtMs: 1,
+      completedAtMs: 2,
+    };
+    const handle = await producerFor(
+      (id) => JSON.stringify({ id, result: { data: [element], nextCursor: 'page-9' } }),
+      [],
+      1,
+    );
+    const store = await storeFor();
+    try {
+      await handle.open({ signal: signal(), streamStore: store });
+      const page = await handle.page({ signal: signal() });
+      expect(page.items.map((item) => item.recordId)).toEqual(['tool-x']);
+      expect(page).toMatchObject({ completeness: 'partial', cursor: 'page-9' });
     } finally {
       await handle.close();
       await store.close();
