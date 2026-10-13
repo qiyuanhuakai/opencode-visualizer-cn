@@ -1,4 +1,6 @@
 // @vitest-environment node
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -323,7 +325,8 @@ describe('remote install transaction preserves the old program and DB backup', (
     a.atomicSwitch = vi.fn(async () => { a.calls.push('switch'); throw new Error('dpkg failed'); });
     const tx = createRemoteInstallTransaction({ host: hostIdentity(), plan: installPlan(), adapter: a });
     await expect(tx.upgrade()).rejects.toThrow('dpkg failed');
-    expect(a.calls).toEqual(['backup:program', 'backup:database', 'switch', 'restore:program']);
+    // A failed switch rolls the program back AND releases the never-delivered staged package.
+    expect(a.calls).toEqual(['backup:program', 'backup:database', 'switch', 'restore:program', 'discard']);
     // The database backup is never destroyed as part of a program rollback.
     expect(a.restore).not.toHaveBeenCalledWith(expect.anything(), 'database', expect.anything());
     const receipt = tx.receipt();
@@ -338,6 +341,102 @@ describe('remote install transaction preserves the old program and DB backup', (
     expect(a.discard).toHaveBeenCalledWith('staged-1');
     expect(a.backup).not.toHaveBeenCalled();
     expect(a.atomicSwitch).not.toHaveBeenCalled();
+  });
+});
+
+describe('remote install releases the staged package on every failure path', () => {
+  type FailureScenario =
+    | 'verify-throws'
+    | 'verify-false'
+    | 'program-backup-fails'
+    | 'database-backup-fails'
+    | 'atomic-switch-fails'
+    | 'discard-fails';
+
+  function stagedAdapter(dir: string, scenario: FailureScenario) {
+    const counts = { discard: 0, restore: 0 };
+    const stagedPath = path.join(dir, 'VisBridge-0.8.0-x64-Linux.deb');
+    const adapter = {
+      download: async () => {
+        await writeFile(stagedPath, 'staged-package-bytes');
+        return stagedPath;
+      },
+      verify: async () => {
+        if (scenario === 'verify-throws') throw new Error('verify exploded');
+        return scenario !== 'verify-false' && scenario !== 'discard-fails';
+      },
+      backup: async (_host: unknown, target: string) => {
+        if (scenario === 'program-backup-fails' && target === 'program') throw new Error('program backup failed');
+        if (scenario === 'database-backup-fails' && target === 'database') throw new Error('database backup failed');
+        return `${target}-ref`;
+      },
+      atomicSwitch: async () => {
+        if (scenario === 'atomic-switch-fails') throw new Error('atomic switch failed');
+      },
+      restore: async () => { counts.restore += 1; },
+      discard: async (staged: unknown) => {
+        counts.discard += 1;
+        if (scenario === 'discard-fails') throw new Error('discard exploded');
+        await rm(String(staged), { force: true });
+      },
+    };
+    return { adapter, counts };
+  }
+
+  async function runFailure(scenario: FailureScenario, action: 'install' | 'upgrade' = 'upgrade') {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'vis-remote-install-'));
+    try {
+      const { adapter, counts } = stagedAdapter(dir, scenario);
+      const tx = createRemoteInstallTransaction({ host: hostIdentity(), plan: installPlan(), adapter });
+      const rejection = await (action === 'upgrade' ? tx.upgrade() : tx.install())
+        .then(() => null, (error: unknown) => error);
+      const observedStagedEntries = (await readdir(dir)).length;
+      return { rejection, counts, observedStagedEntries };
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('releases the staged package when verify throws', async () => {
+    const { rejection, counts, observedStagedEntries } = await runFailure('verify-throws', 'install');
+    expect((rejection as Error).message).toBe('verify exploded');
+    expect(counts.discard).toBe(1);
+    expect(observedStagedEntries).toBe(0);
+  });
+
+  it('releases the staged package when verify returns false', async () => {
+    const { rejection, counts, observedStagedEntries } = await runFailure('verify-false', 'install');
+    expect(rejection).toMatchObject({ code: 'conflict' });
+    expect(counts.discard).toBe(1);
+    expect(observedStagedEntries).toBe(0);
+  });
+
+  it('releases the staged package when the program backup fails', async () => {
+    const { rejection, counts, observedStagedEntries } = await runFailure('program-backup-fails');
+    expect((rejection as Error).message).toBe('program backup failed');
+    expect(counts.discard).toBe(1);
+    expect(observedStagedEntries).toBe(0);
+  });
+
+  it('releases the staged package when the database backup fails', async () => {
+    const { rejection, counts, observedStagedEntries } = await runFailure('database-backup-fails');
+    expect((rejection as Error).message).toBe('database backup failed');
+    expect(counts.discard).toBe(1);
+    expect(observedStagedEntries).toBe(0);
+  });
+
+  it('releases the staged package after a failed atomic switch and rollback', async () => {
+    const { rejection, counts, observedStagedEntries } = await runFailure('atomic-switch-fails');
+    expect((rejection as Error).message).toBe('atomic switch failed');
+    expect(counts.restore).toBe(1);
+    expect(counts.discard).toBe(1);
+    expect(observedStagedEntries).toBe(0);
+  });
+
+  it('keeps the original failure when the cleanup discard itself fails', async () => {
+    const { rejection, counts } = await runFailure('discard-fails', 'install');
+    expect(rejection).toMatchObject({ code: 'conflict' });
+    expect(counts.discard).toBe(1);
   });
 });
 

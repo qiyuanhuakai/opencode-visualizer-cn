@@ -122,21 +122,35 @@ export function createRemoteInstallTransaction(options) {
   async function install(action) {
     state.action = action;
     const staged = await adapter.download(plan);
-    const verified = await adapter.verify(staged, plan);
-    if (verified !== true) {
-      await adapter.discard(staged);
-      throw new ProtocolError('conflict', 'artifact.sha256');
+    let stagedReleased = false;
+    async function releaseStaged() {
+      if (stagedReleased) return;
+      stagedReleased = true;
+      try {
+        await adapter.discard(staged);
+      } catch {
+        // Cleanup is best-effort: releasing the staged package must never mask the install failure.
+      }
     }
-    programBackup = await adapter.backup(host, 'program', plan);
-    databaseBackup = await adapter.backup(host, 'database', plan);
     try {
-      await adapter.atomicSwitch(host, staged, plan);
-      state.switched = true;
+      const verified = await adapter.verify(staged, plan);
+      if (verified !== true) {
+        throw new ProtocolError('conflict', 'artifact.sha256');
+      }
+      programBackup = await adapter.backup(host, 'program', plan);
+      databaseBackup = await adapter.backup(host, 'database', plan);
+      try {
+        await adapter.atomicSwitch(host, staged, plan);
+        state.switched = true;
+      } catch (error) {
+        await rollback();
+        throw error;
+      }
+      return receipt();
     } catch (error) {
-      await rollback();
+      await releaseStaged();
       throw error;
     }
-    return receipt();
   }
 
   return Object.freeze({
