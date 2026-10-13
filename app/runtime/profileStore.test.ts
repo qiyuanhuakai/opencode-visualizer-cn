@@ -179,4 +179,77 @@ describe('profileStore', () => {
     await writeFile(storePath, JSON.stringify({ version: 1, profiles: [{ name: 'x' }] }), 'utf8');
     await expect(createProfileStore({ profilePath: storePath }).load()).rejects.toBeDefined();
   });
+
+  it('does not lose an acknowledged create under concurrent writes', async () => {
+    const storePath = await profilePath();
+    const store = createProfileStore({ profilePath: storePath });
+    const created = await Promise.all(
+      Array.from({ length: 10 }, (_, index) => store.create(localProfile(`Host ${index}`))),
+    );
+    expect(created).toHaveLength(10);
+    expect(new Set(created.map((profile) => profile.profileId)).size).toBe(10);
+
+    const reloaded = await createProfileStore({ profilePath: storePath }).load();
+    expect(reloaded).toHaveLength(10);
+    expect(reloaded.map((profile) => profile.name).sort()).toEqual(
+      created.map((profile) => profile.name).sort(),
+    );
+    for (const profile of created) {
+      expect(reloaded.some((entry) => entry.profileId === profile.profileId)).toBe(true);
+    }
+  });
+
+  it('keeps both acknowledged edits when two profiles are updated at once', async () => {
+    const storePath = await profilePath();
+    const store = createProfileStore({ profilePath: storePath });
+    const first = await store.create(localProfile('First'));
+    const second = await store.create(sshProfile());
+    const [firstEdited, secondEdited] = await Promise.all([
+      store.update(first.profileId, { name: 'First edited' }),
+      store.update(second.profileId, { name: 'Second edited' }),
+    ]);
+    expect(firstEdited?.name).toBe('First edited');
+    expect(secondEdited?.name).toBe('Second edited');
+
+    const reloaded = await createProfileStore({ profilePath: storePath }).load();
+    expect(reloaded.find((profile) => profile.profileId === first.profileId)?.name).toBe('First edited');
+    expect(reloaded.find((profile) => profile.profileId === second.profileId)?.name).toBe('Second edited');
+  });
+
+  it('keeps an interleaved delete and update coherent', async () => {
+    const storePath = await profilePath();
+    const store = createProfileStore({ profilePath: storePath });
+    const first = await store.create(localProfile('First'));
+    const second = await store.create(sshProfile());
+    const third = await store.create(localProfile('Third'));
+    const [edited, removed] = await Promise.all([
+      store.update(first.profileId, { name: 'First edited' }),
+      store.remove(second.profileId),
+    ]);
+    expect(edited?.name).toBe('First edited');
+    expect(removed?.profileId).toBe(second.profileId);
+
+    const reloaded = await createProfileStore({ profilePath: storePath }).load();
+    expect(reloaded.map((profile) => profile.profileId).sort()).toEqual(
+      [first.profileId, third.profileId].sort(),
+    );
+    expect(reloaded.find((profile) => profile.profileId === first.profileId)?.name).toBe('First edited');
+  });
+
+  it('serializes overlapping writes across store instances on one path', async () => {
+    const storePath = await profilePath();
+    const first = createProfileStore({ profilePath: storePath });
+    const second = createProfileStore({ profilePath: storePath });
+    const created = await Promise.all([
+      first.create(localProfile('From first instance')),
+      second.create(sshProfile()),
+    ]);
+    expect(created).toHaveLength(2);
+
+    const reloaded = await createProfileStore({ profilePath: storePath }).load();
+    expect(reloaded).toHaveLength(2);
+    expect(reloaded.map((profile) => profile.profileId).sort()).toEqual(
+      created.map((profile) => profile.profileId).sort(),
+    );
+  });
 });
