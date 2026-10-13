@@ -590,7 +590,7 @@
       v-if="isHarnessSettingsOpen"
       :harness-kind="harnessSettingsKind"
       :manifests="harnessManifests"
-      :scope="harnessScope"
+      :scope="harnessScope ?? harnessInstanceScope"
       :controls="harnessSettingsControls"
       :title="t('app.harnessSettings.title')"
       @save="handleHarnessSettingsSave"
@@ -611,7 +611,7 @@
       :provider-config="providerConfig"
       :backend-kind="activeBackendKind"
       :dsh-rpc-client="dshSettingsRpcClient"
-      :harness-scope="harnessScope"
+      :harness-scope="harnessScope ?? undefined"
       :harness-manifests="harnessManifests"
       @close="isProviderManagerOpen = false"
       @update:model-visibility="handleModelVisibilityUpdate"
@@ -630,7 +630,7 @@
       :magic-context-workers="magicContextWorkers"
       :kimi-web-bridge="kimiWebMessageBridge"
       :dsh-status="dshStatusSnapshot"
-      :harness-scope="harnessScope"
+      :harness-scope="harnessScope ?? undefined"
       :harness-manifests="harnessManifests"
       @close="isStatusMonitorOpen = false"
     />
@@ -9902,8 +9902,10 @@ useCodexWorkspaceSync({
 function parseQualifiedSession(): SessionRef | null {
   const sessionId = selectedSessionId.value;
   if (!sessionId) return null;
-  const environmentId = activeRuntimeEnvironmentId;
-  const harnessInstanceId = activeHarnessInstanceId;
+  // The identity of the active target: dereference the computed values, never
+  // the ref objects themselves — parseSessionRef validates strings.
+  const environmentId = activeRuntimeEnvironmentId.value;
+  const harnessInstanceId = activeHarnessInstanceId.value;
   if (!environmentId || !harnessInstanceId) return null;
   try {
     return parseSessionRef({ environmentId, harnessInstanceId, nativeSessionId: sessionId });
@@ -9928,19 +9930,49 @@ function runtimeSelectionCapture(): SelectionCapture | null {
   });
 }
 
-const runtimeActionClientRef = computed(() => runtimeActionClient.value);
+/**
+ * The runtime client the active bridge target must have attached. The legacy
+ * path keeps running while it is absent — a bare OpenCode server is not a
+ * runtime wire endpoint, so no qualified client is built for it.
+ */
+function requireRuntimeActionClient(): RuntimeClient {
+  const client = runtimeActionClient.value;
+  if (!client) {
+    throw new TypeError('runtime.client: no runtime client is attached for the active bridge target');
+  }
+  return client;
+}
+
+/**
+ * The stable client surface the qualified routers consume. The underlying
+ * runtime client is rebuilt whenever the active bridge target changes, so the
+ * routers receive a facade that resolves the CURRENT client on every call —
+ * never a computed ref object, and never a client captured at setup time.
+ */
+const runtimeActionClientSurface: RuntimeActionClient = {
+  scope(target) {
+    return requireRuntimeActionClient().scope(target);
+  },
+  mutate(target, method, params, options) {
+    return requireRuntimeActionClient().mutate(target, method, params, options);
+  },
+  request(target, method, params, options) {
+    return requireRuntimeActionClient().request(target, method, params, options);
+  },
+};
+
 const runtimeSessionActions = useRuntimeSessionActions({
-  client: runtimeActionClientRef as unknown as RuntimeActionClient,
+  client: runtimeActionClientSurface,
   profileId: activeProfileId.value,
   capture: runtimeSelectionCapture,
 });
 const runtimeMessageSend = useRuntimeMessageSend({
-  client: runtimeActionClientRef as unknown as RuntimeActionClient,
+  client: runtimeActionClientSurface,
   profileId: activeProfileId.value,
   capture: runtimeSelectionCapture,
 });
 const runtimeInteractions = useRuntimeInteractions({
-  client: runtimeActionClientRef as unknown as RuntimeActionClient,
+  client: runtimeActionClientSurface,
   profileId: activeProfileId.value,
   capture: runtimeSelectionCapture,
 });
@@ -9949,6 +9981,10 @@ const runtimeSessionRuntime: RuntimeSessionRuntime = {
   binding: () => {
     const session = runtimeSelectedSessionRef.value;
     if (!session) return null;
+    // The qualified router needs an attached runtime client. Until the active
+    // bridge target publishes one, the legacy backend-specific path keeps
+    // running exactly as before.
+    if (!runtimeActionClient.value) return null;
     return { profileId: activeProfileId.value, session };
   },
   router: {
@@ -9990,10 +10026,12 @@ const runtimeConnectionProfiles = computed(() => {
 });
 
 /**
- * The harness manifests the active bridge target publishes. Until a manifest
- * channel is wired, the active target's own manifest is the one entry the
- * capability gates resolve against, so an unsupported control still names its
- * source instead of masquerading as available.
+ * The harness manifests the active bridge target publishes. No manifest
+ * channel is wired yet, so this stays empty and the capability gates stay on
+ * their legacy fallback (see `harnessScope`): an empty list must never
+ * masquerade as a declaration that every control is unavailable. Once a
+ * channel publishes the active target's manifest, the gates resolve against it
+ * and an unsupported control names its source.
  */
 const harnessManifests = ref<readonly HarnessManifest[]>([]);
 
@@ -10019,16 +10057,30 @@ const isHarnessSettingsOpen = ref(false);
 
 const harnessSettingsKind = activeHarnessKind;
 
-const harnessSettingsControls = computed<readonly string[]>(() =>
-  Object.keys(HARNESS_CONTROLS).filter((control) => {
-    const support = runtimeCapabilities.support({ control, scope: harnessScope.value });
+/**
+ * The harness instance scope of the active backend on the active environment.
+ * The explicit harness settings surface resolves against it when no qualified
+ * session is selected; the default-path modals never receive it — they keep
+ * their legacy behaviour until a real manifest and session exist.
+ */
+const harnessInstanceScope = computed<ControlScope>(() => ({
+  kind: 'instance',
+  environmentId: activeRuntimeEnvironmentId.value,
+  harnessInstanceId: activeHarnessInstanceId.value,
+}));
+
+const harnessSettingsControls = computed<readonly string[]>(() => {
+  const scope = harnessScope.value ?? harnessInstanceScope.value;
+  return Object.keys(HARNESS_CONTROLS).filter((control) => {
+    const support = runtimeCapabilities.support({ control, scope });
     return support.channel === 'harness';
-  }),
-);
+  });
+});
 
 function handleHarnessSettingsSave(control: string) {
-  const save = runtimeCapabilities.capture({ control, scope: harnessScope.value, payload: {} });
-  if (!runtimeCapabilities.apply(save, harnessScope.value)) return;
+  const scope = harnessScope.value ?? harnessInstanceScope.value;
+  const save = runtimeCapabilities.capture({ control, scope, payload: {} });
+  if (!runtimeCapabilities.apply(save, scope)) return;
   setSendStatusText(control);
 }
 
@@ -10124,14 +10176,25 @@ watch(
 );
 watch(activeHarnessKind, (kind) => { runtimeCapabilities.setActiveBackendKind(kind); }, { immediate: true });
 
-const harnessScope = computed<ControlScope>(() => {
+/**
+ * The scope the capability-gated settings surfaces resolve backend-specific
+ * controls against.
+ *
+ * It is only ever a REAL qualified harness scope — the currently selected
+ * session on the active harness instance. A workspace scope is NEVER a harness
+ * scope: falling back to one routes provider/config controls into the
+ * workspace resolver, where every harness operation is unknown and therefore
+ * reported unavailable.
+ *
+ * It stays null until a real manifest is published AND a qualified session is
+ * selected, so the legacy adapter-shape path remains the fallback and an empty
+ * manifest list can never disable a control that used to work.
+ */
+const harnessScope = computed<ControlScope | null>(() => {
+  if (harnessManifests.value.length === 0) return null;
   const session = runtimeSelectedSessionRef.value;
   if (session) return { kind: 'session', session };
-  return {
-    kind: 'workspace',
-    environmentId: activeRuntimeEnvironmentId.value,
-    canonicalPath: activeDirectory.value,
-  };
+  return null;
 });
 
 const connectionEntryProfiles = computed<readonly ConnectionProfileEntry[]>(() =>

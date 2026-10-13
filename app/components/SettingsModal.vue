@@ -715,8 +715,8 @@
               <button
                 type="button"
                 class="font-system-button"
-                :disabled="!workspaceControlAvailable('readFileContent')"
-                :title="workspaceControlAvailable('readFileContent') ? undefined : workspaceControlSourceLine('readFileContent')"
+                :disabled="!localApplicationAvailable"
+                :title="localApplicationAvailable ? undefined : workspaceControlSourceLine('readFileContent')"
                 @click="browseLocalApplication"
               >
                 {{ $t('settings.editor.localApplication.browse') }}
@@ -734,7 +734,7 @@
               {{ localApplicationError }}
             </div>
             <div
-              v-if="!workspaceControlAvailable('readFileContent')"
+              v-if="!localApplicationAvailable"
               class="theme-import-error"
               data-testid="workspace-control-source"
             >
@@ -1048,7 +1048,9 @@ const props = defineProps<{
   /**
    * Task 23: the workspace scope the workspace-level settings controls resolve
    * against. These controls never derive their behaviour from the active
-   * backend kind; absent scope → the control reports the workspace as missing.
+   * backend kind. Absent scope keeps the control's pre-migration behaviour —
+   * the surfaces it guards are local Electron capabilities, so the gate engages
+   * only once a workspace scope is actually supplied.
    */
   workspaceEnvironmentId?: string;
   workspacePath?: string;
@@ -1095,8 +1097,8 @@ const localApplicationError = ref('');
  * gate is deliberately free of `activeBackendKind` — the settings surfaces it
  * guards (local editor, local application, font discovery) are workspace-level
  * capabilities, so switching the active backend kind cannot enable or disable
- * them. A workspace control is only unavailable when its workspace scope is
- * absent, and then it reports the workspace as the source.
+ * them. A workspace control is unavailable only when a supplied workspace scope
+ * cannot serve it, and then it reports the workspace as the source.
  */
 const workspaceScope = computed<ControlScope | null>(() => {
   const environmentId = props.workspaceEnvironmentId;
@@ -1104,17 +1106,38 @@ const workspaceScope = computed<ControlScope | null>(() => {
   if (typeof environmentId !== 'string' || typeof canonicalPath !== 'string' || canonicalPath.length === 0) return null;
   return { kind: 'workspace', environmentId: environmentId as EnvironmentId, canonicalPath };
 });
+/**
+ * Task 23: workspace controls resolve against the workspace scope alone. This
+ * gate is deliberately free of `activeBackendKind` — the settings surfaces it
+ * guards (local editor, local application, font discovery) are workspace-level
+ * capabilities, so switching the active backend kind cannot enable or disable
+ * them.
+ *
+ * When no workspace scope is supplied — the default app passes no workspace
+ * props — the control keeps its pre-migration behaviour: the surfaces it guards
+ * are LOCAL Electron capabilities that never read a remote workspace, so the
+ * control stays available instead of demanding a remote workspace selection
+ * first. The gate engages only once a workspace scope is actually provided.
+ */
 function workspaceControlAvailable(control: string): boolean {
   const scope = workspaceScope.value;
-  if (!scope) return false;
+  if (!scope) return true;
   return resolveControlSupport({ control, scope, manifests: [] }).state === 'supported';
 }
 function workspaceControlSourceLine(control: string): string {
   const scope = workspaceScope.value;
-  if (!scope) return 'Workspace: no workspace is selected for this session';
+  if (!scope) return '';
   const support = resolveControlSupport({ control, scope, manifests: [] });
   return support.state === 'unsupported' ? describeControlSupport(support) : '';
 }
+/**
+ * The local application chooser is an Electron LOCAL capability: it invokes
+ * `electronAPI.localFile.selectApplication` on this machine and never reads a
+ * remote workspace. It is therefore gated on the Electron local capability —
+ * the same condition the row renders under — and on the workspace gate only
+ * once a workspace scope is actually supplied.
+ */
+const localApplicationAvailable = computed(() => isElectron.value && workspaceControlAvailable('readFileContent'));
 const {
   enterToSend,
   showMinimizeButtons,
