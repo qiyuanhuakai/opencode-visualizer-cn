@@ -18,19 +18,25 @@ function context(client: ReturnType<typeof createFakeRuntimeActionClient>) {
 }
 
 describe('useRuntimeInteractions routes permission and question responses by SessionRef', () => {
-  it('permission responds with interaction.respond carrying the qualified session', () => {
+  it('permission responds with the native answer field carrying the qualified session', () => {
     const client = createFakeRuntimeActionClient([ENV_A]);
     useRuntimeInteractions(context(client)).permission(SESSION_A, 'req-1', { allow: true });
     expect(client.calls[0]!.method).toBe('interaction.respond');
     expect(client.calls[0]!.target).toBe(ENV_A);
     expect(client.calls[0]!.params.session).toEqual(SESSION_A);
-    expect(client.calls[0]!.params.args).toEqual({ interactionId: 'req-1', response: { type: 'permission', allow: true } });
+    expect(client.calls[0]!.params.args).toEqual({ interactionId: 'req-1', answer: { decision: 'accept' } });
   });
 
-  it('question responds with the answers payload', () => {
+  it('question encodes the answers under the native answer field', () => {
     const client = createFakeRuntimeActionClient([ENV_A]);
     useRuntimeInteractions(context(client)).question(SESSION_A, 'ask-1', { answer: 'yes' });
-    expect(client.calls[0]!.params.args).toEqual({ interactionId: 'ask-1', response: { type: 'question', answers: { answer: 'yes' } } });
+    expect(client.calls[0]!.params.args).toEqual({ interactionId: 'ask-1', answer: { answers: { answer: 'yes' } } });
+  });
+
+  it('a raw respond passes a caller-supplied native answer through unchanged', () => {
+    const client = createFakeRuntimeActionClient([ENV_A]);
+    useRuntimeInteractions(context(client)).respond(SESSION_A, 'req-2', { action: 'decline' });
+    expect(client.calls[0]!.params.args).toEqual({ interactionId: 'req-2', answer: { action: 'decline' } });
   });
 
   it('respond rejects an empty interaction id before touching the wire', () => {
