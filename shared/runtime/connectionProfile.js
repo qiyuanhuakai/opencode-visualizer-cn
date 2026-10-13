@@ -21,6 +21,12 @@ const SECRET_KEY_TOKENS = Object.freeze([
 const SECRET_VALUE_MARKER = /(password|passphrase|secret|token|api[_-]?key|private[_-]?key|bearer)/iu;
 /** `credentialRef` is the one allowed reference-shaped key; it names a secret, never carries it. */
 const SAFE_KEY = 'credentialref';
+/**
+ * ssh/slurm locators are bare authorities — `host`, `host:port` or `[ipv6]:port`. No scheme, no
+ * userinfo, no query, no fragment, no path: authentication travels only through `credentialRef`.
+ */
+const BRACKETED_LOCATOR = /^\[([0-9A-Fa-f:.]+)\](?::(\d{1,5}))?$/u;
+const HOST_LOCATOR = /^([^:/@?#\s[\]]+)(?::(\d{1,5}))?$/u;
 
 function isSecretKey(key) {
   const normalized = key.toLowerCase().replace(/[^a-z0-9]/gu, '');
@@ -55,6 +61,23 @@ function hasControlCharacter(value) {
   return false;
 }
 
+function requireLocatorPort(text) {
+  if (text === undefined) return;
+  const port = Number(text);
+  requireValue(port >= 1 && port <= 65535, 'transport.endpoint');
+}
+
+function assertHostLocator(endpoint) {
+  const bracketed = BRACKETED_LOCATOR.exec(endpoint);
+  if (bracketed !== null) {
+    requireLocatorPort(bracketed[2]);
+    return;
+  }
+  const match = HOST_LOCATOR.exec(endpoint);
+  requireValue(match !== null, 'transport.endpoint');
+  requireLocatorPort(match[2]);
+}
+
 function parseEndpoint(kind, input) {
   const endpoint = textValue(input, 'transport.endpoint');
   requireValue(endpoint.length <= 1024 && !hasControlCharacter(endpoint), 'transport.endpoint');
@@ -73,7 +96,9 @@ function parseEndpoint(kind, input) {
         !url.username && !url.password && !url.search && !url.hash,
       'transport.endpoint',
     );
+    return endpoint;
   }
+  assertHostLocator(endpoint);
   return endpoint;
 }
 

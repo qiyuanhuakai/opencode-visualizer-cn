@@ -112,6 +112,95 @@ describe('connectionProfile shared contract', () => {
     // The public view must still be a strict profile (no hidden secret-carrying field).
     expect(() => assertNoSecretPayload(publicProfile)).not.toThrow();
   });
+
+  it('accepts only explicit host[:port] locators for ssh and slurm', () => {
+    const accepted: Array<[('ssh' | 'slurm'), string]> = [
+      ['ssh', 'builder.example:22'],
+      ['ssh', 'builder.example'],
+      ['ssh', '[2001:db8::1]:2222'],
+      ['ssh', '127.0.0.1:2222'],
+      ['slurm', 'cluster.example:22'],
+    ];
+    for (const [kind, endpoint] of accepted) {
+      const target =
+        kind === 'slurm'
+          ? { kind: 'slurm' as const, clusterEnvironmentId: clusterEnvironment }
+          : { kind, environmentId: environment };
+      expect(() =>
+        parseNewConnectionProfile({
+          name: 'Valid locator',
+          transport: { kind, endpoint },
+          target,
+          role: kind === 'slurm' ? 'manager' : 'execution',
+          credentialRef: 'cred-1',
+        }),
+      ).not.toThrow();
+    }
+  });
+
+  it('rejects a locator that embeds credentials or auth parameters for every transport kind', () => {
+    // A fictional example password; it deliberately avoids the secret *keyword* list so the
+    // rejection must come from the locator grammar, not from a value-keyword match.
+    const marker = 'hunter2-zz9';
+    const examples: Array<[('direct' | 'ssh' | 'slurm'), string]> = [
+      ['ssh', `demo:${marker}@builder.example:22`],
+      ['ssh', `ssh://demo:${marker}@builder.example:22`],
+      ['ssh', `builder.example:22?auth=${marker}`],
+      ['ssh', `builder.example:22#${marker}`],
+      ['ssh', `builder.example/${marker}:22`],
+      ['slurm', `demo:${marker}@cluster.example:22`],
+      ['slurm', `slurm://cluster.example:22?auth=${marker}`],
+      ['direct', `wss://demo:${marker}@bridge.test/runtime`],
+      ['direct', `wss://bridge.test/runtime?auth=${marker}`],
+    ];
+    for (const [kind, endpoint] of examples) {
+      const target =
+        kind === 'slurm'
+          ? { kind: 'slurm' as const, clusterEnvironmentId: clusterEnvironment }
+          : { kind, environmentId: environment };
+      expect(() =>
+        parseConnectionProfile({
+          profileId: '33333333-3333-4333-8333-333333333333',
+          name: 'Rejected locator',
+          transport: { kind, endpoint },
+          target,
+          role: kind === 'slurm' ? 'manager' : 'execution',
+          credentialRef: 'cred-1',
+          enabled: false,
+        }),
+      ).toThrow(expect.objectContaining({ code: 'invalid_request' }));
+      // The rejected locator must never be echoed back through the public projection.
+      expect(() => {
+        const profile = parseConnectionProfile({
+          profileId: '33333333-3333-4333-8333-333333333333',
+          name: 'Rejected locator',
+          transport: { kind, endpoint },
+          target,
+          role: kind === 'slurm' ? 'manager' : 'execution',
+          credentialRef: 'cred-1',
+          enabled: false,
+        });
+        expect(JSON.stringify(publicConnectionProfile(profile))).not.toContain(marker);
+      }).toThrow(expect.objectContaining({ code: 'invalid_request' }));
+    }
+  });
+
+  it('never projects a secret-carrying locator for a valid ssh profile', () => {
+    const profile = parseConnectionProfile({
+      profileId: '33333333-3333-4333-8333-333333333333',
+      name: 'Build host',
+      transport: { kind: 'ssh', endpoint: 'builder.example:22' },
+      target: { kind: 'ssh', environmentId: environment },
+      role: 'execution',
+      credentialRef: 'cred-ssh-7',
+      enabled: true,
+    });
+    const publicProfile = publicConnectionProfile(profile);
+    // Authentication is a reference only: the public view carries credentialRef and a locator.
+    expect(publicProfile.credentialRef).toBe('cred-ssh-7');
+    expect(publicProfile.transport).toEqual({ kind: 'ssh', endpoint: 'builder.example:22' });
+    expect(JSON.stringify(publicProfile)).not.toContain('hunter2');
+  });
 });
 
 describe('connection manager acceptance criteria', () => {
