@@ -114,6 +114,21 @@ class ReactiveClient {
       },
     };
   }
+  async readIndex(target: EnvironmentId, collections: string | readonly string[], options: { onPage: (collection: string, page: SnapshotPage) => Promise<void> | void }): Promise<{ token: string; revision: number; watermark: number }> {
+    const names = typeof collections === 'string' ? [collections] : collections;
+    for (const name of names) {
+      const rows = this.rows.get(name) ?? [];
+      for (let offset = 0; offset === 0 || offset < rows.length; offset += 200) {
+        const page = rows.slice(offset, offset + 200);
+        await options.onPage(name, {
+          collection: name, items: page, cursor: offset + 200 < rows.length ? String(offset + 200) : null,
+          token: 'snapshot-1', revision: this.revision, watermark: 0, expiresAt: Date.now() + 60000, target, epoch: 'epoch', generation: 1,
+        });
+        if (offset + 200 >= rows.length) break;
+      }
+    }
+    return { token: 'snapshot-1', revision: this.revision, watermark: 0 };
+  }
   async request(_target: EnvironmentId, method: string, params: AnyRecord): Promise<unknown> {
     if (method === 'runtime.entity.resolve') {
       const event = params.event as AnyRecord;

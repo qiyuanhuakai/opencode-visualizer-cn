@@ -15,7 +15,7 @@ export type RequestMethod = Exclude<RuntimeMethod, MutationMethod>;
 export type RequestOptions = { readonly signal?: AbortSignal; readonly selectionCurrent?: () => boolean; readonly onDrained?: () => void };
 export type RuntimeScope = { readonly binding: Binding; readonly generation: number; readonly isCurrent: () => boolean };
 type Collection = RuntimeParams['runtime.snapshot']['collection'];
-type Target = { readonly hello: Hello; readonly state: ProtocolState; readonly generation: number; paging: boolean };
+type Target = { readonly hello: Hello; readonly state: ProtocolState; readonly generation: number; paging: boolean; indexSnapshot?: Readonly<{ token: string; revision: number; watermark: number; expiresAt: number }> };
 type Pending = {
   readonly target: Target; readonly method: RuntimeMethod; readonly current: () => boolean;
   readonly slot: 'normal' | 'reserved';
@@ -344,14 +344,73 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       }
       requireValue(first !== undefined && observer !== undefined, 'snapshot.empty');
       attached.state.acceptSnapshot(first, Date.now());
+      attached.indexSnapshot = Object.freeze({ token: first.token, revision: first.revision, watermark: first.watermark, expiresAt: first.expiresAt });
       return { token: first.token, revision: first.revision, watermark: first.watermark, observer };
     } catch (error) {
       if (observer) await observer.close();
       throw error;
     } finally { attached.paging = false; }
   }
+  /**
+   * Page index collections WITHOUT opening an observer and WITHOUT taking the
+   * per-target paging lock. `snapshot` above always opens an observer because
+   * the task-20 state layer needs one bound at the snapshot watermark. A second
+   * observer on the same attached target is rejected by the dispatcher
+   * (`runtime.observer_duplicate`), and flipping `paging` mid-flight makes the
+   * state's running `observer.read` reject with `observer.busy`. Callers that
+   * only traverse the index (tree topology, full-index search, child
+   * pagination) use this path: they neither contend for the single observer nor
+   * disturb the live reader, and they never call `acceptSnapshot`, so the
+   * state's contiguous event cursor is untouched.
+   *
+   * The bridge bounds live snapshot views per environment (LIMITS.snapshotTokens)
+   * and exposes no wire method to release one early, so this path REUSES the
+   * target's current index view instead of minting a token per read: the view
+   * seeded by `snapshot` (which already covers every index collection) is reused
+   * while it is valid, and a fresh view is minted only once the cached one is
+   * near expiry. Steady state is one index view per target; repeated searches do
+   * not exhaust the token budget. The reuse window is the snapshot TTL, so an
+   * index read observes the index at the shared view's point in time.
+   */
+  async function readIndex(
+    target: EnvironmentId,
+    collections: Collection | readonly Collection[],
+    options: RequestOptions & { readonly onPage: (collection: Collection, page: Snapshot) => void | Promise<void> },
+  ) {
+    const attached = getTarget(target);
+    const names = typeof collections === 'string' ? [collections] : collections;
+    requireValue(names.length > 0 && names.length <= 5 && new Set(names).size === names.length, 'snapshot.collections');
+    const cached = attached.indexSnapshot;
+    const reuse = cached !== undefined && cached.expiresAt - Date.now() > 2000 ? cached.token : undefined;
+    let first: Snapshot | undefined;
+    for (const collection of names) {
+      let cursor: string | null = null;
+      do {
+        const token = first ? first.token : (cursor === null && collection === names[0] ? reuse : undefined);
+        let page: Snapshot;
+        try {
+          page = await request(target, 'runtime.snapshot', { collection, ...(token === undefined ? {} : { token }), cursor, limit: 200 }, options);
+        } catch (error) {
+          if (first !== undefined || token === undefined || !(error instanceof ProtocolError) || error.code !== 'replay_required') throw error;
+          attached.indexSnapshot = undefined;
+          page = await request(target, 'runtime.snapshot', { collection, cursor, limit: 200 }, options);
+        }
+        if (!first) {
+          first = page;
+          attached.indexSnapshot = Object.freeze({ token: page.token, revision: page.revision, watermark: page.watermark, expiresAt: page.expiresAt });
+        }
+        requireValue(page.token === first.token && page.revision === first.revision && page.watermark === first.watermark && page.target === attached.hello.target && page.epoch === attached.hello.epoch && page.generation === attached.hello.generation, 'snapshot.atomic', 'replay_required');
+        requireValue(page.expiresAt > Date.now() && (page.cursor === null || page.cursor !== cursor), 'snapshot.expired', 'replay_required');
+        await options.onPage(collection, page);
+        requireValue(current(attached) && (options.selectionCurrent?.() ?? true), 'snapshot.selection', 'reconcile_required');
+        cursor = page.cursor;
+      } while (cursor !== null);
+    }
+    requireValue(first !== undefined, 'snapshot.empty');
+    return { token: first.token, revision: first.revision, watermark: first.watermark };
+  }
   return {
-    inspect, attach, detach, request, mutate, snapshot, replay, observe,
+    inspect, attach, detach, request, mutate, snapshot, readIndex, replay, observe,
     scope(target: EnvironmentId): RuntimeScope {
       const attached = getTarget(target);
       return { binding: bindingOf(attached.hello), generation: attached.generation, isCurrent: () => current(attached) };

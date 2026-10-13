@@ -9,18 +9,21 @@
 // Three read paths, each with one job:
 //   1. state.view('session_summaries', target) — the bounded visible window
 //      (≤ ENTITY_LIMITS.page rows) that the tree renders.
-//   2. client.snapshot(target, 'harnesses' | 'workspaces') — index topology
+//   2. client.readIndex(target, 'harnesses' | 'workspaces') — index topology
 //      (which of the five harnesses exist, per-source discovery status, and the
 //      workspace→repo mapping). Small collections, read once after start and
 //      re-read after a source retry.
-//   3. client.snapshot(target, 'session_summaries', { onPage }) — a FULL-INDEX
+//   3. client.readIndex(target, 'session_summaries', { onPage }) — a FULL-INDEX
 //      traversal used by search and child pagination. It deliberately bypasses
 //      the bounded LRU window so a match outside the visible window (and
 //      outside the 2000-entry entity cache) is still found.
 //
-// Reads on paths 2 and 3 are serialized (the runtime client rejects concurrent
-// snapshots with `snapshot.pending`), mirroring the state layer's own
-// serialized discipline. A per-source retry re-invokes ONLY that harness's
+// Reads on paths 2 and 3 use `client.readIndex`, NOT `client.snapshot`: the
+// state layer already holds the target's single live observer, and `snapshot`
+// both opens a second observer (`runtime.observer_duplicate`) and holds the
+// paging lock the state's running reader needs. `readIndex` pages the index
+// without contending for either. Reads on paths 2 and 3 are still serialized
+// against each other here. A per-source retry re-invokes ONLY that harness's
 // native `session.list`; it never restarts the target snapshot, so the other
 // sources are not re-fetched.
 import { computed, getCurrentScope, onScopeDispose, shallowRef } from 'vue';
@@ -425,7 +428,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   }
   async function pageCollection(name: IndexCollection): Promise<Readonly<Record<string, unknown>>[]> {
     const items: Readonly<Record<string, unknown>>[] = [];
-    const result = await client.snapshot(target, name, {
+    await client.readIndex(target, name, {
       onPage: (_collection, page) => {
         for (const item of page.items) {
           const record = asRecord(item);
@@ -433,12 +436,14 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
         }
       },
     });
-    await result.observer.close();
     return items;
   }
   async function readTopology(): Promise<void> {
-    // Sequential: the runtime client rejects a second concurrent snapshot with
-    // `snapshot.pending`, and the state layer may still hold the paging lock.
+    // `state.start` already holds the target's single live observer; the index
+    // reads must not open a second one (`runtime.observer_duplicate`) or take
+    // the paging lock the state's running reader depends on. `client.readIndex`
+    // is the non-contending path, so these reads are also serialized against
+    // each other here.
     const harnessValues = await pageCollection('harnesses');
     const workspaceValues = await pageCollection('workspaces');
     if (disposed) return;
@@ -480,7 +485,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
    * superseded traversal mid-flight.
    */
   async function scanSearch(query: string, skip: number, signal: AbortSignal, accumulator: SearchScan): Promise<void> {
-    const result = await client.snapshot(target, 'session_summaries', {
+    await client.readIndex(target, 'session_summaries', {
       signal,
       onPage: (_collection, page) => {
         if (signal.aborted) return;
@@ -497,7 +502,6 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
         }
       },
     });
-    await result.observer.close();
   }
   /** Full-index search: traverses every session_summaries page, not the LRU window. */
   async function searchAll(query: string): Promise<UnifiedSearchState> {
@@ -574,7 +578,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
       const found: UnifiedSessionRow[] = [];
       let scanned = 0;
       let pages = 0;
-      const result = await client.snapshot(target, 'session_summaries', {
+      await client.readIndex(target, 'session_summaries', {
         onPage: (_collection, page) => {
           pages += 1;
           for (const item of page.items) {
@@ -586,7 +590,6 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
           }
         },
       });
-      await result.observer.close();
       const existing = nativeChildren.value.get(parentKey) ?? [];
       const merged = new Map(existing.map((row) => [row.key, row]));
       let duplicates = 0;

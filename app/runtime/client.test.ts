@@ -259,6 +259,35 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     await reading;
     expect(pages).toEqual(['workspaces', 'workspaces', 'session_summaries']);
   });
+  it('reads an index page without opening an observer or holding the paging lock', async () => {
+    const { client, socket } = await fixture();
+    const pages: string[] = [];
+    const page = { version: 1, kind: 'snapshot', target, epoch: 'epoch', generation: 1, token: 'idx', revision: 10, watermark: 4, expiresAt: Date.now() + 60000, items: [], cursor: 'next' };
+    const reading = client.readIndex(target, ['workspaces', 'session_summaries'], { onPage: (collection) => { pages.push(collection); } });
+    const first = await socket.next(); expect(first).toMatchObject({ method: 'runtime.snapshot', params: { collection: 'workspaces' } });
+    socket.reply(first, page);
+    const next = await socket.next(); expect(next.params).toMatchObject({ token: 'idx', cursor: 'next' });
+    socket.reply(next, { ...page, cursor: null });
+    const second = await socket.next(); expect(second.params).toMatchObject({ token: 'idx', collection: 'session_summaries', cursor: null });
+    socket.reply(second, { ...page, cursor: null });
+    await expect(reading).resolves.toEqual({ token: 'idx', revision: 10, watermark: 4 });
+    expect(pages).toEqual(['workspaces', 'workspaces', 'session_summaries']);
+    expect(socket.sent.map((frame) => frame.method)).toEqual(['runtime.snapshot', 'runtime.snapshot', 'runtime.snapshot']);
+  });
+  it('keeps a live observer readable while an index read is in flight', async () => {
+    const { client, socket } = await fixture();
+    const opening = client.observe(target, { after: 0, onDelivery: () => {} });
+    socket.reply(await socket.next(), { observerId: 'observer' });
+    const observer = await opening;
+    const reading = client.readIndex(target, 'workspaces', { onPage: () => {} });
+    const indexRequest = await socket.next(); expect(indexRequest.method).toBe('runtime.snapshot');
+    const delivery = observer.read();
+    const readRequest = await socket.next(); expect(readRequest.method).toBe('runtime.observer.read');
+    socket.reply(readRequest, { kind: 'event', frame: event(1) });
+    await delivery;
+    socket.reply(indexRequest, { version: 1, kind: 'snapshot', target, epoch: 'epoch', generation: 1, token: 'idx', revision: 10, watermark: 4, expiresAt: Date.now() + 60000, items: [], cursor: null });
+    await reading;
+  });
   it('rejects mixed snapshot tokens and closes the pending observer', async () => {
     const { client, socket } = await fixture();
     const page = { version: 1, kind: 'snapshot', target, epoch: 'epoch', generation: 1, token: 'atomic', revision: 10, watermark: 4, expiresAt: Date.now() + 60000, items: [], cursor: null };
