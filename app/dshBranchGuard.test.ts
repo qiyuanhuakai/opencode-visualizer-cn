@@ -119,7 +119,7 @@ type ManualEntry = {
 };
 
 // ---------------------------------------------------------------------------
-// INVENTORY (mirrors task-17/branch-inventory.md) — 270 auto-detected rows.
+// INVENTORY (mirrors task-17/branch-inventory.md) — 273 auto-detected rows.
 // ---------------------------------------------------------------------------
 const BRANCHES: BranchEntry[] = [
   { file: "App.vue", fp: "? 'opencode'", n: 2, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 33, sym: "active backend / composer / identity; task 24 activeHarnessKind fallback reuses this site so a workspace scope is never built for an unknown source" },
@@ -373,6 +373,8 @@ const BRANCHES: BranchEntry[] = [
   { file: "composables/useFileTree.ts", fp: "backendKind==='dsh'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 30, sym: "file tree status source (Todo 30: bridge /dsh listFiles, no PTY git)" },
   { file: "composables/useLiveDescendantHistoryHydration.ts", fp: "backendKind==='opencode'", n: 1, kind: 'cmp', cls: 'capability-optional', disp: 'handled', sym: "opencode-only scope (excludes dsh)" },
   { file: "composables/useRootHistoryLoader.ts", fp: "options.activeBackendKind.value==='acp'", n: 1, kind: 'cmp', cls: 'capability-optional', disp: 'handled', sym: "acp-only metadata refresh" },
+  { file: "composables/useRuntimeMessageSend.ts", fp: "kind: 'codex',", n: 1, kind: 'literal', cls: 'data-only', disp: 'not-applicable', sym: "task 22 per-harness runtime send adapter: the codex adapter's kind label (adapter internals; no dsh branch)" },
+  { file: "composables/useRuntimeMessageSend.ts", fp: "adapter ?? (ctx.harnessKind === 'codex' ? codexSendAdapter() : null);", n: 1, kind: 'literal', cls: 'capability-optional', disp: 'handled', owner: 22, sym: "task 22 per-harness send adapter selection: only codex installs a native send adapter; a non-codex harness (incl. dsh) keeps the generic session.send text/attachments envelope" },
   { file: "composables/useRuntimeSessionTree.ts", fp: "'kimi-web': 'Kimi Web',", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 21, sym: "unified session tree HARNESS_LABELS (five harness kinds + unknown)" },
   { file: "composables/useRuntimeSessionTree.ts", fp: "export const HARNESS_KINDS = ['opencode', 'codex', 'kimi-web', 'dsh', 'acp'] as const;", n: 5, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 21, sym: "unified session tree harness-kind contract (five kinds)" },
   { file: "composables/useSubagentWindows.ts", fp: "agentLabel = messageInfo.mode === 'codex' ? messageInfo.agent", n: 1, kind: 'literal', cls: 'capability-optional', disp: 'todo-24', owner: 24, sym: "subagent window message-mode" },

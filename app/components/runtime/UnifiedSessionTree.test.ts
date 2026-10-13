@@ -78,7 +78,9 @@ class FakeClient {
   abortedSnapshots = 0;
   private tokens = 0;
   private readonly revision = 200000;
+  private indexSnapshot?: Readonly<{ token: string; revision: number; watermark: number; expiresAt: number }>;
   constructor(readonly environment: string = ENV) {}
+  private mintToken(): string { return `snapshot-${++this.tokens}`; }
   add(collection: string, row: AnyRecord): void {
     const list = this.rows.get(collection) ?? [];
     list.push(row);
@@ -90,7 +92,7 @@ class FakeClient {
   onDetach(): () => void { return () => {}; }
   async snapshot(target: EnvironmentId, collections: string | readonly string[], options: { onPage: (collection: string, page: SnapshotPage) => Promise<void> | void; onDelivery?: unknown; signal?: AbortSignal }): Promise<{ token: string; revision: number; watermark: number; observer: { read(): Promise<null>; close(): Promise<void> } }> {
     const names = typeof collections === 'string' ? [collections] : collections;
-    const token = `snapshot-${++this.tokens}`;
+    const token = this.mintToken();
     for (const name of names) {
       const rows = this.rows.get(name) ?? [];
       this.snapshots.set(name, (this.snapshots.get(name) ?? 0) + 1);
@@ -107,7 +109,66 @@ class FakeClient {
         if (offset + 200 >= rows.length) break;
       }
     }
+    this.indexSnapshot = Object.freeze({ token, revision: this.revision, watermark: 0, expiresAt: Date.now() + 60000 });
     return { token, revision: this.revision, watermark: 0, observer: { read: async () => null, close: async () => {} } };
+  }
+  private indexPage(name: string, target: EnvironmentId, token: string | undefined, cursor: string | null): SnapshotPage {
+    const rows = this.rows.get(name) ?? [];
+    const start = cursor === null ? 0 : Number(cursor);
+    return {
+      collection: name,
+      items: rows.slice(start, start + 200),
+      cursor: start + 200 < rows.length ? String(start + 200) : null,
+      token: token ?? this.mintToken(),
+      revision: this.revision,
+      watermark: 0,
+      expiresAt: Date.now() + 60000,
+      target,
+      epoch: 'epoch',
+      generation: 1,
+    };
+  }
+  async readIndex(target: EnvironmentId, collections: string | readonly string[], options: { onPage: (collection: string, page: SnapshotPage) => Promise<void> | void; signal?: AbortSignal; selectionCurrent?: () => boolean }): Promise<{ token: string; revision: number; watermark: number }> {
+    const names = typeof collections === 'string' ? [collections] : collections;
+    if (names.length === 0 || names.length > 5 || new Set(names).size !== names.length) throw new TypeError('snapshot.collections');
+    const cached = this.indexSnapshot;
+    const reuse = cached !== undefined && cached.expiresAt - Date.now() > 2000 ? cached.token : undefined;
+    let first: SnapshotPage | undefined;
+    for (const name of names) {
+      this.snapshots.set(name, (this.snapshots.get(name) ?? 0) + 1);
+      let cursor: string | null = null;
+      do {
+        if (options.signal?.aborted) {
+          this.abortedSnapshots += 1;
+          throw Object.assign(new Error('readIndex cancelled'), { code: 'cancelled' });
+        }
+        const token = first !== undefined ? first.token : (cursor === null && name === names[0] ? reuse : undefined);
+        let page: SnapshotPage;
+        try {
+          if (token !== undefined && token !== this.indexSnapshot?.token) throw Object.assign(new Error('snapshot view is stale'), { code: 'replay_required' });
+          page = this.indexPage(name, target, token, cursor);
+        } catch (error) {
+          if (first !== undefined || token === undefined || (error as { code?: string }).code !== 'replay_required') throw error;
+          this.indexSnapshot = undefined;
+          page = this.indexPage(name, target, undefined, cursor);
+        }
+        if (first === undefined) {
+          first = page;
+          this.indexSnapshot = Object.freeze({ token: page.token, revision: page.revision, watermark: page.watermark, expiresAt: page.expiresAt });
+        }
+        if (page.token !== first.token || page.revision !== first.revision || page.watermark !== first.watermark
+          || page.target !== target || page.epoch !== 'epoch' || page.generation !== 1) {
+          throw Object.assign(new Error('snapshot.atomic'), { code: 'replay_required' });
+        }
+        if (!(page.expiresAt > Date.now()) || (page.cursor !== null && page.cursor === cursor)) {
+          throw Object.assign(new Error('snapshot.expired'), { code: 'replay_required' });
+        }
+        await options.onPage(name, page);
+        cursor = page.cursor;
+      } while (cursor !== null);
+    }
+    if (first === undefined) throw Object.assign(new Error('snapshot.empty'), { code: 'replay_required' });
+    return { token: first.token, revision: first.revision, watermark: first.watermark };
   }
   async request(_target: EnvironmentId, method: string, params: AnyRecord): Promise<unknown> {
     if (method === 'session.list') {
