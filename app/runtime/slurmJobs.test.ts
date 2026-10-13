@@ -1,7 +1,11 @@
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+
+import { ProtocolError } from '../../shared/runtime/capabilities.js';
 
 import {
   CONTROL_STORE_SCHEMA_VERSION,
@@ -462,5 +466,134 @@ describe('vis_bridge control-store role', () => {
     expect(options).toMatchObject({ command: 'control-store', role: 'control-store', stateRoot: '/tmp/vis-control', environmentId: ENVIRONMENT });
     expect(parseCliOptions(['control-store', '--help'], {})).toMatchObject({ command: 'control-store', help: true });
     expect(() => parseCliOptions(['control-store', '--environment', 'not-a-uuid', '--state-root', '/tmp/x'], {})).toThrow(/environment/u);
+  });
+});
+
+describe('slurm sbatch script: hostile resource input cannot alter the script (PR #182 item 4)', () => {
+  const INTENT = '33333333-3333-4333-8333-333333333333';
+  const INJECTED = 'VIS_SBATCH_INJECTION_MARKER';
+
+  function executeSbatchScript(script: string, cwd: string) {
+    const directory = mkdtempSync(path.join(tmpdir(), 'vis-sbatch-behaviour-'));
+    temporaryDirectories.push(directory);
+    const file = path.join(directory, 'job.sh');
+    writeFileSync(file, script, 'utf8');
+    return spawnSync('bash', [file], { cwd, encoding: 'utf8' });
+  }
+
+  const hostilePartition = { ...RESOURCES, partition: `cpu\nprintf '${INJECTED}\\n'` };
+  const hostileAccount = { ...RESOURCES, account: `research\nprintf '${INJECTED}\\n'` };
+  const hostileGres = { ...RESOURCES, gres: `none\nprintf '${INJECTED}\\n'` };
+  const hostileResources = [hostilePartition, hostileAccount, hostileGres];
+
+  it('rejects a control character or a second token in any resource value', () => {
+    expect(() => normalizeSlurmResources(hostilePartition)).toThrow(/resources\.partition/u);
+    expect(() => normalizeSlurmResources(hostileAccount)).toThrow(/resources\.account/u);
+    expect(() => normalizeSlurmResources(hostileGres)).toThrow(/resources\.gres/u);
+    expect(() => normalizeSlurmResources({ ...RESOURCES, partition: 'cpu --mem=1G' })).toThrow(ProtocolError);
+    expect(() => normalizeSlurmResources({ ...RESOURCES, partition: 'cpu\r' })).toThrow(/resources\.partition/u);
+    expect(() => normalizeSlurmResources({ ...RESOURCES, account: 'research;whoami' })).toThrow(/resources\.account/u);
+    expect(normalizeSlurmResources({ ...RESOURCES, gres: 'gpu:2,ssd:10' }).gres).toBe('gpu:2,ssd:10');
+  });
+
+  it('never runs a command injected through a resource field when the built script is executed', () => {
+    for (const resources of hostileResources) {
+      let script: string;
+      try {
+        script = buildSbatchScript({ intentId: INTENT, resources, command: 'true', cwd: tmpdir() });
+      } catch (error) {
+        expect(error).toBeInstanceOf(ProtocolError);
+        continue;
+      }
+      const run = executeSbatchScript(script, tmpdir());
+      expect(`${run.stdout ?? ''}${run.stderr ?? ''}`).not.toContain(INJECTED);
+    }
+  });
+
+  it('rejects env keys that are not legal shell identifiers', () => {
+    const build = (env: Record<string, string>) => () =>
+      buildSbatchScript({ intentId: INTENT, resources: RESOURCES, command: 'true', cwd: tmpdir(), env });
+    expect(build({ 'NOT A NAME': 'x' })).toThrow(ProtocolError);
+    expect(build({ 'SHELL;rm -rf /': 'x' })).toThrow(ProtocolError);
+    expect(build({ 'EVIL\nNAME': 'x' })).toThrow(ProtocolError);
+    expect(build({ GOOD_1: 'x' })).not.toThrow();
+  });
+
+  it('executes a legitimate script with spaces in the working path and a validated environment', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'vis sbatch spaced '));
+    temporaryDirectories.push(root);
+    const workdir = path.join(root, 'compute work');
+    mkdirSync(workdir, { recursive: true });
+
+    const pwdRun = executeSbatchScript(
+      buildSbatchScript({ intentId: INTENT, resources: RESOURCES, command: 'pwd', cwd: workdir }),
+      tmpdir(),
+    );
+    expect(pwdRun.status).toBe(0);
+    expect((pwdRun.stdout ?? '').trim()).toBe(workdir);
+
+    const envRun = executeSbatchScript(
+      buildSbatchScript({
+        intentId: INTENT,
+        resources: RESOURCES,
+        command: 'sh',
+        args: ['-c', 'printf %s "$VIS_MARKER"'],
+        cwd: workdir,
+        env: { VIS_MARKER: 'ok value' },
+      }),
+      tmpdir(),
+    );
+    expect(envRun.status).toBe(0);
+    expect(envRun.stdout).toBe('ok value');
+  });
+});
+
+describe('slurm sbatch script: the compute working directory fails closed (PR #182 item 5)', () => {
+  const INTENT = '33333333-3333-4333-8333-333333333333';
+
+  function executeSbatchScript(script: string, cwd: string) {
+    const directory = mkdtempSync(path.join(tmpdir(), 'vis-sbatch-cwd-'));
+    temporaryDirectories.push(directory);
+    const file = path.join(directory, 'job.sh');
+    writeFileSync(file, script, 'utf8');
+    return spawnSync('bash', [file], { cwd, encoding: 'utf8' });
+  }
+
+  it('a missing compute working directory aborts before the command and never runs in the submission directory', () => {
+    const missing = path.join(tmpdir(), `vis-sbatch-missing-${process.pid}-${Date.now()}`);
+    const script = buildSbatchScript({
+      intentId: INTENT,
+      resources: RESOURCES,
+      command: 'pwd',
+      cwd: missing,
+      output: `${missing}/slurm-%j.out`,
+    });
+    const run = executeSbatchScript(script, tmpdir());
+    expect(run.status).not.toBe(0);
+    expect((run.stdout ?? '').trim()).not.toBe(tmpdir());
+    expect(`${run.stdout ?? ''}${run.stderr ?? ''}`).toContain('compute working directory is unavailable');
+  });
+
+  const isRoot = process.getuid?.() === 0;
+  it.skipIf(isRoot)('a compute working directory without permission aborts before the command', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'vis-sbatch-noperm-'));
+    temporaryDirectories.push(root);
+    const locked = path.join(root, 'locked');
+    mkdirSync(locked, { recursive: true });
+    chmodSync(locked, 0o000);
+    try {
+      const script = buildSbatchScript({
+        intentId: INTENT,
+        resources: RESOURCES,
+        command: 'pwd',
+        cwd: locked,
+        output: `${locked}/slurm-%j.out`,
+      });
+      const run = executeSbatchScript(script, tmpdir());
+      expect(run.status).not.toBe(0);
+      expect((run.stdout ?? '').trim()).not.toBe(tmpdir());
+    } finally {
+      chmodSync(locked, 0o700);
+    }
   });
 });

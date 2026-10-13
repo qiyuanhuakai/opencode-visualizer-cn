@@ -31,6 +31,48 @@ function shellQuote(token) {
   return `'${String(token).replace(/'/gu, "'\\''")}'`;
 }
 
+/**
+ * C0 control characters and DEL cannot survive inside a `#SBATCH` directive or a quoted path: a
+ * newline ends the directive line and turns the remainder into a command. This boundary into `bash`
+ * is validated here rather than trusted.
+ */
+function hasControlCharacter(text) {
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+/** One unquoted Slurm directive token (`partition`/`account`/`gres`/UUID): no whitespace, quotes, `$`, backtick or control character. */
+const SLURM_DIRECTIVE_TOKEN = /^[A-Za-z0-9._:@+,/-]+$/u;
+
+/** A shell variable name — the only thing safe on the left of `export`. */
+const SHELL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+
+function assertNoControlCharacters(value, field) {
+  const text = textValue(value, field);
+  requireValue(!hasControlCharacter(text), field);
+  return text;
+}
+
+function slurmDirectiveToken(value, field) {
+  const text = textValue(value, field);
+  requireValue(SLURM_DIRECTIVE_TOKEN.test(text), field);
+  return text;
+}
+
+/**
+ * Slurm strips one layer of double quotes from a directive value (documented for `--comment`/`--extra`
+ * and relied on for `--output` paths with spaces), so a path must carry no control character that
+ * would escape the quotes and no `"`/`\` that would break out of or corrupt them.
+ */
+function slurmDirectivePath(value, field) {
+  const text = assertNoControlCharacters(value, field);
+  requireValue(!/["\\]/u.test(text), field);
+  return text;
+}
+
 /** Parses a Slurm time limit into seconds. Accepts `mm`, `mm:ss`, `hh:mm:ss`, `d-hh`, `d-hh:mm`, `d-hh:mm:ss`. */
 export function parseSlurmTime(value) {
   const text = textValue(value, 'resources.time');
@@ -77,12 +119,12 @@ export function normalizeSlurmResources(input) {
   requireValue(typeof input.time === 'string' && input.time.trim().length > 0, 'resources.time');
   const timeSeconds = parseSlurmTime(input.time);
   requireValue(typeof input.gres === 'string' && input.gres.trim().length > 0, 'resources.gres');
-  const gres = input.gres.trim();
-  const partition = textValue(input.partition, 'resources.partition');
+  const gres = slurmDirectiveToken(input.gres.trim(), 'resources.gres');
+  const partition = slurmDirectiveToken(input.partition, 'resources.partition');
   requireValue(Number.isSafeInteger(input.cpus) && input.cpus > 0, 'resources.cpus');
   const memoryMiB = parseSlurmMemory(input.memory);
   const account =
-    input.account === undefined || input.account === null ? null : textValue(input.account, 'resources.account');
+    input.account === undefined || input.account === null ? null : slurmDirectiveToken(input.account, 'resources.account');
   return Object.freeze({
     account,
     partition,
@@ -120,13 +162,13 @@ export function buildResourcePreview(resources) {
 
 /** Builds the sbatch payload script: structured directives + a quoted `exec`, never a shell-concatenated line. */
 export function buildSbatchScript(options = {}) {
-  const intentId = textValue(options.intentId, 'intentId');
+  const intentId = slurmDirectiveToken(options.intentId, 'intentId');
   const resources = normalizeSlurmResources(options.resources);
   const command = textValue(options.command, 'command');
   const args = Array.isArray(options.args) ? options.args : [];
   assertNoShellConcatenation([intentId, command, ...args]);
-  const cwd = options.cwd === undefined || options.cwd === null ? '.' : textValue(options.cwd, 'cwd');
-  const output = options.output ?? `${cwd}/slurm-${intentId}-%j.out`;
+  const cwd = options.cwd === undefined || options.cwd === null ? '.' : assertNoControlCharacters(options.cwd, 'cwd');
+  const output = slurmDirectivePath(options.output ?? `${cwd}/slurm-${intentId}-%j.out`, 'output');
   const env = options.env ?? {};
   const directives = [
     `#SBATCH --job-name=${intentId}`,
@@ -139,11 +181,27 @@ export function buildSbatchScript(options = {}) {
     `#SBATCH --mem=${resources.memoryMiB}M`,
     `#SBATCH --time=${resources.time}`,
     `#SBATCH --gres=${resources.gres}`,
-    `#SBATCH --output=${output}`,
+    `#SBATCH --output="${output}"`,
   ];
-  const exports = Object.entries(env).map(([key, value]) => `export ${key}=${shellQuote(value)}`);
+  const exports = Object.entries(env).map(([key, value]) => {
+    requireValue(SHELL_IDENTIFIER.test(key), 'env.key');
+    requireValue(!hasControlCharacter(String(value)), 'env.value');
+    return `export ${key}=${shellQuote(value)}`;
+  });
   const commandLine = `exec ${[command, ...args].map(shellQuote).join(' ')}`;
-  return ['#!/bin/bash', ...directives, ...exports, `cd ${shellQuote(cwd)}`, commandLine, ''].join('\n');
+  const quotedCwd = shellQuote(cwd);
+  return [
+    '#!/bin/bash',
+    ...directives,
+    ...exports,
+    `if [ ! -d ${quotedCwd} ]; then`,
+    `  printf '%s\\n' ${shellQuote(`vis: compute working directory is unavailable: ${cwd}`)} >&2`,
+    '  exit 1',
+    'fi',
+    `cd -- ${quotedCwd} || exit 1`,
+    commandLine,
+    '',
+  ].join('\n');
 }
 
 /** Builds the structured `sbatch` argument vector (no shell string). The intent UUID rides on the job name. */
