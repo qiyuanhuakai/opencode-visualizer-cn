@@ -1,4 +1,4 @@
-import type { LegacyExportPage, LegacyExportToken, LegacyPageRequest } from './legacyExport';
+import type { LegacyExportChunk, LegacyExportPage, LegacyExportToken, LegacyPageRequest } from './legacyExport';
 import { openLegacyExport, readLegacyExportPage, resolveLegacyLocalBinding } from './legacyExport';
 import type { LegacySource } from './legacyExport';
 import { legacyDigest } from './legacyExport';
@@ -18,8 +18,7 @@ import type { LocalBindingHint } from './legacyBinding';
  */
 export function createBrowserLegacySourcePort(source: LegacySource): LegacySourcePort {
   let token: LegacyExportToken | null = null;
-  const chunks = new Map<string, string>();
-  const endings = new Set<string>();
+  const chunks: LegacyExportChunk[] = [];
 
   async function materialise(): Promise<LegacyExportToken> {
     if (token) return token;
@@ -28,10 +27,7 @@ export function createBrowserLegacySourcePort(source: LegacySource): LegacySourc
     let request: LegacyPageRequest | null = { token: opened };
     while (request) {
       const page: LegacyExportPage = await readLegacyExportPage(source, request);
-      for (const chunk of page.chunks) {
-        chunks.set(chunk.sourceKey, (chunks.get(chunk.sourceKey) ?? '') + chunk.content);
-        if (chunk.end) endings.add(chunk.sourceKey);
-      }
+      for (const chunk of page.chunks) chunks.push(chunk);
       request = page.next ? { token: page.next } : null;
     }
     return opened;
@@ -46,34 +42,29 @@ export function createBrowserLegacySourcePort(source: LegacySource): LegacySourc
       if (request.token.revision !== current.revision) {
         throw new TypeError('source_changed');
       }
-      const remaining = [...chunks.keys()].slice(request.token.offset, request.token.offset + 8);
+      // Serve the source's own chunks unchanged: the archive verifies each
+      // chunk's `checksum` against `legacyDigest(chunk.content)` and relies on
+      // the original `namespace`/`authority`/`offset`/`end` fields. Re-deriving
+      // them here (or emitting an empty checksum) fails any non-empty source.
+      const limit = request.limit ?? 8;
+      const remaining = chunks.slice(request.token.offset, request.token.offset + limit);
       const nextOffset = request.token.offset + remaining.length;
       return {
         revision: current.revision,
-        chunks: remaining.map((sourceKey) => ({
-          source: sourceKey,
-          sourceKey,
-          namespace: 'unattached-legacy-local',
-          ownership: 'unattached-legacy-local' as const,
-          authority: 'indexeddb',
-          offset: request.token.offset,
-          content: chunks.get(sourceKey) ?? '',
-          end: endings.has(sourceKey),
-          checksum: '',
-        })),
-        next: nextOffset < chunks.size ? { ...current, offset: nextOffset } : null,
+        chunks: remaining,
+        next: nextOffset < chunks.length ? { ...current, offset: nextOffset } : null,
       };
     },
     async binding(sourceKey: string): Promise<LocalBindingHint> {
       const resolved = await resolveLegacyLocalBinding(source, sourceKey);
-      return describeBinding(resolved);
+      return describeBinding(resolved, sourceKey);
     },
   };
 }
 
-async function describeBinding(local: Readonly<{ key: string; source: string; namespace: string }>): Promise<LocalBindingHint> {
+async function describeBinding(local: Readonly<{ key: string; source: string; namespace: string }>, sourceKey: string): Promise<LocalBindingHint> {
   return {
-    sourceKey: local.key,
+    sourceKey,
     ...(local.namespace.startsWith('backend-history-v1:')
       ? { kind: 'history' as const, scopeFingerprint: await legacyDigest(local.namespace) }
       : { kind: 'local' as const }),
