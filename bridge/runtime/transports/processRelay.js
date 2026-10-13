@@ -59,8 +59,18 @@ export function createProcessRelay(options = {}) {
       ...(platform === 'win32' ? {} : detachedProcessOptions()),
     });
     const id = randomUUID();
-    owned.set(id, { id, child, owned: true, command: spec.command });
+    const record = { id, child, owned: true, command: spec.command, error: undefined, errorHandlers: [] };
+    owned.set(id, record);
     buffers.set(id, Buffer.alloc(0));
+    // A failed spawn (ENOENT/EACCES) raises 'error' asynchronously; with no listener Node
+    // escalates that to an uncaught exception that kills the host process, so the record
+    // always owns the event and fans it out to any dial waiting on this process.
+    if (typeof child.on === 'function') {
+      child.on('error', (error) => {
+        record.error = error;
+        for (const handler of record.errorHandlers.splice(0)) handler(error);
+      });
+    }
     return { id, pid: child.pid, child, owned: true };
   }
 
@@ -87,7 +97,22 @@ export function createProcessRelay(options = {}) {
   }
 
   function onExit(id, handler) {
-    entry(id).child.once('exit', handler);
+    const record = entry(id);
+    if (record.child.exitCode !== null && record.child.exitCode !== undefined) {
+      handler(record.child.exitCode);
+      return;
+    }
+    record.child.once('exit', handler);
+  }
+
+  /** Routes a spawn 'error' to a dial so it can reject instead of crashing the host. */
+  function onError(id, handler) {
+    const record = entry(id);
+    if (record.error !== undefined) {
+      handler(record.error);
+      return;
+    }
+    record.errorHandlers.push(handler);
   }
 
   /** Terminates only a process this relay spawned; a foreign id is a no-op returning false. */
@@ -96,7 +121,9 @@ export function createProcessRelay(options = {}) {
     if (record === undefined || record.owned !== true) return false;
     owned.delete(id);
     buffers.delete(id);
-    await stopTree(record.child);
+    // A spawn failure (ENOENT/EACCES) leaves no pid and no process to signal; stopTree would
+    // otherwise block waiting for an exit event that never arrives.
+    if (record.child.pid !== undefined) await stopTree(record.child);
     return true;
   }
 
@@ -112,6 +139,7 @@ export function createProcessRelay(options = {}) {
     send,
     onMessage,
     onExit,
+    onError,
     terminate,
     terminateAll,
   });

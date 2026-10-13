@@ -1,9 +1,12 @@
+import { execFileSync } from 'node:child_process';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { chmodSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -361,11 +364,12 @@ describe('ssh transport', () => {
     expect(target).toMatchObject({ host: 'builder.internal', port: 2222, user: 'deploy', proxyJump: 'bastion' });
   });
 
-  it('builds a secret-free argv with no PTY, no default agent forwarding and a dynamic loopback forward', () => {
+  it('builds a secret-free argv with no PTY, no default agent forwarding and an explicit allocated loopback forward', () => {
     const target = resolveSshTarget({ host: HOST, port: 22, configText: SSH_CONFIG });
+    // A real local forward port is allocated before ssh is spawned; OpenSSH rejects port 0 for -L.
     const argv = buildSshArgv({
       target,
-      forward: { localHost: '127.0.0.1', localPort: 0, remoteHost: '127.0.0.1', remotePort: 23004 },
+      forward: { localHost: '127.0.0.1', localPort: 43117, remoteHost: '127.0.0.1', remotePort: 23004 },
       knownHostsFile: '/home/u/.ssh/known_hosts',
     });
     expect(Array.isArray(argv)).toBe(true);
@@ -375,7 +379,7 @@ describe('ssh transport', () => {
     expect(argv).toEqual(expect.arrayContaining(['-o', 'ExitOnForwardFailure=yes']));
     expect(argv).toEqual(expect.arrayContaining(['-o', 'IdentitiesOnly=yes']));
     expect(argv).toEqual(expect.arrayContaining(['-o', 'UserKnownHostsFile=/home/u/.ssh/known_hosts']));
-    expect(argv).toEqual(expect.arrayContaining(['-L', '127.0.0.1:0:127.0.0.1:23004']));
+    expect(argv).toEqual(expect.arrayContaining(['-L', '127.0.0.1:43117:127.0.0.1:23004']));
     expect(argv).toEqual(expect.arrayContaining(['-J', 'bastion']));
     expect(argv).not.toContain('-A');
     expect(argv.some((arg) => arg.includes(' '))).toBe(false);
@@ -405,6 +409,7 @@ describe('ssh transport', () => {
       const transport = createSshTransport({
         platform,
         spawn,
+        stopProcessTree: async () => {},
         configText: SSH_CONFIG,
         knownHostsText: '',
         hostKeyProvider: async () => ({ keyType: 'ssh-ed25519', keyBlob: KEY_A }),
@@ -443,6 +448,7 @@ describe('ssh transport', () => {
     const transport = createSshTransport({
       platform: 'linux',
       spawn,
+      stopProcessTree: async () => {},
       configText: SSH_CONFIG,
       knownHostsText: '',
       hostKeyProvider: async () => ({ keyType: 'ssh-ed25519', keyBlob: KEY_A }),
@@ -567,5 +573,230 @@ describe('ssh transport', () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+});
+
+describe('ssh transport review fixes: real OpenSSH forwarding, spawn errors, lifecycle teardown', () => {
+  const TRANSPORT_MODULE_URL = (() => {
+    const url = new URL('../../bridge/runtime/transports/sshTransport.js', import.meta.url);
+    if (url.protocol === 'file:') return url.href;
+    const filePath = decodeURIComponent(url.pathname).replace(/^\/@fs/u, '');
+    return pathToFileURL(filePath).href;
+  })();
+
+  function hasSshBinary(): boolean {
+    try {
+      execFileSync('ssh', ['-V'], { stdio: 'ignore' });
+      return true;
+    } catch (error) {
+      return (error as { status?: number }).status === 0;
+    }
+  }
+
+  function sshGStatus(argv: readonly string[]): number | null {
+    try {
+      execFileSync('ssh', ['-G', ...argv], { stdio: ['ignore', 'ignore', 'ignore'] });
+      return 0;
+    } catch (error) {
+      return (error as { status?: number }).status ?? null;
+    }
+  }
+
+  function portIsFree(port: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const probe = createServer();
+      probe.once('error', () => resolve(false));
+      probe.listen(port, '127.0.0.1', () => {
+        probe.close(() => resolve(true));
+      });
+    });
+  }
+
+  function responderAccept() {
+    return async (challenge: { kind: string }) => {
+      if (challenge.kind === 'host-key') return { accept: true, persist: true };
+      if (challenge.kind === 'password') return { secret: SECRET };
+      if (challenge.kind === 'passphrase') return { secret: PASSPHRASE };
+      return { accept: false };
+    };
+  }
+
+  function transportOptions(extra: Record<string, unknown> = {}) {
+    return {
+      platform: 'linux',
+      configText: SSH_CONFIG,
+      knownHostsText: '',
+      hostKeyProvider: async () => ({ keyType: 'ssh-ed25519', keyBlob: KEY_A }),
+      persistKnownHost: async () => {},
+      askpassPath: '/usr/lib/vis/askpass',
+      responder: responderAccept(),
+      ...extra,
+    } as Parameters<typeof createSshTransport>[0];
+  }
+
+  function probeScript(secretDirectory: string): string {
+    return `
+import { createSshTransport } from ${JSON.stringify(TRANSPORT_MODULE_URL)};
+const transport = createSshTransport({
+  platform: 'linux',
+  configText: '',
+  knownHostsText: '',
+  hostKeyProvider: async () => ({ keyType: 'ssh-ed25519', keyBlob: ${JSON.stringify(KEY_A)} }),
+  persistKnownHost: async () => {},
+  method: 'password',
+  responder: async (challenge) => challenge.kind === 'host-key' ? { accept: true, persist: true } : { secret: ${JSON.stringify(SECRET)} },
+  secretDirectory: ${JSON.stringify(secretDirectory)},
+  askpassPath: '/usr/lib/vis/askpass',
+});
+try {
+  await transport.open({ profileId: '55555555-5555-4555-8555-555555555555', transport: { kind: 'ssh', endpoint: 'builder.example:22' }, target: { kind: 'ssh', environmentId: '66666666-6666-4666-8666-666666666666' }, credentialRef: 'cred-ssh-password' });
+  console.log('PROBE: opened');
+} catch (error) {
+  console.log('PROBE: caught', (error && error.code) || 'no-code');
+}
+`;
+  }
+
+  function runProbe(pathValue: string, secretDirectory: string): string {
+    return execFileSync(process.execPath, ['--input-type=module', '-e', probeScript(secretDirectory)], {
+      cwd: process.cwd(),
+      env: { ...process.env, PATH: pathValue },
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+  }
+
+  it('rejects a non-positive local forward port instead of emitting a spec OpenSSH cannot parse', () => {
+    const target = resolveSshTarget({ host: HOST, port: 22, configText: SSH_CONFIG });
+    expect(() => buildSshArgv({ target, forward: { localHost: '127.0.0.1', localPort: 0, remoteHost: '127.0.0.1', remotePort: 23004 } })).toThrow(/forward\.localPort/u);
+    expect(() => buildSshArgv({ target, forward: { localHost: '127.0.0.1', remoteHost: '127.0.0.1', remotePort: 23004 } })).toThrow(/forward\.localPort/u);
+  });
+
+  it.skipIf(!hasSshBinary())('hands real OpenSSH a -L spec it accepts, unlike the historical port-0 spec', () => {
+    const target = resolveSshTarget({ host: HOST, port: 22, configText: SSH_CONFIG });
+    const argv = buildSshArgv({ target, forward: { localHost: '127.0.0.1', localPort: 43117, remoteHost: '127.0.0.1', remotePort: 23004 } });
+    expect(sshGStatus(argv)).toBe(0);
+    const historical = [...argv];
+    historical[historical.indexOf('-L') + 1] = '127.0.0.1:0:127.0.0.1:23004';
+    expect(sshGStatus(historical)).not.toBe(0);
+  });
+
+  it('allocates a real free local port and hands it to OpenSSH (no mocked readAllocatedPort)', async () => {
+    const captured: string[][] = [];
+    const spawn = vi.fn((_command: string, args: readonly string[], _options: Record<string, unknown>) => {
+      captured.push([...args]);
+      const child = fakeChild(3100);
+      setImmediate(() => child.emit('close', 0));
+      return child;
+    });
+    const transport = createSshTransport(transportOptions({
+      spawn,
+      stopProcessTree: async () => {},
+      targetHello: async () => ({ ok: true }),
+      secretDirectory: await temporaryDirectory('vis-ssh-alloc-'),
+    }));
+    const dialed = await transport.open(sshProfile());
+    expect(dialed.ready).toBe(true);
+    const argv = captured[0] ?? [];
+    const port = Number(String(argv[argv.indexOf('-L') + 1]).split(':')[1]);
+    expect(port).toBeGreaterThan(0);
+    expect(dialed.forward.port).toBe(port);
+    expect(await portIsFree(port)).toBe(true);
+    if (hasSshBinary()) expect(sshGStatus(argv)).toBe(0);
+    await transport.close();
+  });
+
+  it('converts a spawn ENOENT into an open rejection, retires the owned process and cleans the secret', async () => {
+    const child = fakeChild(3200);
+    const spawn = vi.fn(() => child);
+    const stopProcessTree = vi.fn(async () => {});
+    const secretDirectory = await temporaryDirectory('vis-ssh-enoent-');
+    const transport = createSshTransport(transportOptions({
+      spawn,
+      stopProcessTree,
+      readAllocatedPort: async () => 45678,
+      targetHello: () => new Promise(() => {}),
+      secretDirectory,
+    }));
+    const outcome = transport.open(sshProfile()).catch((error) => error);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
+    const error = Object.assign(new Error('spawn ssh ENOENT'), { code: 'ENOENT' });
+    let emitThrew = false;
+    try {
+      child.emit('error', error);
+    } catch {
+      emitThrew = true;
+    }
+    expect(emitThrew).toBe(false);
+    const result = (await outcome) as { code?: string };
+    expect(result.code).toBe('ENOENT');
+    expect(stopProcessTree).toHaveBeenCalledTimes(1);
+    expect(readdirSync(secretDirectory)).toHaveLength(0);
+  });
+
+  it('a real child process whose PATH has no ssh handles the failure instead of exiting', async () => {
+    const noSshDirectory = mkdtempSync(path.join(tmpdir(), 'vis-no-ssh-'));
+    temporaryDirectories.push(noSshDirectory);
+    const secretDirectory = await temporaryDirectory('vis-ssh-subproc-');
+    const output = runProbe(noSshDirectory, secretDirectory);
+    expect(output).toContain('PROBE: caught');
+    expect(readdirSync(secretDirectory)).toHaveLength(0);
+  });
+
+  it.skipIf(process.platform === 'win32')('a real child process whose ssh is not executable handles EACCES instead of exiting', async () => {
+    const nonexecDirectory = mkdtempSync(path.join(tmpdir(), 'vis-nonexec-'));
+    temporaryDirectories.push(nonexecDirectory);
+    writeFileSync(path.join(nonexecDirectory, 'ssh'), '#!/bin/sh\n');
+    chmodSync(path.join(nonexecDirectory, 'ssh'), 0o644);
+    const secretDirectory = await temporaryDirectory('vis-ssh-eacces-');
+    const output = runProbe(nonexecDirectory, secretDirectory);
+    expect(output).toContain('PROBE: caught');
+    expect(readdirSync(secretDirectory)).toHaveLength(0);
+  });
+
+  it('transport.close retires every active connection: terminates the owned process and removes secret files', async () => {
+    const secretDirectory = await temporaryDirectory('vis-ssh-global-close-');
+    const stopProcessTree = vi.fn(async () => {});
+    const relay = createProcessRelay({ spawn: () => fakeChild(9200), stopProcessTree });
+    const transport = createSshTransport(transportOptions({
+      relay,
+      readAllocatedPort: async () => 45678,
+      targetHello: async () => ({ ok: true }),
+      secretDirectory,
+    }));
+    const dialed = await transport.open(sshProfile());
+    expect(dialed.ready).toBe(true);
+    expect(relay.ownedIds()).toHaveLength(1);
+    expect(readdirSync(secretDirectory)).toHaveLength(1);
+    await transport.close();
+    expect(stopProcessTree).toHaveBeenCalledTimes(1);
+    expect(relay.ownedIds()).toHaveLength(0);
+    expect(readdirSync(secretDirectory)).toHaveLength(0);
+    expect(transport.state(sshProfile().profileId)).toBe('disconnected');
+  });
+
+  it('a global close during a dial retires the pending connection and a late completion cannot re-leak', async () => {
+    const secretDirectory = await temporaryDirectory('vis-ssh-late-');
+    const stopProcessTree = vi.fn(async () => {});
+    const relay = createProcessRelay({ spawn: () => fakeChild(9300), stopProcessTree });
+    let releaseAlloc: (value: number) => void = () => {};
+    const allocGate = new Promise<number>((resolve) => {
+      releaseAlloc = resolve;
+    });
+    const transport = createSshTransport(transportOptions({
+      relay,
+      readAllocatedPort: () => allocGate,
+      targetHello: async () => ({ ok: true }),
+      secretDirectory,
+    }));
+    const outcome = transport.open(sshProfile()).catch((error) => error);
+    await vi.waitFor(() => expect(readdirSync(secretDirectory).length).toBeGreaterThan(0));
+    await transport.close();
+    releaseAlloc(45678);
+    const result = (await outcome) as { code?: string };
+    expect(result.code).toBe('cancelled');
+    expect(stopProcessTree).toHaveBeenCalledTimes(1);
+    expect(readdirSync(secretDirectory)).toHaveLength(0);
+    expect(relay.ownedIds()).toHaveLength(0);
   });
 });
