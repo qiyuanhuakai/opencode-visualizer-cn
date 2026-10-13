@@ -266,11 +266,40 @@ export async function runBridgeConfigCommand(options, env = process.env) {
   console.log(`Config saved at ${store.configPath}. Run vis_bridge restart to apply service changes.`);
 }
 
+/** Node's maximum timer delay; the referenced handle keeps the event loop alive indefinitely. */
+const LIVENESS_HEARTBEAT_MS = 2_147_483_647;
+
+/**
+ * Explicit, closable process-liveness token for the long-lived lifecycle roles. Registering a
+ * SIGINT/SIGTERM listener alone does NOT keep Node's event loop alive, so a command that only
+ * listens for signals exits as soon as `main` returns. One referenced timer is an event-loop
+ * handle that keeps the process resident until the role calls `release()`, after which the loop
+ * can drain and the process exits normally. `release()` is idempotent.
+ */
+function createLivenessToken() {
+  const timer = setInterval(() => {
+    // Intentionally empty: the referenced timer itself is the liveness handle.
+  }, LIVENESS_HEARTBEAT_MS);
+  let released = false;
+  return {
+    release() {
+      if (released) return;
+      released = true;
+      clearInterval(timer);
+    },
+  };
+}
+
 /**
  * Runs the login-side control-store role: opens the durable Slurm control store on the
  * login-local disk (verifying local FS + acquiring the single-owner fence) and holds it
  * until SIGINT/SIGTERM. The compute Runtime never writes here directly; it reaches this
  * store through the login-owned relay (task 29).
+ *
+ * Liveness is an explicit referenced timer (not an accidental open handle): without it the
+ * process would exit immediately after claiming ownership, since a signal listener does not
+ * keep the event loop alive. Every terminating path (SIGINT, SIGTERM, an unexpected error, or
+ * an explicit `close()`) releases the on-disk fence before the process ends.
  */
 export async function runControlStoreCommand(options, dependencies = {}) {
   const stateRoot = options.stateRoot ?? dependencies.stateRoot;
@@ -287,13 +316,52 @@ export async function runControlStoreCommand(options, dependencies = {}) {
   console.log(
     `vis_bridge control-store owns environment ${status.environmentId} at ${status.root} (epoch ${status.epoch}).`,
   );
-  const shutdown = () => {
-    void store.close().then(
-      () => process.exit(0),
+
+  const liveness = createLivenessToken();
+  let released = false;
+  const releaseFence = async () => {
+    if (released) return;
+    released = true;
+    liveness.release();
+    await store.close();
+  };
+  const exitAfterRelease = (code) => {
+    void releaseFence().then(
+      () => process.exit(code),
       () => process.exit(1),
     );
   };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
-  return store;
+  const onSignal = () => exitAfterRelease(0);
+  const onFatalError = (error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    exitAfterRelease(1);
+  };
+  const onUnhandledRejection = (reason) => {
+    console.error(reason instanceof Error ? reason.message : String(reason));
+    exitAfterRelease(1);
+  };
+  const removeLivenessListeners = () => {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
+    process.off('uncaughtException', onFatalError);
+    process.off('unhandledRejection', onUnhandledRejection);
+  };
+
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+  process.once('uncaughtException', onFatalError);
+  process.once('unhandledRejection', onUnhandledRejection);
+
+  return {
+    store,
+    /**
+     * Releases ownership (writes the fence with `released: true`) and stops holding the event
+     * loop open. Signal-driven exits call this internally; an in-process caller uses it to
+     * relinquish the role without a signal.
+     */
+    async close() {
+      removeLivenessListeners();
+      await releaseFence();
+    },
+  };
 }
