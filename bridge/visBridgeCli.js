@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { createBridgeConfigStore } from './bridgeConfig.js';
 import { createDaemonPaths, isProcessAlive, readDaemonState } from './daemonState.js';
@@ -27,6 +28,7 @@ Usage:
   vis_bridge restart [options]
   vis_bridge config [--config <path>]
   vis_bridge control-store --state-root <dir> [--environment <uuid>]
+  vis_bridge relay --environment <uuid> --job <uuid> --bridge-instance <uuid> --compute-node <name> (--socket <path>|--port <n>) [--step <uuid>] [--epoch <n>]
   vis_bridge update [--check] [--yes|-y]
   vis_bridge upgrade [--check] [--yes|-y]
   vis_bridge --version
@@ -42,6 +44,13 @@ Options:
   --config             Bridge supervisor config path.
   --state-root         Login-local state root owned by the control-store role.
   --environment        Persistent cluster environment UUID the control store fences.
+  --job                Slurm intent UUID the relay belongs to (relay role).
+  --bridge-instance    Compute Bridge instance UUID currently serving the job (relay role).
+  --compute-node       Verified compute node the relay is bound to (relay role).
+  --socket             Compute-local socket path the relay listens on (relay role, no compute TCP).
+  --port               Authenticated local TCP port the relay listens on (relay role).
+  --step               Relay step UUID (relay role; generated when omitted).
+  --epoch              Control-store fencing epoch the relay binds (relay role; default 0).
   --help               Show this help.
 
 Environment:
@@ -94,7 +103,7 @@ function createDaemonArgs(options) {
 
 export function parseCliOptions(argv = process.argv.slice(2), env = process.env) {
   const explicitCommand = argv[0]?.startsWith('-') ? undefined : argv[0];
-  if (explicitCommand && !['start', 'stop', 'restart', 'config', 'control-store', '__daemon'].includes(explicitCommand)) {
+  if (explicitCommand && !['start', 'stop', 'restart', 'config', 'control-store', 'relay', '__daemon'].includes(explicitCommand)) {
     throw new Error(`Unknown vis_bridge command: ${explicitCommand}`);
   }
   const command = explicitCommand ?? 'start';
@@ -112,6 +121,12 @@ export function parseCliOptions(argv = process.argv.slice(2), env = process.env)
       config: { type: 'string' },
       'state-root': { type: 'string' },
       environment: { type: 'string' },
+      job: { type: 'string' },
+      'bridge-instance': { type: 'string' },
+      'compute-node': { type: 'string' },
+      socket: { type: 'string' },
+      step: { type: 'string' },
+      epoch: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
     allowPositionals: false,
@@ -162,6 +177,72 @@ export function parseCliOptions(argv = process.argv.slice(2), env = process.env)
       serverArgs: [],
       ...(stateRoot === undefined ? {} : { stateRoot }),
       ...(environmentId === undefined ? {} : { environmentId }),
+    };
+  }
+
+  if (command === 'relay') {
+    const unexpectedOption = Object.keys(values).find(
+      (key) =>
+        ![
+          'help',
+          'environment',
+          'job',
+          'bridge-instance',
+          'compute-node',
+          'socket',
+          'step',
+          'epoch',
+          'host',
+          'port',
+        ].includes(key),
+    );
+    if (unexpectedOption) throw new Error(`vis_bridge relay does not accept --${unexpectedOption}.`);
+    const environmentText = values.environment ?? env.VIS_BRIDGE_ENVIRONMENT;
+    let environmentId;
+    if (!values.help || environmentText !== undefined) {
+      if (environmentText === undefined) throw new Error('vis_bridge relay requires --environment <uuid>.');
+      try {
+        environmentId = parseEnvironmentId(environmentText);
+      } catch {
+        throw new Error(`Invalid vis_bridge relay environment: ${environmentText}`);
+      }
+    }
+    const socketPath = values.socket ?? env.VIS_BRIDGE_RELAY_SOCKET?.trim() ?? undefined;
+    const portText = values.port ?? env.VIS_BRIDGE_RELAY_PORT;
+    let port;
+    if (portText !== undefined) {
+      port = Number.parseInt(String(portText), 10);
+      if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+        throw new Error(`Invalid vis_bridge relay port: ${portText}`);
+      }
+    }
+    if (!values.help) {
+      if (!values.job) throw new Error('vis_bridge relay requires --job <uuid>.');
+      if (!values['bridge-instance']) throw new Error('vis_bridge relay requires --bridge-instance <uuid>.');
+      if (!values['compute-node']) throw new Error('vis_bridge relay requires --compute-node <name>.');
+      if (socketPath === undefined && port === undefined) {
+        throw new Error('vis_bridge relay requires --socket <path> or --port <n>.');
+      }
+    }
+    let epoch = 0;
+    if (values.epoch !== undefined) {
+      epoch = Number.parseInt(values.epoch, 10);
+      if (!Number.isSafeInteger(epoch) || epoch < 0) throw new Error(`Invalid vis_bridge relay epoch: ${values.epoch}`);
+    }
+    return {
+      command,
+      role: 'relay',
+      help: Boolean(values.help),
+      serverArgs: [],
+      ...(environmentId === undefined ? {} : { environmentId }),
+      ...(values.job === undefined ? {} : { intentId: values.job }),
+      ...(values['bridge-instance'] === undefined ? {} : { bridgeInstanceId: values['bridge-instance'] }),
+      ...(values['compute-node'] === undefined ? {} : { computeNode: values['compute-node'] }),
+      ...(values.step === undefined ? {} : { stepId: values.step }),
+      ...(socketPath === undefined ? {} : { socketPath }),
+      ...(port === undefined ? {} : { port }),
+      ...(values.host === undefined ? {} : { host: values.host }),
+      epoch,
     };
   }
 
@@ -364,4 +445,50 @@ export async function runControlStoreCommand(options, dependencies = {}) {
       await releaseFence();
     },
   };
+}
+
+/**
+ * Runs the compute-side relay role: holds the login-owned long-term relay open (an authenticated
+ * TCP listener or a compute-local socket) for the live job + bridge instance. A client disconnect
+ * removes only that connection; the relay and the job stay alive until SIGINT/SIGTERM.
+ */
+export async function runRelayCommand(options, dependencies = {}) {
+  const socketPath = options.socketPath ?? dependencies.socketPath;
+  const port = options.port ?? dependencies.port;
+  if (!socketPath && port === undefined) throw new Error('vis_bridge relay requires --socket <path> or --port <n>.');
+  const environmentId = options.environmentId ?? dependencies.environmentId;
+  if (!environmentId) throw new Error('vis_bridge relay requires an environment id (--environment).');
+  if (!options.intentId) throw new Error('vis_bridge relay requires --job (the job intent UUID).');
+  if (!options.bridgeInstanceId) throw new Error('vis_bridge relay requires --bridge-instance.');
+  if (!options.computeNode) throw new Error('vis_bridge relay requires --compute-node.');
+  const { createComputeRelay } = await import('./runtime/transports/computeRelay.js');
+  const { createRelayBinding, createRelayHandshake } = await import('./runtime/transports/relayHandshake.js');
+  const binding = createRelayBinding({
+    environmentId,
+    intentId: options.intentId,
+    bridgeInstanceId: options.bridgeInstanceId,
+    epoch: options.epoch ?? 0,
+    computeNode: options.computeNode,
+    stepId: options.stepId ?? dependencies.stepId ?? randomUUID(),
+  });
+  const credential = options.credential ?? dependencies.credential ?? process.env.VIS_BRIDGE_RELAY_CREDENTIAL ?? '';
+  const relay = createComputeRelay({
+    handshake: createRelayHandshake({ credential, binding }),
+    mode: socketPath ? 'local-socket' : 'tcp',
+    ...(socketPath ? { socketPath } : {}),
+    ...(options.host === undefined ? {} : { host: options.host }),
+    ...(port === undefined ? {} : { port }),
+  });
+  const address = await relay.listen();
+  const location = address.mode === 'tcp' ? `${address.host}:${address.port}` : address.path;
+  console.log(`vis_bridge relay listening (${address.mode}) for job ${binding.intentId} at ${location} (epoch ${binding.epoch}).`);
+  const shutdown = () => {
+    void relay.close().then(
+      () => process.exit(0),
+      () => process.exit(1),
+    );
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+  return relay;
 }

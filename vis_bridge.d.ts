@@ -68,8 +68,24 @@ export type VisBridgeControlStoreCliOptions = {
   readonly environmentId?: string;
 };
 
+export type VisBridgeRelayCliOptions = {
+  readonly command: 'relay';
+  readonly role: 'relay';
+  readonly help: boolean;
+  readonly serverArgs: readonly [];
+  readonly environmentId?: string;
+  readonly intentId?: string;
+  readonly bridgeInstanceId?: string;
+  readonly computeNode?: string;
+  readonly stepId?: string;
+  readonly socketPath?: string;
+  readonly port?: number;
+  readonly host?: string;
+  readonly epoch: number;
+};
+
 export function parseCliOptions(
   argv?: readonly string[],
   env?: NodeJS.ProcessEnv,
-): VisBridgeServerCliOptions | VisBridgeStopCliOptions | VisBridgeControlStoreCliOptions;
+): VisBridgeServerCliOptions | VisBridgeStopCliOptions | VisBridgeControlStoreCliOptions | VisBridgeRelayCliOptions;
 export function main(): Promise<void>;
