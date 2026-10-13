@@ -14,7 +14,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer, type ServerResponse } from 'node:http';
 import { once } from 'node:events';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parseEnvironmentId, parseHarnessInstanceId, parseSessionRef } from '../../shared/runtime/identity.js';
@@ -309,13 +309,23 @@ afterAll(async () => {
     return { label, pid, absent: !running };
   });
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
-  await writeFile(new URL('../../.omo/evidence/vis-v090/task-23/fix-capability-mapping/cleanup-receipt.json', import.meta.url), `${JSON.stringify({
+  const receipt = `${JSON.stringify({
     unit: 'FIX.pr182-capability-mapping',
     at: new Date().toISOString(),
     ownedPids: absent,
     allOwnedPidsAbsent: absent.every((entry) => entry.absent),
     ports: 'all listeners bound 127.0.0.1:0 and were closed; no fixed port was claimed',
-  }, null, 2)}\n`, 'utf8');
+  }, null, 2)}\n`;
+  // The OS temp directory exists on every runner, so a fresh CI checkout still
+  // records the receipt even though the git-ignored `.omo/` tree is absent.
+  await writeFile(path.join(tmpdir(), 'vis-v090-task-23-fix-capability-mapping-cleanup-receipt.json'), receipt, 'utf8').catch(() => undefined);
+  // The checked-in `.omo/` evidence copy is best-effort: create its parent tree
+  // (git-ignored, so absent on CI) and never let a write failure fail the run.
+  const evidencePath = new URL('../../.omo/evidence/vis-v090/task-23/fix-capability-mapping/cleanup-receipt.json', import.meta.url);
+  await (async () => {
+    await mkdir(new URL('./', evidencePath), { recursive: true });
+    await writeFile(evidencePath, receipt, 'utf8');
+  })().catch(() => undefined);
 }, 120000);
 
 /** The support state a real manifest declares for one operation, or null. */
