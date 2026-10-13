@@ -150,3 +150,130 @@ describe('Codex raw history cancellation', () => {
     }
   }, 20000);
 });
+
+/** Controlled-stdio stand-in for the reviewer round a8ee4d9e8 finding 1: `history` with
+ * `params.hold` is withheld, any later `history` answers first and then flushes the held one
+ * (new response BEFORE the cancelled old response); `echo` answers result-first / id-last. */
+const REORDER_FIXTURE = [
+  "let buffer = '';",
+  'let held = null;',
+  'function reply(message) {',
+  "  process.stdout.write(JSON.stringify({ result: { data: [{ turnId: 't1', item: { id: 'item-' + message.id, payload: 'x'.repeat(64) } }], nextCursor: null }, id: message.id }) + '\\n');",
+  '}',
+  "process.stdin.on('data', (chunk) => {",
+  "  buffer += chunk.toString('utf8');",
+  '  for (;;) {',
+  "    const index = buffer.indexOf('\\n');",
+  '    if (index < 0) break;',
+  '    const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);',
+  '    if (!line.trim()) continue;',
+  '    const message = JSON.parse(line);',
+  "    if (message.method === 'history') {",
+  '      if (message.params && message.params.hold === true) {',
+  '        held = message;',
+  "        process.stderr.write('held\\n');",
+  '      } else {',
+  '        reply(message);',
+  '        if (held) { reply(held); held = null; }',
+  '      }',
+  "    } else if (message.method === 'echo') {",
+  "      process.stdout.write(JSON.stringify({ result: { ok: true, method: message.method }, id: message.id }) + '\\n');",
+  '    }',
+  '  }',
+  '});',
+].join('\n');
+
+describe('Codex result-first frame ownership after cancel', () => {
+  async function spawnFixture() {
+    const { createCodexProcess } =
+      await import('../../../bridge/runtime/drivers/codexProcess.js');
+    const dir = await mkdtemp(path.join(tmpdir(), 'vis-codex-process-'));
+    const script = path.join(dir, 'app-server.mjs');
+    await writeFile(script, REORDER_FIXTURE, 'utf8');
+    const proc = createCodexProcess({ executable: process.execPath, args: [script] });
+    return { proc, dir };
+  }
+
+  async function waitForLine(lines: string[], label: string, deadlineMs = 8000): Promise<string> {
+    const deadline = Date.now() + deadlineMs;
+    while (lines.length === 0) {
+      if (Date.now() > deadline) throw new Error(`${label} timed out`);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    return lines[0] ?? '';
+  }
+
+  it('delivers a result-first ordinary response that arrives after a cancelled raw read', async () => {
+    const { proc, dir } = await spawnFixture();
+    const lines: string[] = [];
+    proc.subscribe(
+      (line) => lines.push(line),
+      () => {},
+    );
+    try {
+      const requestRaw = proc.requestRaw;
+      if (!requestRaw) throw new TypeError('missing raw transport');
+      // Given a raw read parked on next() whose held frame never delivers a byte.
+      const raw = requestRaw(
+        JSON.stringify({ id: 1, method: 'history', params: { hold: true } }),
+        1,
+      );
+      const iterator = raw[Symbol.asyncIterator]();
+      void iterator.next().catch(() => {});
+      await waitFor(() => proc.inspection().stderrBytes > 0);
+      await iterator.return?.();
+
+      // When an ordinary request is sent after the cancel, its result-first / id-last response
+      // must be delivered by its actual envelope id, not discarded as the cancelled frame.
+      proc.send(JSON.stringify({ id: 2, method: 'echo', params: {} }));
+      const line = await waitForLine(lines, 'echo after cancel');
+      expect(JSON.parse(line)).toEqual({ result: { ok: true, method: 'echo' }, id: 2 });
+      expect(proc.inspection().failed).toBe(false);
+    } finally {
+      await proc.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  it('owns the new history response when it arrives before the cancelled old response', async () => {
+    const { proc, dir } = await spawnFixture();
+    const lines: string[] = [];
+    proc.subscribe(
+      (line) => lines.push(line),
+      () => {},
+    );
+    try {
+      const requestRaw = proc.requestRaw;
+      if (!requestRaw) throw new TypeError('missing raw transport');
+      // Given a cancelled raw read whose frame is still held.
+      const held = requestRaw(
+        JSON.stringify({ id: 1, method: 'history', params: { hold: true } }),
+        1,
+      );
+      const heldIterator = held[Symbol.asyncIterator]();
+      void heldIterator.next().catch(() => {});
+      await waitFor(() => proc.inspection().stderrBytes > 0);
+      held.cancel?.();
+
+      // When a new raw read is issued and the server answers the new request before the old one.
+      const next = requestRaw(JSON.stringify({ id: 2, method: 'history', params: {} }), 2);
+      const parts: Buffer[] = [];
+      for await (const chunk of next) parts.push(Buffer.from(chunk));
+      const frame = JSON.parse(Buffer.concat(parts).toString('utf8')) as {
+        id: number;
+        result: { data: [{ item: { id: string } }] };
+      };
+
+      // Then the new sink owns the id=2 frame; the abandoned id=1 frame is discarded, never
+      // routed into the live sink (which previously produced reconcile_required:codex.history_correlation).
+      expect(frame.id).toBe(2);
+      expect(frame.result.data[0].item.id).toBe('item-2');
+      expect(lines).toHaveLength(0);
+      expect(proc.inspection().failed).toBe(false);
+      expect(proc.inspection().rawPending).toBe(false);
+    } finally {
+      await proc.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 20000);
+});

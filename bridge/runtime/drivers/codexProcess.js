@@ -8,14 +8,27 @@ const RAW_PREFIX_BYTES = 64;
 const rawIdFirst = /^\s*\{\s*"id"\s*:\s*(-?\d+)/u;
 const rawResultFirst = /^\s*\{\s*"(?:result|error)"/u;
 
+function parseEnvelopeId(frame) {
+  let parsed;
+  try {
+    parsed = JSON.parse(frame.toString('utf8'));
+  } catch {
+    return null;
+  }
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Number.isSafeInteger(parsed.id)
+    ? parsed.id
+    : null;
+}
+
 /** History-only raw routing: a registered response frame is streamed as raw bytes before the ordinary
  * line buffer and 4 MiB bound, so an oversized history frame is bounded downstream instead of assembled.
- * An id absent from the frame prefix is still routed (the frame starts with `result`/`error`) and the
- * client correlates the real id from the full frame. Every other frame keeps the existing parser.
- * An explicit raw `cancel()` (or an early `return()`) abandons the sink and wakes a pending `next()`
- * directly, resumes the shared stdout, and discards the in-flight frame up to its newline, so a later
- * RPC is not blocked; the raw slot is freed immediately and the abandoned frame's id is retained so
- * its late bytes are dropped rather than parsed as the cancelled read's data.
+ * An explicit raw `cancel()` (or an early `return()`) abandons the sink, wakes a pending `next()`,
+ * resumes the shared stdout, and discards the in-flight frame up to its newline, so a later RPC is not
+ * blocked; the raw slot is freed immediately and the abandoned frame's id is retained so its late bytes
+ * are dropped rather than parsed as the cancelled read's data. A frame that starts with `result`/`error`
+ * (no leading id) is attributed by its ACTUAL trailing envelope id: while a live raw read owns the sink
+ * its response streams immediately, and once a raw read is abandoned the frame is bound-buffered until
+ * its id is known, then routed to the live sink, to the abandoned discard, or to the ordinary parser.
  */
 export function createCodexProcess({
   executable = 'codex',
@@ -108,8 +121,7 @@ export function createCodexProcess({
     }
     if (rawResultFirst.test(head)) {
       if (abandonedRawId === null && pendingRawId !== null) return 'raw';
-      if (abandonedRawId !== null) return 'abandoned';
-      if (pendingRawId !== null) return 'raw';
+      if (abandonedRawId !== null) return 'defer';
     }
     return 'ordinary';
   }
@@ -120,9 +132,11 @@ export function createCodexProcess({
     sink.abandon();
     if (rawSink === sink) rawSink = null;
     if (pendingRawId === id) pendingRawId = null;
-    if (mode === 'raw' || buffer.length > 0 || prefix.length > 0) mode = 'discard';
+    if (mode === 'raw' || mode === 'classify' || buffer.length > 0 || prefix.length > 0)
+      mode = 'discard';
     else abandonedRawId = id;
     prefix = Buffer.alloc(0);
+    buffer = Buffer.alloc(0);
     if (child.stdout.isPaused()) child.stdout.resume();
   }
   function resumeRaw() {
@@ -135,6 +149,53 @@ export function createCodexProcess({
     mode = 'ordinary';
     sink?.end();
     if (child.stdout.isPaused()) child.stdout.resume();
+  }
+  function pushToRaw(bytes) {
+    if (!rawSink) return;
+    rawSink.push(bytes);
+    if (rawSink.state.bytes >= RAW_HIGH_WATER) child.stdout.pause();
+  }
+  /** Resolve a bound-buffered result-first/error-first frame (`buffer`) by its actual envelope id.
+   * `complete` means the terminating newline has been consumed; otherwise the id is unknown until the
+   * frame either closes or outgrows the ordinary bound, at which point only a raw response can fit. */
+  function resolveDeferredFrame(complete) {
+    if (complete) {
+      const id = parseEnvelopeId(buffer);
+      if (id === pendingRawId) return 'raw';
+      if (id === abandonedRawId) return 'abandoned';
+      return 'ordinary';
+    }
+    if (buffer.length <= maxFrameBytes) return 'need-more';
+    if (pendingRawId !== null) return 'raw';
+    if (abandonedRawId !== null) return 'abandoned';
+    return 'fail';
+  }
+  function applyDeferred(kind, newline, end) {
+    if (kind === 'need-more') {
+      mode = 'classify';
+      return newline >= 0 ? end + 1 : end;
+    }
+    if (kind === 'fail') {
+      fail();
+      return -1;
+    }
+    const next = newline >= 0 ? end + 1 : end;
+    if (kind === 'raw') {
+      mode = 'raw';
+      pushToRaw(buffer);
+      buffer = Buffer.alloc(0);
+      if (newline >= 0) finishRaw();
+      return next;
+    }
+    if (kind === 'abandoned') {
+      abandonedRawId = null;
+      buffer = Buffer.alloc(0);
+      mode = newline >= 0 ? 'ordinary' : 'discard';
+      return next;
+    }
+    mode = 'ordinary';
+    if (newline >= 0) emitLine();
+    return next;
   }
   function emitLine() {
     const line = buffer.toString('utf8');
@@ -208,6 +269,17 @@ export function createCodexProcess({
         start = end + 1;
         continue;
       }
+      if (mode === 'classify') {
+        if (segment.length) buffer = buffer.length ? Buffer.concat([buffer, segment]) : segment;
+        if (newline < 0 && buffer.length <= maxFrameBytes) {
+          start = end;
+          continue;
+        }
+        const next = applyDeferred(resolveDeferredFrame(newline >= 0), newline, end);
+        if (next < 0) return;
+        start = next;
+        continue;
+      }
       const tracking = pendingRawId !== null || abandonedRawId !== null;
       if (
         buffer.length === 0 &&
@@ -225,10 +297,7 @@ export function createCodexProcess({
         const classification = classify(candidate);
         if (classification === 'raw') {
           mode = 'raw';
-          if (rawSink) {
-            rawSink.push(candidate);
-            if (rawSink.state.bytes >= RAW_HIGH_WATER) child.stdout.pause();
-          }
+          pushToRaw(candidate);
           if (newline < 0) {
             start = end;
             continue;
@@ -246,6 +315,13 @@ export function createCodexProcess({
           }
           mode = 'ordinary';
           start = end + 1;
+          continue;
+        }
+        if (classification === 'defer') {
+          buffer = candidate;
+          const next = applyDeferred(resolveDeferredFrame(newline >= 0), newline, end);
+          if (next < 0) return;
+          start = next;
           continue;
         }
       }
