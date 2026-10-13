@@ -343,17 +343,17 @@
                       :title="
                         canDisconnectProvider(provider)
                           ? undefined
-                          : providerControlSourceLine('deleteProviderAuth')
+                          : providerControlSourceLine(disconnectProviderControl(provider))
                       "
                       @click="disconnectProvider(provider)"
                     >
                       {{ $t('providerManager.actions.disconnect') }}
                     </button>
                     <span
-                      v-if="providerControlUnavailable('deleteProviderAuth')"
+                      v-if="providerControlUnavailable(disconnectProviderControl(provider))"
                       class="provider-control-source"
                       data-testid="provider-control-source"
-                      >{{ providerControlSourceLine('deleteProviderAuth') }}</span
+                      >{{ providerControlSourceLine(disconnectProviderControl(provider)) }}</span
                     >
                   </div>
                 </article>
@@ -1113,8 +1113,19 @@ function canDisconnectProvider(provider: ProviderInfo) {
   if (isProviderDisconnected(provider)) return false;
   if (provider.source === 'env') return false;
   if (isBackendManagedProvider(provider)) return false;
-  if (!providerControlAvailable('deleteProviderAuth')) return false;
-  return true;
+  // Judge the control by the SAME execution branch `disconnectProvider` uses:
+  // a config-backed provider is disconnected through the config branch
+  // (`updateGlobalConfig`, credential deletion optional), a credential-backed
+  // one through `deleteProviderAuth`. The real Codex adapter has no
+  // `deleteProviderAuth` yet emits `source=config` providers, so gating every
+  // provider on it wrongly disabled their Disconnect.
+  if (isConfigBackedProvider(provider)) return providerControlAvailable('updateGlobalConfig');
+  return providerControlAvailable('deleteProviderAuth');
+}
+
+/** The control the provider's disconnect branch actually executes, for source lines. */
+function disconnectProviderControl(provider: ProviderInfo): string {
+  return isConfigBackedProvider(provider) ? 'updateGlobalConfig' : 'deleteProviderAuth';
 }
 
 function supportsProviderConfigUpdates() {

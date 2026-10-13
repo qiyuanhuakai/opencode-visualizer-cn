@@ -511,6 +511,17 @@ watch(() => props.activeBackendKind, (newKind, oldKind) => {
   }
 });
 
+// Task 23: the harness scope or manifest decides which source the monitor
+// controls resolve against. When either changes, the previous source's
+// results are retired before the new resolution runs, so data fetched for
+// one instance can never be attributed to another.
+watch([() => props.harnessScope, () => props.harnessManifests], () => {
+  resetLoadedState();
+  if (props.open || props.preload) {
+    void ensureLoaded();
+  }
+});
+
 onBeforeUnmount(() => {
   unbindEvents();
 });
@@ -610,36 +621,50 @@ async function refresh() {
       : typeof activeBackend.getPluginStatus !== 'function' &&
         typeof activeBackend.getGlobalConfig !== 'function';
   }
-  // Task 23: when a harness scope is supplied, the manifest decides. An
-  // unsupported or undeclared capability is reported unsupported and carries
-  // its source, so it never masquerades as available.
-  if (monitorControlUnavailable('getMcpStatus')) mcpUnsupported.value = true;
-  if (monitorControlUnavailable('getLspStatus')) lspUnsupported.value = true;
-  if (monitorControlUnavailable('getSkillStatus')) skillUnsupported.value = true;
-  if (monitorControlUnavailable('getPluginStatus')) pluginUnsupported.value = true;
-  if (monitorControlUnavailable('getGlobalHealth')) serverHealth.value = null;
+  // Task 23: when a harness scope is supplied, the manifest decides. The
+  // support of every item is resolved BEFORE its request is issued: an
+  // unsupported or undeclared control is never called, its data is cleared,
+  // and the source line stays visible — so neither stale results nor a
+  // coincidental adapter method can masquerade as an available control.
+  const healthUnsupported = monitorControlUnavailable('getGlobalHealth');
+  const mcpUnsupportedControl = monitorControlUnavailable('getMcpStatus');
+  const lspUnsupportedControl = monitorControlUnavailable('getLspStatus');
+  const skillUnsupportedControl = monitorControlUnavailable('getSkillStatus');
+  const pluginUnsupportedControl = monitorControlUnavailable('getPluginStatus');
+  const configUnsupportedControl = monitorControlUnavailable('getGlobalConfig');
+  if (mcpUnsupportedControl) { mcpUnsupported.value = true; mcpData.value = null; }
+  if (lspUnsupportedControl) { lspUnsupported.value = true; lspData.value = null; }
+  if (skillUnsupportedControl) { skillUnsupported.value = true; skillData.value = null; }
+  if (pluginUnsupportedControl) {
+    pluginUnsupported.value = true;
+    backendPluginData.value = [];
+    codexPluginData.value = [];
+  }
+  if (healthUnsupported) serverHealth.value = null;
+  if (configUnsupportedControl) configData.value = null;
 
   const currentRefresh = (async () => {
     try {
       const [health, mcp, lsp, skills, cfg, plugins] = await Promise.allSettled([
-        activeBackend.getGlobalHealth?.() ?? Promise.resolve(null),
-        activeBackend.getMcpStatus?.() ?? Promise.resolve({}),
-        activeBackend.getLspStatus?.() ?? Promise.resolve([]),
-        activeBackend.getSkillStatus?.(isDshBackend.value ? props.sessionId : undefined) ?? Promise.resolve([]),
-        activeBackend.getGlobalConfig?.() ?? Promise.resolve({}),
-        activeBackend.getPluginStatus?.() ?? Promise.resolve([]),
+        healthUnsupported ? Promise.resolve(null) : (activeBackend.getGlobalHealth?.() ?? Promise.resolve(null)),
+        mcpUnsupportedControl ? Promise.resolve(null) : (activeBackend.getMcpStatus?.() ?? Promise.resolve({})),
+        lspUnsupportedControl ? Promise.resolve(null) : (activeBackend.getLspStatus?.() ?? Promise.resolve([])),
+        skillUnsupportedControl ? Promise.resolve(null) : (activeBackend.getSkillStatus?.(isDshBackend.value ? props.sessionId : undefined) ?? Promise.resolve([])),
+        configUnsupportedControl ? Promise.resolve(null) : (activeBackend.getGlobalConfig?.() ?? Promise.resolve({})),
+        pluginUnsupportedControl ? Promise.resolve(null) : (activeBackend.getPluginStatus?.() ?? Promise.resolve([])),
       ]);
       if (requestId !== refreshRequestId) return;
-      serverHealth.value = health.status === 'fulfilled' ? health.value : null;
+      serverHealth.value = healthUnsupported ? null : (health.status === 'fulfilled' ? health.value : null);
       mcpData.value =
-        mcp.status === 'fulfilled' ? ((mcp.value as typeof mcpData.value) ?? {}) : null;
+        mcpUnsupportedControl ? null : (mcp.status === 'fulfilled' ? ((mcp.value as typeof mcpData.value) ?? {}) : null);
       lspData.value =
-        lsp.status === 'fulfilled' ? ((lsp.value as typeof lspData.value) ?? []) : null;
+        lspUnsupportedControl ? null : (lsp.status === 'fulfilled' ? ((lsp.value as typeof lspData.value) ?? []) : null);
       skillData.value =
-        skills.status === 'fulfilled' ? ((skills.value as typeof skillData.value) ?? []) : null;
-      configData.value = cfg.status === 'fulfilled' ? (cfg.value as Record<string, unknown>) : null;
+        skillUnsupportedControl ? null : (skills.status === 'fulfilled' ? ((skills.value as typeof skillData.value) ?? []) : null);
+      configData.value =
+        configUnsupportedControl ? null : (cfg.status === 'fulfilled' ? (cfg.value as Record<string, unknown>) : null);
       backendPluginData.value =
-        plugins.status === 'fulfilled' ? (plugins.value as typeof backendPluginData.value) : [];
+        pluginUnsupportedControl ? [] : (plugins.status === 'fulfilled' ? (plugins.value as typeof backendPluginData.value) : []);
       if (!mcpUnsupported.value && mcp.status === 'rejected') mcpUnsupported.value = true;
       if (!lspUnsupported.value && lsp.status === 'rejected') lspUnsupported.value = true;
       if (!skillUnsupported.value && skills.status === 'rejected') skillUnsupported.value = true;
@@ -1855,7 +1880,7 @@ watch(tabs, (available) => {
           <div v-if="loading && !mcpData" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
-          <div v-else-if="mcpUnsupported && mcpEntries.length === 0" class="status-monitor-empty">
+          <div v-else-if="mcpUnsupported" class="status-monitor-empty">
             {{ mcpUnsupportedText }}
             <span v-if="mcpUnsupportedSource" class="status-monitor-source" data-testid="monitor-control-source">{{
               mcpUnsupportedSource
@@ -1912,7 +1937,7 @@ watch(tabs, (available) => {
           <div v-if="loading && !lspData" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
-          <div v-else-if="lspUnsupported && (lspData || []).length === 0" class="status-monitor-empty">
+          <div v-else-if="lspUnsupported" class="status-monitor-empty">
             {{ lspUnsupportedText }}
             <span v-if="lspUnsupportedSource" class="status-monitor-source" data-testid="monitor-control-source">{{
               lspUnsupportedSource
@@ -2008,7 +2033,7 @@ watch(tabs, (available) => {
           <div v-if="loading && skillEntries.length === 0" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
-          <div v-else-if="skillStatusUnsupported && skillEntries.length === 0" class="status-monitor-empty">
+          <div v-else-if="skillStatusUnsupported" class="status-monitor-empty">
             {{ skillUnsupportedText }}
             <span v-if="skillUnsupportedSource" class="status-monitor-source" data-testid="monitor-control-source">{{
               skillUnsupportedSource

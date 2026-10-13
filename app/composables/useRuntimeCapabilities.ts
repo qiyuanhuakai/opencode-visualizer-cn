@@ -68,6 +68,8 @@ export type WorkspaceControlEntry = Readonly<{
 export const HARNESS_CONTROLS: Readonly<Record<string, HarnessControlEntry>> = Object.freeze({
   // ── model ──────────────────────────────────────────────────────────────
   'codex.models': { operation: 'codex.models', capability: 'providerConfig', group: 'model' },
+  'dsh.models.list': { operation: 'dsh.models.list', capability: 'providerConfig', group: 'model' },
+  'dsh.models.select': { operation: 'dsh.models.select', capability: 'providerConfig', group: 'model' },
   // ── provider / model provider configuration ────────────────────────────
   listProviders: { operation: 'listProviders', capability: 'providerConfig', group: 'provider' },
   listProviderAuthMethods: { operation: 'listProviderAuthMethods', capability: 'providerConfig', group: 'provider' },
@@ -76,11 +78,13 @@ export const HARNESS_CONTROLS: Readonly<Record<string, HarnessControlEntry>> = O
   completeProviderOAuth: { operation: 'completeProviderOAuth', capability: 'providerConfig', group: 'provider' },
   deleteProviderAuth: { operation: 'deleteProviderAuth', capability: 'providerConfig', group: 'provider' },
   'codex.providerCapabilities': { operation: 'codex.providerCapabilities', capability: 'providerConfig', group: 'provider' },
+  'dsh.providers.list': { operation: 'dsh.providers.list', capability: 'providerConfig', group: 'provider' },
   // ── auth (harness / agent authentication) ──────────────────────────────
   listAgents: { operation: 'listAgents', capability: 'providerConfig', group: 'auth' },
   listAgentAuthMethods: { operation: 'listAgentAuthMethods', capability: 'providerConfig', group: 'auth' },
   createAgentAuthPty: { operation: 'createAgentAuthPty', capability: 'terminal', group: 'auth' },
   authenticateAgent: { operation: 'authenticateAgent', capability: 'providerConfig', group: 'auth' },
+  'dsh.agentPresets.list': { operation: 'dsh.agentPresets.list', capability: 'providerConfig', group: 'auth' },
   // ── skills ─────────────────────────────────────────────────────────────
   getSkillStatus: { operation: 'getSkillStatus', capability: null, group: 'skills' },
   updateSkill: { operation: 'updateSkill', capability: null, group: 'skills' },
@@ -110,12 +114,14 @@ export const HARNESS_CONTROLS: Readonly<Record<string, HarnessControlEntry>> = O
   setPluginEnabled: { operation: 'setPluginEnabled', capability: 'status', group: 'plugins' },
   'codex.plugin.install': { operation: 'codex.plugin.install', capability: 'status', group: 'plugins' },
   'codex.plugin.uninstall': { operation: 'codex.plugin.uninstall', capability: 'status', group: 'plugins' },
+  'dsh.plugins.list': { operation: 'dsh.plugins.list', capability: 'status', group: 'plugins' },
   // ── lsp ────────────────────────────────────────────────────────────────
   getLspStatus: { operation: 'getLspStatus', capability: 'status', group: 'lsp' },
   // ── status ─────────────────────────────────────────────────────────────
   getSessionStatusMap: { operation: 'getSessionStatusMap', capability: 'status', group: 'status' },
   listPendingPermissions: { operation: 'listPendingPermissions', capability: 'permissions', group: 'status' },
   listPendingQuestions: { operation: 'listPendingQuestions', capability: 'questions', group: 'status' },
+  'dsh.permissions.catalog': { operation: 'dsh.permissions.catalog', capability: 'permissions', group: 'status' },
 });
 
 /** Every workspace control entered into the task-4 mapping (never backend-kind dependent). */

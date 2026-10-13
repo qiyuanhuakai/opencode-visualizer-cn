@@ -76,7 +76,7 @@ const REGISTRY: Readonly<Record<HarnessKind, HarnessManifest>> = Object.freeze({
   // kimi-web: usage monitor + skills, no provider auth.
   'kimi-web': manifest('kimi-web', ['getSkillStatus', 'updateSkill', 'getGlobalConfig', 'updateGlobalConfig']),
   // dsh: usage + provider config, no auth terminal.
-  dsh: manifest('dsh', ['getGlobalConfig', 'updateGlobalConfig', 'getMcpStatus', 'updateMcp']),
+  dsh: manifest('dsh', ['dsh.providers.list', 'dsh.models.list', 'dsh.models.select', 'dsh.plugins.list', 'dsh.agentPresets.list', 'dsh.permissions.catalog', 'getGlobalConfig', 'updateGlobalConfig', 'getMcpStatus', 'updateMcp']),
 });
 
 describe('task-23 criterion 1: native settings/provider/auth/skills/MCP/usage stay capability-gated', () => {
