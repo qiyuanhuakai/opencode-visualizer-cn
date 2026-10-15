@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createDshTransport } from './dshTransport.js';
 import { createDshOperations } from './dshOperations.js';
 import { readDshHistoryPage } from './dshHistory.js';
-import { createFollowState } from '../../../shared/runtime/native/dsh/follow.js';
+import { createFollowState, terminalTurn } from '../../../shared/runtime/native/dsh/follow.js';
 import { record, text, integer, summaries, selectModel, approvalOutcome, fail, DshError } from '../../../shared/runtime/native/dsh/protocol.js';
 import { parseSessionRef, parseEnvironmentId, parseHarnessInstanceId } from '../../../shared/runtime/identity.js';
 import { jsonValue } from '../../../shared/runtime/capabilities.js';
@@ -10,6 +10,7 @@ import { CORE_OPERATIONS, unsupported } from '../../../shared/runtime/harnessCon
 import { readRecord, compareRecord, fingerprint } from '../operationJournal.js';
 
 const supported = Object.freeze({ state: 'supported' });
+const SELECTED_SLOTS = 4, SNAPSHOT_SLOTS = 3, SNAPSHOT_TTL_MS = 60000, SNAPSHOT_BUDGET_BYTES = 33554432;
 const EXTENSIONS = Object.freeze({
   'dsh.providers.list': { method: 'session/modelCatalog', scope: 'instance' },
   'dsh.models.list': { method: 'session/modelCatalog', scope: 'instance' },
@@ -27,6 +28,36 @@ export function createDshDriver(options) {
   let mux, connecting, clientId, liveGeneration = 0, closed = false, reconnectTimer, reconnectAttempt = 0, retryBlocked = false;
   const pendingWork = new Set();
   const now = options.now ?? Date.now;
+  let retainSeq = 0;
+  const retained = new Map();
+  function retain(session, reason) {
+    const key = session.nativeSessionId, token = `${reason}:${++retainSeq}`;
+    let tokens = retained.get(key);
+    if (!tokens) retained.set(key, (tokens = new Set()));
+    tokens.add(token);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      tokens.delete(token);
+      if (!tokens.size) retained.delete(key);
+    };
+  }
+  async function reclaimable(entry) {
+    const key = entry.session.nativeSessionId;
+    if (entry.waiting || retained.get(key)?.size) return false;
+    for (const delivery of deliveries.values()) if (delivery.live && delivery.session?.nativeSessionId === key) return false;
+    try { if (await operations.pendingPrompt(entry.session)) return false; }
+    catch { return false; }
+    return true;
+  }
+  async function evictIdleFollows() {
+    for (const [key, entry] of selected) {
+      if (!await reclaimable(entry)) continue;
+      entry.handle?.cancel(); entry.handle = undefined; entry.state.disconnect();
+      selected.delete(key);
+    }
+  }
   function publish(event) {
     const clean = jsonValue({ ...event, environmentId: identity.environmentId, harnessInstanceId: identity.harnessInstanceId, generation: liveGeneration });
     options.onEvent?.(clean);
@@ -108,6 +139,15 @@ export function createDshDriver(options) {
       if (error.code !== 'invalid_request') scheduleReconnect();
     }
   }
+  function reconcileSnapshot(entry, frame) {
+    const sentCursor = entry.sentCursor;
+    if (sentCursor === undefined) return;
+    const terminal = terminalTurn(frame, sentCursor);
+    if (!terminal) return;
+    entry.sentCursor = undefined;
+    const kind = terminal.data?.reason?.kind;
+    background(operations.finish(entry.session, kind === 'completed' ? 'completed' : kind === 'aborted' ? 'cancelled' : 'failed'));
+  }
   function openFollow(entry) {
     if (!mux) fail('source_unavailable', 'mux');
     const connectionGeneration = liveGeneration, generation = entry.state.rebuild();
@@ -120,11 +160,13 @@ export function createDshDriver(options) {
           if (admitted.action === 'snapshot') {
             if (value.header.id !== entry.session.nativeSessionId) fail('conflict', 'snapshot_session');
             entry.snapshot = value; known.add(entry.session.nativeSessionId); entry.resolve?.(value); entry.resolve = undefined; entry.reject = undefined;
+            reconcileSnapshot(entry, value);
           }
           publish({ type: admitted.action === 'snapshot' ? 'session-snapshot' : 'session-event', session: entry.session, value: admitted.value,
             revision: entry.state.inspect().revision });
           if (admitted.action === 'event' && value.type === 'event' && value.event.type === 'turn/end') {
             const kind = value.event.data?.reason?.kind;
+            entry.sentCursor = undefined;
             background(operations.finish(entry.session, kind === 'completed' ? 'completed' : kind === 'aborted' ? 'cancelled' : 'failed'));
           }
         } catch (error) {
@@ -179,22 +221,26 @@ export function createDshDriver(options) {
   async function select(session, refresh = false) {
     const key = session.nativeSessionId;
     let entry = selected.get(key);
-    if (!entry) {
-      if (selected.size >= 4) fail('source_unavailable', 'selected_limit');
-      entry = { session, state: createFollowState() }; selected.set(key, entry);
-    }
-    await ensureMux();
-    if (refresh && entry.state.inspect().phase === 'live' && !entry.waiting) { entry.handle?.cancel(); entry.handle = undefined; entry.state.disconnect(); }
-    if (entry.state.inspect().phase === 'live') return entry;
-    if (entry.waiting) { await entry.waiting; return entry; }
-    entry.waiting = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { entry.handle?.cancel(); entry.handle = undefined; entry.state.disconnect(); entry.reject = undefined; entry.resolve = undefined; reject(new DshError('timeout', 'dsh.follow_snapshot')); }, 15000);
-      entry.resolve = (value) => { clearTimeout(timer); resolve(value); };
-      entry.reject = (error) => { clearTimeout(timer); reject(error); };
-      if (!entry.handle) openFollow(entry);
-    }).finally(() => { entry.waiting = undefined; });
-    await entry.waiting;
-    return entry;
+    const release = retain(session, 'select');
+    try {
+      if (!entry) {
+        if (selected.size >= SELECTED_SLOTS) await evictIdleFollows();
+        if (selected.size >= SELECTED_SLOTS) fail('source_unavailable', 'selected_limit');
+        entry = { session, state: createFollowState() }; selected.set(key, entry);
+      }
+      await ensureMux();
+      if (refresh && entry.state.inspect().phase === 'live' && !entry.waiting) { entry.handle?.cancel(); entry.handle = undefined; entry.state.disconnect(); }
+      if (entry.state.inspect().phase === 'live') return entry;
+      if (entry.waiting) { await entry.waiting; return entry; }
+      entry.waiting = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { entry.handle?.cancel(); entry.handle = undefined; entry.state.disconnect(); entry.reject = undefined; entry.resolve = undefined; reject(new DshError('timeout', 'dsh.follow_snapshot')); }, 15000);
+        entry.resolve = (value) => { clearTimeout(timer); resolve(value); };
+        entry.reject = (error) => { clearTimeout(timer); reject(error); };
+        if (!entry.handle) openFollow(entry);
+      }).finally(() => { entry.waiting = undefined; });
+      await entry.waiting;
+      return entry;
+    } finally { release(); }
   }
   async function listSessionPage(input) {
     const { params } = context(input); const limit = integer(params.limit ?? 100, 1, 200);
@@ -216,13 +262,17 @@ export function createDshDriver(options) {
       const items = summaries(native, workspace, identity);
       const bytes = Buffer.byteLength(JSON.stringify(items));
       if (bytes > 16777216 || items.length > 100000) fail('source_unavailable', 'summary_snapshot_budget');
-      if (snapshots.size >= 3 || [...snapshots.values()].reduce((sum, value) => sum + value.bytes, bytes) > 33554432) fail('source_unavailable', 'summary_snapshot_slots');
-      token = randomUUID(); snapshot = { items, lease, bytes, expiresAt: now() + 60000 }; snapshots.set(token, snapshot);
       known.clear();
       for (const item of items) known.add(item.session.nativeSessionId);
       for (const id of selected.keys()) known.add(id);
+      if (items.length <= limit) {
+        return { items, cursor: null, completeness: 'complete', source: 'native-summary-snapshot', total: items.length, expiresAt: now() + SNAPSHOT_TTL_MS };
+      }
+      if (snapshots.size >= SNAPSHOT_SLOTS || [...snapshots.values()].reduce((sum, value) => sum + value.bytes, bytes) > SNAPSHOT_BUDGET_BYTES) fail('source_unavailable', 'summary_snapshot_slots');
+      token = randomUUID(); snapshot = { items, lease, bytes, expiresAt: now() + SNAPSHOT_TTL_MS }; snapshots.set(token, snapshot);
     }
     const items = snapshot.items.slice(offset, offset + limit), next = offset + items.length;
+    if (next >= snapshot.items.length) snapshots.delete(token);
     return { items, cursor: next < snapshot.items.length ? `${token}:${next}` : null, completeness: next < snapshot.items.length ? 'partial' : 'complete',
       source: 'native-summary-snapshot', total: snapshot.items.length, expiresAt: snapshot.expiresAt };
   }
@@ -242,10 +292,11 @@ export function createDshDriver(options) {
     const { session } = context(input, true);
     if (observers.size >= 64) fail('source_unavailable', 'observer_limit');
     const queue = []; let bytes = 0, wake, error, ended = false;
-    const observer = { stop() { ended = true; wake?.(); wake = undefined; }, push(value) {
+    const release = retain(session, 'subscriber');
+    const observer = { stop() { ended = true; release(); wake?.(); wake = undefined; }, push(value) {
       if (ended || (value.session && value.session.nativeSessionId !== session.nativeSessionId)) return;
       const size = Buffer.byteLength(JSON.stringify(value));
-      if (queue.length >= 256 || bytes + size > 2097152) { error = new DshError('replay_required', 'dsh.subscriber_overflow'); ended = true; observers.delete(observer); }
+      if (queue.length >= 256 || bytes + size > 2097152) { error = new DshError('replay_required', 'dsh.subscriber_overflow'); ended = true; release(); observers.delete(observer); }
       else { queue.push({ value, size }); bytes += size; }
       wake?.(); wake = undefined;
     } };
@@ -256,7 +307,7 @@ export function createDshDriver(options) {
         const pending = await operations.interactions.get(delivery.key);
         if (delivery.live && delivery.generation === liveGeneration && pending.phase === 'pending') observer.push({ type: 'interaction-pending', session, interactionId: delivery.key, request: pending.payload.request });
       }
-    }).catch((failure) => { error = failure; ended = true; wake?.(); });
+    }).catch((failure) => { error = failure; ended = true; release(); wake?.(); });
     return { ready, async next() {
       await ready;
       if (error) throw error;
@@ -264,7 +315,7 @@ export function createDshDriver(options) {
       if (error) throw error;
       const item = queue.shift(); if (item) { bytes -= item.size; return { value: item.value, done: false }; }
       return { value: undefined, done: true };
-    }, async return() { ended = true; observers.delete(observer); queue.length = 0; bytes = 0; wake?.(); return { value: undefined, done: true }; },
+    }, async return() { ended = true; release(); observers.delete(observer); queue.length = 0; bytes = 0; wake?.(); return { value: undefined, done: true }; },
     [Symbol.asyncIterator]() { return this; } };
   }
   async function close() {
@@ -274,15 +325,23 @@ export function createDshDriver(options) {
     transport.close();
     for (const entry of selected.values()) entry.reject?.(new DshError('cancelled', 'dsh.closed'));
     for (const delivery of deliveries.values()) await invalidate(delivery);
-    deliveries.clear(); snapshots.clear(); selected.clear(); known.clear();
+    deliveries.clear(); snapshots.clear(); selected.clear(); known.clear(); retained.clear();
     await Promise.allSettled(pendingWork);
     publish({ type: 'source-closed' }); for (const observer of observers) observer.stop(); observers.clear();
   }
   const core = {
     inspect(input) { context(input); const state = options.getOwnedEndpoint()?.state ?? 'missing'; return { state: closed ? 'disabled' : state, protocolVersion: 1 }; },
     listSessionPage,
-    async getSession(input) { const { session } = context(input, true); const entry = await select(session, true); return { session, snapshot: entry.snapshot, ...entry.state.inspect(), connectionGeneration: liveGeneration }; },
-    async readHistoryPage(input) { const { session, params } = context(input, true); const entry = await select(session); return readDshHistoryPage({ transport, session, state: entry.state, beforeSeq: params.beforeSeq, throughSeq: params.throughSeq, limit: params.limit }); },
+    async getSession(input) {
+      const { session } = context(input, true), release = retain(session, 'read');
+      try { const entry = await select(session, true); return { session, snapshot: entry.snapshot, ...entry.state.inspect(), connectionGeneration: liveGeneration }; }
+      finally { release(); }
+    },
+    async readHistoryPage(input) {
+      const { session, params } = context(input, true), release = retain(session, 'read');
+      try { const entry = await select(session); return readDshHistoryPage({ transport, session, state: entry.state, beforeSeq: params.beforeSeq, throughSeq: params.throughSeq, limit: params.limit }); }
+      finally { release(); }
+    },
     async createSession(input) {
       const { params } = context(input), idempotencyKey = text(params.idempotencyKey);
       const request = record(params.request);
@@ -296,8 +355,12 @@ export function createDshDriver(options) {
       const capturedScope = operations.capture(session);
       const payload = jsonValue(record(params.request));
       if (payload.sessionId !== undefined && payload.sessionId !== session.nativeSessionId) fail('conflict', 'prompt_session');
-      await select(session);
-      return operations.sessionMutation({ session, capturedScope, idempotencyKey, method: 'session/prompt', args: { request: { ...payload, sessionId: session.nativeSessionId } }, ongoing: true });
+      const release = retain(session, 'send');
+      try {
+        const entry = await select(session);
+        entry.sentCursor = entry.state.inspect().cursor;
+        return await operations.sessionMutation({ session, capturedScope, idempotencyKey, method: 'session/prompt', args: { request: { ...payload, sessionId: session.nativeSessionId } }, ongoing: true });
+      } finally { release(); }
     },
     async cancel(input) {
       const { session, params } = context(input, true);

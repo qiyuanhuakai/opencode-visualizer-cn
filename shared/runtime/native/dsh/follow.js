@@ -51,3 +51,19 @@ export function historyPage(value, throughSeq, beforeSeq, limit) {
   return { records, nativeHasMore: value.hasMore, cursor: lowest === 0 || value.records.length === 0 ? null : lowest,
     completeness: lowest === 0 || value.records.length === 0 ? 'complete' : 'partial' };
 }
+/** Authoritative snapshot replay: the newest turn/end the snapshot covers strictly after `afterSeq`. */
+export function terminalTurn(value, afterSeq) {
+  const frame = record(value);
+  if (!Array.isArray(frame.records)) fail('invalid_request', 'snapshot');
+  integer(afterSeq, -1);
+  let terminal = null;
+  for (const row of frame.records) {
+    if (row === null || typeof row !== 'object' || Array.isArray(row) || row.type !== 'event') continue;
+    const event = record(row.event);
+    if (event.type !== 'turn/end') continue;
+    if (integer(event.seq, -1) <= afterSeq) continue;
+    terminal = event;
+  }
+  return terminal;
+}
+
