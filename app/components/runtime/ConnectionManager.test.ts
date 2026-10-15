@@ -11,7 +11,7 @@
  * `ConnectionEntry.test.ts` does, and assert on the rendered identity attributes rather than on
  * a label string.
  */
-import { createApp, nextTick } from 'vue';
+import { createApp, h, nextTick, reactive } from 'vue';
 import { createI18n } from 'vue-i18n';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -384,6 +384,7 @@ describe('a password / OTP is never cached', () => {
     expect(root.querySelector('[data-testid="challenge-secret"]')?.getAttribute('type')).toBe('text');
   });
 
+
   it('stores a credential reference on the SSH form and never a secret field', async () => {
     const saved: unknown[] = [];
     const root = mount(SshHostForm, {
@@ -444,6 +445,159 @@ describe('a password / OTP is never cached', () => {
     expect(root.querySelector('[data-testid="ssh-host-problems"]')?.textContent).toContain('transport.endpoint');
   });
 });
+// ---------------------------------------------------------------------------
+// PR #184 finding 1 — a secret never outlives the challenge it was typed for
+// ---------------------------------------------------------------------------
+
+describe('a secret never outlives the challenge it was typed for', () => {
+  const SECRET = 'correct-horse-battery';
+  const OTP = '491207';
+
+  function challengeFields(challengeId: string, kind: 'password' | 'otp', prompt: string) {
+    return Object.freeze({ challengeId, kind, prompt, echo: false, redacted: true, createdAt: 1 });
+  }
+
+  /**
+   * A live container that owns the props reactively, the way the production App will: the
+   * challenge arrives from outside and can be revoked, replaced or re-opened at any moment
+   * without the user pressing Send.
+   */
+  function mountLive(initial: Record<string, unknown>) {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    const state = reactive({ ...initial });
+    const app = createApp({
+      setup() {
+        return () => h(ConnectionManager as never, {
+          open: true,
+          client: 'browser',
+          profiles: [sshProfile()],
+          capabilityEntry: capabilityEntryFor('browser', true),
+          managedTransport: true,
+          ...state,
+        });
+      },
+    });
+    const i18n = createI18n({ legacy: false, locale: 'en', messages: { en: {} }, missingWarn: false, fallbackWarn: false });
+    app.use(i18n);
+    app.mount(host);
+    return { root: host, state };
+  }
+
+  async function type(testId: string, value: string) {
+    const input = host!.querySelector<HTMLInputElement>(`[data-testid="${testId}"]`);
+    input!.value = value;
+    input!.dispatchEvent(new Event('input'));
+    await nextTick();
+  }
+
+  it('drops the typed password when the challenge is revoked and replaced, so the answer cannot pair a new challengeId with an old secret', async () => {
+    const answers: Array<{ challengeId: string; accept: boolean; secret?: string }> = [];
+    const live = mountLive({
+      challenge: challengeFields('challenge-1', 'password', 'Password:'),
+      onChallengeAnswer: (answer: { challengeId: string; accept: boolean; secret?: string }) => answers.push(answer),
+    });
+
+    // The user types the password but does NOT press Send.
+    await type('challenge-secret', SECRET);
+    expect(live.root.querySelector<HTMLInputElement>('[data-testid="challenge-secret"]')?.value).toBe(SECRET);
+
+    live.state.challenge = challengeFields('challenge-2', 'otp', 'Verification code:');
+    await nextTick();
+
+    const accept = live.root.querySelector<HTMLButtonElement>('[data-testid="challenge-accept"]');
+    expect(accept?.disabled).toBe(true);
+    accept?.click();
+    await nextTick();
+    expect(answers).toEqual([]);
+
+    await type('challenge-secret', OTP);
+    live.root.querySelector<HTMLButtonElement>('[data-testid="challenge-accept"]')?.click();
+    await nextTick();
+    expect(answers).toEqual([{ challengeId: 'challenge-2', accept: true, secret: OTP }]);
+
+    const input = live.root.querySelector<HTMLInputElement>('[data-testid="challenge-secret"]');
+    expect(input?.type).toBe('text');
+    expect(input?.value).toBe('');
+    expect(live.root.querySelector('[data-testid="connection-challenge"]')?.getAttribute('data-kind')).toBe('otp');
+  });
+
+  it('drops the typed password when the challenge kind changes, so a password can never be echoed by the one-time-code input', async () => {
+    const answers: Array<{ challengeId: string; accept: boolean; secret?: string }> = [];
+    const live = mountLive({
+      challenge: challengeFields('challenge-1', 'password', 'Password:'),
+      onChallengeAnswer: (answer: { challengeId: string; accept: boolean; secret?: string }) => answers.push(answer),
+    });
+    await type('challenge-secret', SECRET);
+
+    live.state.challenge = challengeFields('challenge-2', 'otp', 'Verification code:');
+    await nextTick();
+
+    const input = live.root.querySelector<HTMLInputElement>('[data-testid="challenge-secret"]');
+    expect(input?.type).toBe('text');
+    expect(input?.value).toBe('');
+    expect(live.root.textContent).not.toContain(SECRET);
+  });
+
+  it('drops the typed password when the selected profile changes', async () => {
+    const answers: Array<{ challengeId: string; accept: boolean; secret?: string }> = [];
+    const live = mountLive({
+      challenge: challengeFields('challenge-1', 'password', 'Password:'),
+      selectedProfileId: '33333333-3333-4333-8333-333333333333',
+      onChallengeAnswer: (answer: { challengeId: string; accept: boolean; secret?: string }) => answers.push(answer),
+    });
+    await type('challenge-secret', SECRET);
+    expect(live.root.querySelector<HTMLInputElement>('[data-testid="challenge-secret"]')?.value).toBe(SECRET);
+
+    live.state.selectedProfileId = '44444444-4444-4444-8444-444444444444';
+    await nextTick();
+
+    expect(live.root.querySelector<HTMLInputElement>('[data-testid="challenge-secret"]')?.value).toBe('');
+    live.root.querySelector<HTMLButtonElement>('[data-testid="challenge-accept"]')?.click();
+    await nextTick();
+    expect(answers[0]?.secret).toBeUndefined();
+  });
+
+  it('drops the typed password when the surface is closed and re-opened on the same challenge', async () => {
+    const answers: Array<{ challengeId: string; accept: boolean; secret?: string }> = [];
+    const live = mountLive({
+      challenge: challengeFields('challenge-1', 'password', 'Password:'),
+      onChallengeAnswer: (answer: { challengeId: string; accept: boolean; secret?: string }) => answers.push(answer),
+    });
+    await type('challenge-secret', SECRET);
+
+    live.state.open = false;
+    await nextTick();
+    live.state.open = true;
+    await nextTick();
+
+    const input = live.root.querySelector<HTMLInputElement>('[data-testid="challenge-secret"]');
+    expect(input?.value).toBe('');
+    expect(live.root.querySelector<HTMLButtonElement>('[data-testid="challenge-accept"]')?.disabled).toBe(true);
+
+    live.root.querySelector<HTMLButtonElement>('[data-testid="challenge-accept"]')?.click();
+    await nextTick();
+    expect(answers).toEqual([]);
+
+    await type('challenge-secret', SECRET);
+    live.root.querySelector<HTMLButtonElement>('[data-testid="challenge-accept"]')?.click();
+    await nextTick();
+    expect(answers).toEqual([{ challengeId: 'challenge-1', accept: true, secret: SECRET }]);
+  });
+
+  it('still hands over the secret for the challenge it was typed against', async () => {
+    const answers: Array<{ challengeId: string; accept: boolean; secret?: string }> = [];
+    const live = mountLive({
+      challenge: challengeFields('challenge-1', 'password', 'Password:'),
+      onChallengeAnswer: (answer: { challengeId: string; accept: boolean; secret?: string }) => answers.push(answer),
+    });
+    await type('challenge-secret', SECRET);
+    live.root.querySelector<HTMLButtonElement>('[data-testid="challenge-accept"]')?.click();
+    await nextTick();
+    expect(answers).toEqual([{ challengeId: 'challenge-1', accept: true, secret: SECRET }]);
+  });
+});
+
 
 // ---------------------------------------------------------------------------
 // 5. A visible compute node AND a stable environment distinction
@@ -558,18 +712,26 @@ describe('the Slurm execution form shows an explicit resource and time preview',
       input.value = value;
       input.dispatchEvent(new Event('input'));
     };
+    // The draft is filled to MATCH the preview on screen. The submitted request is the preview:
+    // a form whose resources differ from the displayed preview is refused, not sent.
     set('slurm-partition', 'cpu');
     set('slurm-account', 'research');
-    set('slurm-memory', '4096');
+    set('slurm-cpus', '5');
+    set('slurm-memory', '4224');
     set('slurm-time', '01:00:00');
+    set('slurm-gres', 'none');
     await nextTick();
     root.querySelector<HTMLButtonElement>('[data-testid="slurm-form-submit"]')?.click();
     await nextTick();
 
     expect(submitted).toEqual([{
-      resources: { partition: 'cpu', account: 'research', cpus: 1, memory: '4096', time: '01:00:00', gres: 'none' },
+      resources: { partition: 'cpu', account: 'research', cpus: 5, memory: '4224', time: '01:00:00', gres: 'none' },
       ownership: 'owned',
     }]);
+    // What was displayed is what was requested.
+    expect(root.querySelector('[data-testid="slurm-resource-preview"]')?.getAttribute('data-cpus')).toBe('5');
+    expect(root.querySelector('[data-testid="slurm-resource-preview"]')?.getAttribute('data-memory-mib')).toBe('4224');
+    expect(root.querySelector('[data-testid="slurm-resource-preview"]')?.getAttribute('data-bound')).toBe('true');
   });
 
   it('refuses to submit a request whose time or gres is blank', async () => {
@@ -608,5 +770,124 @@ describe('the Slurm execution form shows an explicit resource and time preview',
     const root = mount(SlurmExecutionForm, { available: false, unavailableReason: 'No managed bridge: Slurm is unavailable', preview });
     expect(root.querySelector('[data-testid="slurm-form-unavailable"]')?.textContent).toContain('No managed bridge');
     expect(root.querySelector<HTMLButtonElement>('[data-testid="slurm-form-submit"]')?.disabled).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #184 finding 4 — the preview shown IS the request submitted
+// ---------------------------------------------------------------------------
+
+describe('the Slurm execution form binds the preview to the request it submits', () => {
+  const matching = Object.freeze({
+    nodes: 1, ntasks: 1, cpus: 5, memory: '4224M', memoryMiB: 4224,
+    time: '01:00:00', timeSeconds: 3600, gres: 'none', requestsGpu: false,
+    partition: 'cpu', account: 'research',
+  });
+
+  function fill(root: HTMLDivElement, values: Record<string, string>) {
+    for (const [testId, value] of Object.entries(values)) {
+      const input = root.querySelector<HTMLInputElement>(`[data-testid="${testId}"]`)!;
+      input.value = value;
+      input.dispatchEvent(new Event('input'));
+    }
+  }
+
+  function mountLive(initial: Record<string, unknown>) {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    const state = reactive({ ...initial });
+    const app = createApp({
+      setup() {
+        return () => h(SlurmExecutionForm as never, state);
+      },
+    });
+    const i18n = createI18n({ legacy: false, locale: 'en', messages: { en: {} }, missingWarn: false, fallbackWarn: false });
+    app.use(i18n);
+    app.mount(host);
+    return { root: host, state };
+  }
+
+  function previewAttributes(root: HTMLDivElement) {
+    const surface = root.querySelector('[data-testid="slurm-resource-preview"]');
+    return {
+      gres: surface?.getAttribute('data-gres') ?? null,
+      timeSeconds: surface?.getAttribute('data-time-seconds') ?? null,
+      cpus: surface?.getAttribute('data-cpus') ?? null,
+      memoryMiB: surface?.getAttribute('data-memory-mib') ?? null,
+      partition: surface?.getAttribute('data-partition') ?? null,
+    };
+  }
+
+  it('refuses to submit resources the displayed preview no longer describes', async () => {
+    const submitted: Array<{ resources: { gres: string; time: string } }> = [];
+    const root = mount(SlurmExecutionForm, {
+      available: true,
+      preview: matching,
+      onSubmit: (request: unknown) => submitted.push(request as { resources: { gres: string; time: string } }),
+    });
+    fill(root, { 'slurm-partition': 'cpu', 'slurm-account': 'research', 'slurm-cpus': '5', 'slurm-memory': '4224', 'slurm-time': '01:00:00', 'slurm-gres': 'none' });
+    await nextTick();
+
+    fill(root, { 'slurm-gres': 'gpu:a100:2', 'slurm-time': '10:00:00' });
+    await nextTick();
+    root.querySelector<HTMLButtonElement>('[data-testid="slurm-form-submit"]')?.click();
+    await nextTick();
+
+    const displayed = previewAttributes(root);
+    expect(submitted).toHaveLength(0);
+    expect(displayed.gres).toBe('none');
+    expect(displayed.timeSeconds).toBe('3600');
+    expect(root.querySelector('[data-testid="slurm-form-problems"]')?.textContent).toContain('preview');
+  });
+
+  it('asks for a fresh preview whenever the resource draft changes, so the preview can be re-bound', async () => {
+    const requests: unknown[] = [];
+    const root = mount(SlurmExecutionForm, {
+      available: true,
+      preview: matching,
+      onSubmit: () => {},
+      onPreviewRequest: (draft: unknown) => requests.push(draft),
+    });
+    fill(root, { 'slurm-partition': 'cpu', 'slurm-account': 'research', 'slurm-cpus': '5', 'slurm-memory': '4224', 'slurm-time': '01:00:00', 'slurm-gres': 'none' });
+    await nextTick();
+
+    fill(root, { 'slurm-gres': 'gpu:a100:2' });
+    await nextTick();
+
+    expect(requests.length).toBeGreaterThan(0);
+    const last = requests[requests.length - 1] as { resources: { gres: string } };
+    expect(last.resources.gres).toBe('gpu:a100:2');
+  });
+
+  it('submits once a preview that describes the edited request arrives', async () => {
+    const submitted: Array<{ resources: { gres: string; time: string } }> = [];
+    const live = mountLive({
+      available: true,
+      preview: matching,
+      onSubmit: (request: unknown) => submitted.push(request as { resources: { gres: string; time: string } }),
+    });
+    fill(live.root, { 'slurm-partition': 'cpu', 'slurm-account': 'research', 'slurm-cpus': '5', 'slurm-memory': '4224', 'slurm-time': '01:00:00', 'slurm-gres': 'none' });
+    await nextTick();
+
+    fill(live.root, { 'slurm-gres': 'gpu:a100:2', 'slurm-time': '10:00:00' });
+    await nextTick();
+    live.root.querySelector<HTMLButtonElement>('[data-testid="slurm-form-submit"]')?.click();
+    await nextTick();
+    expect(submitted).toHaveLength(0);
+
+    live.state.preview = Object.freeze({
+      ...matching, gres: 'gpu:a100:2', requestsGpu: true, time: '10:00:00', timeSeconds: 36000,
+    });
+    await nextTick();
+    live.root.querySelector<HTMLButtonElement>('[data-testid="slurm-form-submit"]')?.click();
+    await nextTick();
+
+    expect(submitted).toEqual([{
+      resources: { partition: 'cpu', account: 'research', cpus: 5, memory: '4224', time: '10:00:00', gres: 'gpu:a100:2' },
+      ownership: 'owned',
+    }]);
+    const displayed = previewAttributes(live.root);
+    expect(displayed.gres).toBe('gpu:a100:2');
+    expect(displayed.timeSeconds).toBe('36000');
   });
 });
