@@ -3,6 +3,27 @@ import { parseSessionRef, encodeSessionKey } from '../../../shared/runtime/ident
 import { StoreError } from '../storage/storeProtocol.js';
 import { record, text } from '../../../shared/runtime/native/acp/capabilities.js';
 
+// ACP session/list takes no page-size parameter, so a conforming agent may answer with any
+// number of sessions and the adapter - not the agent - decides how much of that answer
+// reaches the index in one discovery round. The index commits one bounded transaction
+// batch per scheduler round, so this adapter buffers each native response and hands it out
+// in internal pages of at most NATIVE_PAGE_SIZE items, advancing its own opaque cursor
+// over the buffer. The DSH driver already uses this shape for its unbounded native
+// snapshot (dshDriver.js:199-228). Handing the whole native answer over at once is what
+// made a 600+ session account blow the scheduler's per-round deadline and lose the page.
+const NATIVE_PAGE_SIZE = 200;
+// Adapter-local fences, NOT protocol bounds: the ACP specification defines no maximum
+// page size for session/list (its request has no limit parameter at all and it only says
+// agents SHOULD enforce reasonable page sizes internally), so nothing here is a contract
+// an agent is required to honor. They bound this process's memory and cursor lifetime and
+// must never be restated elsewhere as a native limit.
+const ACP_SESSION_LIMITS = Object.freeze({
+  nativePage: 1000,
+  internalPage: NATIVE_PAGE_SIZE,
+  cached: 1000,
+  cursorRounds: 1000,
+  cursors: 128,
+});
 export function createAcpSessions({ rpc, mutations, capabilities, queue, cwd, emit }) {
   const sessions = new Map();
   const cursors = new Map();
@@ -26,7 +47,7 @@ export function createAcpSessions({ rpc, mutations, capabilities, queue, cwd, em
       native: { ...sessions.get(session.nativeSessionId)?.native, ...result },
     };
     sessions.set(session.nativeSessionId, value);
-    if (sessions.size > 1000) sessions.delete(sessions.keys().next().value);
+    if (sessions.size > ACP_SESSION_LIMITS.cached) sessions.delete(sessions.keys().next().value);
     return value;
   }
   async function create(input) {
@@ -64,6 +85,12 @@ export function createAcpSessions({ rpc, mutations, capabilities, queue, cwd, em
       };
     });
   }
+  function keep(state) {
+    const cursor = randomUUID();
+    cursors.set(cursor, state);
+    if (cursors.size > ACP_SESSION_LIMITS.cursors) cursors.delete(cursors.keys().next().value);
+    return cursor;
+  }
   async function list(input = {}) {
     if (!capabilities.list)
       return {
@@ -72,28 +99,41 @@ export function createAcpSessions({ rpc, mutations, capabilities, queue, cwd, em
         cursor: null,
         reason: 'native_session_list_unsupported',
       };
-    const page = input.cursor ? cursors.get(input.cursor) : { seen: [], native: null };
-    if (!page) throw new StoreError('invalid_request', 'session_cursor');
-    const response = record(
-      await rpc.request('session/list', { cwd, ...(page.native ? { cursor: page.native } : {}) }),
-    );
-    if (!Array.isArray(response.sessions) || response.sessions.length > 1000)
-      throw new StoreError('invalid_request', 'session_list');
-    const items = response.sessions.map((item) => register(record(item)));
-    const next = response.nextCursor;
-    if (next === undefined || next === null)
+    const held = input.cursor ? cursors.get(input.cursor) : null;
+    if (input.cursor && !held) throw new StoreError('invalid_request', 'session_cursor');
+    let state = held;
+    if (state === null || state.offset >= state.buffer.length) {
+      const send = state === null ? null : state.next;
+      const response = record(
+        await rpc.request('session/list', { cwd, ...(send === null ? {} : { cursor: send }) }),
+      );
+      if (!Array.isArray(response.sessions) || response.sessions.length > ACP_SESSION_LIMITS.nativePage)
+        throw new StoreError('invalid_request', 'session_list');
+      const buffer = response.sessions.map((item) => register(record(item)));
+      // The index dedupes one internal page at a time, so a native answer that repeats a
+      // session across two internal pages has to be fenced here or it would slip through.
+      if (new Set(buffer.map((item) => item.session.nativeSessionId)).size !== buffer.length)
+        throw new StoreError('reconcile_required', 'index_duplicate_page');
+      const next = response.nextCursor ?? null;
+      const seen = state === null ? [] : state.seen;
+      if (next !== null) {
+        text(next);
+        if (send === next || seen.includes(next))
+          return { items: buffer, status: 'partial', cursor: null, reason: 'repeated_cursor' };
+        if (seen.length >= ACP_SESSION_LIMITS.cursorRounds)
+          return { items: buffer, status: 'partial', cursor: null, reason: 'cursor_budget' };
+      }
+      state = { next, seen: next === null ? seen : [...seen, next], buffer, offset: 0 };
+    }
+    const items = state.buffer.slice(state.offset, state.offset + ACP_SESSION_LIMITS.internalPage);
+    const drained = state.offset + items.length;
+    if (drained < state.buffer.length)
+      return { items, status: 'partial', cursor: keep({ ...state, offset: drained }) };
+    if (state.next === null)
       return capabilities.listCompleteness === 'bounded'
         ? { items, status: 'partial', cursor: null, reason: 'native_session_list_bounded' }
         : { items, status: 'complete', cursor: null };
-    text(next);
-    if (page.native === next || page.seen.includes(next))
-      return { items, status: 'partial', cursor: null, reason: 'repeated_cursor' };
-    if (page.seen.length >= 1000)
-      return { items, status: 'partial', cursor: null, reason: 'cursor_budget' };
-    const cursor = randomUUID();
-    cursors.set(cursor, { native: next, seen: [...page.seen, next] });
-    if (cursors.size > 128) cursors.delete(cursors.keys().next().value);
-    return { items, status: 'partial', cursor };
+    return { items, status: 'partial', cursor: keep({ next: state.next, seen: state.seen, buffer: [], offset: 0 }) };
   }
   function update(params) {
     const input = record(params);
