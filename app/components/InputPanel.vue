@@ -126,7 +126,7 @@
         :aria-expanded="mentionOpen"
         :aria-controls="mentionOpen ? mentionListboxId : undefined"
         :aria-activedescendant="mentionOpen ? activeMentionOptionId || undefined : undefined"
-        :disabled="false"
+        :readonly="props.readOnly"
         :placeholder="$t('inputPanel.placeholder')"
         @input="handleTextInput"
         @keydown="handleKeydown"
@@ -193,6 +193,7 @@
           <button
             type="button"
             class="attachment-remove"
+            :disabled="props.readOnly"
             @click="$emit('remove-attachment', item.id)"
           >
             <Icon icon="lucide:x" :width="12" :height="12" />
@@ -548,7 +549,7 @@
             v-else
             type="button"
             class="input-button primary send-button"
-            :disabled="!canRunCodexCommand && !canRunForgeCommand && (props.disabled || !canSend)"
+            :disabled="props.readOnly || (!canRunCodexCommand && !canRunForgeCommand && (props.disabled || !canSend))"
             :title="sendTooltip"
             @click="$emit('send')"
           >
@@ -561,7 +562,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch, inject } from 'vue';
+import { computed, nextTick, ref, watch, inject, type Ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import { FileIcon, FolderIcon } from '@vue-symbols/icons';
@@ -664,6 +665,7 @@ const props = defineProps<{
   agentColor?: string;
   resolveAgentColor?: (agent?: string) => string;
   disabled?: boolean;
+  readOnly?: boolean;
   activeDirectory?: string;
   activeFile?: string;
 }>();
@@ -695,7 +697,7 @@ const emit = defineEmits<{
 
 const messageValue = computed({
   get: () => props.messageInput,
-  set: (value) => emit('update:message-input', value),
+  set: (value) => { if (!props.readOnly) emit('update:message-input', value); },
 });
 const permissionModeOptions = computed(() => props.permissionModeOptions ?? []);
 const permissionModeValue = computed({
@@ -879,6 +881,7 @@ const userHistory = computed(() => {
 });
 
 function applyHistoryEntry(entry: HistoryEntry) {
+  if (props.readOnly) return;
   emit('apply-history-entry', {
     text: entry.text,
     agent: entry.agent,
@@ -1057,6 +1060,7 @@ function syncTextCursor(event: Event) {
 }
 
 function handleTextInput(event: Event) {
+  if (props.readOnly) return;
   textTransformerInputRevision += 1;
   syncTextCursor(event);
 }
@@ -1333,6 +1337,7 @@ function textTransformerSelectionChanged(snapshot: TextTransformerSelectionSnaps
 }
 
 async function applyTextTransformerSelection(id: string) {
+  if (props.readOnly) return;
   const applicationGeneration = ++textTransformerApplicationGeneration;
   const transformer = normalizedTextTransformers.value.find((item) => item.id === id);
   if (!transformer) return;
@@ -1411,39 +1416,32 @@ function applyCommandSelection(name: string) {
 function applyAgentSelection(id: string) {
   const agent = findAgent(id);
   if (!agent) return;
+  applyMentionSelection('@', agent.label, agentPopupDismissed);
+}
 
+function applyMentionSelection(marker: string, label: string, popupDismissed: Ref<boolean>) {
   const textarea = textareaRef.value;
   const value = messageValue.value;
   const cursorPos = textarea?.selectionStart ?? value.length;
-
-  // Find the last @ before cursor
   const textBeforeCursor = value.slice(0, cursorPos);
-  const lastAtIndex = textBeforeCursor.lastIndexOf('@');
-  if (lastAtIndex === -1) return;
-
-  // Find where the @query ends (next whitespace or cursor position)
-  const textAfterAt = value.slice(lastAtIndex + 1);
-  const whitespaceMatch = textAfterAt.match(/\s/);
-  const queryEndOffset = whitespaceMatch ? whitespaceMatch.index! : textAfterAt.length;
-  const queryEndPos = lastAtIndex + 1 + queryEndOffset;
-
-  // Build new value: text before @ + @agentName + space + text after query
-  const beforeAt = value.slice(0, lastAtIndex);
+  const markerIndex = textBeforeCursor.lastIndexOf(marker);
+  if (markerIndex === -1) return;
+  const textAfterMarker = value.slice(markerIndex + 1);
+  const whitespaceMatch = textAfterMarker.match(/\s/);
+  const queryEndOffset = whitespaceMatch ? whitespaceMatch.index! : textAfterMarker.length;
+  const queryEndPos = markerIndex + 1 + queryEndOffset;
+  const beforeMarker = value.slice(0, markerIndex);
   const afterQuery = value.slice(queryEndPos);
-  const newValue = beforeAt + '@' + agent.label + ' ' + afterQuery;
-
-  messageValue.value = newValue;
+  messageValue.value = beforeMarker + marker + label + ' ' + afterQuery;
 
   // Dismiss popup - use double nextTick to ensure it happens after watch resets it
   nextTick(() => {
     nextTick(() => {
-      agentPopupDismissed.value = true;
+      popupDismissed.value = true;
     });
   });
-
-  // Set cursor position after the inserted agent name + space
   nextTick(() => {
-    const newCursorPos = lastAtIndex + agent.label.length + 2; // +2 for '@' and ' '
+    const newCursorPos = markerIndex + label.length + 2;
     textarea?.setSelectionRange(newCursorPos, newCursorPos);
     textarea?.focus();
   });
@@ -1452,33 +1450,7 @@ function applyAgentSelection(id: string) {
 function applySkillSelection(name: string) {
   const skill = (props.availableSkills ?? []).find((s) => s.name === name);
   if (!skill) return;
-
-  const textarea = textareaRef.value;
-  const value = messageValue.value;
-  const cursorPos = textarea?.selectionStart ?? value.length;
-  const textBeforeCursor = value.slice(0, cursorPos);
-  const lastDollar = textBeforeCursor.lastIndexOf('$');
-  if (lastDollar === -1) return;
-  const textAfterDollar = value.slice(lastDollar + 1);
-  const whitespaceMatch = textAfterDollar.match(/\s/);
-  const queryEndOffset = whitespaceMatch ? whitespaceMatch.index! : textAfterDollar.length;
-  const queryEndPos = lastDollar + 1 + queryEndOffset;
-
-  const beforeDollar = value.slice(0, lastDollar);
-  const afterQuery = value.slice(queryEndPos);
-  messageValue.value = beforeDollar + '$' + skill.name + ' ' + afterQuery;
-
-  nextTick(() => {
-    nextTick(() => {
-      skillPopupDismissed.value = true;
-    });
-  });
-
-  nextTick(() => {
-    const newCursorPos = lastDollar + skill.name.length + 2; // +2 for '$' and ' '
-    textarea?.setSelectionRange(newCursorPos, newCursorPos);
-    textarea?.focus();
-  });
+  applyMentionSelection('$', skill.name, skillPopupDismissed);
 }
 
 function nextCyclicIndex(current: string | undefined, options: Array<string | undefined>) {
@@ -1541,6 +1513,7 @@ function handleModelDropdownOpenChange(open: boolean) {
 }
 
 function handleKeydown(event: KeyboardEvent) {
+  if (props.readOnly) return;
   if (event.isComposing) return;
   syncTextCursor(event);
   const isPlainEnter =
@@ -1657,10 +1630,12 @@ function handleKeydown(event: KeyboardEvent) {
 }
 
 function triggerFileInput() {
+  if (props.readOnly) return;
   fileInputRef.value?.click();
 }
 
 function handleFileChange(event: Event) {
+  if (props.readOnly) return;
   const input = event.target as HTMLInputElement | null;
   const files = input?.files ? Array.from(input.files) : [];
   if (files.length > 0) emit('add-attachments', files);
@@ -1671,6 +1646,7 @@ function handleFileChange(event: Event) {
 }
 
 function handlePaste(event: ClipboardEvent) {
+  if (props.readOnly) { event.preventDefault(); return; }
   const items = event.clipboardData?.items ? Array.from(event.clipboardData.items) : [];
   if (items.length === 0) return;
   const files = items
@@ -1683,6 +1659,7 @@ function handlePaste(event: ClipboardEvent) {
 }
 
 function handleDrop(event: DragEvent) {
+  if (props.readOnly) { event.preventDefault(); return; }
   const files = event.dataTransfer?.files ? Array.from(event.dataTransfer.files) : [];
   if (files.length === 0) return;
   event.preventDefault();
@@ -1811,6 +1788,13 @@ function reset() {
   favoritesOpen.value = false;
   modelSearchQuery.value = '';
 }
+
+watch(() => props.readOnly, (readOnly) => {
+  if (!readOnly) return;
+  historyOpen.value = false;
+  favoritesOpen.value = false;
+  dismissActiveMention();
+});
 
 const canRunCodexCommand = computed(() =>
   props.codexCommandsEnabled === true && parseLeadingSlashCommand(props.messageInput) !== null,

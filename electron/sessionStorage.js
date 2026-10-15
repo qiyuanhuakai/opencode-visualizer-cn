@@ -107,6 +107,7 @@ export function createLegacyExportStorage(filePath) {
   return {
     exportOpen: () => send('exportOpen'),
     exportPage: (request) => send('exportPage', request),
+    exportBinding: (request) => send('exportBinding', request),
     async close() { closed = true; fail(new Error('source_unavailable')); await worker.terminate(); },
   };
 }

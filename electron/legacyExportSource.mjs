@@ -3,7 +3,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { LegacyExportError, streamStringMap, stringChunks } from '../shared/runtime/migration/streamingJson.js';
-import { openLegacyExport, readLegacyExportPage } from '../shared/runtime/migration/legacyExport.js';
+import { openLegacyExport, readLegacyExportPage, resolveLegacyLocalBinding } from '../shared/runtime/migration/legacyExport.js';
 
 function exists(file) {
   try { if (!fs.lstatSync(file).isFile()) throw new LegacyExportError('corrupt_source'); return true; }
@@ -69,6 +69,25 @@ export function createElectronLegacySource(filePath) {
   };
 }
 
+
+async function localBindingHint(source, sourceKey) {
+  if (typeof sourceKey !== 'string' || !/^[a-f0-9]{64}$/u.test(sourceKey)) throw new LegacyExportError('invalid_request');
+  const local = await resolveLegacyLocalBinding(source, sourceKey);
+  if (local.key === 'opencode.drafts.composer.v1') return { sourceKey, kind: 'composer' };
+  if (local.key === 'opencode.drafts.question.v1') return { sourceKey, kind: 'question' };
+  let nativeSessionId; let scopeFingerprint;
+  const scoped = /^opencode\.state\.backendHistory\.v1\.([a-f0-9]{32})\.(.+)$/u.exec(local.key);
+  try {
+    if (scoped) { nativeSessionId = decodeURIComponent(scoped[2]); scopeFingerprint = createHash('sha256').update('backend-history-v1:' + scoped[1]).digest('hex'); }
+    else if (local.namespace.startsWith('backend-history-v1:')) {
+      const tuple = JSON.parse(local.key); if (Array.isArray(tuple) && typeof tuple[2] === 'string') nativeSessionId = tuple[2];
+      scopeFingerprint = createHash('sha256').update(local.namespace).digest('hex');
+    }
+  } catch { return { sourceKey, kind: 'local' }; }
+  if (!nativeSessionId || nativeSessionId.length > 1024 || /[:@/?#]/u.test(nativeSessionId) || [...nativeSessionId].some(char => char.charCodeAt(0) < 32)) return { sourceKey, kind: 'local' };
+  return { sourceKey, kind: 'history', nativeSessionId, scopeFingerprint };
+}
+
 export function serveLegacyExportWorker(port, filePath) {
   const source = createElectronLegacySource(filePath);
   let pending = Promise.resolve();
@@ -79,6 +98,7 @@ export function serveLegacyExportWorker(port, filePath) {
         switch (method) {
           case 'exportOpen': value = await openLegacyExport(source); break;
           case 'exportPage': value = await readLegacyExportPage(source, payload); break;
+          case 'exportBinding': value = await localBindingHint(source, payload?.sourceKey); break;
           case 'close': port.postMessage({ id, ok: true }); port.close(); return;
           default: throw new LegacyExportError('invalid_request');
         }

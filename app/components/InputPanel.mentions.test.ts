@@ -7,6 +7,49 @@ vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 describe('composer file mentions', () => {
   afterEach(cleanupInputPanelFixtures);
 
+  it.each(['@', '$'])('preserves %s replacement boundaries, cursor, focus and popup dismissal', async marker => {
+    const { root, props } = mountInputPanel({
+      messageInput: marker,
+      agentOptions: [{ id: 'review', label: 'Review Agent' }],
+      availableSkills: [{ name: 'review', description: 'Review changes', enabled: true }],
+    });
+    props['onUpdate:messageInput'] = value => { props.messageInput = value; };
+    await nextTick();
+    const input = root.querySelector('textarea')!;
+    props.messageInput = `prefix ${marker}rev tail`;
+    input.value = props.messageInput;
+    input.setSelectionRange(11, 11);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await nextTick();
+    const option = root.querySelector<HTMLElement>('#input-mention-listbox [role="option"]');
+    expect(option).not.toBeNull();
+    option!.click();
+    const label = marker === '@' ? 'Review Agent' : 'review';
+    await vi.waitFor(() => {
+      expect(props.messageInput).toBe(`prefix ${marker}${label}  tail`);
+      expect(input.selectionStart).toBe(7 + label.length + 2);
+      expect(input.selectionEnd).toBe(input.selectionStart);
+      expect(document.activeElement).toBe(input);
+      expect(input.getAttribute('aria-expanded')).toBe('false');
+    });
+  });
+
+  it.each(['@', '$'])('rejects %s keyboard selection when read-only', async marker => {
+    const update = vi.fn();
+    const { root } = mountInputPanel({
+      messageInput: marker, readOnly: true,
+      agentOptions: [{ id: 'review', label: 'Review Agent' }],
+      availableSkills: [{ name: 'review', description: 'Review changes', enabled: true }],
+      'onUpdate:messageInput': update,
+    });
+    await nextTick();
+    const input = root.querySelector('textarea')!;
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    expect(update).not.toHaveBeenCalled();
+    expect(input.value).toBe(marker);
+    expect(input.readOnly).toBe(true);
+  });
+
   it.each([
     ['kimi-web', [{ id: 'manual', label: 'manual' }]],
     ['codex', [{ id: 'default', label: 'Default' }, { id: 'plan', label: 'Plan' }]],

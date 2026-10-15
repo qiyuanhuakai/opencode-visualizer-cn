@@ -1,3 +1,4 @@
+import { legacyEditingPaused, registerLegacyWriter, retainFrozenLegacyWrite } from '../../runtime/migration/writerFreeze';
 import { StorageKeys, storageGetJSON, storageKey, storageRemove, storageSetJSON } from '../../utils/storageKeys';
 import { clearNativeAuxiliaryHistory, flushNativeAuxiliaryStorage, hydrateNativeAuxiliaryHistory, initializeNativeAuxiliaryStorage, nativeAuxiliaryDatabase, readNativeAuxiliarySnapshot, writeNativeAuxiliarySnapshot } from './nativeAuxiliaryStorage';
 
@@ -8,6 +9,11 @@ const snapshots = new Map<string, string | null>();
 const generations = new Map<string, number>();
 const pending = new Set<Promise<void>>();
 const electronPending = new Map<string, string | null>();
+type AuxiliaryWrite = Readonly<{ key: string; value: string | null; generation: number; electron: boolean }>;
+const writes: AuxiliaryWrite[] = [];
+let writeBytes = 0;
+let writing: Promise<void> | undefined;
+let writeFailure: unknown;
 let database: IDBDatabase | null = null;
 let initialization: Promise<void> | null = null;
 let channel: BroadcastChannel | null = null;
@@ -53,7 +59,7 @@ function synchronizeKey(key: string): Promise<void> {
     transaction.onabort = () => reject(transaction.error);
     transaction.oncomplete = () => {
       const value: unknown = request.result;
-      if (connection === database && generation === generations.get(key)
+      if (connection === database && generation === generations.get(key) && !writes.some(write => write.key === key)
         && (typeof value === 'string' || value === undefined)) {
         snapshots.set(key, value ?? null);
       }
@@ -81,6 +87,7 @@ function listenForChanges() {
 }
 
 function hydrateAndMigrate(connection: IDBDatabase): Promise<void> {
+  if (legacyEditingPaused()) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const transaction = connection.transaction(STORE, 'readwrite');
     const store = transaction.objectStore(STORE);
@@ -169,11 +176,43 @@ function persist(key: string, value: string | null): Promise<void> {
   });
 }
 
-function update(key: string, value: string | null) {
-  generations.set(key, (generations.get(key) ?? 0) + 1);
-  snapshots.set(key, value);
-  track(database ? persist(key, value) : initializeCodexAuxiliaryStorage().then(() => persist(key, value)));
+function admitWrite(key: string, value: string | null, electron: boolean): void {
+  if (retainFrozenLegacyWrite({ channel: 'codex-history', key, value })) return;
+  const size = value === null ? 0 : value.length * 2;
+  if (writeFailure !== undefined || writes.length >= 32 || writeBytes + size > 8 * 1024 * 1024) {
+    throw new Error('Auxiliary history persistence paused; retry pending writes');
+  }
+  const generation = (generations.get(key) ?? 0) + 1;
+  generations.set(key, generation);
+  if (electron) electronPending.set(key, value);
+  else snapshots.set(key, value);
+  writes.push({ key, value, generation, electron });
+  writeBytes += size;
+  void pumpWrites();
 }
+
+function pumpWrites(): Promise<void> {
+  if (writing) return writing;
+  writeFailure = undefined;
+  writing = (async () => {
+    while (writes.length) {
+      const write = writes[0]!;
+      if (write.electron) {
+        const storage = window.electronAPI?.persistentStorage;
+        if (!storage?.setItemAsync || !await storage.setItemAsync(write.key, write.value)) throw new Error('Native auxiliary history write failed');
+        if (generations.get(write.key) === write.generation) electronPending.delete(write.key);
+      } else {
+        await initializeCodexAuxiliaryStorage();
+        await persist(write.key, write.value);
+      }
+      writes.shift();
+      writeBytes -= write.value === null ? 0 : write.value.length * 2;
+    }
+  })().catch((error: unknown) => { writeFailure = error; reportFailure(error); }).finally(() => { writing = undefined; });
+  return writing;
+}
+
+function update(key: string, value: string | null) { admitWrite(key, value, false); }
 
 export function readCodexAuxiliarySnapshot(threadId: string): unknown {
   if (nativeAuxiliaryDatabase()) return readNativeAuxiliarySnapshot(threadId);
@@ -229,13 +268,7 @@ export function removeCodexAuxiliarySnapshot(threadId: string): void {
 function persistElectron(key: string, value: string | null): boolean {
   const setItemAsync = typeof window !== 'undefined' && window.electronAPI?.persistentStorage?.setItemAsync;
   if (!setItemAsync) return false;
-  const generation = (generations.get(key) ?? 0) + 1;
-  generations.set(key, generation);
-  electronPending.set(key, value);
-  track(setItemAsync(key, value).then((ok) => {
-    if (!ok) throw new Error('Native auxiliary history write failed');
-    if (generations.get(key) === generation) electronPending.delete(key);
-  }));
+  admitWrite(key, value, true);
   return true;
 }
 
@@ -243,6 +276,11 @@ export async function flushCodexAuxiliaryStorage(): Promise<void> {
   if (nativeAuxiliaryDatabase()) await flushNativeAuxiliaryStorage();
   await initialization;
   while (pending.size > 0) await Promise.all(pending);
+  if (writing) await writing;
+  else if (writes.length) await pumpWrites();
+  if (writeFailure !== undefined) throw writeFailure;
 }
+
+registerLegacyWriter(flushCodexAuxiliaryStorage);
 
 if (import.meta.hot) import.meta.hot.dispose(closeConnection);
