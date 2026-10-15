@@ -2,6 +2,9 @@ import { parseEnvironmentId, parseHarnessInstanceId, parseInstanceId, parseSessi
 import { StoreError } from './storage/storeProtocol.js';
 
 const kinds = ['opencode', 'codex', 'acp', 'kimi-web', 'dsh'];
+// ACP session/list carries no page-size parameter, so its adapter bounds the response itself.
+const nativePageBudgets = Object.freeze({ acp: 1000 });
+function pageBudget(kind) { return nativePageBudgets[kind] ?? 200; }
 function record(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new StoreError('invalid_request', 'index_object');
   return value;
@@ -83,11 +86,15 @@ export function matchesScope(summary, scope) {
 }
 export function nativePage(source, input) {
   const page = record(input);
-  if (!Array.isArray(page.items) || page.items.length > 200) throw new StoreError('source_unavailable', 'index_native_page_budget');
+  if (!Array.isArray(page.items) || page.items.length > pageBudget(source.kind)) throw new StoreError('source_unavailable', 'index_native_page_budget');
   const completeness = source.kind === 'acp' ? page.status : page.completeness;
   if (!['complete', 'partial', 'unsupported'].includes(completeness)) throw new StoreError('invalid_request', 'index_completeness');
   const cursor = page.cursor == null ? null : text(page.cursor, 16384);
-  if (cursor === '' || (cursor !== null && page.items.length === 0)) throw new StoreError('reconcile_required', 'index_cursor_progress');
+  // An empty page that advances the cursor is legal: Codex discovery ends the unarchived list
+  // with a fresh cursor and switches to the archived list, so an account with no unarchived
+  // session answers with this shape and must still reach archived:true. Cursor cycles stay
+  // fenced by the caller's repeated-cursor and bounded-scan-budget check.
+  if (cursor === '') throw new StoreError('reconcile_required', 'index_cursor_progress');
   const items = page.items.map((item) => sessionSummary(source, item));
   if (Buffer.byteLength(JSON.stringify(items)) > 4194304) throw new StoreError('source_unavailable', 'index_page_bytes');
   const keys = items.map((item) => encodeSessionKey(item.session));

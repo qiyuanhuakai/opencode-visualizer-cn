@@ -159,6 +159,50 @@ describe('progressive native summary index', () => {
       expect((await index.page()).items).toHaveLength(1);
     });
   });
+  it('continues a legal empty native page into the archived Codex list', async () => {
+    const requests: unknown[] = [];
+    await fixture(async ({ params }) => {
+      requests.push(params);
+      if (requests.length === 1) return { items: [], cursor: 'codex-archived-scan', completeness: 'partial', reason: 'more_pages' };
+      return { items: [row('archived-only')], cursor: null, completeness: 'complete' };
+    }, async ({ index, store }) => {
+      const source = await index.attach({ harnessInstanceId, authority: () => ({ epoch, processGeneration: 1 }), subscribe: false });
+      expect(await source.discover()).toMatchObject({ status: 'complete', count: 1 });
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toMatchObject({ cursor: 'codex-archived-scan' });
+      expect((await store.get({ collection: 'session_summaries', key: encodeSessionKey(session('archived-only')) }))?.value).toMatchObject({ title: 'archived-only' });
+    });
+  });
+  it('still fences an empty native page that repeats its cursor', async () => {
+    let calls = 0;
+    await fixture(async () => {
+      calls++;
+      return { items: [], cursor: 'stalled', completeness: 'partial' };
+    }, async ({ index }) => {
+      const source = await index.attach({ harnessInstanceId, authority: () => ({ epoch, processGeneration: 1 }), subscribe: false });
+      expect(await source.discover()).toMatchObject({ status: 'partial', count: 0, reason: 'index_cursor_cycle' });
+      expect(calls).toBe(2);
+      expect((await index.page()).items).toHaveLength(0);
+    });
+  });
+  it('indexes a legal ACP page above the unified page limit', async () => {
+    const items = Array.from({ length: 201 }, (_, index) => ({ session: session(`acp-${index}`), native: { sessionId: `acp-${index}`, cwd: '/repo', title: `acp-${index}` } }));
+    await fixture(async () => ({ items, status: 'complete', cursor: null }), async ({ index, store }) => {
+      const source = await index.attach({ harnessInstanceId, authority: () => ({ epoch, processGeneration: 1 }), subscribe: false });
+      expect(await source.discover()).toMatchObject({ status: 'complete', count: 201 });
+      expect((await store.get({ collection: 'session_summaries', key: encodeSessionKey(session('acp-0')) }))?.value).toMatchObject({ title: 'acp-0' });
+      expect((await store.get({ collection: 'session_summaries', key: encodeSessionKey(session('acp-200')) }))?.value).toMatchObject({ title: 'acp-200' });
+    }, 'acp');
+  }, 30000);
+  it('bounds every native page against the adapter that produced it', () => {
+    const acp = sourceIdentity({ kind: 'acp', environmentId, harnessInstanceId });
+    const codex = sourceIdentity({ kind: 'codex', environmentId, harnessInstanceId });
+    const page = (count: number) => Array.from({ length: count }, (_, index) => ({ session: session(`native-${index}`), native: { sessionId: `native-${index}`, cwd: '/repo', title: `native-${index}` } }));
+    expect(nativePage(codex, { items: [], cursor: 'fresh', completeness: 'partial' })).toMatchObject({ items: [], cursor: 'fresh', reason: 'more_pages' });
+    expect(nativePage(acp, { items: page(1000), status: 'complete' }).items).toHaveLength(1000);
+    expect(() => nativePage(acp, { items: page(1001), status: 'complete' })).toThrow(/index_native_page_budget/);
+    expect(() => nativePage(codex, { items: page(201), completeness: 'complete' })).toThrow(/index_native_page_budget/);
+  });
   it('does not interpret a native sequence as the durable store sequence', async () => {
     await fixture(async () => ({ items: [], cursor: null, completeness: 'complete' }), async ({ index, store }) => {
       const source = await index.attach({ harnessInstanceId, authority: () => ({ epoch, processGeneration: 1 }), subscribe: false });
