@@ -70,6 +70,38 @@
           </div>
         </div>
 
+        <!--
+          Task 35: the thread surface. The container supplies the read models through the injected
+          state; this panel renders them and forwards every action back into the composable, which
+          drives the landed task-31/34 services.
+        -->
+        <ThreadPanel
+          v-if="threadState && threadState.summary.value"
+          variant="panel"
+          :open="true"
+          :thread="threadState.summary.value"
+          :targets="threadState.targets.value"
+          :handoff="threadState.handoff.value"
+          :handoff-ops="threadState.handoffOps.value"
+          :timeline="threadState.timelinePage.value"
+          :draft-text="''"
+          :busy="threadState.busy.value"
+          :error="threadState.error.value"
+          @select-target="onThreadSelectTarget"
+          @activate="onThreadActivate"
+          @leave="onThreadLeave"
+          @resume="onThreadResume"
+          @join="onThreadJoin"
+          @begin-handoff="onThreadBeginHandoff"
+          @prepare-handoff="onThreadPrepareHandoff"
+          @deliver-handoff="onThreadDeliverHandoff"
+          @observe-handoff="onThreadObserveHandoff"
+          @cancel-handoff="onThreadCancelHandoff"
+          @locate-session="onThreadLocateSession"
+          @browse-native-history="() => undefined"
+          @close="onThreadClose"
+        />
+
         <button
           v-show="!isFollowing"
           type="button"
@@ -93,7 +125,7 @@
 
 <script setup lang="ts">
 import { Icon } from '@iconify/vue';
-import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import FileRefPopup from './FileRefPopup.vue';
 import StatusBar from './StatusBar.vue';
@@ -104,6 +136,7 @@ import { useMessages } from '../composables/useMessages';
 import { useAssistantPreRenderer } from '../composables/useAssistantPreRenderer';
 import { useThinkingAnimation } from '../composables/useThinkingAnimation';
 import type { HistoryWindowEntry, MessageDiffEntry, MessageTokens } from '../types/message';
+import type { SessionRef } from '../../shared/runtime/identity.js';
 import type { MessageInfo } from '../types/sse';
 import type { BackendKind } from '../backends/types';
 import { resolveChildOwners } from '../utils/threadSubagents';
@@ -113,6 +146,10 @@ import {
   bindRuntimeAction,
   type RuntimeSessionRuntime,
 } from '../composables/useRuntimeSessionActions';
+import { useRuntimeThreadState } from '../composables/useRuntimeThread';
+
+// Task 35: the full thread surface, lazily loaded so the output panel's entry chunk keeps its size.
+const ThreadPanel = defineAsyncComponent(() => import('./runtime/ThreadView.vue'));
 import {
   initialProgressiveRootWindow,
   preserveProgressiveRootWindowOnAppend,
@@ -188,6 +225,81 @@ const emit = defineEmits<{
 // Task 22: prefer the injected qualified runtime action port for fork/revert;
 // fall back to the legacy emits when no container provides it.
 const runtimeSessionActions = inject<RuntimeSessionRuntime | null>(RUNTIME_SESSION_ACTIONS_KEY, null);
+
+// Task 35: when a container provides the thread state, the output panel hosts the full thread
+// surface — participants, handoff, causal timeline, checkpoint/evidence and per-participant
+// native history. Absent → nothing renders and the panel is unchanged.
+const threadState = useRuntimeThreadState();
+
+/*
+ * Task 35 handlers. Each forwards into the composable, which drives the landed task-31/34
+ * services; the null guard keeps the handlers total even though the template only renders the
+ * panel when the state exists.
+ */
+function onThreadJoin(session: SessionRef): void {
+  if (threadState === null) return;
+  void threadState.joinThread(session);
+}
+
+function onThreadLocateSession(session: SessionRef): void {
+  if (threadState === null) return;
+  threadState.setSelectedSession(session);
+}
+
+function onThreadBeginHandoff(input: {
+  sourceParticipantId: string;
+  targetParticipantId: string;
+  prompt: string;
+  entries: readonly unknown[];
+}): void {
+  if (threadState === null) return;
+  void threadState.beginHandoff(input);
+}
+
+function onThreadSelectTarget(participantId: string): void {
+  if (threadState === null) return;
+  threadState.setTarget(participantId);
+}
+
+function onThreadActivate(participantId: string): void {
+  if (threadState === null) return;
+  void threadState.activateParticipant(participantId);
+}
+
+function onThreadLeave(participantId: string): void {
+  if (threadState === null) return;
+  void threadState.leaveParticipant(participantId);
+}
+
+function onThreadResume(participantId: string): void {
+  if (threadState === null) return;
+  void threadState.resumeParticipant(participantId);
+}
+
+function onThreadPrepareHandoff(prompt: string): void {
+  if (threadState === null) return;
+  void threadState.prepareHandoff(prompt);
+}
+
+function onThreadDeliverHandoff(): void {
+  if (threadState === null) return;
+  void threadState.deliverHandoff();
+}
+
+function onThreadObserveHandoff(nativeEventId: string): void {
+  if (threadState === null) return;
+  void threadState.observeHandoff(nativeEventId);
+}
+
+function onThreadCancelHandoff(reason?: string): void {
+  if (threadState === null) return;
+  void threadState.cancelHandoff(reason);
+}
+
+function onThreadClose(): void {
+  if (threadState === null) return;
+  threadState.closeThread();
+}
 
 function onForkMessage(payload: { sessionId: string; messageId: string }): void {
   const binding = runtimeSessionActions ? bindRuntimeAction(runtimeSessionActions) : null;

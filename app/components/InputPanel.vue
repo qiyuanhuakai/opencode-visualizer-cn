@@ -302,6 +302,24 @@
           </template>
         </Dropdown>
       </div>
+      <!--
+        Task 35: the target row. The chips name every participant the single prompt goes to, and
+        the reserved fan-out marker stays visible next to them until task 42 enables it. The row
+        only renders when a container wired the thread state.
+      -->
+      <div v-if="threadState && threadState.summary.value" class="input-thread-row" data-testid="input-thread-row">
+        <ThreadTargetRow
+          variant="composer"
+          :open="true"
+          :thread="threadState.summary.value"
+          :targets="threadState.targets.value"
+          :handoff="threadState.handoff.value"
+          :draft-text="messageValue"
+          :busy="threadState.busy.value"
+          :error="threadState.error.value"
+          @select-target="threadState.setTarget"
+        />
+      </div>
       <div class="input-toolbar">
         <div class="input-selects">
           <slot name="before-controls" />
@@ -562,7 +580,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch, inject, type Ref } from 'vue';
+import { computed, defineAsyncComponent, nextTick, ref, watch, inject, type Ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import { FileIcon, FolderIcon } from '@vue-symbols/icons';
@@ -596,6 +614,11 @@ import {
   type RuntimeSendInput,
   type RuntimeSessionRuntime,
 } from '../composables/useRuntimeSessionActions';
+import { useRuntimeThreadState } from '../composables/useRuntimeThread';
+
+// Task 35: the thread surfaces are lazily loaded so the composer's entry chunk keeps its size;
+// the panel variant lives in OutputPanel.
+const ThreadTargetRow = defineAsyncComponent(() => import('./runtime/ThreadView.vue'));
 type ModelOption = {
   id: string;
   modelID: string;
@@ -706,6 +729,10 @@ const emit = defineEmits<{
 // provider the component keeps its legacy emits, so existing parents are
 // unaffected.
 const runtimeSessionActions = inject<RuntimeSessionRuntime | null>(RUNTIME_SESSION_ACTIONS_KEY, null);
+
+// Task 35: when a container provides the thread state, the composer shows exactly which
+// participants the input goes to. Absent → the row is not rendered and the composer is unchanged.
+const threadState = useRuntimeThreadState();
 
 function runtimeBinding() {
   return runtimeSessionActions ? bindRuntimeAction(runtimeSessionActions) : null;
@@ -1902,6 +1929,15 @@ const inputMessageStyle = computed(() => {
 
 .input-message:has(.input-textarea:disabled) {
   opacity: 0.6;
+}
+
+.input-thread-row {
+  padding: 0 10px 6px;
+}
+
+.input-thread-row :deep(.target-section) {
+  padding: 6px 8px;
+  gap: 4px;
 }
 
 .input-toolbar {
