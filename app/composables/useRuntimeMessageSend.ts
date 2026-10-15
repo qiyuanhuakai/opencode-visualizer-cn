@@ -86,7 +86,7 @@ export function useRuntimeMessageSend(ctx: RuntimeSendContext, adapter?: Runtime
   // Model selection is per qualified session, never global — a source switch
   // must not leak the previous source's model.
   const models = new Map<string, string>();
-  // The native parent operationId of the last accepted send, per qualified
+  // The native parent operationId of the turn that is actually EXECUTING, per qualified
   // session; a cancel must target the active turn's owner, not an empty id.
   const parents = new Map<string, string>();
   const harness: RuntimeSendAdapter | null =
@@ -100,14 +100,26 @@ export function useRuntimeMessageSend(ctx: RuntimeSendContext, adapter?: Runtime
     const bound = router.bind(session, capture);
     const mutation = router.mutate(bound, 'session.send', router.call(bound, args));
     const key = router.qualifiedKey(session);
-    mutation.accepted.then(
-      (receipt) => {
-        if (typeof receipt?.operationId === 'string' && receipt.operationId.length > 0) {
-          parents.set(key, receipt.operationId);
-        }
-      },
-      () => {},
-    );
+    // A queued receipt is NOT the active turn: it is a message waiting behind whatever is
+    // running. Recording it as the turn owner would make cancelTurn() cancel the QUEUE instead
+    // of stopping the turn the user is waiting on, so only a non-queued send becomes the owner.
+    if (args.queue !== true) {
+      mutation.accepted.then(
+        (receipt) => {
+          if (typeof receipt?.operationId === 'string' && receipt.operationId.length > 0) {
+            const operationId = receipt.operationId;
+            parents.set(key, operationId);
+            // The owner is retired by the turn's own completion, so a later cancel never carries a
+            // stale operationId into a session that is no longer running anything.
+            const retire = () => {
+              if (parents.get(key) === operationId) parents.delete(key);
+            };
+            void mutation.executed.then(retire, retire);
+          }
+        },
+        () => {},
+      );
+    }
     return mutation;
   }
 

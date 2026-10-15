@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import { requireValue, textValue } from '../../../shared/runtime/capabilities.js';
 import { stopProcessTree as defaultStopProcessTree } from '../../processTree.js';
@@ -24,6 +26,15 @@ import { assertComputeTarget, createRelayBinding, createRelayHandshake } from '.
  *    redacted, never merged into the binary stdout stream;
  *  - a relay loss stops and replaces only a step this transport owns, and `srun --parsable
  *    --async` is never used (it is not a compatibility baseline).
+ *
+ * The relay step runs the real `vis_bridge relay --stdio-forward` subcommand: its argument
+ * vector carries the complete binding (environment / job / bridge-instance / compute-node /
+ * compute-local socket / epoch), because a bare `relay` verb is refused by the CLI parser and
+ * cannot establish the channel the login side waits on. The step's stdio is forwarded to the
+ * compute-local socket where the long-term relay listens, and its stdout carries protocol
+ * bytes only. The socket path is `options.relaySocketPath` when the caller knows the deployed
+ * path, and otherwise the documented per-job convention `<tmpdir>/vis-relay-<intentId>.sock`;
+ * either way a missing listener fails the handshake loudly instead of hanging.
  */
 export const STEP_MODES = Object.freeze(['service', 'relay']);
 export const RESERVE_CPUS = 1;
@@ -57,6 +68,8 @@ export function buildAllocationResources(options = {}) {
 /**
  * Builds the structured `srun` argument vector for one step mode. No shell concatenation, no
  * `--parsable`/`--async`, and the node binding / exact / exclusive / GRES flags are always present.
+ * A relay step whose `relay` binding is supplied runs the complete `vis_bridge relay
+ * --stdio-forward` command; without it the caller's own `args` (or the bare verb) are used.
  */
 export function buildStepArgv(options = {}) {
   const mode = options.mode;
@@ -75,6 +88,31 @@ export function buildStepArgv(options = {}) {
     requireValue(Number.isSafeInteger(compute.memoryMiB) && compute.memoryMiB > 0, 'compute.memoryMiB');
     budget = [`--cpus-per-task=${compute.cpus}`, `--mem=${compute.memoryMiB}M`, `--gres=${textValue(options.gres, 'step.gres')}`];
   }
+  let stepArgs;
+  if (mode === 'relay' && options.relay !== undefined && options.relay !== null) {
+    // The complete relay binding: without every one of these the real CLI refuses to start the
+    // relay role and the login side would wait forever for a handshake that can never arrive.
+    const relay = options.relay;
+    requireValue(relay !== null && typeof relay === 'object', 'step.relay');
+    stepArgs = [
+      'relay',
+      '--stdio-forward',
+      '--socket',
+      textValue(relay.socketPath, 'step.relay.socketPath'),
+      '--environment',
+      textValue(relay.environmentId, 'step.relay.environmentId'),
+      '--job',
+      textValue(relay.intentId, 'step.relay.intentId'),
+      '--bridge-instance',
+      textValue(relay.bridgeInstanceId, 'step.relay.bridgeInstanceId'),
+      '--compute-node',
+      bridgeNode,
+      '--epoch',
+      String(relay.epoch ?? 0),
+    ];
+  } else {
+    stepArgs = Array.isArray(options.args) ? options.args : ['relay'];
+  }
   const argv = [
     ...common,
     ...budget,
@@ -84,7 +122,7 @@ export function buildStepArgv(options = {}) {
     `--job-name=${stepId}`,
     '--',
     textValue(options.program ?? 'vis_bridge', 'step.program'),
-    ...(Array.isArray(options.args) ? options.args : ['relay']),
+    ...stepArgs,
   ];
   assertNoShellConcatenation(argv);
   return Object.freeze(argv);
@@ -126,6 +164,12 @@ export function planStepReplacement(options = {}) {
 }
 
 function childStream(child) {
+  const out = child.stdout;
+  // A child spawn error or an early exit must reach the channel as a stream failure: the
+  // channel listens on stdout, so the child's own lifecycle events are mirrored onto it and
+  // the handshake is rejected instead of waiting for the handshake timeout.
+  child.on?.('error', (error) => out?.emit?.('error', error));
+  child.on?.('exit', () => out?.emit?.('end'));
   return {
     write: (chunk) => child.stdin?.write?.(chunk),
     on: (event, handler) => child.stdout?.on?.(event, handler),
@@ -149,6 +193,17 @@ export function createSlurmStepTransport(options = {}) {
 
   function appendStderr(chunk) {
     stderrText = (stderrText + redactSecrets(chunk, redactions)).slice(-STDERR_LOG_LIMIT);
+  }
+
+  /** The complete `vis_bridge relay` binding the relay step runs, derived from the channel binding. */
+  function relayBindingFor(binding) {
+    return Object.freeze({
+      environmentId: binding.environmentId,
+      intentId: binding.intentId,
+      bridgeInstanceId: binding.bridgeInstanceId,
+      epoch: binding.epoch,
+      socketPath: options.relaySocketPath ?? path.join(tmpdir(), `vis-relay-${binding.intentId}.sock`),
+    });
   }
 
   function connectionFor(target, binding, step, channel, argv) {
@@ -182,14 +237,19 @@ export function createSlurmStepTransport(options = {}) {
     }
     spawned.child.stderr?.on?.('data', (chunk) => appendStderr(String(chunk)));
     state = 'connecting';
+    // The step is recorded BEFORE the handshake settles: a failed handshake, an EOF or an
+    // early close must still terminate the process this transport spawned.
+    current = { relayId: spawned.id, step, argv, channel, binding, target };
     try {
       await channel.ready;
     } catch (error) {
-      state = 'failed';
+      // An explicit close already settled this transport; only a genuine failure flips the state.
+      if (state !== 'closed') state = 'failed';
+      await relay.terminate(spawned.id);
+      if (current !== null && current.relayId === spawned.id) current = null;
       throw error;
     }
     state = 'ready';
-    current = { relayId: spawned.id, step, argv, channel, binding, target };
     return connectionFor(target, binding, step, channel, argv);
   }
 
@@ -211,6 +271,7 @@ export function createSlurmStepTransport(options = {}) {
       gres: step.gres,
       program: step.program,
       args: step.args,
+      relay: relayBindingFor(binding),
     });
     return startStep({ argv, binding, target, step });
   }
@@ -249,6 +310,7 @@ export function createSlurmStepTransport(options = {}) {
       gres: step.gres,
       program: step.program,
       args: step.args,
+      relay: relayBindingFor(previous.binding),
     });
     return startStep({ argv, binding: previous.binding, target: previous.target, step });
   }

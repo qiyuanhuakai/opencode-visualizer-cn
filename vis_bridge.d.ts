@@ -73,6 +73,7 @@ export type VisBridgeRelayCliOptions = {
   readonly role: 'relay';
   readonly help: boolean;
   readonly serverArgs: readonly [];
+  readonly stdioForward: boolean;
   readonly environmentId?: string;
   readonly intentId?: string;
   readonly bridgeInstanceId?: string;

@@ -371,17 +371,25 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
    * near expiry. Steady state is one index view per target; repeated searches do
    * not exhaust the token budget. The reuse window is the snapshot TTL, so an
    * index read observes the index at the shared view's point in time.
+   *
+   * `fresh` bypasses that reuse for a caller that knows the cached view cannot
+   * answer — a new user search, an explicit refresh, or an index update the
+   * caller just performed. Pagination inside ONE traversal leaves it unset so
+   * every page of that traversal stays on one consistent view.
    */
   async function readIndex(
     target: EnvironmentId,
     collections: Collection | readonly Collection[],
-    options: RequestOptions & { readonly onPage: (collection: Collection, page: Snapshot) => void | Promise<void> },
+    options: RequestOptions & { readonly onPage: (collection: Collection, page: Snapshot) => void | Promise<void>; readonly fresh?: boolean },
   ) {
     const attached = getTarget(target);
     const names = typeof collections === 'string' ? [collections] : collections;
     requireValue(names.length > 0 && names.length <= 5 && new Set(names).size === names.length, 'snapshot.collections');
     const cached = attached.indexSnapshot;
-    const reuse = cached !== undefined && cached.expiresAt - Date.now() > 2000 ? cached.token : undefined;
+    const reuse = options.fresh === true || cached === undefined || cached.expiresAt - Date.now() <= 2000
+      ? undefined
+      : cached.token;
+    if (options.fresh === true) attached.indexSnapshot = undefined;
     let first: Snapshot | undefined;
     for (const collection of names) {
       let cursor: string | null = null;

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createConnectionManager } from '../../bridge/runtime/transports/connectionManager.js';
 import type { OpenTransport } from '../../bridge/runtime/transports/connectionManager.js';
 import { createProfileStore } from '../../bridge/runtime/transports/profileStore.js';
+import { ProtocolError } from '../../shared/runtime/capabilities.js';
 import { resolveProfileEnvironment } from '../../shared/runtime/connectionProfile.js';
 import { parseEnvironmentId } from '../../shared/runtime/identity.js';
 
@@ -145,6 +146,58 @@ describe('connection manager dial retirement (review round 18d8ae82b item 3)', (
       expect(dial.closeCalls()).toBe(1);
       expect(dial.live()).toBe(0);
       expect((await manager.status(profileId))?.state).toBe('disconnected');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('connection manager retry after a failed dial (review round 6138580284 item 1)', () => {
+  it('dials again after a transient failure instead of reusing the rejected promise', async () => {
+    // A controlled opener whose FIRST dial throws a transient error and whose second dial succeeds.
+    let attempts = 0;
+    const openTransport: OpenTransport = async (profile) => {
+      attempts += 1;
+      if (attempts === 1) throw new ProtocolError('source_unavailable', 'transport.live');
+      return { environmentId: resolveProfileEnvironment(profile), connectionId: 'h-2' };
+    };
+    const { directory, manager, profileId } = await setupManager(openTransport);
+    try {
+      await expect(manager.connect(profileId)).rejects.toMatchObject({ code: 'source_unavailable' });
+
+      // The retry must open a NEW dial. Before the fix the failed dial's pending entry was never
+      // retired, so this second connect awaited the SAME rejected promise and never dialed again.
+      const status = await manager.connect(profileId);
+      expect(status.state).toBe('connected');
+      expect(attempts).toBe(2);
+      expect((await manager.status(profileId))?.state).toBe('connected');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('concurrent callers share one dial and a later failure is not cached for the next connect', async () => {
+    const gate = deferred<void>();
+    let attempts = 0;
+    const openTransport: OpenTransport = async (profile) => {
+      attempts += 1;
+      await gate.promise;
+      if (attempts === 1) throw new ProtocolError('timeout', 'transport.live');
+      return { environmentId: resolveProfileEnvironment(profile), connectionId: `h-${attempts}` };
+    };
+    const { directory, manager, profileId } = await setupManager(openTransport);
+    try {
+      const first = manager.connect(profileId);
+      const second = manager.connect(profileId);
+      await settleMicrotasks();
+      gate.resolve();
+      await expect(first).rejects.toMatchObject({ code: 'timeout' });
+      await expect(second).rejects.toMatchObject({ code: 'timeout' });
+      expect(attempts).toBe(1);
+
+      const status = await manager.connect(profileId);
+      expect(status.state).toBe('connected');
+      expect(attempts).toBe(2);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
