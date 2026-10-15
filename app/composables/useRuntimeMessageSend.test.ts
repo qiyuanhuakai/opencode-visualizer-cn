@@ -143,3 +143,76 @@ describe('useRuntimeMessageSend — model selection never crosses sources', () =
     expect(send.modelFor(SESSION_B)).toBe('model-b');
   });
 });
+
+describe('useRuntimeMessageSend — active turn owner vs queued receipt (review round 6138580284 item 6)', () => {
+  /** Flush every pending microtask, so an accepted receipt has reached the owner map. */
+  function settleMicrotasks() {
+    return new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+
+  function lastCancel(client: ReturnType<typeof createFakeRuntimeActionClient>) {
+    const call = client.calls.at(-1);
+    if (!call || call.kind !== 'mutate' || call.method !== 'session.cancel') {
+      throw new TypeError('the last recorded call is not a session.cancel');
+    }
+    return call;
+  }
+
+  it('cancelTurn stops the executing turn, not a message queued behind it', async () => {
+    const client = createFakeRuntimeActionClient([ENV_A]);
+    const { ctx } = context(client);
+    const send = useRuntimeMessageSend(ctx);
+
+    // Given a send that is executing.
+    send.send(SESSION_A, { text: 'running turn' });
+    await settleMicrotasks();
+
+    // When a second message is queued behind it and the user then stops.
+    send.queue(SESSION_A, { text: 'queued behind it' });
+    await settleMicrotasks();
+    send.cancelTurn(SESSION_A);
+
+    // Then the cancel targets the EXECUTING turn's operationId, not the queued receipt's.
+    const cancel = lastCancel(client);
+    expect(cancel.params.args).toMatchObject({ operationId: 'op-1' });
+  });
+
+  it('retires the active owner once that turn finishes', async () => {
+    const client = createFakeRuntimeActionClient([ENV_A]);
+    const { ctx } = context(client);
+    const send = useRuntimeMessageSend(ctx);
+
+    send.send(SESSION_A, { text: 'running turn' });
+    await settleMicrotasks();
+    expect(client.settle()).toBe(true);
+    await settleMicrotasks();
+
+    send.cancelTurn(SESSION_A);
+    // The finished turn owns nothing, so no stale operationId is carried into the cancel.
+    expect(lastCancel(client).params.args).toEqual({});
+  });
+
+  it('keeps a queued receipt from stealing the owner of a still-running turn', async () => {
+    const client = createFakeRuntimeActionClient([ENV_A]);
+    const { ctx } = context(client);
+    const send = useRuntimeMessageSend(ctx);
+
+    send.send(SESSION_A, { text: 'running turn' });
+    await settleMicrotasks();
+    send.queue(SESSION_A, { text: 'first queued' });
+    await settleMicrotasks();
+    send.queue(SESSION_A, { text: 'second queued' });
+    await settleMicrotasks();
+
+    send.cancelTurn(SESSION_A);
+    expect(lastCancel(client).params.args).toMatchObject({ operationId: 'op-1' });
+
+    // And the running turn is still the owner after it completes.
+    expect(client.settle()).toBe(true);
+    await settleMicrotasks();
+    send.cancelTurn(SESSION_A);
+    expect(lastCancel(client).params.args).toEqual({});
+  });
+});
