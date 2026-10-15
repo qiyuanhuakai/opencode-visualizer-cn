@@ -142,7 +142,8 @@ export function createAcpExtensions({
       configId,
       value,
     });
-    sessions.register({ ...record(result.result), sessionId: input.session.nativeSessionId });
+    if (result.phase !== 'already-completed')
+      sessions.register({ ...record(result.result), sessionId: input.session.nativeSessionId });
     return result;
   };
   declare('acp.setMode', 'session', (input) => {
