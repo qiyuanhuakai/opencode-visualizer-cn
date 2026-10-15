@@ -220,6 +220,7 @@ const remoteBridgePort = {
 // ── reactive host state fed to the surfaces ────────────────────────────────────────────────────
 const probeEnvironmentId = ref('');
 const preview = ref<SlurmResourcePreview | null>(null);
+let autoPreview = true;
 let runtime: ReturnType<typeof useRuntimeProfiles> | null = null;
 let lastChallengeAnswer: AnyRecord | null = null;
 let consumedSecret: string | null = null;
@@ -236,7 +237,7 @@ const app = createApp({
     });
     const rt = runtime;
 
-    const selectedIntentId = (): string => rt.selectedProfileId.value;
+    const selectedIntentId = (): string => rt.selectedIntentId.value;
 
     function onChallengeAnswer(answer: Readonly<{ challengeId: string; accept: boolean; secret?: string }>) {
       const current = rt.challenge.value;
@@ -274,6 +275,14 @@ const app = createApp({
       onUpdate: () => { void rt.updateRemoteBridge(); },
       onSaveSsh: (draft: unknown) => { void rt.createProfile(draft as ConnectionProfileDraft); },
       onSubmitSlurm: (request: unknown) => { void rt.submitSlurm(request as Readonly<{ resources: SlurmResourceInput; ownership?: SlurmOwnership }>); },
+      // Every resource edit is answered with a preview produced by the injected port for THAT
+      // draft, so the displayed preview is the request the form will submit.
+      onPreviewRequest: (draft: Readonly<{ resources: SlurmResourceInput }>) => {
+        if (!autoPreview) return;
+        void rt.previewSlurm(draft.resources).then((produced) => {
+          if (produced !== null) preview.value = produced;
+        });
+      },
       onChallengeAnswer,
     });
   },
@@ -387,6 +396,12 @@ const api: AnyRecord = {
 
   setPreview(value: SlurmResourcePreview | null) { preview.value = value; return preview.value; },
 
+  /**
+   * When disabled, a `preview-request` from the form is NOT answered, so the displayed preview is
+   * left describing an older request. The form must refuse to submit in that state.
+   */
+  setAutoPreview(enabled: boolean) { autoPreview = enabled; return autoPreview; },
+
   previewViaPort(resources: AnyRecord) {
     const rt = runtime as ReturnType<typeof useRuntimeProfiles>;
     return rt.previewSlurm(resources as SlurmResourceInput);
@@ -394,10 +409,13 @@ const api: AnyRecord = {
 
   setSlurm(status: AnyRecord | null) {
     const rt = runtime as ReturnType<typeof useRuntimeProfiles>;
-    if (status === null) { rt.slurmStatuses.value = Object.freeze([]); return null; }
+    if (status === null) { rt.slurmStatuses.value = Object.freeze([]); rt.selectIntent(''); return null; }
     const frozen = Object.freeze({ ...status }) as SlurmLifecycleStatus;
     rt.slurmStatuses.value = Object.freeze([frozen]);
     slurmIntents.set(frozen.intentId, frozen);
+    // The injected status stands in for a real submission, so it is bound to the intent the same
+    // way `submitSlurm` binds one. The intent id is NOT the profile id.
+    rt.selectIntent(frozen.intentId);
     return frozen;
   },
 
@@ -406,7 +424,25 @@ const api: AnyRecord = {
     const frozen = Object.freeze(statuses.map((entry) => Object.freeze({ ...entry }))) as readonly SlurmLifecycleStatus[];
     rt.slurmStatuses.value = frozen;
     for (const entry of frozen) slurmIntents.set(entry.intentId, entry);
+    rt.selectIntent(frozen[frozen.length - 1]?.intentId ?? '');
     return frozen.length;
+  },
+
+  selectIntent(intentId: string) {
+    const rt = runtime as ReturnType<typeof useRuntimeProfiles>;
+    rt.selectIntent(intentId);
+    return rt.selectedIntentId.value;
+  },
+
+  selectedIntentState() {
+    const rt = runtime as ReturnType<typeof useRuntimeProfiles>;
+    return {
+      selectedProfileId: rt.selectedProfileId.value,
+      selectedIntentId: rt.selectedIntentId.value,
+      selectedSlurmIntent: rt.selectedSlurm.value?.intentId ?? null,
+      selectedSlurmJob: rt.selectedSlurm.value?.jobId ?? null,
+      intentDiffersFromProfile: rt.selectedIntentId.value !== '' && rt.selectedIntentId.value !== rt.selectedProfileId.value,
+    };
   },
 
   setStatus(status: AnyRecord | null) {
@@ -488,8 +524,20 @@ const api: AnyRecord = {
 
   async connectViaUi() { const clicked = await click('connection-connect'); await nextTick(); const rt = runtime as ReturnType<typeof useRuntimeProfiles>; return { clicked, status: rt.statusOf.value }; },
   async cancelViaUi() { const clicked = await click('connection-cancel'); await nextTick(); await nextTick(); const rt = runtime as ReturnType<typeof useRuntimeProfiles>; return { clicked, status: rt.statusOf.value, slurmStatuses: rt.slurmStatuses.value }; },
-  async detachViaUi() { const clicked = await click('remote-detach'); await nextTick(); await nextTick(); const rt = runtime as ReturnType<typeof useRuntimeProfiles>; return { clicked, slurm: rt.selectedSlurm.value }; },
-  async stopViaUi() { const clicked = await click('remote-stop'); await nextTick(); await nextTick(); const rt = runtime as ReturnType<typeof useRuntimeProfiles>; return { clicked, slurm: rt.selectedSlurm.value }; },
+  async detachViaUi() {
+    const rt = runtime as ReturnType<typeof useRuntimeProfiles>;
+    const target = rt.selectedIntentId.value;
+    const clicked = await click('remote-detach');
+    await nextTick(); await nextTick();
+    return { clicked, target, profileId: rt.selectedProfileId.value, targetIsNotProfile: target !== '' && target !== rt.selectedProfileId.value, slurm: rt.selectedSlurm.value };
+  },
+  async stopViaUi() {
+    const rt = runtime as ReturnType<typeof useRuntimeProfiles>;
+    const target = rt.selectedIntentId.value;
+    const clicked = await click('remote-stop');
+    await nextTick(); await nextTick();
+    return { clicked, target, profileId: rt.selectedProfileId.value, targetIsNotProfile: target !== '' && target !== rt.selectedProfileId.value, slurm: rt.selectedSlurm.value };
+  },
   async reconnectViaUi() { const clicked = await click('remote-reconnect'); await nextTick(); await nextTick(); const rt = runtime as ReturnType<typeof useRuntimeProfiles>; return { clicked, status: rt.statusOf.value }; },
   async updateViaUi() { const clicked = await click('remote-update'); await nextTick(); await nextTick(); const rt = runtime as ReturnType<typeof useRuntimeProfiles>; return { clicked, plan: rt.remotePlan.value }; },
 
@@ -502,10 +550,25 @@ const api: AnyRecord = {
     if (resources.memory !== undefined) await setInput('slurm-memory', String(resources.memory));
     if (resources.time !== undefined) await setInput('slurm-time', String(resources.time));
     if (resources.gres !== undefined) await setInput('slurm-gres', String(resources.gres));
+    // The edit-driven preview refresh is measured separately from the submit itself: filling the
+    // form asks the port for a preview of each draft, and the submit must add none of its own.
+    const beforeSubmitClick = portCalls.slurmPreview;
     await click('slurm-form-submit');
     await nextTick(); await nextTick();
     const rt = runtime as ReturnType<typeof useRuntimeProfiles>;
-    return { preview: preview.value, slurmStatuses: rt.slurmStatuses.value, error: rt.error.value };
+    return {
+      preview: preview.value,
+      slurmStatuses: rt.slurmStatuses.value,
+      error: rt.error.value,
+      selectedProfileId: rt.selectedProfileId.value,
+      selectedIntentId: rt.selectedIntentId.value,
+      selectedSlurm: rt.selectedSlurm.value,
+      intentDiffersFromProfile: rt.selectedIntentId.value !== '' && rt.selectedIntentId.value !== rt.selectedProfileId.value,
+      previewCallsBeforeSubmitClick: beforeSubmitClick,
+      previewCallsAfterSubmitClick: portCalls.slurmPreview,
+      previewBoundToDraft: (element('slurm-resource-preview') as HTMLElement | null)?.getAttribute('data-bound') ?? null,
+      previewStale: (element('slurm-preview-stale') as HTMLElement | null)?.textContent ?? null,
+    };
   },
 
   errorState() { const rt = runtime as ReturnType<typeof useRuntimeProfiles>; return { error: rt.error.value, busy: rt.busy.value }; },

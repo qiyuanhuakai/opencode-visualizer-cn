@@ -37,6 +37,14 @@ export function buildAllocationResources(options: {
   gres: string;
 }): SlurmAllocationResources;
 
+export interface SlurmRelayStepBinding {
+  readonly environmentId: string;
+  readonly intentId: string;
+  readonly bridgeInstanceId: string;
+  readonly epoch?: number;
+  readonly socketPath: string;
+}
+
 export function buildStepArgv(options: {
   mode: string;
   bridgeNode: string;
@@ -46,6 +54,7 @@ export function buildStepArgv(options: {
   gres?: string;
   program?: string;
   args?: readonly string[];
+  relay?: SlurmRelayStepBinding;
 }): readonly string[];
 
 export function assertStepCapabilities(input: {
@@ -116,4 +125,5 @@ export function createSlurmStepTransport(options?: {
   redactions?: readonly string[];
   timeoutMs?: number;
   uuid?: () => string;
+  relaySocketPath?: string;
 }): SlurmStepTransport;

@@ -15,12 +15,19 @@ import { ProtocolError, requireValue, textValue } from '../../../shared/runtime/
  *                         stale relay is answered with `reconcile_required`, not silently adopted;
  *  - `computeNode`/`stepId` — the verified node binding and the specific relay step.
  *
- * Only an HMAC over (kind, binding, nonce) travels in the challenge; the credential never does.
+ * The handshake is mutual and every leg is domain-separated: the HMAC input carries the message
+ * kind, so a token minted for the hello can never verify as the ack, and an ack minted for one
+ * connection's challenge can never verify as another connection's. Only HMACs over
+ * (kind, binding, nonce[, peer challenge]) travel on the wire; the credential never does. The
+ * login proves possession by answering the compute side's fresh challenge, and the compute side
+ * proves possession by answering the login's — a reflected or replayed message proves nothing.
  * The same module also owns the compute-target routing rule that forbids a login fallback: a
  * request whose target is the login node is rejected with an explicit code, never redirected.
  */
 export const RELAY_HANDSHAKE_KIND = 'slurm.relay.hello';
 export const RELAY_HELLO_ACK_KIND = 'slurm.relay.hello.ack';
+export const RELAY_HELLO_CONFIRM_KIND = 'slurm.relay.hello.confirm';
+export const RELAY_HANDSHAKE_KINDS = Object.freeze([RELAY_HANDSHAKE_KIND, RELAY_HELLO_ACK_KIND, RELAY_HELLO_CONFIRM_KIND]);
 export const COMPUTE_OPERATION_KINDS = Object.freeze(['fs', 'git', 'pty', 'driver']);
 
 const BINDING_FIELDS = Object.freeze(['environmentId', 'intentId', 'bridgeInstanceId', 'computeNode', 'stepId']);
@@ -63,30 +70,62 @@ export function compareRelayBindings(expected, actual) {
 
 /**
  * Builds the handshake for one binding. Both ends construct it with the same credential and the
- * same binding; `verify` is a timing-safe comparison of the HMAC plus a binding equality check.
+ * same binding. Every message kind has its own HMAC domain, so `verify` dispatches on the
+ * message's own kind: a hello token never verifies as an ack and vice versa, which is what makes
+ * a kind-flipped reflection worthless. The ack and the confirm additionally bind the compute
+ * side's fresh challenge, so a captured leg of one connection can never be replayed on another.
+ * `verify` is a timing-safe comparison of the HMAC plus a binding equality check.
  */
 export function createRelayHandshake(options = {}) {
   const credential = textValue(options.credential, 'relay.credential');
   const binding = createRelayBinding(options.binding);
-  const token = (nonce) =>
-    createHmac('sha256', credential).update(`${RELAY_HANDSHAKE_KIND}\0${bindingString(binding)}\0${nonce}`).digest('hex');
+  const token = (kind, nonce, challenge) => {
+    const input =
+      challenge === undefined
+        ? `${kind}\0${bindingString(binding)}\0${nonce}`
+        : `${kind}\0${bindingString(binding)}\0${nonce}\0${challenge}`;
+    return createHmac('sha256', credential).update(input).digest('hex');
+  };
   return Object.freeze({
     kind: RELAY_HANDSHAKE_KIND,
     binding,
     challenge() {
       const nonce = randomUUID();
-      return Object.freeze({ kind: RELAY_HANDSHAKE_KIND, nonce, binding, token: token(nonce) });
+      return Object.freeze({ kind: RELAY_HANDSHAKE_KIND, nonce, binding, token: token(RELAY_HANDSHAKE_KIND, nonce) });
     },
     ack(nonce) {
       const value = textValue(nonce, 'relay.nonce');
-      return Object.freeze({ kind: RELAY_HELLO_ACK_KIND, nonce: value, binding, token: token(value) });
+      // The compute side answers the login's challenge with a fresh challenge of its own; the
+      // login must prove the credential again over it before the compute side is ready.
+      const challenge = randomUUID();
+      return Object.freeze({
+        kind: RELAY_HELLO_ACK_KIND,
+        nonce: value,
+        challenge,
+        binding,
+        token: token(RELAY_HELLO_ACK_KIND, value, challenge),
+      });
+    },
+    confirm(nonce, challenge) {
+      const value = textValue(nonce, 'relay.nonce');
+      const peer = textValue(challenge, 'relay.challenge');
+      return Object.freeze({
+        kind: RELAY_HELLO_CONFIRM_KIND,
+        nonce: value,
+        challenge: peer,
+        binding,
+        token: token(RELAY_HELLO_CONFIRM_KIND, value, peer),
+      });
     },
     verify(message) {
       if (message === null || typeof message !== 'object') return false;
-      const { nonce, token: presented } = message;
+      const { kind, nonce, challenge, token: presented } = message;
       if (typeof nonce !== 'string' || typeof presented !== 'string') return false;
+      // An unknown or absent kind has no domain and can never verify.
+      if (!RELAY_HANDSHAKE_KINDS.includes(kind)) return false;
+      if (kind !== RELAY_HANDSHAKE_KIND && typeof challenge !== 'string') return false;
       if (!compareRelayBindings(binding, message.binding).match) return false;
-      const expected = Buffer.from(token(nonce));
+      const expected = Buffer.from(token(kind, nonce, kind === RELAY_HANDSHAKE_KIND ? undefined : challenge));
       const actual = Buffer.from(presented);
       return expected.length === actual.length && timingSafeEqual(expected, actual);
     },

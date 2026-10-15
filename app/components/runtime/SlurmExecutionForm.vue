@@ -114,6 +114,8 @@
       v-if="preview"
       class="resource-preview"
       data-testid="slurm-resource-preview"
+      :data-bound="String(previewDescribesDraft)"
+      :data-stale="String(preview !== null && !previewDescribesDraft)"
       :data-nodes="preview.nodes"
       :data-ntasks="preview.ntasks"
       :data-cpus="preview.cpus"
@@ -154,6 +156,10 @@
       <p class="preview-note" data-testid="slurm-preview-note">
         {{ previewNote }}
       </p>
+      <p v-if="previewStale" class="preview-stale" role="status" data-testid="slurm-preview-stale">
+        This preview no longer describes the request above. Submit is disabled until a preview for
+        the current resources arrives.
+      </p>
     </section>
 
     <p v-if="problems.length" class="form-problems" role="alert" data-testid="slurm-form-problems">
@@ -168,7 +174,7 @@
         type="submit"
         class="action-button save"
         data-testid="slurm-form-submit"
-        :disabled="disabled || !available"
+        :disabled="disabled || !available || preview === null"
       >
         Submit
       </button>
@@ -177,7 +183,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import Dropdown from '../Dropdown.vue';
 import DropdownItem from '../Dropdown/Item.vue';
 import type { SlurmOwnership, SlurmResourceInput, SlurmResourcePreview } from '../../composables/useRuntimeProfiles';
@@ -197,6 +203,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   (event: 'submit', request: Readonly<{ resources: SlurmResourceInput; ownership: SlurmOwnership }>): void;
   (event: 'cancel'): void;
+  (event: 'preview-request', draft: Readonly<{ resources: SlurmResourceInput; ownership: SlurmOwnership }>): void;
 }>();
 
 const ownerships: readonly { value: SlurmOwnership; label: string }[] = Object.freeze([
@@ -216,6 +223,50 @@ const form = reactive({
 
 const problems = ref<readonly string[]>([]);
 
+/** The request the form would submit right now, normalized exactly the way `submit` sends it. */
+const draft = computed<SlurmResourceInput>(() => Object.freeze({
+  partition: form.partition,
+  account: form.account.trim().length === 0 ? null : form.account.trim(),
+  cpus: form.cpus,
+  memory: form.memory,
+  time: form.time,
+  gres: form.gres,
+}));
+
+function memoryMiBOf(value: SlurmResourceInput['memory']): number | null {
+  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function timeSecondsOf(value: string): number | null {
+  const parts = value.split(':');
+  if (parts.length !== 3) return null;
+  const numbers = parts.map((part) => Number(part));
+  if (!numbers.every((entry) => Number.isFinite(entry))) return null;
+  return (numbers[0] ?? 0) * 3600 + (numbers[1] ?? 0) * 60 + (numbers[2] ?? 0);
+}
+
+/**
+ * Whether the bridge preview on screen describes the request the form would submit.
+ *
+ * The comparison is field-by-field against the SAME normalization the submit path uses, so a
+ * preview that still shows the previous resources can never be presented as the request that is
+ * actually sent.
+ */
+const previewDescribesDraft = computed<boolean>(() => {
+  const current = props.preview;
+  if (current === null) return false;
+  const resources = draft.value;
+  return current.partition === resources.partition
+    && current.cpus === resources.cpus
+    && current.memoryMiB === memoryMiBOf(resources.memory)
+    && current.timeSeconds === timeSecondsOf(resources.time)
+    && current.gres === resources.gres
+    && current.account === resources.account;
+});
+
+const previewStale = computed<boolean>(() => props.preview !== null && !previewDescribesDraft.value);
+
 const timePreview = computed(() => (props.preview === null ? '' : slurmTimePreview(props.preview)));
 
 const previewNote = computed(() => {
@@ -226,19 +277,26 @@ const previewNote = computed(() => {
   return 'No GPU is requested. GRES is written explicitly as none.';
 });
 
+// Every edit asks the container for a preview of the FULL draft, so the bridge-produced preview can
+// be re-bound to what is about to be submitted instead of left describing an older request.
+watch([draft, () => form.ownership], () => {
+  emit('preview-request', { resources: draft.value, ownership: form.ownership });
+});
+
 function submit() {
   if (props.disabled || !props.available) return;
-  const resources: SlurmResourceInput = Object.freeze({
-    partition: form.partition,
-    account: form.account.trim().length === 0 ? null : form.account.trim(),
-    cpus: form.cpus,
-    memory: form.memory,
-    time: form.time,
-    gres: form.gres,
-  });
+  const resources = draft.value;
   const invalid = validateSlurmResourceInput(resources);
   if (invalid.length > 0) {
     problems.value = Object.freeze(invalid.map((field) => `${field} is required`));
+    return;
+  }
+  if (props.preview === null) {
+    problems.value = Object.freeze(['the bridge preview has not arrived yet — nothing is submitted without it']);
+    return;
+  }
+  if (!previewDescribesDraft.value) {
+    problems.value = Object.freeze(['the preview no longer describes this request — refresh it before submitting']);
     return;
   }
   problems.value = [];
@@ -391,6 +449,13 @@ function submit() {
   font-size: var(--type-caption, 10px);
   line-height: 1.4;
   color: var(--theme-text-muted, #94a3b8);
+}
+
+.preview-stale {
+  margin: 0;
+  font-size: var(--type-caption, 10px);
+  line-height: 1.4;
+  color: var(--theme-status-warning, #fcd34d);
 }
 
 .form-problems {

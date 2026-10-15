@@ -51,6 +51,15 @@ const browserSkill = '/home/qiyuaner/.codex/plugins/cache/sisyphuslabs/omo/5.1.2
 
 const ENVIRONMENT = '11111111-1111-4111-8111-111111111111';
 const OTHER_ENVIRONMENT = '22222222-2222-4222-8222-222222222222';
+// An INTENT id is not a PROFILE id. These are deliberately distinct UUIDs so a lookup that
+// conflated the two could not pass by accident.
+const FIRST_INTENT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const MOVED_INTENT = 'aaaaaaa1-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const SECOND_INTENT = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const BORROWED_INTENT = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+const PREEMPTED_INTENT = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+const TIMEOUT_INTENT = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const RECONCILING_INTENT = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
 const COMPUTE_NODE = 'compute-01.cluster';
 const OTHER_COMPUTE_NODE = 'compute-02.cluster';
 const SECRET = '(this-is-the-challenge-secret-NEVER-PERSISTED)';
@@ -507,13 +516,27 @@ export async function run(context) {
     const selectedProfileId = created.selectedProfileId;
     const readyIntent = await evaluate((args) => window.task30.setSlurm({
       environmentId: '11111111-1111-4111-8111-111111111111',
-      intentId: args.profileId, jobId: '24680', state: 'RUNNING', queue: 'RUNNING',
+      intentId: FIRST_INTENT, jobId: '24680', state: 'RUNNING', queue: 'RUNNING',
       terminal: null, reconcile: null, attached: true, ownership: 'owned',
       computeNode: args.node, stepId: 'step-1', epoch: 3, bridgeInstanceId: 'bridge-1',
     }), { profileId: selectedProfileId, node: COMPUTE_NODE });
     const targets = await evaluate(() => window.task30.renderedTargets());
     const resolvedEnv = await evaluate((id) => window.task30.resolvedEnvironmentOf(id), selectedProfileId);
-    record('renderedTargets', { readyIntent, targets, resolvedEnv });
+    const selectedIntentState = await evaluate(() => window.task30.selectedIntentState());
+    record('renderedTargets', { readyIntent, targets, resolvedEnv, selectedIntentState });
+    check('the injected intent is NOT the profile id, and the surface still resolves the job through it', {
+      profileId: selectedProfileId,
+      intentId: readyIntent?.intentId ?? null,
+      intentDiffersFromProfile: selectedIntentState.intentDiffersFromProfile,
+      selectedSlurmJob: selectedIntentState.selectedSlurmJob,
+      renderedJobId: targets.jobId,
+    }, {
+      profileId: selectedProfileId,
+      intentId: FIRST_INTENT,
+      intentDiffersFromProfile: true,
+      selectedSlurmJob: '24680',
+      renderedJobId: '24680',
+    });
     check('the execution target renders the stable environment UUID NEXT TO a visible compute node, a job id and the ownership — the node is never the identity', {
       environmentId: targets.environmentId,
       computeNode: targets.computeNode,
@@ -543,7 +566,7 @@ export async function run(context) {
     // identity is the selected profile's resolved environment (ConnectionStatus' `identity` prop),
     // so the node must move while the environment UUID does not — the receiver's real contract.
     const movedIntent = await evaluate((args) => window.task30.setSlurm({
-      environmentId: args.env, intentId: args.profileId, jobId: '24680', state: 'RUNNING', queue: 'RUNNING',
+      environmentId: args.env, intentId: MOVED_INTENT, jobId: '24680', state: 'RUNNING', queue: 'RUNNING',
       terminal: null, reconcile: null, attached: true, ownership: 'owned',
       computeNode: args.node, stepId: 'step-1', epoch: 4, bridgeInstanceId: 'bridge-1',
     }), { env: ENVIRONMENT, profileId: selectedProfileId, node: OTHER_COMPUTE_NODE });
@@ -579,7 +602,7 @@ export async function run(context) {
     const createdOther = await evaluate(() => window.task30.createSshProfileViaUi({ name: 'Second cluster', endpoint: 'cluster2.example.edu', credentialRef: 'cred-2', enabled: true }));
     const selectedOther = await evaluate((id) => window.task30.selectProfile(id), createdOther.selectedProfileId);
     const otherIntent = await evaluate((args) => window.task30.setSlurm({
-      environmentId: args.other, intentId: args.profileId, jobId: '13579', state: 'RUNNING', queue: 'RUNNING',
+      environmentId: args.other, intentId: SECOND_INTENT, jobId: '13579', state: 'RUNNING', queue: 'RUNNING',
       terminal: null, reconcile: null, attached: true, ownership: 'owned',
       computeNode: args.node, stepId: 'step-2', epoch: 1, bridgeInstanceId: 'bridge-2',
     }), { other: OTHER_ENVIRONMENT, profileId: createdOther.selectedProfileId, node: COMPUTE_NODE });
@@ -616,7 +639,7 @@ export async function run(context) {
     await evaluate((id) => window.task30.selectProfile(id), selectedProfileId);
     await evaluate((env) => window.task30.setProbeEnvironment(env), ENVIRONMENT);
     await evaluate((args) => window.task30.setSlurm({
-      environmentId: args.env, intentId: args.profileId, jobId: '24680', state: 'RUNNING', queue: 'RUNNING',
+      environmentId: args.env, intentId: FIRST_INTENT, jobId: '24680', state: 'RUNNING', queue: 'RUNNING',
       terminal: null, reconcile: null, attached: true, ownership: 'owned',
       computeNode: args.node, stepId: 'step-1', epoch: 3, bridgeInstanceId: 'bridge-1',
     }), { env: ENVIRONMENT, profileId: selectedProfileId, node: COMPUTE_NODE });
@@ -667,7 +690,7 @@ export async function run(context) {
     // ── Criterion 3 (UI): a connection cancel never signals a borrowed job ──
     const baselineCalls = await evaluate(() => window.task30.portCalls());
     await evaluate((args) => window.task30.setSlurm({
-      environmentId: args.env, intentId: args.profileId, jobId: '24680', state: 'RUNNING', queue: 'RUNNING',
+      environmentId: args.env, intentId: BORROWED_INTENT, jobId: '24680', state: 'RUNNING', queue: 'RUNNING',
       terminal: null, reconcile: null, attached: true, ownership: 'borrowed',
       computeNode: args.node, stepId: 'step-1', epoch: 3, bridgeInstanceId: 'bridge-1',
     }), { env: ENVIRONMENT, profileId: selectedProfileId, node: COMPUTE_NODE });
@@ -723,7 +746,10 @@ export async function run(context) {
       previewCpusAttr: previewFromPort.cpus,
       previewTimeSeconds: previewFromPort.timeSeconds,
       previewCallsDelta: postSubmitCalls.slurmPreview - callsBeforePreview.slurmPreview,
-      previewCallsDuringSubmit: postSubmitCalls.slurmPreview - preSubmitCalls.slurmPreview,
+      previewCallsDuringSubmit: submitted.previewCallsAfterSubmitClick - submitted.previewCallsBeforeSubmitClick,
+      previewRefreshedOnEdit: postSubmitCalls.slurmPreview > preSubmitCalls.slurmPreview,
+      previewBoundToSubmittedDraft: submitted.previewBoundToDraft,
+      previewStaleNote: submitted.previewStale,
       submitCallsDelta: postSubmitCalls.slurmSubmit - preSubmitCalls.slurmSubmit,
       submittedState: submittedIntent?.state,
       submittedOwnership: submittedIntent?.ownership,
@@ -739,6 +765,9 @@ export async function run(context) {
       previewTimeSeconds: 3600,
       previewCallsDelta: 1,
       previewCallsDuringSubmit: 0,
+      previewRefreshedOnEdit: true,
+      previewBoundToSubmittedDraft: 'true',
+      previewStaleNote: null,
       submitCallsDelta: 1,
       submittedState: 'PENDING',
       submittedOwnership: 'owned',
@@ -747,13 +776,29 @@ export async function run(context) {
 
     const submittedIntentId = submittedIntent?.intentId;
     const submittedJobId = submittedIntent?.jobId;
-    // the composable selects the lifecycle intent by the selected profile id; the case wires the
-    // injected port's intent to the selected profile so the integrated surface renders it.
+    // The submitted intent keeps its OWN uuid — never rewritten to the profile id. A submission
+    // and the profile it was made for are different identities, and the surface must resolve the
+    // job through that real intent id.
+    check('the submitted intent is a DIFFERENT uuid from the profile that submitted it, and the surface resolves the job through it', {
+      submittedIntentId,
+      profileId: submitted.selectedProfileId,
+      intentDiffersFromProfile: submitted.intentDiffersFromProfile,
+      selectedIntentIsSubmitted: submitted.selectedIntentId === submittedIntentId,
+      selectedSlurmIntent: submitted.selectedSlurm?.intentId ?? null,
+      selectedSlurmJob: submitted.selectedSlurm?.jobId ?? null,
+    }, {
+      submittedIntentId: submittedIntentId,
+      profileId: selectedProfileId,
+      intentDiffersFromProfile: true,
+      selectedIntentIsSubmitted: true,
+      selectedSlurmIntent: submittedIntentId,
+      selectedSlurmJob: submittedJobId,
+    });
     await evaluate((args) => window.task30.setSlurm({
-      environmentId: args.env, intentId: args.profileId, jobId: args.jobId, state: 'PENDING', queue: 'PENDING',
+      environmentId: args.env, intentId: args.intentId, jobId: args.jobId, state: 'PENDING', queue: 'PENDING',
       terminal: null, reconcile: null, attached: true, ownership: 'owned',
       computeNode: null, stepId: null, epoch: null, bridgeInstanceId: null,
-    }), { env: ENVIRONMENT, profileId: selectedProfileId, jobId: submittedJobId });
+    }), { env: ENVIRONMENT, profileId: selectedProfileId, intentId: submittedIntentId, jobId: submittedJobId });
     const pendingTargets = await evaluate(() => window.task30.renderedTargets());
     check('a pending intent is told apart from a ready one by the control-store fields, not a status string: PENDING shows the queued reason while a job with no bridge instance is still not ready', {
       pendingQueueState: pendingTargets.queueStateCell,
@@ -778,10 +823,10 @@ export async function run(context) {
     // scheduler status — the receiver would (correctly) keep reporting "waiting for the compute bridge
     // hello" for the latter.
     await evaluate((args) => window.task30.setSlurm({
-      environmentId: args.env, intentId: args.profileId, jobId: args.jobId, state: 'attached', queue: null,
+      environmentId: args.env, intentId: args.intentId, jobId: args.jobId, state: 'attached', queue: null,
       terminal: null, reconcile: null, attached: true, ownership: 'owned',
       computeNode: args.node, stepId: 'step-1', epoch: 3, bridgeInstanceId: 'bridge-1',
-    }), { env: ENVIRONMENT, profileId: selectedProfileId, jobId: submittedJobId, node: COMPUTE_NODE });
+    }), { env: ENVIRONMENT, profileId: selectedProfileId, intentId: submittedIntentId, jobId: submittedJobId, node: COMPUTE_NODE });
     const readyTargets = await evaluate(() => window.task30.renderedTargets());
     check('a ready intent shows a visible compute node, the bridge instance, the step/epoch and NO pending reason', {
       readyQueueState: readyTargets.queueStateCell,
@@ -805,6 +850,8 @@ export async function run(context) {
     const afterDetachTargets = await evaluate(() => window.task30.renderedTargets());
     check('detaching a running job only stops tracking it: the intent stays alive on the same job/node/epoch and is no longer attached', {
       detachClicked: detachResult.clicked,
+      detachTarget: detachResult.target,
+      detachTargetIsIntent: detachResult.targetIsNotProfile,
       attachedAfter: detachResult.slurm?.attached,
       computeNodeAfter: detachResult.slurm?.computeNode,
       jobIdAfter: detachResult.slurm?.jobId,
@@ -813,6 +860,8 @@ export async function run(context) {
       renderedNode: afterDetachTargets.computeNode,
     }, {
       detachClicked: true,
+      detachTarget: submittedIntentId,
+      detachTargetIsIntent: true,
       attachedAfter: false,
       computeNodeAfter: COMPUTE_NODE,
       jobIdAfter: submittedJobId,
@@ -823,10 +872,10 @@ export async function run(context) {
 
     const reconnectResult = await evaluate(() => window.task30.reconnectViaUi());
     await evaluate((args) => window.task30.setSlurm({
-      environmentId: args.env, intentId: args.profileId, jobId: args.jobId, state: 'RUNNING', queue: 'RUNNING',
+      environmentId: args.env, intentId: args.intentId, jobId: args.jobId, state: 'RUNNING', queue: 'RUNNING',
       terminal: null, reconcile: null, attached: true, ownership: 'owned',
       computeNode: args.node, stepId: 'step-1', epoch: 3, bridgeInstanceId: 'bridge-1',
-    }), { env: ENVIRONMENT, profileId: selectedProfileId, jobId: submittedJobId, node: COMPUTE_NODE });
+    }), { env: ENVIRONMENT, profileId: selectedProfileId, intentId: submittedIntentId, jobId: submittedJobId, node: COMPUTE_NODE });
     const reattachTargets = await evaluate(() => window.task30.renderedTargets());
     record('detachReattach', { detachResult, reconnectResult, reattachTargets });
     check('re-attaching returns to the SAME job, node and epoch through a new generation — detach never cancelled the job and reconnect binds the same execution', {
@@ -926,7 +975,7 @@ export async function run(context) {
 
       // ── F3: preempt → terminal, no stop, no pending reason ──
       await evaluate((args) => window.task30.setSlurm({
-        environmentId: args.env, intentId: args.profileId, jobId: '55501', state: 'PREEMPTED', queue: 'PREEMPTED',
+        environmentId: args.env, intentId: PREEMPTED_INTENT, jobId: '55501', state: 'PREEMPTED', queue: 'PREEMPTED',
         terminal: 'PREEMPTED', reconcile: null, attached: true, ownership: 'owned',
         computeNode: 'compute-09.cluster', stepId: 'step-9', epoch: 4, bridgeInstanceId: 'bridge-9',
       }), { env: ENVIRONMENT, profileId: selectedProfileId });
@@ -944,7 +993,7 @@ export async function run(context) {
 
       // ── F4: time limit expiry → terminal, never ready ──
       await evaluate((args) => window.task30.setSlurm({
-        environmentId: args.env, intentId: args.profileId, jobId: '55502', state: 'TIMEOUT', queue: 'TIMEOUT',
+        environmentId: args.env, intentId: TIMEOUT_INTENT, jobId: '55502', state: 'TIMEOUT', queue: 'TIMEOUT',
         terminal: 'TIMEOUT', reconcile: null, attached: false, ownership: 'owned',
         computeNode: 'compute-09.cluster', stepId: 'step-9', epoch: 4, bridgeInstanceId: 'bridge-9',
       }), { env: ENVIRONMENT, profileId: selectedProfileId });
@@ -968,9 +1017,36 @@ export async function run(context) {
         problemsMentionTime: /time/u.test(String(resourceProbe.slurmFormProblems ?? '')),
         problemsMentionGres: /gres/u.test(String(resourceProbe.slurmFormProblems ?? '')),
         submitCallsDelta: postSubmitCalls.slurmSubmit - preSubmitCalls.slurmSubmit,
-        previewCallsDelta: postSubmitCalls.slurmPreview - preSubmitCalls.slurmPreview,
+        previewRefreshedOnEdit: postSubmitCalls.slurmPreview > preSubmitCalls.slurmPreview,
       }, {
-        problemsMentionTime: true, problemsMentionGres: true, submitCallsDelta: 0, previewCallsDelta: 0,
+        problemsMentionTime: true, problemsMentionGres: true, submitCallsDelta: 0, previewRefreshedOnEdit: true,
+      });
+
+      // ── F5b: a preview that no longer describes the request is never submitted ──
+      await evaluate(() => window.task30.setAutoPreview(false));
+      await evaluate((preview) => window.task30.setPreview(preview), previewFromPort);
+      const stalePreSubmit = await evaluate(() => window.task30.portCalls());
+      const staleSubmit = await evaluate(() => window.task30.submitSlurmViaUi({ partition: 'cpu', account: 'research', cpus: 5, memory: '4224', time: '01:00:00', gres: 'gpu:a100:2' }));
+      const stalePostSubmit = await evaluate(() => window.task30.portCalls());
+      const staleProbe = await evaluate(() => window.task30.probe());
+      await evaluate(() => window.task30.setAutoPreview(true));
+      record('f5b-stale-preview', { staleSubmit, staleProbe, stalePreSubmit, stalePostSubmit });
+      check('editing the resources without a matching preview refuses the submit: the displayed preview and the request can never disagree', {
+        displayedGres: staleProbe.slurmPreviewGres,
+        displayedTime: staleProbe.slurmPreviewTime,
+        submitCallsDelta: stalePostSubmit.slurmSubmit - stalePreSubmit.slurmSubmit,
+        previewCallsDelta: stalePostSubmit.slurmPreview - stalePreSubmit.slurmPreview,
+        problemsMentionPreview: /preview/u.test(String(staleProbe.slurmFormProblems ?? '')),
+        staleNotePresent: /no longer describes/u.test(String(staleProbe.slurmPreviewNote ?? '')) || /no longer describes/u.test(String(staleSubmit.previewStale ?? '')),
+        submittedCount: staleSubmit.slurmStatuses.length,
+      }, {
+        displayedGres: 'none',
+        displayedTime: '01:00:00',
+        submitCallsDelta: 0,
+        previewCallsDelta: 0,
+        problemsMentionPreview: true,
+        staleNotePresent: true,
+        submittedCount: 1,
       });
 
       // ── F6: an incompatible bridge version refuses the update with an explicit reason ──
@@ -1026,13 +1102,13 @@ export async function run(context) {
 
       // ── F8: a stale scheduler response is surfaced as reconciling, never as ready ──
       await evaluate((args) => window.task30.setSlurm({
-        environmentId: args.env, intentId: args.profileId, jobId: null, state: 'reconciling', queue: null,
+        environmentId: args.env, intentId: RECONCILING_INTENT, jobId: null, state: 'reconciling', queue: null,
         terminal: null, reconcile: 'unconfirmed', attached: true, ownership: 'owned',
         computeNode: null, stepId: null, epoch: null, bridgeInstanceId: null,
       }), { env: ENVIRONMENT, profileId: selectedProfileId });
       const staleUnconfirmed = await evaluate(() => window.task30.renderedTargets());
       await evaluate((args) => window.task30.setSlurm({
-        environmentId: args.env, intentId: args.profileId, jobId: null, state: 'reconciling', queue: null,
+        environmentId: args.env, intentId: RECONCILING_INTENT, jobId: null, state: 'reconciling', queue: null,
         terminal: null, reconcile: 'ambiguous', attached: true, ownership: 'owned',
         computeNode: null, stepId: null, epoch: null, bridgeInstanceId: null,
       }), { env: ENVIRONMENT, profileId: selectedProfileId });

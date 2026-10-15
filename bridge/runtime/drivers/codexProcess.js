@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { detachedProcessOptions, stopProcessTree } from '../../processTree.js';
-import { requireValue } from '../../../shared/runtime/capabilities.js';
+import { ProtocolError, requireValue } from '../../../shared/runtime/capabilities.js';
 
 const RAW_HIGH_WATER = 1024 * 1024;
 const RAW_LOW_WATER = 128 * 1024;
@@ -29,6 +29,10 @@ function parseEnvelopeId(frame) {
  * (no leading id) is attributed by its ACTUAL trailing envelope id: while a live raw read owns the sink
  * its response streams immediately, and once a raw read is abandoned the frame is bound-buffered until
  * its id is known, then routed to the live sink, to the abandoned discard, or to the ordinary parser.
+ * A bound-buffered frame that outgrows the ordinary bound BEFORE its id is known cannot be attributed
+ * at all, so it is drained to its newline and published to no sink: guessing would route one request's
+ * bytes into another's sink. If a later frame proves the drained bytes belonged to the pending read,
+ * that read fails instead of parking forever.
  */
 export function createCodexProcess({
   executable = 'codex',
@@ -54,7 +58,8 @@ export function createCodexProcess({
     prefix = Buffer.alloc(0),
     pendingRawId = null,
     rawSink = null,
-    abandonedRawId = null;
+    abandonedRawId = null,
+    drainedUnattributed = false;
   const exited = new Promise((resolve) =>
     child.once('close', (code, signal) => resolve({ code, signal, pid: child.pid })),
   );
@@ -132,6 +137,7 @@ export function createCodexProcess({
     sink.abandon();
     if (rawSink === sink) rawSink = null;
     if (pendingRawId === id) pendingRawId = null;
+    drainedUnattributed = false;
     if (mode === 'raw' || mode === 'classify' || buffer.length > 0 || prefix.length > 0)
       mode = 'discard';
     else abandonedRawId = id;
@@ -146,8 +152,20 @@ export function createCodexProcess({
     const sink = rawSink;
     rawSink = null;
     pendingRawId = null;
+    drainedUnattributed = false;
     mode = 'ordinary';
     sink?.end();
+    if (child.stdout.isPaused()) child.stdout.resume();
+  }
+  /** A drained frame turned out to be the pending raw read's own response, so its bytes are already
+   * gone: the read is failed rather than left parked on a frame that will never arrive. */
+  function failDrainedRaw() {
+    const sink = rawSink;
+    if (sink === null) return;
+    drainedUnattributed = false;
+    rawSink = null;
+    pendingRawId = null;
+    sink.fail(new ProtocolError('reconcile_required', 'codex.raw_frame'));
     if (child.stdout.isPaused()) child.stdout.resume();
   }
   function pushToRaw(bytes) {
@@ -157,7 +175,8 @@ export function createCodexProcess({
   }
   /** Resolve a bound-buffered result-first/error-first frame (`buffer`) by its actual envelope id.
    * `complete` means the terminating newline has been consumed; otherwise the id is unknown until the
-   * frame either closes or outgrows the ordinary bound, at which point only a raw response can fit. */
+   * frame either closes or outgrows the ordinary bound. An outgrown frame whose id is still unknown
+   * is `drain`: it is not attributable, so it is consumed to its newline and published to no sink. */
   function resolveDeferredFrame(complete) {
     if (complete) {
       const id = parseEnvelopeId(buffer);
@@ -166,9 +185,8 @@ export function createCodexProcess({
       return 'ordinary';
     }
     if (buffer.length <= maxFrameBytes) return 'need-more';
-    if (pendingRawId !== null) return 'raw';
-    if (abandonedRawId !== null) return 'abandoned';
-    return 'fail';
+    if (pendingRawId === null && abandonedRawId === null) return 'fail';
+    return 'drain';
   }
   function applyDeferred(kind, newline, end) {
     if (kind === 'need-more') {
@@ -180,6 +198,20 @@ export function createCodexProcess({
       return -1;
     }
     const next = newline >= 0 ? end + 1 : end;
+    if (kind === 'drain') {
+      // Never publish an unattributable frame: a guess would put one request's bytes in another's
+      // sink. Remember that a live read may have lost its response, so a later frame that proves
+      // the drained bytes were that read's own can fail it instead of parking it forever. There are
+      // at most two candidates (one pending, one abandoned), so a SECOND unattributable frame means
+      // both have been drained and the pending read's response is certainly gone.
+      buffer = Buffer.alloc(0);
+      if (rawSink !== null) {
+        if (drainedUnattributed) failDrainedRaw();
+        else drainedUnattributed = true;
+      }
+      mode = newline >= 0 ? 'ordinary' : 'discard';
+      return next;
+    }
     if (kind === 'raw') {
       mode = 'raw';
       pushToRaw(buffer);
@@ -189,6 +221,7 @@ export function createCodexProcess({
     }
     if (kind === 'abandoned') {
       abandonedRawId = null;
+      if (drainedUnattributed) failDrainedRaw();
       buffer = Buffer.alloc(0);
       mode = newline >= 0 ? 'ordinary' : 'discard';
       return next;
@@ -308,6 +341,7 @@ export function createCodexProcess({
         }
         if (classification === 'abandoned') {
           abandonedRawId = null;
+          if (drainedUnattributed) failDrainedRaw();
           mode = 'discard';
           if (newline < 0) {
             start = end;
