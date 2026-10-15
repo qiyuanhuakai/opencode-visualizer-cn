@@ -10,10 +10,10 @@ import { createOperationJournal, fingerprint } from '../../../bridge/runtime/ope
 import { createInteractionStore } from '../../../bridge/runtime/interactionStore.js';
 import { createCodexSessionOperations } from '../../../shared/runtime/native/codex/sessionOperations.js';
 import { createCodexCancellation } from '../../../shared/runtime/native/codex/cancelOperations.js';
-import { jsonValue } from '../../../shared/runtime/capabilities.js';
+import { ProtocolError, jsonValue } from '../../../shared/runtime/capabilities.js';
 import type { JsonValue } from '../../../shared/runtime/capabilities.js';
 import { record } from '../../../shared/runtime/native/codex/boundaries.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   normalizeCodexTurnsToHistory,
   parseCodexThreadTokenUsage,
@@ -667,5 +667,277 @@ describe('Codex cancellation durable ownership', () => {
         await rm(directory, { recursive: true, force: true });
       }
     }
+  });
+});
+
+describe('Codex session operations completion and resume defects', () => {
+  const session = parseSessionRef({
+    environmentId: '11111111-1111-4111-8111-111111111111',
+    harnessInstanceId: '22222222-2222-4222-8222-222222222222',
+    nativeSessionId: 'native-defects',
+  });
+  const epoch = randomUUID();
+  const scope = { target: session.environmentId, epoch, processGeneration: 1, session };
+  async function harness() {
+    const directory = await mkdtemp(path.join(tmpdir(), 'vis-task14-defects-'));
+    const store = createRuntimeStore({
+      stateDirectory: directory,
+      environmentId: session.environmentId,
+      ownerId: session.harnessInstanceId,
+      epoch,
+    });
+    await store.ready;
+    const journal = createOperationJournal({ store, isProcessCurrent: () => true });
+    return { directory, store, journal, interactions: createInteractionStore({ store }) };
+  }
+  it('dispatches the accepted send queue once a non-turn mutation completes', async () => {
+    // Given a loaded session whose non-turn mutation holds the session active.
+    const { directory, store, journal, interactions } = await harness();
+    try {
+      const dispatched: string[] = [];
+      let releaseRename: () => void = () => {};
+      const renameGate = new Promise<void>((resolve) => {
+        releaseRename = resolve;
+      });
+      const sessions = createCodexSessionOperations({
+        store,
+        fingerprint,
+        newId: randomUUID,
+        journal,
+        interactions,
+        request: async (method: string): Promise<JsonValue> => {
+          dispatched.push(method);
+          if (method === 'thread/rename') await renameGate;
+          return method === 'thread/turn/start' ? { turn: { id: 'turn-1' } } : { ok: true };
+        },
+        scopeFor: () => scope,
+        assertCurrent() {},
+        emit() {},
+        authorizeSession: async () => directory,
+      });
+      await sessions.loaded(session);
+      const rename = sessions.mutate({
+        session,
+        method: 'thread/rename',
+        payload: { name: 'renamed' },
+        idempotencyKey: 'rename',
+      });
+      await vi.waitFor(() => expect(sessions.activeFor(session)?.method).toBe('thread/rename'));
+      // When a queue:true send is accepted while the mutation is still running.
+      const queued = record(
+        await sessions.mutate({
+          session,
+          method: 'thread/turn/start',
+          payload: { text: 'hi' },
+          idempotencyKey: 'send',
+          turn: true,
+          queue: true,
+        }),
+      );
+      if (typeof queued.operationId !== 'string') throw new Error('missing queued receipt');
+      const queuedId = queued.operationId;
+      expect(await journal.get(queuedId)).toMatchObject({ phase: 'accepted' });
+      releaseRename();
+      await rename;
+      // Then the non-turn completion advances the queue instead of stalling it.
+      await vi.waitFor(async () => {
+        expect(await journal.get(queuedId)).toMatchObject({ phase: 'observed' });
+      });
+      expect(dispatched).toContain('thread/turn/start');
+      await sessions.terminal({ session, turnId: 'turn-1', outcome: 'completed' });
+      await sessions.close();
+    } finally {
+      await store.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it('clears the cached resume rejection when authorization fails before the native send', async () => {
+    // Given a send whose resume closure fails at authorizeSession, before thread/resume.
+    const { directory, store, journal, interactions } = await harness();
+    try {
+      let authorizeCalls = 0;
+      let resumeCalls = 0;
+      let failAuthorization = true;
+      const sessions = createCodexSessionOperations({
+        store,
+        fingerprint,
+        newId: randomUUID,
+        journal,
+        interactions,
+        request: async (method: string): Promise<JsonValue> => {
+          if (method === 'thread/resume') resumeCalls += 1;
+          return method === 'thread/turn/start' ? { turn: { id: 'turn-1' } } : { ok: true };
+        },
+        scopeFor: () => scope,
+        assertCurrent() {},
+        emit() {},
+        authorizeSession: async () => {
+          authorizeCalls += 1;
+          // The second call is the one inside resume's closure.
+          if (failAuthorization && authorizeCalls === 2)
+            throw new Error('workspace check temporarily unavailable');
+          return directory;
+        },
+      });
+      await expect(
+        sessions.mutate({
+          session,
+          method: 'thread/turn/start',
+          payload: { text: 'hi' },
+          idempotencyKey: 'send-1',
+          turn: true,
+        }),
+      ).rejects.toThrow('workspace check temporarily unavailable');
+      expect(authorizeCalls).toBe(2);
+      expect(resumeCalls).toBe(0);
+      // When the transient condition clears, the next send retries in the same generation.
+      failAuthorization = false;
+      const retried = record(
+        await sessions.mutate({
+          session,
+          method: 'thread/turn/start',
+          payload: { text: 'again' },
+          idempotencyKey: 'send-2',
+          turn: true,
+        }),
+      );
+      if (typeof retried.operationId !== 'string') throw new Error('missing retried receipt');
+      // Then the memo is re-entered: authorizeSession runs again and thread/resume is sent once.
+      expect(authorizeCalls).toBe(4);
+      expect(resumeCalls).toBe(1);
+      expect(await journal.get(retried.operationId)).toMatchObject({ phase: 'observed' });
+      await sessions.terminal({ session, turnId: 'turn-1', outcome: 'completed' });
+      await sessions.close();
+    } finally {
+      await store.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it('keeps a rejected native resume memoised so an ambiguous outcome is not replayed', async () => {
+    // Given a resume whose native thread/resume was already sent when it failed.
+    const { directory, store, journal, interactions } = await harness();
+    try {
+      let resumeCalls = 0;
+      let failNative = true;
+      const sessions = createCodexSessionOperations({
+        store,
+        fingerprint,
+        newId: randomUUID,
+        journal,
+        interactions,
+        request: async (method: string): Promise<JsonValue> => {
+          if (method === 'thread/resume') {
+            resumeCalls += 1;
+            if (failNative) throw new Error('native resume acknowledgement lost');
+          }
+          return method === 'thread/turn/start' ? { turn: { id: 'turn-1' } } : { ok: true };
+        },
+        scopeFor: () => scope,
+        assertCurrent() {},
+        emit() {},
+        authorizeSession: async () => directory,
+      });
+      await expect(
+        sessions.mutate({
+          session,
+          method: 'thread/turn/start',
+          payload: { text: 'hi' },
+          idempotencyKey: 'send-1',
+          turn: true,
+        }),
+      ).rejects.toThrow('native resume acknowledgement lost');
+      expect(resumeCalls).toBe(1);
+      // When a later send retries, the ambiguous native outcome must not be replayed.
+      failNative = false;
+      await expect(
+        sessions.mutate({
+          session,
+          method: 'thread/turn/start',
+          payload: { text: 'again' },
+          idempotencyKey: 'send-2',
+          turn: true,
+        }),
+      ).rejects.toThrow('native resume acknowledgement lost');
+      expect(resumeCalls).toBe(1);
+      await sessions.close();
+    } finally {
+      await store.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Codex history unmaterialized thread reads', () => {
+  const session = parseSessionRef({
+    environmentId: '11111111-1111-4111-8111-111111111111',
+    harnessInstanceId: '22222222-2222-4222-8222-222222222222',
+    nativeSessionId: 'native-empty',
+  });
+  const unmaterialized = (nativeCode: number) =>
+    Object.assign(new ProtocolError('invalid_request', 'codex.rpc.thread/turns/list'), {
+      nativeCode,
+    });
+  it('reads a brand-new thread with no first message as an empty complete page', async () => {
+    // Given Codex answers thread/turns/list on an unmaterialized thread with -32600.
+    const { createCodexHistory } = await import('../../../bridge/runtime/drivers/codexHistory.js');
+    const read = createCodexHistory({
+      processGeneration: 1,
+      epoch: 'epoch',
+      assertCurrent() {},
+      request: async (method: string): Promise<JsonValue> => {
+        if (method === 'thread/turns/list') throw unmaterialized(-32600);
+        throw new Error('unexpected method');
+      },
+    });
+    // When the initial history page is read.
+    const page = await read({ session });
+    // Then the thread reads as an empty, complete history instead of failing.
+    expect(page).toEqual({ items: [], cursor: null, completeness: 'complete' });
+  });
+  it('rejects an unrelated invalid_request instead of reporting empty history', async () => {
+    // Given a -32602 invalid params rejection on the same method (not unmaterialized).
+    const { createCodexHistory } = await import('../../../bridge/runtime/drivers/codexHistory.js');
+    const read = createCodexHistory({
+      processGeneration: 1,
+      epoch: 'epoch',
+      assertCurrent() {},
+      request: async (method: string): Promise<JsonValue> => {
+        if (method === 'thread/turns/list') throw unmaterialized(-32602);
+        throw new Error('unexpected method');
+      },
+    });
+    // When the initial history page is read.
+    // Then the failure surfaces instead of being swallowed as an empty page.
+    await expect(read({ session })).rejects.toThrow('codex.rpc.thread/turns/list');
+  });
+  it('never converts an unmaterialized rejection into an empty page mid-pagination', async () => {
+    // Given a first page that proves more turns remain, then an unmaterialized rejection.
+    const { createCodexHistory } = await import('../../../bridge/runtime/drivers/codexHistory.js');
+    let first = true;
+    const read = createCodexHistory({
+      processGeneration: 1,
+      epoch: 'epoch',
+      assertCurrent() {},
+      request: async (method: string): Promise<JsonValue> => {
+        if (method === 'thread/turns/list') {
+          if (first) {
+            first = false;
+            return { data: [{ id: 't', status: 'completed', items: [] }], nextCursor: 'turn-2' };
+          }
+          throw unmaterialized(-32600);
+        }
+        return {
+          data: [{ turnId: 't', item: { id: 'a', type: 'agentMessage', text: 'a' } }],
+          nextCursor: null,
+        };
+      },
+    });
+    const page = await read({ session });
+    expect(page.cursor).toBeTruthy();
+    // When the continuation page hits the same rejection.
+    // Then only the initial page may convert it, so the continuation still fails.
+    await expect(read({ session, cursor: page.cursor })).rejects.toThrow(
+      'codex.rpc.thread/turns/list',
+    );
   });
 });

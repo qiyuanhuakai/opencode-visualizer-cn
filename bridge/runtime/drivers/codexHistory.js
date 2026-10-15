@@ -6,6 +6,22 @@ import { normalizeCodexTurnsToHistory } from '../../../shared/runtime/native/cod
 const MAX_PAGE = 2 * 1024 * 1024;
 const CHUNK = 64 * 1024;
 
+/**
+ * Codex answers thread/turns/list on a thread with no first user message with a
+ * -32600 invalid_request ("not materialized yet"). appServerClient maps that to
+ * invalid_request and drops the native message, so the classification is the
+ * exact RPC method field plus the -32600 native code; a different native code
+ * (e.g. -32602 invalid params) is not an unmaterialized thread and still fails.
+ */
+function isUnmaterializedThreadListError(error) {
+  return (
+    error instanceof ProtocolError &&
+    error.code === 'invalid_request' &&
+    error.nativeCode === -32600 &&
+    error.field === 'codex.rpc.thread/turns/list'
+  );
+}
+
 /** Pages native items, never thread/read(includeTurns). Cursors retain no resident transcript. */
 export function createCodexHistory({ request, processGeneration, epoch, assertCurrent }) {
   const key = randomBytes(32);
@@ -198,6 +214,9 @@ export function createCodexHistory({ request, processGeneration, epoch, assertCu
     } catch (error) {
       if (error instanceof ProtocolError && error.code === 'unsupported')
         return { items: [], cursor: null, completeness: 'unsupported', reason: error.field };
+      // Only the initial page of a not-yet-materialized thread reads as empty and complete.
+      if (!cursor && !state.turn && isUnmaterializedThreadListError(error))
+        return { items: [], cursor: null, completeness: 'complete' };
       throw error;
     }
   };
