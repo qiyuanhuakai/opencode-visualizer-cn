@@ -27,6 +27,7 @@ import {
   TRANSPORT_KINDS,
   assertNoSecretPayload,
   buildChallengeAnswer,
+  createBridgeProfileClient,
   createRuntimeSecretBox,
   isDirectOnlyRuntime,
   planConnectionCancel,
@@ -633,5 +634,250 @@ describe('useRuntimeProfiles drives the picker, the forms and the lifecycle', ()
 
   it('declares the transport kinds the profile contract accepts', () => {
     expect([...TRANSPORT_KINDS]).toEqual(['local', 'direct', 'ssh', 'slurm']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #184 finding 2 — the real client must honour the real response envelope
+// ---------------------------------------------------------------------------
+
+describe('the real bridge profile client honours the real response envelope', () => {
+  const BRIDGE_PROFILE = Object.freeze({
+    profileId: '77777777-7777-4777-8777-777777777777',
+    name: 'Lab cluster',
+    transport: Object.freeze({ kind: 'ssh' as const, endpoint: 'cluster.example.edu' }),
+    target: Object.freeze({ kind: 'ssh' as const, environmentId: CLUSTER_ENVIRONMENT }),
+    role: 'manager' as const,
+    credentialRef: 'cred-1',
+    enabled: true,
+  });
+
+  function bridgeFetch(payload: unknown) {
+    const calls: Array<{ method: string; url: string }> = [];
+    const fetchImpl = (async (input: unknown, init?: { method?: string }) => {
+      calls.push({ method: init?.method ?? 'GET', url: String(input) });
+      return { ok: true, status: 200, text: async () => JSON.stringify(payload) };
+    }) as unknown as typeof fetch;
+    return { fetchImpl, calls };
+  }
+
+  it('reads the profiles out of the envelope the bridge really sends, and refresh() survives it', async () => {
+    const bridge = bridgeFetch({ profiles: [BRIDGE_PROFILE] });
+    const port = createBridgeProfileClient({ baseUrl: 'http://bridge.test', fetchImpl: bridge.fetchImpl });
+    const runtime = useRuntimeProfiles({ profilePort: port, managedTransport: true });
+
+    await runtime.refresh();
+
+    expect(runtime.error.value).toBe('');
+    expect(runtime.profiles.value).toHaveLength(1);
+    expect(runtime.profiles.value[0]?.profileId).toBe(BRIDGE_PROFILE.profileId);
+    expect(bridge.calls).toContainEqual({ method: 'GET', url: 'http://bridge.test/api/v1/profiles' });
+  });
+
+  it('never presents a profile list entry as a connection status', async () => {
+    const bridge = bridgeFetch({ profiles: [BRIDGE_PROFILE] });
+    const port = createBridgeProfileClient({ baseUrl: 'http://bridge.test', fetchImpl: bridge.fetchImpl });
+    const runtime = useRuntimeProfiles({ profilePort: port, managedTransport: true });
+
+    await runtime.refresh();
+
+    // A ConnectionProfile carries no state and no generation. Inventing one here would show a
+    // status chip for a connection nobody observed.
+    expect(runtime.statuses.value).toEqual([]);
+    expect(runtime.statusOf.value).toBeNull();
+  });
+
+  it('still reports a genuine transport failure instead of swallowing it', async () => {
+    const failing = (async () => ({ ok: false, status: 500, text: async () => JSON.stringify({ code: 'internal' }) })) as unknown as typeof fetch;
+    const port = createBridgeProfileClient({ baseUrl: 'http://bridge.test', fetchImpl: failing });
+    const runtime = useRuntimeProfiles({ profilePort: port, managedTransport: true });
+
+    await runtime.refresh();
+
+    expect(runtime.error.value).toBe('internal');
+    expect(runtime.profiles.value).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #184 finding 5 — a disconnect must update the status it was given
+// ---------------------------------------------------------------------------
+
+describe('a disconnect updates the status the port returns', () => {
+  const PROFILE_ID = '88888888-8888-4888-8888-888888888888';
+  const slurmProfile = Object.freeze({
+    profileId: PROFILE_ID,
+    name: 'Lab cluster',
+    transport: Object.freeze({ kind: 'ssh' as const, endpoint: 'cluster.example.edu' }),
+    target: Object.freeze({ kind: 'ssh' as const, environmentId: CLUSTER_ENVIRONMENT }),
+    role: 'manager' as const,
+    credentialRef: 'cred-1',
+    enabled: true,
+  }) as ConnectionProfile;
+
+  function statusPort(overrides: Partial<Record<'connect' | 'disconnect' | 'reconnect', (profileId: string) => Promise<never>>> = {}) {
+    const calls: string[] = [];
+    const build = (verb: string, fallback: (profileId: string) => object) =>
+      overrides[verb as 'connect'] ?? (async (profileId: string) => { calls.push(`${verb}:${profileId}`); return fallback(profileId); });
+    return {
+      calls,
+      port: {
+        async list() { return Object.freeze([] as readonly ConnectionProfile[]); },
+        async create() { return slurmProfile; },
+        async update() { return undefined; },
+        async setEnabled() { return undefined; },
+        async remove() { return undefined; },
+        async inspect() { return Object.freeze({ profiles: Object.freeze([]) }); },
+        connect: build('connect', (profileId) => Object.freeze({ profileId, state: 'connected' as const, environmentId: CLUSTER_ENVIRONMENT, generation: 1 })),
+        disconnect: build('disconnect', (profileId) => Object.freeze({ profileId, state: 'disconnected' as const, environmentId: CLUSTER_ENVIRONMENT, generation: 2 })),
+        reconnect: build('reconnect', (profileId) => Object.freeze({ profileId, state: 'connected' as const, environmentId: CLUSTER_ENVIRONMENT, generation: 3 })),
+      },
+    };
+  }
+
+  it('writes the disconnected status, so the chip stops reporting connected', async () => {
+    const port = statusPort();
+    const runtime = useRuntimeProfiles({ profilePort: port.port as never, profiles: [slurmProfile], managedTransport: true });
+    runtime.selectProfile(PROFILE_ID);
+
+    await runtime.connect(PROFILE_ID);
+    expect(runtime.statusOf.value).toMatchObject({ state: 'connected', generation: 1 });
+
+    const receipt = await runtime.cancelConnection(PROFILE_ID);
+    expect(receipt).not.toBeNull();
+    expect(port.calls).toContain(`disconnect:${PROFILE_ID}`);
+
+    expect(runtime.statusOf.value).toMatchObject({ state: 'disconnected', generation: 2 });
+    expect(runtime.statusOf.value?.state).not.toBe('connected');
+  });
+
+  it('keeps a disconnect result when an earlier connect is still in flight', async () => {
+    const gate: { release?: () => void } = {};
+    const port = statusPort({
+      connect: (async () => {
+        await new Promise<void>((resolve) => { gate.release = resolve; });
+        return Object.freeze({ profileId: PROFILE_ID, state: 'connected' as const, environmentId: CLUSTER_ENVIRONMENT, generation: 9 });
+      }) as never,
+      disconnect: (async () => Object.freeze({ profileId: PROFILE_ID, state: 'disconnected' as const, environmentId: CLUSTER_ENVIRONMENT, generation: 0 })) as never,
+    });
+    const runtime = useRuntimeProfiles({ profilePort: port.port as never, profiles: [slurmProfile], managedTransport: true });
+    runtime.selectProfile(PROFILE_ID);
+
+    const connecting = runtime.connect(PROFILE_ID);
+    const cancelling = runtime.cancelConnection(PROFILE_ID);
+    await cancelling;
+    expect(runtime.statusOf.value).toMatchObject({ state: 'disconnected' });
+
+    gate.release?.();
+    await connecting;
+
+    expect(runtime.statusOf.value).toMatchObject({ state: 'disconnected', generation: 0 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #184 finding 3 — a profile and the intent it submits are different identities
+// ---------------------------------------------------------------------------
+
+describe('a profile and the intent it submits are different identities', () => {
+  const PROFILE_ID = '99999999-9999-4999-8999-999999999999';
+  const INTENT_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const SECOND_INTENT_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const RESOURCES = Object.freeze({
+    partition: 'cpu', account: null, cpus: 4, memory: '8G', time: '01:00:00', gres: 'none',
+  });
+  const slurmProfile = Object.freeze({
+    profileId: PROFILE_ID,
+    name: 'Lab cluster',
+    transport: Object.freeze({ kind: 'slurm' as const }),
+    target: Object.freeze({ kind: 'slurm' as const, clusterEnvironmentId: CLUSTER_ENVIRONMENT }),
+    role: 'manager' as const,
+    credentialRef: 'cred-1',
+    enabled: true,
+  }) as ConnectionProfile;
+
+  function slurmRuntime(intentIds: readonly string[], record?: { detached: string[]; stopped: string[] }) {
+    const submitted: unknown[] = [];
+    let index = 0;
+    const port = {
+      preview: () => Object.freeze({
+        nodes: 1, ntasks: 1, cpus: 4, memory: '8G', memoryMiB: 8192, time: '01:00:00', timeSeconds: 3600,
+        gres: 'none', requestsGpu: false, partition: 'cpu', account: null,
+      }),
+      submit: async (request: unknown) => {
+        submitted.push(request);
+        const intentId = intentIds[index] ?? INTENT_ID;
+        index += 1;
+        return lifecycle({ intentId, jobId: String(1000 + index), attached: true });
+      },
+      detach: async (intentId: string) => {
+        record?.detached.push(intentId);
+        return Object.freeze({ intentId, cancelled: false, signalled: false });
+      },
+      stop: async (intentId: string) => {
+        record?.stopped.push(intentId);
+        return Object.freeze({ intentId, cancelled: true, signalled: true });
+      },
+      state: async (intentId: string) => lifecycle({ intentId }),
+    };
+    const runtime = useRuntimeProfiles({ profiles: [slurmProfile], slurmPort: port as never, managedTransport: true });
+    runtime.selectProfile(PROFILE_ID);
+    return { runtime, submitted, port };
+  }
+
+  it('associates a submitted job with the profile that submitted it, with two DIFFERENT uuids', async () => {
+    const { runtime } = slurmRuntime([INTENT_ID]);
+
+    const status = await runtime.submitSlurm({ resources: RESOURCES });
+
+    expect(status?.intentId).toBe(INTENT_ID);
+    expect(status?.intentId).not.toBe(PROFILE_ID);
+    expect(runtime.slurmStatuses.value).toHaveLength(1);
+    expect(runtime.selectedSlurm.value?.intentId).toBe(INTENT_ID);
+    expect(runtime.selectedSlurm.value?.jobId).toBe('1001');
+  });
+
+  it('keeps the association when the same profile submits a second job', async () => {
+    const { runtime } = slurmRuntime([INTENT_ID, SECOND_INTENT_ID]);
+
+    await runtime.submitSlurm({ resources: RESOURCES });
+    expect(runtime.selectedSlurm.value?.intentId).toBe(INTENT_ID);
+
+    await runtime.submitSlurm({ resources: RESOURCES });
+    expect(runtime.slurmStatuses.value).toHaveLength(2);
+    expect(runtime.selectedSlurm.value?.intentId).toBe(SECOND_INTENT_ID);
+  });
+
+  it('drops the association when another profile is selected, so a job is never borrowed across profiles', async () => {
+    const otherProfile = Object.freeze({
+      ...slurmProfile,
+      profileId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    }) as ConnectionProfile;
+    const { runtime } = slurmRuntime([INTENT_ID]);
+    runtime.profiles.value = Object.freeze([slurmProfile, otherProfile]);
+
+    await runtime.submitSlurm({ resources: RESOURCES });
+    expect(runtime.selectedSlurm.value?.intentId).toBe(INTENT_ID);
+
+    runtime.selectProfile(otherProfile.profileId);
+    expect(runtime.selectedSlurm.value).toBeNull();
+
+    runtime.selectProfile(PROFILE_ID);
+    expect(runtime.selectedSlurm.value?.intentId).toBe(INTENT_ID);
+  });
+
+  it('detaches and stops the INTENT, never the profile id', async () => {
+    const record = { detached: [] as string[], stopped: [] as string[] };
+    const { runtime } = slurmRuntime([INTENT_ID], record);
+    await runtime.submitSlurm({ resources: RESOURCES });
+
+    const target = runtime.selectedSlurm.value?.intentId ?? '';
+    await runtime.detachSlurm(target);
+    await runtime.stopSlurm(target);
+
+    expect(target).toBe(INTENT_ID);
+    expect(target).not.toBe(PROFILE_ID);
+    expect(record.detached).toEqual([INTENT_ID]);
+    expect(record.stopped).toEqual([INTENT_ID]);
   });
 });

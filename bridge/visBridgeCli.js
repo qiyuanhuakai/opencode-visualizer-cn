@@ -28,7 +28,7 @@ Usage:
   vis_bridge restart [options]
   vis_bridge config [--config <path>]
   vis_bridge control-store --state-root <dir> [--environment <uuid>]
-  vis_bridge relay --environment <uuid> --job <uuid> --bridge-instance <uuid> --compute-node <name> (--socket <path>|--port <n>) [--step <uuid>] [--epoch <n>]
+  vis_bridge relay --environment <uuid> --job <uuid> --bridge-instance <uuid> --compute-node <name> (--socket <path>|--port <n>) [--step <uuid>] [--epoch <n>] [--stdio-forward]
   vis_bridge update [--check] [--yes|-y]
   vis_bridge upgrade [--check] [--yes|-y]
   vis_bridge --version
@@ -48,6 +48,7 @@ Options:
   --bridge-instance    Compute Bridge instance UUID currently serving the job (relay role).
   --compute-node       Verified compute node the relay is bound to (relay role).
   --socket             Compute-local socket path the relay listens on (relay role, no compute TCP).
+  --stdio-forward      Forward this process's stdio to the compute-local socket (the srun relay step).
   --port               Authenticated local TCP port the relay listens on (relay role).
   --step               Relay step UUID (relay role; generated when omitted).
   --epoch              Control-store fencing epoch the relay binds (relay role; default 0).
@@ -127,6 +128,7 @@ export function parseCliOptions(argv = process.argv.slice(2), env = process.env)
       socket: { type: 'string' },
       step: { type: 'string' },
       epoch: { type: 'string' },
+      'stdio-forward': { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
     allowPositionals: false,
@@ -194,6 +196,7 @@ export function parseCliOptions(argv = process.argv.slice(2), env = process.env)
           'epoch',
           'host',
           'port',
+          'stdio-forward',
         ].includes(key),
     );
     if (unexpectedOption) throw new Error(`vis_bridge relay does not accept --${unexpectedOption}.`);
@@ -220,6 +223,9 @@ export function parseCliOptions(argv = process.argv.slice(2), env = process.env)
       if (!values.job) throw new Error('vis_bridge relay requires --job <uuid>.');
       if (!values['bridge-instance']) throw new Error('vis_bridge relay requires --bridge-instance <uuid>.');
       if (!values['compute-node']) throw new Error('vis_bridge relay requires --compute-node <name>.');
+      if (values['stdio-forward'] === true && socketPath === undefined) {
+        throw new Error('vis_bridge relay --stdio-forward requires --socket <path> (the compute-local socket).');
+      }
       if (socketPath === undefined && port === undefined) {
         throw new Error('vis_bridge relay requires --socket <path> or --port <n>.');
       }
@@ -234,6 +240,7 @@ export function parseCliOptions(argv = process.argv.slice(2), env = process.env)
       role: 'relay',
       help: Boolean(values.help),
       serverArgs: [],
+      stdioForward: values['stdio-forward'] === true,
       ...(environmentId === undefined ? {} : { environmentId }),
       ...(values.job === undefined ? {} : { intentId: values.job }),
       ...(values['bridge-instance'] === undefined ? {} : { bridgeInstanceId: values['bridge-instance'] }),
@@ -451,8 +458,14 @@ export async function runControlStoreCommand(options, dependencies = {}) {
  * Runs the compute-side relay role: holds the login-owned long-term relay open (an authenticated
  * TCP listener or a compute-local socket) for the live job + bridge instance. A client disconnect
  * removes only that connection; the relay and the job stay alive until SIGINT/SIGTERM.
+ *
+ * With `--stdio-forward` the process is the `srun` relay step instead: it connects to the
+ * compute-local socket the long-term relay listens on and pipes its own stdio to it, so the
+ * framed bytes travel over the step's pipes. stdout carries protocol bytes only — every
+ * diagnostic goes to stderr — because the login side decodes the binary handshake off stdout.
  */
 export async function runRelayCommand(options, dependencies = {}) {
+  if (options.stdioForward === true) return runRelayStdioCommand(options, dependencies);
   const socketPath = options.socketPath ?? dependencies.socketPath;
   const port = options.port ?? dependencies.port;
   if (!socketPath && port === undefined) throw new Error('vis_bridge relay requires --socket <path> or --port <n>.');
@@ -491,4 +504,33 @@ export async function runRelayCommand(options, dependencies = {}) {
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
   return relay;
+}
+
+/**
+ * The `srun` relay step's entry: connects this process's stdio to the compute-local socket the
+ * long-term relay already listens on and pipes bytes both ways. The credential proof is
+ * end-to-end between the login channel and that relay, so this forwarder never needs the
+ * credential. stdout stays protocol-bytes-only (diagnostics on stderr); the process exits when
+ * the socket or the stdin pipe closes, and a connect failure exits non-zero with the cause.
+ */
+export async function runRelayStdioCommand(options, dependencies = {}) {
+  const socketPath = options.socketPath ?? dependencies.socketPath;
+  if (!socketPath) throw new Error('vis_bridge relay --stdio-forward requires --socket <path>.');
+  const { connect } = await import('node:net');
+  const socket = connect(socketPath);
+  await new Promise((resolve, reject) => {
+    socket.once('connect', resolve);
+    socket.once('error', (error) => reject(new Error(`vis_bridge relay --stdio-forward cannot reach ${socketPath}: ${error.message}`)));
+  });
+  process.stdin.pipe(socket);
+  socket.pipe(process.stdout);
+  const shutdown = (code) => {
+    socket.destroy();
+    process.exit(code);
+  };
+  socket.on('error', () => shutdown(1));
+  socket.on('close', () => shutdown(0));
+  process.stdin.on('end', () => socket.end());
+  process.stdin.on('error', () => shutdown(1));
+  return new Promise(() => {});
 }

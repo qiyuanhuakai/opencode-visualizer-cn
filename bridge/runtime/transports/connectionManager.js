@@ -81,28 +81,36 @@ export function createConnectionManager(options = {}) {
     // the await finds and invalidates this dial instead of letting its late result resurrect.
     pendingDials.set(key, entry);
     const dial = (async () => {
-      const dialed = await openTransport(profile);
-      const current = pendingDials.get(key);
-      if (current === undefined || current.token !== token) {
-        await safeClose(dialed);
-        const stillPresent = await store.get(key);
-        requireValue(stillPresent !== undefined, 'profile', 'source_unavailable');
-        throw new ProtocolError('conflict', 'profile.dial');
+      try {
+        const dialed = await openTransport(profile);
+        const current = pendingDials.get(key);
+        if (current === undefined || current.token !== token) {
+          await safeClose(dialed);
+          const stillPresent = await store.get(key);
+          requireValue(stillPresent !== undefined, 'profile', 'source_unavailable');
+          throw new ProtocolError('conflict', 'profile.dial');
+        }
+        pendingDials.delete(key);
+        if (dialed === undefined || dialed === null || dialed.environmentId !== expected) {
+          await safeClose(dialed);
+          fail(profile, expected, generation);
+          throw new ProtocolError('conflict', 'profile.environment');
+        }
+        connections.set(key, {
+          state: 'connected',
+          environmentId: expected,
+          generation,
+          connectionId: dialed.connectionId ?? `conn-${generation}`,
+          close: dialed.close,
+        });
+        return statusOf(profile);
+      } catch (error) {
+        // Retire THIS dial's pending entry on every failure path. The entry is registered before
+        // openTransport runs, so without this cleanup a rejected dial would be reused forever: the
+        // next connect would await the same settled rejection and never open a new transport.
+        if (pendingDials.get(key) === entry) pendingDials.delete(key);
+        throw error;
       }
-      pendingDials.delete(key);
-      if (dialed === undefined || dialed === null || dialed.environmentId !== expected) {
-        await safeClose(dialed);
-        fail(profile, expected, generation);
-        throw new ProtocolError('conflict', 'profile.environment');
-      }
-      connections.set(key, {
-        state: 'connected',
-        environmentId: expected,
-        generation,
-        connectionId: dialed.connectionId ?? `conn-${generation}`,
-        close: dialed.close,
-      });
-      return statusOf(profile);
     })();
     entry.promise = dial;
     return dial;
