@@ -468,6 +468,18 @@ export function createSlurmControlStore(options = {}) {
       throw new ProtocolError('conflict', 'store.fence');
     }
     epoch = current?.epoch ?? epoch;
+    // Reload and verify the journal under the exclusive lock. The pre-lock loadJournal cannot see
+    // records a previous owner appended while this open was waiting for the lock, and appending
+    // from that stale sequence/hash silently forks the hash chain, so the view is refreshed — and
+    // the existing chain proven intact — before any record is written.
+    const verified = await verifyIntegrity();
+    try {
+      await loadJournal();
+      requireValue(verified.lastHash === lastJournalHash, 'store.integrity', 'conflict');
+    } catch (error) {
+      await releaseOwnershipLock();
+      throw error;
+    }
     await updateOwnershipLock();
     writable = true;
     await writeFence(false);
