@@ -82,6 +82,7 @@ async function controlledNative() {
   const streams = new Set<ServerResponse>();
   let connections = 0;
   let generation = 1;
+  let healthy = true;
   const paths: Record<string, Record<string, object>> = {};
   for (const route of ['/session/{sessionID}', '/session/{sessionID}/fork', '/session/{sessionID}/revert', '/session/{sessionID}/unrevert', '/session/{sessionID}/diff', '/session/{sessionID}/children', '/session/{sessionID}/message/{messageID}', '/session/{sessionID}/todo', '/session/{sessionID}/command', '/session/{sessionID}/message/{messageID}/part/{partID}', '/global/config', '/provider', '/provider/auth', '/provider/{providerID}/oauth/authorize', '/provider/{providerID}/oauth/callback', '/auth/{providerID}', '/agent', '/command', '/session/status', '/permission', '/question', '/mcp', '/lsp', '/skill']) paths[route] = { get: {}, post: {}, patch: {}, put: {}, delete: {} };
   function publish(type: string, properties: Json) { for (const stream of streams) stream.write(`data: ${JSON.stringify({ directory: '/non-git', payload: { type, properties } })}\n\n`); }
@@ -92,7 +93,7 @@ async function controlledNative() {
     const raw = Buffer.concat(chunks).toString(); const body: unknown = raw ? JSON.parse(raw) : null;
     calls.push({ method: request.method ?? '', path: route.pathname + route.search, body });
     response.setHeader('Content-Type', 'application/json');
-    if (route.pathname === '/global/health') { response.end(JSON.stringify({ healthy: true, version: '1.18.34' })); return; }
+    if (route.pathname === '/global/health') { response.end(JSON.stringify({ healthy, version: '1.18.34' })); return; }
     if (route.pathname === '/doc') { response.end(JSON.stringify({ paths })); return; }
     if (route.pathname === '/global/event') { connections++; response.setHeader('Content-Type', 'text/event-stream'); response.flushHeaders(); streams.add(response); response.on('close', () => streams.delete(response)); return; }
     if (responseGate) await responseGate;
@@ -114,7 +115,7 @@ async function controlledNative() {
   const store = createRuntimeStore({ stateDirectory: path.join(dir, 'runtime'), environmentId, ownerId, epoch }); await store.ready;
   const runtime = createRuntimeHost({ environmentId, role: 'local' }); runtime.start();
   const options = { environmentId, harnessInstanceId, epoch, processGeneration: 1, endpoint: `http://127.0.0.1:${address.port}`, store, runtime, currentProcess: () => ({ epoch, processGeneration: generation }) };
-  return { options, store, calls, publish, get connections() { return connections; }, setGeneration(value: number) { generation = value; }, gate(value: Promise<void> | undefined) { responseGate = value; }, async close() { await runtime.stop(); for (const stream of streams) stream.end(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); await store.close(); } };
+  return { options, store, calls, publish, get connections() { return connections; }, setGeneration(value: number) { generation = value; }, setHealthy(value: boolean) { healthy = value; }, gate(value: Promise<void> | undefined) { responseGate = value; }, async close() { await runtime.stop(); for (const stream of streams) stream.end(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); await store.close(); } };
 }
 
 describe('OpenCode Bridge driver over controlled HTTP/SSE with real durable store', () => {
@@ -172,6 +173,21 @@ describe('OpenCode Bridge driver over controlled HTTP/SSE with real durable stor
       expect(driver.registration.manifest.capabilities.sessionPin).toMatchObject({ state: 'unsupported' });
     } finally { await fixture.close(); }
   });
+  it('retries the same native process binding after a failed init', async () => {
+    // Given a native service whose first health probe reports unhealthy.
+    const fixture = await controlledNative();
+    try {
+      fixture.setHealthy(false);
+      await expect(createOpenCodeDriver(fixture.options)).rejects.toMatchObject({ code: 'source_unavailable', field: 'opencode.health' });
+      const probed = fixture.calls.filter((call) => call.path.startsWith('/global/health')).length;
+      // When the native service recovers and the driver is rebuilt with the same epoch and process generation.
+      fixture.setHealthy(true);
+      const driver = await createOpenCodeDriver(fixture.options); const registry = createHarnessRegistry(); registry.register(driver.registration);
+      // Then the rebuilt driver re-probes health and binds instead of being fenced out as a duplicate upstream.
+      expect(fixture.calls.filter((call) => call.path.startsWith('/global/health')).length).toBe(probed + 1);
+      expect(await registry.invoke({ ...input(), channel: 'core', operation: 'inspect' })).toEqual({ state: 'ready', protocolVersion: 1 });
+    } finally { await fixture.close(); }
+  });
 });
 
 describe('OpenCode discovery fences', () => {
@@ -199,6 +215,20 @@ describe('OpenCode instance intent authority', () => {
       await expect(operations.ready).rejects.toMatchObject({ code: 'unauthorized' });
       // Then the durable catalog contains no operation for that forged target.
       expect((await fixture.store.page({ collection: 'operations' })).items).toEqual([]);
+    } finally { await fixture.close(); }
+  });
+  it('still fences a live concurrent upstream that claims the same epoch and generation', async () => {
+    const fixture = await controlledNative();
+    try {
+      const scope = { environmentId, harnessInstanceId, epoch, processGeneration: 1 };
+      const live = createInstanceOperations({ store: fixture.store, scope, current: () => ({ epoch, processGeneration: 1 }), fingerprint, randomUUID });
+      await live.ready;
+      // When a second instance claims the same epoch and generation while the first claim is still alive.
+      const rival = createInstanceOperations({ store: fixture.store, scope, current: () => ({ epoch, processGeneration: 1 }), fingerprint, randomUUID });
+      // Then the genuinely concurrent upstream is still rejected and the live claim stays authoritative.
+      await expect(rival.ready).rejects.toMatchObject({ code: 'conflict', field: 'opencode.duplicate_upstream' });
+      expect(await live.assertCurrent()).toMatchObject({ key: `opencode-process:${fingerprint([environmentId, harnessInstanceId])}`, value: { alive: true } });
+      await live.close(); await rival.close();
     } finally { await fixture.close(); }
   });
 });
@@ -276,6 +306,20 @@ it('failure accepts an instance intent once under duplicate concurrent submissio
     let sends = 0; const send = async () => { sends++; return nativeSession; };
     const outcomes = await Promise.allSettled(intents.map((intent) => operations.execute(intent.operationId, send)));
     expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1); expect(sends).toBe(1);
+    await operations.close();
+  } finally { await fixture.close(); }
+});
+
+it('retries a shared process revision race instead of reporting a missing operation', async () => {
+  const fixture = await controlledNative();
+  try {
+    const operations = createInstanceOperations({ store: fixture.store, scope: { environmentId, harnessInstanceId, epoch, processGeneration: 1 }, current: () => ({ epoch, processGeneration: 1 }), fingerprint, randomUUID }); await operations.ready;
+    // Given two concurrent accepts carrying different idempotency keys.
+    const outcomes = await Promise.allSettled([operations.accept({ idempotencyKey: 'create-a', method: 'createSession', payload: { title: 'a' } }), operations.accept({ idempotencyKey: 'create-b', method: 'createSession', payload: { title: 'b' } })]);
+    // When both collide on the shared process revision inside one control mutation.
+    // Then each intent is durably accepted under its own identity rather than one reporting a missing operation.
+    const accepted = outcomes.flatMap((outcome) => outcome.status === 'fulfilled' ? [outcome.value.operationId] : []);
+    expect(accepted).toHaveLength(2); expect(new Set(accepted).size).toBe(2);
     await operations.close();
   } finally { await fixture.close(); }
 });

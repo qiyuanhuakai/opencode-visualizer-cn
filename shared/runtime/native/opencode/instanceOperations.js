@@ -1,6 +1,8 @@
 import { parseEnvironmentId, parseHarnessInstanceId, parseInstanceId, parseSessionRef } from '../../identity.js';
 import { ProtocolError, requireValue, textValue, jsonValue } from '../../capabilities.js';
 
+const INSTANCE_COMMIT_ATTEMPTS = 8;
+
 /** Durable instance intents before a native session exists. Store, clock identity and hashes are injected by the target Runtime. */
 export function createInstanceOperations({ store, scope: input, current, fingerprint, randomUUID }) {
   const scope = Object.freeze({ environmentId: parseEnvironmentId(input.environmentId), harnessInstanceId: parseHarnessInstanceId(input.harnessInstanceId), epoch: parseInstanceId(input.epoch), processGeneration: input.processGeneration });
@@ -9,6 +11,10 @@ export function createInstanceOperations({ store, scope: input, current, fingerp
   const encoder = new TextEncoder();
   let active = true;
   const matching = (value) => value?.epoch === scope.epoch && value?.processGeneration === scope.processGeneration;
+  // A claim this instance already released - a failed init or a completed close - is not a concurrent
+  // upstream, so the same epoch and generation may bind again. A live claim, and any same-or-newer
+  // generation row that is still alive, keeps fencing the bind.
+  const released = (value) => Boolean(value) && value.alive !== true && matching(value);
   async function target() {
     const state = await store.ready;
     requireValue(state.environment === scope.environmentId, 'opencode.store_target', 'unauthorized');
@@ -31,7 +37,7 @@ export function createInstanceOperations({ store, scope: input, current, fingerp
   const ready = (async () => {
     await target(); local();
     const prior = await read(processKey); local();
-    requireValue(!prior?.value || prior.value.epoch !== scope.epoch || prior.value.processGeneration < scope.processGeneration, 'opencode.duplicate_upstream', 'conflict');
+    requireValue(!prior?.value || released(prior.value) || prior.value.epoch !== scope.epoch || prior.value.processGeneration < scope.processGeneration, 'opencode.duplicate_upstream', 'conflict');
     await change(processKey, prior, { ...scope, alive: true }); local();
   })();
   // Consumers await ready; the attached handler also makes construction safe before their first call.
@@ -48,6 +54,22 @@ export function createInstanceOperations({ store, scope: input, current, fingerp
     if (['accepted', 'sent', 'observed'].includes(prior.value.phase)) await change(id, prior, { ...prior.value, phase: 'reconciling' });
   }
   const revisionConflict = (error) => error instanceof Error && error.code === 'conflict' && error.reason === 'entity_revision';
+  // Every control mutation carries the shared process row as an authority precondition, so two accepts
+  // can collide on that revision even though neither touches the other's record. Such a collision is
+  // not evidence that the target record exists, so re-read the authority and the record before
+  // deciding, and retry within a bound: a genuine fence must still reach the caller instead of looping.
+  async function commit(id, prior, value, process, settled) {
+    for (let attempt = 1; ; attempt++) {
+      try { await change(id, prior, value, process); return; }
+      catch (error) {
+        if (!revisionConflict(error)) throw error;
+        const latest = await read(id); local();
+        if (settled(latest)) return;
+        requireValue(attempt < INSTANCE_COMMIT_ATTEMPTS, 'opencode.instance_accept_race', 'conflict');
+        prior = latest; process = await authority();
+      }
+    }
+  }
   return {
     ready,
     async assertCurrent() { if (startupError) throw startupError; await ready; const process = await authority(); return { collection: 'operations', key: processKey, expectedRevision: process.revision, value: process.value }; },
@@ -63,8 +85,7 @@ export function createInstanceOperations({ store, scope: input, current, fingerp
       let prior = await read(id); local();
       const ref = { key: `opencode-body:${id}:${digest}`, chunks: Math.ceil(serialized.length / 8192), digest: fingerprint(payload), bytes };
       if (!prior) {
-        try { await change(id, null, { kind: 'opencode-instance-operation', scope, method, digest, phase: 'intent', payloadRef: ref }, process); }
-        catch (error) { if (!revisionConflict(error)) throw error; }
+        await commit(id, null, { kind: 'opencode-instance-operation', scope, method, digest, phase: 'intent', payloadRef: ref }, process, (latest) => latest !== null);
         prior = await operation(id); local();
       }
       requireValue(prior.value.digest === digest, 'opencode.instance_idempotency', 'conflict');
@@ -76,8 +97,11 @@ export function createInstanceOperations({ store, scope: input, current, fingerp
         }
         process = await authority(); prior = await operation(id); local();
         if (prior.value.phase === 'intent') {
-          try { await change(id, prior, { ...prior.value, phase: 'accepted' }, process); }
-          catch (error) { if (!revisionConflict(error)) throw error; const duplicate = await operation(id); requireValue(duplicate.value.phase === 'accepted' && duplicate.value.digest === digest, 'opencode.instance_accept_race', 'conflict'); }
+          await commit(id, prior, { ...prior.value, phase: 'accepted' }, process, (latest) => {
+            if (!latest || latest.value.phase === 'intent') return false;
+            requireValue(latest.value.phase === 'accepted' && latest.value.digest === digest, 'opencode.instance_accept_race', 'conflict');
+            return true;
+          });
         }
       }
       try { await authority(); }
