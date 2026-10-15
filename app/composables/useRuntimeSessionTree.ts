@@ -26,6 +26,13 @@
 // against each other here. A per-source retry re-invokes ONLY that harness's
 // native `session.list`; it never restarts the target snapshot, so the other
 // sources are not re-fetched.
+//
+// `readIndex` reuses the target's cached index view so repeated reads do not
+// exhaust the bridge's bounded live-view budget. That reuse is bypassed with
+// `fresh` wherever the cached view provably cannot answer: a NEW search, an
+// explicit refresh, and the topology re-read after a source retry. Paging one
+// search and paging one parent's children keep the view they started on, so a
+// single traversal stays internally consistent.
 import { computed, getCurrentScope, onScopeDispose, shallowRef } from 'vue';
 import type { ErrorCode } from '../../shared/runtime/capabilities.js';
 import { decodeSessionKey, encodeSessionKey } from '../../shared/runtime/identity.js';
@@ -365,7 +372,10 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   const workspaces = shallowRef<readonly WorkspaceEntry[]>([]);
   const harnesses = shallowRef<readonly HarnessEntry[]>([]);
   const nativeChildren = shallowRef<ReadonlyMap<string, readonly UnifiedSessionRow[]>>(new Map());
-  const childScans = shallowRef<ReadonlySet<string>>(new Set<string>());
+  // The index revision each parent's children were scanned against. A parent is "already scanned"
+  // only for the view it was scanned against, so a newer index view re-scans it.
+  const childScanRevisions = new Map<string, number>();
+  const childScans = computed<ReadonlySet<string>>(() => new Set(childScanRevisions.keys()));
   const expanded = shallowRef<ReadonlySet<string>>(new Set<string>());
   const filterKinds = shallowRef<ReadonlySet<SessionHarness>>(new Set<SessionHarness>([...HARNESS_KINDS, 'unknown']));
   const search = shallowRef<UnifiedSearchState>(idleSearchState());
@@ -380,6 +390,10 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   let previousWindowKeys: ReadonlySet<string> = new Set<string>();
   let searchGeneration = 0;
   let searchController: AbortController | undefined;
+  // The revision of the most recent index view this composable read. It tells a child expand
+  // whether the index has moved on since that parent was last scanned, without minting another
+  // bridge snapshot view just to ask.
+  let lastIndexRevision: number | null = null;
   let clearingSelection = false;
 
   function serialize<T>(work: () => Promise<T>): Promise<T> {
@@ -426,9 +440,10 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     selection.value = state.capture();
     usage.value = state.usage();
   }
-  async function pageCollection(name: IndexCollection): Promise<Readonly<Record<string, unknown>>[]> {
+  async function pageCollection(name: IndexCollection, fresh = false): Promise<Readonly<Record<string, unknown>>[]> {
     const items: Readonly<Record<string, unknown>>[] = [];
-    await client.readIndex(target, name, {
+    const view = await client.readIndex(target, name, {
+      fresh,
       onPage: (_collection, page) => {
         for (const item of page.items) {
           const record = asRecord(item);
@@ -436,16 +451,17 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
         }
       },
     });
+    lastIndexRevision = view.revision;
     return items;
   }
-  async function readTopology(): Promise<void> {
+  async function readTopology(fresh = false): Promise<void> {
     // `state.start` already holds the target's single live observer; the index
     // reads must not open a second one (`runtime.observer_duplicate`) or take
     // the paging lock the state's running reader depends on. `client.readIndex`
     // is the non-contending path, so these reads are also serialized against
     // each other here.
-    const harnessValues = await pageCollection('harnesses');
-    const workspaceValues = await pageCollection('workspaces');
+    const harnessValues = await pageCollection('harnesses', fresh);
+    const workspaceValues = await pageCollection('workspaces', fresh);
     if (disposed) return;
     const entries: HarnessEntry[] = [];
     for (const value of harnessValues) {
@@ -468,13 +484,15 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     started.value = true;
     refreshFromState();
     unsubscribe = state.subscribe(() => { if (!disposed) refreshFromState(); });
-    await serialize(readTopology);
+    await serialize(() => readTopology(false));
     refreshFromState();
   }
   /** Re-read the state window and the index topology without restarting the target. */
   async function refresh(): Promise<void> {
     refreshFromState();
-    await serialize(readTopology);
+    // An explicit refresh asks for a NEW index view: the cached one may predate
+    // sessions the user expects to see.
+    await serialize(() => readTopology(true));
     refreshFromState();
   }
   /**
@@ -483,9 +501,14 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
    * and `totalMatched` count the whole traversal without retaining rows, so the
    * caller still knows the full-index population. The `signal` aborts a
    * superseded traversal mid-flight.
+   *
+   * `fresh` starts a NEW index view. A new user search sets it, because the
+   * cached view may predate sessions the query should match; paging the SAME
+   * search leaves it unset so every page reads one consistent view.
    */
-  async function scanSearch(query: string, skip: number, signal: AbortSignal, accumulator: SearchScan): Promise<void> {
-    await client.readIndex(target, 'session_summaries', {
+  async function scanSearch(query: string, skip: number, signal: AbortSignal, accumulator: SearchScan, fresh: boolean): Promise<void> {
+    const view = await client.readIndex(target, 'session_summaries', {
+      fresh,
       signal,
       onPage: (_collection, page) => {
         if (signal.aborted) return;
@@ -502,6 +525,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
         }
       },
     });
+    lastIndexRevision = view.revision;
   }
   /** Full-index search: traverses every session_summaries page, not the LRU window. */
   async function searchAll(query: string): Promise<UnifiedSearchState> {
@@ -513,7 +537,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     return serialize(async () => {
       const accumulator: SearchScan = { retained: [], totalMatched: 0, scanned: 0, pages: 0 };
       try {
-        await scanSearch(query, 0, controller.signal, accumulator);
+        await scanSearch(query, 0, controller.signal, accumulator, true);
         if (generation !== searchGeneration) return search.value;
         const hasMore = accumulator.totalMatched > accumulator.retained.length;
         const complete: UnifiedSearchState = { status: 'complete', query, scanned: accumulator.scanned, pages: accumulator.pages,
@@ -550,7 +574,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     return serialize(async () => {
       const accumulator: SearchScan = { retained: [], totalMatched: 0, scanned: 0, pages: 0 };
       try {
-        await scanSearch(query, skip, controller.signal, accumulator);
+        await scanSearch(query, skip, controller.signal, accumulator, false);
         if (generation !== searchGeneration) return search.value;
         const nextOffset = skip + accumulator.retained.length;
         const hasMore = accumulator.totalMatched > nextOffset;
@@ -570,7 +594,11 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   }
   /** Child expand pagination: full-index scan for ONE parent's native children. */
   async function loadMoreChildren(parentKey: string): Promise<Readonly<{ parentKey: string; scanned: number; pages: number; added: number; duplicates: number; total: number; alreadyScanned: boolean }>> {
-    if (childScans.value.has(parentKey)) {
+    // A parent counts as "already scanned" only for the index view it was scanned against. A newer
+    // view — a new search, an explicit refresh, or a cached view that aged out — re-scans it, so a
+    // child that appeared after the first expand is found instead of hidden by a frozen marker.
+    const scannedAt = childScanRevisions.get(parentKey);
+    if (scannedAt !== undefined && scannedAt === lastIndexRevision) {
       const existing = nativeChildren.value.get(parentKey) ?? [];
       return Object.freeze({ parentKey, scanned: 0, pages: 0, added: 0, duplicates: 0, total: existing.length, alreadyScanned: true });
     }
@@ -578,7 +606,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
       const found: UnifiedSessionRow[] = [];
       let scanned = 0;
       let pages = 0;
-      await client.readIndex(target, 'session_summaries', {
+      const view = await client.readIndex(target, 'session_summaries', {
         onPage: (_collection, page) => {
           pages += 1;
           for (const item of page.items) {
@@ -590,6 +618,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
           }
         },
       });
+      lastIndexRevision = view.revision;
       const existing = nativeChildren.value.get(parentKey) ?? [];
       const merged = new Map(existing.map((row) => [row.key, row]));
       let duplicates = 0;
@@ -600,9 +629,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
       const next = new Map(nativeChildren.value);
       next.set(parentKey, Object.freeze([...merged.values()]));
       nativeChildren.value = next;
-      const scans = new Set(childScans.value);
-      scans.add(parentKey);
-      childScans.value = scans;
+      childScanRevisions.set(parentKey, view.revision);
       return Object.freeze({ parentKey, scanned, pages, added: found.length - duplicates, duplicates, total: merged.size, alreadyScanned: false });
     });
   }
@@ -613,7 +640,8 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     retrying.value = next;
     try {
       await client.request(target, 'session.list', { harnessInstanceId: harnessInstanceId as HarnessInstanceId, args: {} });
-      await serialize(readTopology);
+      // The native session.list just changed the index, so the topology re-read needs a new view.
+      await serialize(() => readTopology(true));
       refreshFromState();
       return Object.freeze({ harnessInstanceId, retried: true as const });
     } finally {
