@@ -21,6 +21,9 @@ export const TARGET_HELLO_OK = Object.freeze({ kind: 'target.hello.ok', version:
 const DEFAULT_CONNECT_TIMEOUT_SECONDS = 10;
 const DEFAULT_HELLO_TIMEOUT_MS = 5_000;
 const MAX_FORWARD_ATTEMPTS = 3;
+// A refused connect means "the forward is not listening yet", which is retryable; the pause keeps
+// the retry loop from hammering the loopback port while OpenSSH is still establishing the session.
+const HELLO_RETRY_DELAY_MS = 25;
 
 export function sshProgram(platform = process.platform) {
   return SSH_PROGRAMS[platform] ?? 'ssh';
@@ -273,11 +276,19 @@ function childHasExited(child) {
 /**
  * Resolves the forward outcome: readiness only when the target hello confirms, plus an immediate
  * rejection if the spawn itself fails (ENOENT/EACCES) or the process exits before readiness.
+ *
+ * `helloTimeoutMs` is the TOTAL readiness budget. OpenSSH binds the local forward only once the
+ * SSH session (and the remote side of the forward) is up, so a connect that lands first is
+ * REFUSED rather than slow: that is "not listening yet", not a failed forward. A refused connect
+ * is therefore retried inside the same budget while the child is still alive and nothing has
+ * cancelled the dial. Every other hello result — a target that accepted the connection and then
+ * stayed silent, a parse failure, a child exit, a spawn error — settles immediately.
  */
 function awaitForward({ relay, spawned, targetHello, helloTimeoutMs, localPort }) {
   return new Promise((resolve) => {
     let settled = false;
     const controller = new AbortController();
+    const deadline = Date.now() + helloTimeoutMs;
     const finish = (outcome) => {
       if (settled) return;
       settled = true;
@@ -288,23 +299,40 @@ function awaitForward({ relay, spawned, targetHello, helloTimeoutMs, localPort }
     };
     if (typeof relay.onError === 'function') relay.onError(spawned.id, (error) => finish({ kind: 'spawn-error', error }));
     relay.onExit(spawned.id, () => finish({ kind: 'exit' }));
-    let hello;
-    try {
-      hello = Promise.resolve(targetHello({
-        host: '127.0.0.1',
-        port: localPort,
-        frame: TARGET_HELLO,
-        timeoutMs: helloTimeoutMs,
-        signal: controller.signal,
-      }));
-    } catch (error) {
-      finish({ kind: 'hello-error', error });
-      return;
-    }
-    hello.then(
-      (result) => finish(result?.ok === true ? { kind: 'ready' } : { kind: 'hello', hello: result }),
-      (error) => finish({ kind: 'hello-error', error }),
-    );
+    const attempt = () => {
+      if (settled) return;
+      let hello;
+      try {
+        hello = Promise.resolve(targetHello({
+          host: '127.0.0.1',
+          port: localPort,
+          frame: TARGET_HELLO,
+          timeoutMs: Math.max(1, deadline - Date.now()),
+          signal: controller.signal,
+        }));
+      } catch (error) {
+        finish({ kind: 'hello-error', error });
+        return;
+      }
+      hello.then(
+        (result) => {
+          if (settled) return;
+          if (result?.ok === true) {
+            finish({ kind: 'ready' });
+            return;
+          }
+          const refused = result?.code === 'ECONNREFUSED';
+          const budgetLeft = deadline - Date.now();
+          if (refused && !childHasExited(spawned.child) && !controller.signal.aborted && budgetLeft > HELLO_RETRY_DELAY_MS) {
+            setTimeout(attempt, HELLO_RETRY_DELAY_MS);
+            return;
+          }
+          finish({ kind: 'hello', hello: result });
+        },
+        (error) => finish({ kind: 'hello-error', error }),
+      );
+    };
+    attempt();
   });
 }
 
@@ -349,7 +377,13 @@ function defaultTargetHello({ host, port, frame, timeoutMs, signal }) {
         }
       }
     });
-    socket.on('error', (error) => finish({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+    // The Node error code travels with the result so a dial can tell "nothing is listening yet"
+    // (retryable) from "the target answered nothing" (terminal) without string-matching a message.
+    socket.on('error', (error) => finish({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      code: error instanceof Error && typeof error.code === 'string' ? error.code : undefined,
+    }));
   });
 }
 

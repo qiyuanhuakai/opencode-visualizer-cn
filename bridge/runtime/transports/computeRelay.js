@@ -3,7 +3,7 @@ import { createServer as createNetServer } from 'node:net';
 
 import { ProtocolError, requireValue } from '../../../shared/runtime/capabilities.js';
 import { RELAY_MAX_FRAME_BYTES, decodeRelayFrames, encodeRelayFrame } from './processRelay.js';
-import { RELAY_HELLO_ACK_KIND, RELAY_HANDSHAKE_KIND } from './relayHandshake.js';
+import { RELAY_HELLO_ACK_KIND, RELAY_HANDSHAKE_KIND, RELAY_HANDSHAKE_KINDS, RELAY_HELLO_CONFIRM_KIND } from './relayHandshake.js';
 
 /**
  * Compute relay (plan task 29 / Scope 13).
@@ -57,8 +57,10 @@ function jsonParse(payload) {
 
 /**
  * A duplex tagged relay channel over any stream (a net socket or an srun stdio pipe). The
- * `login` role opens the handshake; the `compute` role verifies it and acks. `ready` resolves
- * only after both ends verified the credential-protected binding.
+ * `login` role opens the handshake; the `compute` role verifies it and answers with a fresh
+ * challenge of its own. `ready` resolves only after both ends verified the credential-protected
+ * binding, and every termination path (handshake timeout, EOF, stream error, explicit close)
+ * settles `ready` instead of leaving the caller's `open` pending forever.
  */
 export function createRelayChannel(stream, options = {}) {
   const handshake = options.handshake;
@@ -83,15 +85,34 @@ export function createRelayChannel(stream, options = {}) {
   });
   ready.catch(() => {});
 
+  // The handshake must settle within `timeoutMs`: a silent peer must not hang `open` forever.
+  let handshakeTimer = setTimeout(() => fail(new ProtocolError('timeout', 'relay.handshake')), timeoutMs);
+  // Per-connection handshake state. The login remembers the nonce it challenged with; the
+  // compute side remembers the hello nonce it verified and the fresh challenge it issued. Both
+  // are matched exactly, so a message captured on another connection never verifies here.
+  let issuedNonce = null;
+  let verifiedNonce = null;
+  let peerChallenge = null;
+  let closing = false;
+
+  function clearHandshakeTimer() {
+    if (handshakeTimer !== null) {
+      clearTimeout(handshakeTimer);
+      handshakeTimer = null;
+    }
+  }
+
   function emitClose() {
     if (state === 'closed') return;
     state = state === 'rejected' ? state : 'closed';
+    clearHandshakeTimer();
     for (const handler of closeHandlers) handler();
   }
 
   function fail(error) {
     if (state === 'closed' || state === 'rejected') return;
     state = 'rejected';
+    clearHandshakeTimer();
     for (const [, record] of pendingStore) {
       clearTimeout(record.timer);
       record.reject(error);
@@ -106,6 +127,12 @@ export function createRelayChannel(stream, options = {}) {
     emitClose();
   }
 
+  function becomeReady() {
+    state = 'ready';
+    clearHandshakeTimer();
+    settleReady({ role, binding: handshake.binding });
+  }
+
   function write(tag, payload) {
     try {
       stream.write?.(encodeRelayMessage(tag, payload));
@@ -116,21 +143,45 @@ export function createRelayChannel(stream, options = {}) {
 
   function handleHandshake(message) {
     if (role === 'login') {
-      if (message?.kind !== RELAY_HELLO_ACK_KIND || handshake.verify(message) !== true) {
+      // The login awaits the ack to the challenge THIS connection issued: the nonce must match
+      // exactly and the ack must carry the peer's fresh challenge.
+      if (
+        message?.kind !== RELAY_HELLO_ACK_KIND ||
+        message.nonce !== issuedNonce ||
+        typeof message.challenge !== 'string' ||
+        handshake.verify(message) !== true
+      ) {
         fail(new ProtocolError('unauthorized', 'relay.handshake'));
         return;
       }
-      state = 'ready';
-      settleReady({ role, binding: handshake.binding });
+      // The ack proved the peer holds the credential; the confirm proves the login does.
+      write(RELAY_TAG.control, handshake.confirm(message.nonce, message.challenge));
+      becomeReady();
       return;
     }
-    if (message?.kind !== RELAY_HANDSHAKE_KIND || handshake.verify(message) !== true) {
+    if (verifiedNonce === null) {
+      if (message?.kind !== RELAY_HANDSHAKE_KIND || handshake.verify(message) !== true) {
+        fail(new ProtocolError('unauthorized', 'relay.handshake'));
+        return;
+      }
+      verifiedNonce = message.nonce;
+      const ack = handshake.ack(message.nonce);
+      peerChallenge = ack.challenge;
+      write(RELAY_TAG.control, ack);
+      return;
+    }
+    // The compute side becomes ready only after the login answers the compute side's own
+    // challenge, so a replayed hello can never produce a ready channel.
+    if (
+      message?.kind !== RELAY_HELLO_CONFIRM_KIND ||
+      message.nonce !== verifiedNonce ||
+      message.challenge !== peerChallenge ||
+      handshake.verify(message) !== true
+    ) {
       fail(new ProtocolError('unauthorized', 'relay.handshake'));
       return;
     }
-    write(RELAY_TAG.control, handshake.ack(message.nonce));
-    state = 'ready';
-    settleReady({ role, binding: handshake.binding });
+    becomeReady();
   }
 
   function handleStorageRequest(payload) {
@@ -174,6 +225,25 @@ export function createRelayChannel(stream, options = {}) {
   }
 
   function dispatch(message) {
+    if (state === 'handshaking') {
+      // Before the credential proof only the expected handshake message is accepted. Every
+      // other tag — data, storageRequest, storageAck, any other control verb — is a
+      // credential-boundary failure, and the failed handshake stops the rest of the batch.
+      if (message.tag !== RELAY_TAG.control) {
+        fail(new ProtocolError('unauthorized', 'relay.handshake'));
+        return;
+      }
+      let value;
+      try {
+        value = jsonParse(message.payload);
+      } catch (error) {
+        fail(error);
+        return;
+      }
+      handleHandshake(value);
+      return;
+    }
+    if (state !== 'ready') return;
     const { tag, payload } = message;
     if (tag === RELAY_TAG.control) {
       let value;
@@ -183,8 +253,9 @@ export function createRelayChannel(stream, options = {}) {
         fail(error);
         return;
       }
-      if (state === 'handshaking') {
-        handleHandshake(value);
+      // The handshake is never renegotiated once the proof is complete.
+      if (RELAY_HANDSHAKE_KINDS.includes(value?.kind)) {
+        fail(new ProtocolError('unauthorized', 'relay.handshake'));
         return;
       }
       for (const handler of controlHandlers) handler(value);
@@ -215,12 +286,27 @@ export function createRelayChannel(stream, options = {}) {
     for (const message of decoded.messages) dispatch(message);
   }
 
+  function onStreamEnd() {
+    if (closing) return;
+    // A peer that EOFs (or a stream that closes) before the credential proof must reject
+    // `ready`; after the proof it is an ordinary disconnect.
+    if (state === 'handshaking') {
+      fail(new ProtocolError('source_unavailable', 'relay.stream'));
+      return;
+    }
+    emitClose();
+  }
+
   stream.on?.('data', onData);
   stream.on?.('error', () => fail(new ProtocolError('source_unavailable', 'relay.stream')));
-  stream.on?.('end', emitClose);
-  stream.on?.('close', emitClose);
+  stream.on?.('end', onStreamEnd);
+  stream.on?.('close', onStreamEnd);
 
-  if (role === 'login') write(RELAY_TAG.control, handshake.challenge());
+  if (role === 'login') {
+    const hello = handshake.challenge();
+    issuedNonce = hello.nonce;
+    write(RELAY_TAG.control, hello);
+  }
 
   return Object.freeze({
     role,
@@ -268,17 +354,23 @@ export function createRelayChannel(stream, options = {}) {
     },
     close() {
       if (state === 'closed') return;
+      closing = true;
+      const wasHandshaking = state === 'handshaking';
       for (const [, record] of pendingStore) {
         clearTimeout(record.timer);
         record.reject(new ProtocolError('cancelled', 'relay.storage'));
       }
       pendingStore.clear();
+      clearHandshakeTimer();
       try {
         stream.end?.();
         stream.destroy?.();
       } catch {
         // Ignore teardown races.
       }
+      // An intentional close before the credential proof settles `ready` as cancelled;
+      // leaving it pending would hang the caller's `open` forever.
+      if (wasHandshaking) failReady(new ProtocolError('cancelled', 'relay.handshake'));
       state = 'closed';
       emitClose();
     },
