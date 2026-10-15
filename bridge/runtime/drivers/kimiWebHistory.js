@@ -124,6 +124,9 @@ export function createKimiWebHistory({ transport, onRecovered = () => {} }) {
     try { return await session.recovering; }
     finally { session.recovering = undefined; session.buffer = []; session.bytes = 0; }
   }
+  // Reclaiming an unreferenced session drops its cached agents, offsets, cursor and recovery buffer, so the 32-session cap bounds resident sessions.
+  function release(sessionId) { sessions.delete(sessionId); }
+  function resident() { return sessions.size; }
   return {
     selected, receive, read, recover,
     cursor: (sessionId) => sessions.get(sessionId)?.cursor,
@@ -132,6 +135,7 @@ export function createKimiWebHistory({ transport, onRecovered = () => {} }) {
       const { session, agent } = selected(sessionId, agentId);
       return { cursor: session.cursor ?? null, transcriptSeq: agent.seq ?? null, snapshot: structuredClone(agent.snapshot), recovering: !!session.recovering };
     },
+    release, resident,
     clear: () => sessions.clear(),
   };
 }

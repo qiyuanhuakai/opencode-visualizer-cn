@@ -16,7 +16,7 @@ export interface KimiWebDriver {
   readonly operations: KimiWebOperations | undefined;
   close(): Promise<{ readonly closed: true }>;
   reconnect(): Promise<void>; flush(): Promise<void>;
-  diagnostics(): { readonly state: string; readonly capabilities: KimiCapabilities; readonly recoveries: number; readonly nativeFrames: number; readonly lifecycleFrames: number; readonly sourceDisconnects: number; readonly heartbeats: { readonly pings: number; readonly pongs: number }; readonly observers: number; readonly selected: number; readonly connected: boolean; readonly nativeConnections: number; readonly eventQueue: number; readonly lastEventError: { readonly code: string; readonly reason: string } | null };
+  diagnostics(): { readonly state: string; readonly capabilities: KimiCapabilities; readonly recoveries: number; readonly nativeFrames: number; readonly lifecycleFrames: number; readonly sourceDisconnects: number; readonly reclaimed: number; readonly heartbeats: { readonly pings: number; readonly pongs: number }; readonly observers: number; readonly selected: number; readonly historySessions: number; readonly lifecycleSubscriptions: number; readonly connected: boolean; readonly nativeConnections: number; readonly eventQueue: number; readonly lastEventError: { readonly code: string; readonly reason: string } | null };
   history: KimiWebHistory['inspect'];
 }
 export function createKimiWebDriver(options: KimiWebDriverOptions): Promise<KimiWebDriver>;

@@ -15,6 +15,8 @@ export interface KimiWebHistory {
   cursor(sessionId: string): KimiCursor | undefined;
   transcriptCursors(sessionId: string): Readonly<Record<string, number>>;
   inspect(sessionId: string, agentId?: string): { readonly cursor: KimiCursor | null; readonly transcriptSeq: number | null; readonly snapshot: KimiTranscript; readonly recovering: boolean };
+  release(sessionId: string): void;
+  resident(): number;
   clear(): void;
 }
 export function createKimiWebHistory(options: { readonly transport: KimiWebTransport; readonly onRecovered?: (sessionId: string, value: { readonly cursor: KimiCursor; readonly buffered: number }) => void }): KimiWebHistory;
