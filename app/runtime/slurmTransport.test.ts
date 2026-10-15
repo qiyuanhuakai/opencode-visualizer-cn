@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { connect as netConnect } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -544,5 +545,398 @@ describe('vis_bridge relay role', () => {
     expect(parseCliOptions(['relay', '--help'], {})).toMatchObject({ command: 'relay', help: true });
     expect(() => parseCliOptions(['relay', '--environment', 'not-a-uuid', '--socket', '/tmp/x'], {})).toThrow(/environment/u);
     expect(() => parseCliOptions(['relay', '--environment', ENVIRONMENT, '--job', INTENT, '--bridge-instance', BRIDGE_INSTANCE, '--compute-node', COMPUTE_NODE], {})).toThrow(/socket/u);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PR #183 source-review remediation (findings i1 [P1], i2 [P1], i3, i4).
+//
+// i1 [P1 credential boundary] — reverse storage executed before the handshake proved the
+//    credential: `dispatch` only gated the control branch on `handshaking`, so data /
+//    storageRequest / storageAck were dispatched to a peer that had proved nothing.
+// i2 [P1 credential reflection] — hello and ack shared one HMAC input and the receiver never
+//    matched the ACK nonce against the challenge it issued, so the ACK was reflectable by
+//    flipping the message kind, and a captured ACK/hello replayed on another connection.
+// i3 — the default `srun` step ran a bare `vis_bridge relay` with none of the required
+//    arguments, and the relay role only listened instead of forwarding stdio to the
+//    compute-local socket.
+// i4 — EOF / a silent peer during the handshake left `ready` unsettled forever, so `open`
+//    hung and the spawned step was never reclaimed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('i1 [P1]: nothing but the expected handshake is processed before the credential proof', () => {
+  it('refuses a reverse storage write from a relay peer that has not proven the credential', async () => {
+    const { left, right } = linkedPair();
+    const login = createRelayChannel(left, { handshake: handshake(), role: 'login', timeoutMs: 400 });
+    const root = await temporaryDirectory('vis-relay-boundary-');
+    const store = createSlurmControlStore({
+      root,
+      environmentId: ENVIRONMENT,
+      ownerInstanceId: 'relay-login',
+      platform: 'linux',
+      statfs: () => ({ type: EXT4 }),
+    });
+    await store.open('owner');
+    login.onStorageRequest((request: { op: string; params: Record<string, unknown> }) => dispatchStoreOperation(store, request));
+
+    // The attacker controls the relay-side stream and can send frames, but has proved no
+    // credential: no hello was ever answered. It asks the login control store for a durable
+    // write directly.
+    left.push(
+      encodeRelayMessage(
+        RELAY_TAG.storageRequest,
+        JSON.stringify({ id: 'attacker-1', op: 'writeIntent', params: { intentId: INTENT, uuid: INTENT, state: 'planned' } }),
+      ),
+    );
+    const outcome = await Promise.race([
+      login.ready.then(
+        () => 'ready' as const,
+        () => 'rejected' as const,
+      ),
+      new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), 250)),
+    ]);
+    const persisted = await store.readIntent(INTENT);
+
+    expect({
+      outcome,
+      persisted: persisted === undefined ? null : 'written',
+      state: login.state(),
+    }).toEqual({ outcome: 'rejected', persisted: null, state: 'rejected' });
+
+    login.close();
+    right.end();
+    await store.close();
+  });
+
+  it('refuses data, storageAck and non-handshake control frames sent before the proof', async () => {
+    const refused: Array<{ tag: number; code: string; field: string }> = [];
+    for (const [name, frame] of [
+      ['data', encodeRelayMessage(RELAY_TAG.data, Buffer.from([0x01, 0x02]))],
+      ['storageAck', encodeRelayMessage(RELAY_TAG.storageAck, JSON.stringify({ id: 'x', ok: true }))],
+      ['control', encodeRelayMessage(RELAY_TAG.control, JSON.stringify({ kind: 'slurm.relay.verb', body: 'x' }))],
+    ] as const) {
+      const { left, right } = linkedPair();
+      const channel = createRelayChannel(left, { handshake: handshake(), role: 'login', timeoutMs: 400 });
+      const seen: Buffer[] = [];
+      channel.onData((chunk) => seen.push(chunk));
+      left.push(frame);
+      await expect(channel.ready, name).rejects.toMatchObject({ code: 'unauthorized', field: 'relay.handshake' });
+      expect(seen, name).toHaveLength(0);
+      refused.push({ tag: frame[0], code: 'unauthorized', field: 'relay.handshake' });
+      right.end();
+    }
+    expect(refused).toHaveLength(3);
+  });
+
+  it('stops processing the rest of a batch after a failed handshake', async () => {
+    const { left, right } = linkedPair();
+    const login = createRelayChannel(left, { handshake: handshake(), role: 'login', timeoutMs: 400 });
+    const dispatched: unknown[] = [];
+    login.onStorageRequest((request: unknown) => {
+      dispatched.push(request);
+      return { ok: true };
+    });
+    // One batch: a hello the login role never expects (it awaits the ACK), followed by a
+    // storage request. The failed handshake must stop the batch before the request runs.
+    const batch = Buffer.concat([
+      encodeRelayMessage(RELAY_TAG.control, JSON.stringify(handshake().challenge())),
+      encodeRelayMessage(RELAY_TAG.storageRequest, JSON.stringify({ id: 'smuggled', op: 'readIntent', params: { intentId: INTENT } })),
+    ]);
+    left.push(batch);
+    await expect(login.ready).rejects.toMatchObject({ code: 'unauthorized', field: 'relay.handshake' });
+    expect(dispatched).toHaveLength(0);
+    right.end();
+  });
+});
+
+describe('i2 [P1]: the ACK proves the compute peer holds the credential', () => {
+  it('refuses an ACK reflected from the challenge by flipping the message kind', async () => {
+    const { left, right } = linkedPair();
+    const login = createRelayChannel(left, { handshake: handshake(), role: 'login', timeoutMs: 400 });
+    const wire: Buffer[] = [];
+    right.on('data', (chunk: Buffer) => wire.push(Buffer.from(chunk)));
+    // The login issues its challenge at construction; the attacker reads it off the wire.
+    const { messages } = decodeRelayMessages(Buffer.concat(wire));
+    expect(messages).toHaveLength(1);
+    const challenge = JSON.parse(messages[0]!.payload.toString('utf8')) as Record<string, unknown>;
+    expect(challenge.kind).toBe(RELAY_HANDSHAKE_KIND);
+
+    // The attacker holds no credential: it reflects the challenge with only the kind flipped.
+    const reflected = { ...challenge, kind: RELAY_HELLO_ACK_KIND };
+    left.push(encodeRelayMessage(RELAY_TAG.control, JSON.stringify(reflected)));
+    await expect(login.ready).rejects.toMatchObject({ code: 'unauthorized', field: 'relay.handshake' });
+    expect(login.state()).toBe('rejected');
+    right.end();
+  });
+
+  it('refuses a historical ACK minted for another connection (cross-connection replay)', async () => {
+    const { left, right } = linkedPair();
+    const login = createRelayChannel(left, { handshake: handshake(), role: 'login', timeoutMs: 400 });
+    // A legitimate ACK captured from a DIFFERENT connection, replayed at this one.
+    const historical = handshake().ack('99999999-9999-4999-8999-999999999999');
+    left.push(encodeRelayMessage(RELAY_TAG.control, JSON.stringify(historical)));
+    await expect(login.ready).rejects.toMatchObject({ code: 'unauthorized', field: 'relay.handshake' });
+    expect(login.state()).toBe('rejected');
+    right.end();
+  });
+
+  it('refuses a replayed hello on the compute side with a fresh challenge the replayer cannot answer', async () => {
+    const { left, right } = linkedPair();
+    const compute = createRelayChannel(right, { handshake: handshake(), role: 'compute', timeoutMs: 150 });
+    // A hello captured from another legitimate connection, replayed at this relay.
+    left.push(encodeRelayMessage(RELAY_TAG.control, JSON.stringify(handshake().challenge())));
+    await expect(compute.ready).rejects.toMatchObject({ code: 'timeout', field: 'relay.handshake' });
+    expect(compute.state()).toBe('rejected');
+    left.end();
+  });
+
+  it('refuses a complete captured handshake stream replayed at a fresh relay', async () => {
+    const first = linkedPair();
+    const loginWrites: Buffer[] = [];
+    const computeWrites: Buffer[] = [];
+    const leftWrite = first.left.write;
+    const rightWrite = first.right.write;
+    first.left.write = (chunk: Buffer) => {
+      loginWrites.push(Buffer.from(chunk));
+      return leftWrite(chunk);
+    };
+    first.right.write = (chunk: Buffer) => {
+      computeWrites.push(Buffer.from(chunk));
+      return rightWrite(chunk);
+    };
+    const loginA = createRelayChannel(first.left, { handshake: handshake(), role: 'login', timeoutMs: 400 });
+    const computeA = createRelayChannel(first.right, { handshake: handshake(), role: 'compute', timeoutMs: 400 });
+    await Promise.all([loginA.ready, computeA.ready]);
+    const session = Buffer.concat([...loginWrites, ...computeWrites]);
+    expect(session.length).toBeGreaterThan(0);
+    loginA.close();
+    computeA.close();
+
+    const second = linkedPair();
+    const computeB = createRelayChannel(second.right, { handshake: handshake(), role: 'compute', timeoutMs: 400 });
+    // The whole captured stream is replayed at the fresh relay's input.
+    second.right.push(session);
+    await expect(computeB.ready).rejects.toMatchObject({ code: 'unauthorized', field: 'relay.handshake' });
+    expect(computeB.state()).toBe('rejected');
+    second.left.end();
+  });
+
+  it('still completes the mutual handshake between the legitimate ends', async () => {
+    const { left, right } = linkedPair();
+    const login = createRelayChannel(left, { handshake: handshake(), role: 'login', timeoutMs: 400 });
+    const compute = createRelayChannel(right, { handshake: handshake(), role: 'compute', timeoutMs: 400 });
+    await expect(Promise.all([login.ready, compute.ready])).resolves.toEqual([
+      { role: 'login', binding: binding() },
+      { role: 'compute', binding: binding() },
+    ]);
+    const received: Buffer[] = [];
+    compute.onData((chunk) => received.push(chunk));
+    const binary = Buffer.from([0x00, 0xff, 0x10, 0x0a, 0x00, 0x7f]);
+    login.sendData(binary);
+    expect(Buffer.concat(received).equals(binary)).toBe(true);
+    login.close();
+    compute.close();
+  });
+});
+
+describe('i3: the srun relay step runs the real vis_bridge relay subcommand', () => {
+  it('builds the complete relay argument vector the real CLI accepts', async () => {
+    const harness = stdioHarness();
+    const spawned: Array<{ command: string; args: readonly string[] }> = [];
+    const socketPath = path.join(await temporaryDirectory('vis-relay-argv-'), 'compute.sock');
+    const transport = createSlurmStepTransport({
+      binding: binding(),
+      loginHosts: [LOGIN_NODE],
+      credential: CREDENTIAL,
+      spawn: (command: string, args: readonly string[]) => {
+        spawned.push({ command, args });
+        return harness.child;
+      },
+      stopProcessTree: vi.fn(async () => true),
+      relaySocketPath: socketPath,
+    });
+    const opening = transport.open({
+      step: { mode: 'relay', bridgeNode: COMPUTE_NODE, jobId: '24680', stepId: STEP_ID, compute: { cpus: 4, memoryMiB: 8192 }, gres: 'none' },
+    });
+    const compute = createRelayChannel(harness.compute, { handshake: handshake(), role: 'compute' });
+    const connection = await opening;
+    await compute.ready;
+
+    // The command the step actually runs, after srun's `--` separator and the program.
+    const relayArgv = spawned[0]!.args.slice(spawned[0]!.args.indexOf('--') + 2);
+    expect(relayArgv[0]).toBe('relay');
+    expect(relayArgv).toEqual(
+      expect.arrayContaining([
+        '--stdio-forward',
+        '--socket',
+        socketPath,
+        '--environment',
+        ENVIRONMENT,
+        '--job',
+        INTENT,
+        '--bridge-instance',
+        BRIDGE_INSTANCE,
+        '--compute-node',
+        COMPUTE_NODE,
+        '--epoch',
+        '3',
+      ]),
+    );
+    // The REAL CLI parser must accept the exact command the step runs.
+    const parsed = parseCliOptions(relayArgv, {});
+    expect(parsed).toMatchObject({
+      command: 'relay',
+      role: 'relay',
+      stdioForward: true,
+      environmentId: ENVIRONMENT,
+      intentId: INTENT,
+      bridgeInstanceId: BRIDGE_INSTANCE,
+      computeNode: COMPUTE_NODE,
+      socketPath,
+      epoch: 3,
+    });
+
+    connection.close();
+    compute.close();
+  });
+
+  it('establishes the channel through a REAL vis_bridge relay subprocess with stdout carrying only protocol bytes', async () => {
+    const root = await temporaryDirectory('vis-relay-subprocess-');
+    const socketPath = path.join(root, 'compute.sock');
+    const relay = createComputeRelay({ handshake: handshake(), mode: 'local-socket', socketPath });
+    const address = await relay.listen();
+    expect(address.mode).toBe('local-socket');
+    const accepted: Buffer[] = [];
+    let tracked = false;
+    relay.onConnection((channel: { onData(handler: (payload: Buffer) => void): void; sendData(payload: Buffer): void }) => {
+      tracked = true;
+      channel.onData((payload) => {
+        accepted.push(payload);
+        channel.sendData(payload);
+      });
+    });
+
+    // The exact argument vector the step transport builds for the relay step.
+    const relayArgv = buildStepArgv({
+      mode: 'relay',
+      bridgeNode: COMPUTE_NODE,
+      jobId: '24680',
+      stepId: STEP_ID,
+      compute: { cpus: 4, memoryMiB: 8192 },
+      gres: 'none',
+      relay: { environmentId: ENVIRONMENT, intentId: INTENT, bridgeInstanceId: BRIDGE_INSTANCE, socketPath, epoch: 3 },
+    });
+    // The exact argument vector the step transport builds for the relay step, after srun's
+    // `--` separator and the program name.
+    const command = relayArgv.slice(relayArgv.indexOf('--') + 2);
+    const cliEntry = path.resolve(process.cwd(), 'vis_bridge.js');
+    const child = spawn(process.execPath, [cliEntry, ...command], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const stdoutBytes: Buffer[] = [];
+    child.stdout!.on('data', (chunk: Buffer) => stdoutBytes.push(Buffer.from(chunk)));
+    const channel = createRelayChannel(
+      {
+        write: (chunk: Buffer) => child.stdin!.write(chunk),
+        on: (event: string, handler: (...args: unknown[]) => void) => child.stdout!.on(event, handler),
+        off: (event: string, handler: (...args: unknown[]) => void) => child.stdout!.off(event, handler),
+        end: () => child.stdin!.end(),
+        destroy: () => child.kill(),
+      },
+      { handshake: handshake(), role: 'login', timeoutMs: 10_000 },
+    );
+    try {
+      // The handshake crossed a real subprocess and a real compute-local unix socket.
+      await channel.ready;
+      // The relay-side channel is tracked (and its handlers attached) one microtask after the
+      // confirm settles, so a consumer must wait for it before the first data frame.
+      await vi.waitFor(() => expect(tracked).toBe(true));
+      const received: Buffer[] = [];
+      channel.onData((chunk) => received.push(chunk));
+      const payload = Buffer.from([0x00, 0xff, 0x10, 0x0a, 0x00, 0x7f]);
+      channel.sendData(payload);
+      await vi.waitFor(() => expect(Buffer.concat(received).equals(payload)).toBe(true));
+      expect(Buffer.concat(accepted).equals(payload)).toBe(true);
+      // stdout carried protocol bytes only: every byte decodes as a tagged relay frame.
+      const decoded = decodeRelayMessages(Buffer.concat(stdoutBytes));
+      expect(decoded.remaining).toHaveLength(0);
+      expect(decoded.messages.length).toBeGreaterThan(0);
+      expect(decoded.messages.every((message) => message.tag >= RELAY_TAG.control && message.tag <= RELAY_TAG.storageAck)).toBe(true);
+    } finally {
+      channel.close();
+      child.kill();
+      await relay.close();
+    }
+  });
+});
+
+describe('i4: a handshake that never completes settles instead of hanging', () => {
+  it('rejects the handshake when the peer goes silent (timeout)', async () => {
+    const silent = duplex();
+    const channel = createRelayChannel(silent, { handshake: handshake(), role: 'login', timeoutMs: 60 });
+    await expect(channel.ready).rejects.toMatchObject({ code: 'timeout', field: 'relay.handshake' });
+    expect(channel.state()).toBe('rejected');
+  });
+
+  it('rejects the handshake when the peer EOFs before the credential proof', async () => {
+    const { left, right } = linkedPair();
+    const channel = createRelayChannel(left, { handshake: handshake(), role: 'login', timeoutMs: 5_000 });
+    left.emit('end');
+    await expect(channel.ready).rejects.toMatchObject({ code: 'source_unavailable', field: 'relay.stream' });
+    expect(channel.state()).toBe('rejected');
+    right.end();
+  });
+
+  it('rejects an explicit close before the handshake completes', async () => {
+    const stream = duplex();
+    const channel = createRelayChannel(stream, { handshake: handshake(), role: 'login', timeoutMs: 5_000 });
+    channel.close();
+    await expect(channel.ready).rejects.toMatchObject({ code: 'cancelled', field: 'relay.handshake' });
+    expect(channel.state()).toBe('closed');
+  });
+
+  it('terminates the spawned srun step when the relay EOFs before ready', async () => {
+    const harness = stdioHarness();
+    const stopProcessTree = vi.fn(async () => true);
+    const transport = createSlurmStepTransport({
+      binding: binding(),
+      loginHosts: [LOGIN_NODE],
+      credential: CREDENTIAL,
+      spawn: () => harness.child,
+      stopProcessTree,
+    });
+    const opening = transport.open({
+      step: { mode: 'relay', bridgeNode: COMPUTE_NODE, jobId: '24680', stepId: STEP_ID, compute: { cpus: 4, memoryMiB: 8192 }, gres: 'none' },
+    });
+    await vi.waitFor(() => expect(transport.ownedIds()).toHaveLength(1));
+    // The srun step's stdout EOFs before any handshake byte arrives.
+    (harness.child.stdout as EventEmitter).emit('end');
+    await expect(opening).rejects.toMatchObject({ code: 'source_unavailable', field: 'relay.stream' });
+    expect(transport.ownedIds()).toHaveLength(0);
+    expect(transport.state()).toBe('failed');
+    expect(stopProcessTree).toHaveBeenCalled();
+    await transport.close();
+  });
+
+  it('rejects the handshake when the spawned child errors or exits before ready', async () => {
+    const harness = stdioHarness();
+    const stopProcessTree = vi.fn(async () => true);
+    const transport = createSlurmStepTransport({
+      binding: binding(),
+      loginHosts: [LOGIN_NODE],
+      credential: CREDENTIAL,
+      spawn: () => harness.child,
+      stopProcessTree,
+    });
+    const opening = transport.open({
+      step: { mode: 'relay', bridgeNode: COMPUTE_NODE, jobId: '24680', stepId: STEP_ID, compute: { cpus: 4, memoryMiB: 8192 }, gres: 'none' },
+    });
+    await vi.waitFor(() => expect(transport.ownedIds()).toHaveLength(1));
+    // A spawn failure (ENOENT/EACCES) reaches the channel as a stream error.
+    harness.child.emit('error', new Error('spawn ENOENT'));
+    await expect(opening).rejects.toMatchObject({ code: 'source_unavailable', field: 'relay.stream' });
+    expect(transport.ownedIds()).toHaveLength(0);
+    expect(stopProcessTree).toHaveBeenCalled();
+    await transport.close();
   });
 });
