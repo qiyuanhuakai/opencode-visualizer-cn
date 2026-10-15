@@ -17,6 +17,7 @@ import {
   parseEnvironmentId,
 } from '../shared/runtime/identity.js';
 import type { WorkspaceRef, PathPolicy } from '../shared/runtime/identity.js';
+import type { ProtocolError } from '../shared/runtime/capabilities.js';
 
 const target = parseEnvironmentId('11111111-1111-4111-8111-111111111111');
 const foreign = parseEnvironmentId('22222222-2222-4222-8222-222222222222');
@@ -487,5 +488,124 @@ describe('repository mutation races', () => {
       'leased',
     );
     expect(await f.service.leases.read(key)).toMatchObject({ value: { owner: 'first-writer' } });
+  });
+});
+
+describe('worktree mutations across separate roots', () => {
+  type Permission = 'read' | 'write' | 'command';
+  // Given one main repository, two linked worktrees, and a destination parent as separate grant roots.
+  async function crossRoots(repositoryPermissions: readonly Permission[]) {
+    const f = await fixture();
+    const linked = path.join(f.root, 'linked');
+    f.gitExec(['worktree', 'add', '--detach', linked]);
+    const victim = path.join(f.root, 'victim');
+    f.gitExec(['worktree', 'add', '--detach', victim]);
+    const parent = path.join(f.root, 'destination parent');
+    await mkdir(parent);
+    const writable: readonly Permission[] = ['read', 'write', 'command'];
+    const command = await createTargetGitCommand({
+      target,
+      roots: [
+        { root: f.repo, pathPolicy: f.policy, permissions: repositoryPermissions },
+        { root: linked, pathPolicy: f.policy, permissions: writable },
+        { root: victim, pathPolicy: f.policy, permissions: writable },
+        { root: parent, pathPolicy: f.policy, permissions: writable },
+      ],
+      assertCurrent() {},
+    });
+    cleanup.push(() => command.close());
+    const git = createGitService({ command });
+    const service = createWorktreeService({ command, git, store: f.store, assertCurrent() {} });
+    cleanup.push(() => service.close());
+    return {
+      ...f,
+      command,
+      git,
+      service,
+      linked,
+      victim,
+      parent,
+      writer: f.ref(linked),
+      parentRef: f.ref(parent),
+    };
+  }
+  it('refuses a create whose repository common directory is outside the write grant', async () => {
+    // Given a read-only main repository beside a writable linked worktree and destination parent.
+    const f = await crossRoots(['read', 'command']);
+    // Then the read-only repository itself refuses write authority.
+    await expect(f.command.authorize(f.workspace, 'write')).rejects.toThrow('permission');
+    // When a create is launched from the writable linked worktree.
+    const outcome = await f.service
+      .create({
+        workspace: f.writer,
+        parent: f.parentRef,
+        name: 'crossed',
+        idempotencyKey: 'crossed',
+      })
+      .then(
+        async (accepted) => `completed:${(await f.service.wait(accepted.operationId)).outcome}`,
+        (error: ProtocolError) => `refused:${error.code}:${error.field}`,
+      );
+    // Then no administrative bytes reach the read-only common directory.
+    expect({
+      outcome,
+      adminBytes: await stat(path.join(f.repo, '.git', 'worktrees', 'crossed', 'gitdir')).then(
+        () => 'written',
+        () => 'absent',
+      ),
+      worktreeBytes: await stat(path.join(f.parent, 'crossed')).then(
+        () => 'written',
+        () => 'absent',
+      ),
+    }).toEqual({
+      outcome: 'refused:unauthorized:git.permission',
+      adminBytes: 'absent',
+      worktreeBytes: 'absent',
+    });
+  });
+  it('refuses a remove whose repository common directory is outside the write grant', async () => {
+    // Given a read-only main repository and a clean linked worktree selected for removal.
+    const f = await crossRoots(['read', 'command']);
+    // When removal is launched from the writable linked worktree.
+    const outcome = await f.service
+      .remove({
+        workspace: f.writer,
+        worktree: f.ref(f.victim),
+        idempotencyKey: 'crossed-remove',
+      })
+      .then(
+        async (accepted) => `completed:${(await f.service.wait(accepted.operationId)).outcome}`,
+        (error: ProtocolError) => `refused:${error.code}:${error.field}`,
+      );
+    // Then the administrative records and the selected worktree bytes both survive.
+    expect({
+      outcome,
+      adminBytes: await stat(path.join(f.repo, '.git', 'worktrees', 'victim', 'gitdir')).then(
+        () => 'written',
+        () => 'absent',
+      ),
+      worktreeBytes: await stat(f.victim).then(() => 'written', () => 'absent'),
+    }).toEqual({
+      outcome: 'refused:unauthorized:git.permission',
+      adminBytes: 'written',
+      worktreeBytes: 'written',
+    });
+  });
+  it('allows a cross-root create when the repository common directory itself is writable', async () => {
+    // Given every root, including the main repository, holding write authority.
+    const f = await crossRoots(['read', 'write', 'command']);
+    // When a create crosses the linked worktree, the destination parent, and the repository.
+    const accepted = await f.service.create({
+      workspace: f.writer,
+      parent: f.parentRef,
+      name: 'allowed',
+      idempotencyKey: 'allowed',
+    });
+    // Then it completes and its administrative bytes land in the writable common directory.
+    expect((await f.service.wait(accepted.operationId)).outcome).toBe('completed');
+    expect((await stat(path.join(f.repo, '.git', 'worktrees', 'allowed', 'gitdir'))).isFile()).toBe(
+      true,
+    );
+    expect((await stat(path.join(f.parent, 'allowed'))).isDirectory()).toBe(true);
   });
 });
