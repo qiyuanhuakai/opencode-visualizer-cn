@@ -72,6 +72,7 @@ class ReactiveClient {
   private readonly canonicalRows = new Map<string, unknown>();
   private readonly tombstones = new Set<string>();
   private readonly queue: ObserverDelivery[] = [];
+  private indexView: { readonly collections: ReadonlySet<string>; readonly rows: Readonly<Record<string, AnyRecord[]>>; readonly revision: number } | null = null;
   private revision = 1000;
   private seq = 0;
   constructor(readonly environment: string = ENV) {}
@@ -79,6 +80,8 @@ class ReactiveClient {
     const list = this.rows.get(collection) ?? [];
     list.push(row);
     this.rows.set(collection, list);
+    // Every store write advances the entity revision, which is what an index view is pinned to.
+    this.revision += 1;
     if (collection === 'session_summaries' && typeof row.key === 'string') this.canonicalRows.set(row.key, row.value);
   }
   scope() {
@@ -114,20 +117,32 @@ class ReactiveClient {
       },
     };
   }
-  async readIndex(target: EnvironmentId, collections: string | readonly string[], options: { onPage: (collection: string, page: SnapshotPage) => Promise<void> | void }): Promise<{ token: string; revision: number; watermark: number }> {
+  async readIndex(target: EnvironmentId, collections: string | readonly string[], options: { onPage: (collection: string, page: SnapshotPage) => Promise<void> | void; fresh?: boolean }): Promise<{ token: string; revision: number; watermark: number }> {
     const names = typeof collections === 'string' ? [collections] : collections;
+    // Model the bridge's bounded live-view reuse: a view is minted when none is cached, when the
+    // caller explicitly asks for a fresh one, or when the cached view does not cover the requested
+    // collection (the real bridge answers that with replay_required, which also mints a new view).
+    // Every page of one read then comes from that single view, exactly like the real store.
+    const cached = this.indexView;
+    if (cached === null || options.fresh === true || !names.every((name) => cached.collections.has(name))) {
+      const rows: Record<string, AnyRecord[]> = {};
+      for (const name of names) rows[name] = [...(this.rows.get(name) ?? [])];
+      this.indexView = { collections: new Set(names), rows, revision: this.revision };
+    }
+    const view = this.indexView;
+    if (view === null) throw new TypeError('no index view was minted');
     for (const name of names) {
-      const rows = this.rows.get(name) ?? [];
+      const rows = view.rows[name] ?? [];
       for (let offset = 0; offset === 0 || offset < rows.length; offset += 200) {
         const page = rows.slice(offset, offset + 200);
         await options.onPage(name, {
           collection: name, items: page, cursor: offset + 200 < rows.length ? String(offset + 200) : null,
-          token: 'snapshot-1', revision: this.revision, watermark: 0, expiresAt: Date.now() + 60000, target, epoch: 'epoch', generation: 1,
+          token: `view-${view.revision}`, revision: view.revision, watermark: 0, expiresAt: Date.now() + 60000, target, epoch: 'epoch', generation: 1,
         });
         if (offset + 200 >= rows.length) break;
       }
     }
-    return { token: 'snapshot-1', revision: this.revision, watermark: 0 };
+    return { token: `view-${view.revision}`, revision: view.revision, watermark: 0 };
   }
   async request(_target: EnvironmentId, method: string, params: AnyRecord): Promise<unknown> {
     if (method === 'runtime.entity.resolve') {
@@ -243,6 +258,98 @@ describe('useRuntimeSessionTree — selection clear on delete', () => {
       expect(tree.selection.value).not.toBeNull();
       expect(selects).toHaveLength(0);
       expect(tree.viewStatus.value).toBe('complete');
+    } finally {
+      await tree.dispose();
+    }
+  });
+});
+
+describe('useRuntimeSessionTree — index view freshness (review round 6138580284 item 7)', () => {
+  /** A session_summaries entity with a distinctive title, so a search can match it exactly. */
+  function titled(index: number, title: string, parent?: SessionRef): AnyRecord {
+    return { ...summaryValue(index), title, ...(parent ? { parentSession: parent } : {}) };
+  }
+
+  it('a repeated search sees sessions added after the first search', async () => {
+    const client = new ReactiveClient();
+    seedTopology(client);
+    const { history } = historySpy();
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV, history: history as never });
+    try {
+      await tree.start();
+      // Given a search that matches nothing, which caches an index view.
+      const first = await tree.search('late-arrival');
+      expect(first).toMatchObject({ status: 'complete', totalMatched: 0 });
+
+      // When a matching session is added to the index and the user searches again.
+      client.add('session_summaries', canonical(sessionKey(9), 2, titled(9, 'late-arrival')));
+      const second = await tree.search('late-arrival');
+
+      // Then the repeated search must mint a new index view instead of re-serving the cached one.
+      expect(second).toMatchObject({ status: 'complete', totalMatched: 1 });
+      expect(second.matches.map((row) => row.key)).toEqual([sessionKey(9)]);
+    } finally {
+      await tree.dispose();
+    }
+  });
+
+  it('an explicit refresh sees sessions added after the tree started', async () => {
+    const client = new ReactiveClient();
+    seedTopology(client);
+    const { history } = historySpy();
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV, history: history as never });
+    try {
+      await tree.start();
+      client.add('session_summaries', canonical(sessionKey(4), 2, titled(4, 'arrived-after-start')));
+
+      await tree.refresh();
+
+      const found = await tree.search('arrived-after-start');
+      expect(found).toMatchObject({ status: 'complete', totalMatched: 1 });
+    } finally {
+      await tree.dispose();
+    }
+  });
+
+  it('re-scans a parent whose children appeared after the first expand', async () => {
+    const client = new ReactiveClient();
+    seedTopology(client);
+    const parentKey = sessionKey(0);
+    client.add('session_summaries', canonical(parentKey, 1, titled(0, 'parent-session')));
+    const { history } = historySpy();
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV, history: history as never });
+    try {
+      await tree.start();
+      // Given a first expand that found no children and froze that result.
+      const first = await tree.loadMoreChildren(parentKey);
+      expect(first).toMatchObject({ alreadyScanned: false, added: 0 });
+
+      // When a child appears and the index is re-read through a new search.
+      client.add('session_summaries', canonical(sessionKey(1), 3, titled(1, 'child-session', sessionRef(0))));
+      await tree.search('child-session');
+
+      // Then the parent is re-scanned against the newer index view instead of reporting the frozen
+      // "already scanned" result, so the new child is found.
+      const second = await tree.loadMoreChildren(parentKey);
+      expect(second).toMatchObject({ alreadyScanned: false, added: 1 });
+      expect((tree.nativeChildren.value.get(parentKey) ?? []).map((row) => row.key)).toEqual([sessionKey(1)]);
+    } finally {
+      await tree.dispose();
+    }
+  });
+
+  it('still short-circuits a repeated expand while the index view is unchanged', async () => {
+    const client = new ReactiveClient();
+    seedTopology(client);
+    const parentKey = sessionKey(0);
+    client.add('session_summaries', canonical(parentKey, 1, titled(0, 'parent-session')));
+    const { history } = historySpy();
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV, history: history as never });
+    try {
+      await tree.start();
+      expect(await tree.loadMoreChildren(parentKey)).toMatchObject({ alreadyScanned: false });
+      // Nothing changed the index, so the second expand must not re-scan it.
+      expect(await tree.loadMoreChildren(parentKey)).toMatchObject({ alreadyScanned: true, scanned: 0 });
     } finally {
       await tree.dispose();
     }

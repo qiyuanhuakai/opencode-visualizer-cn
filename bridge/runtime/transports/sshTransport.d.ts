@@ -32,7 +32,7 @@ export type TargetHelloRequest = {
   readonly frame: { readonly kind: string; readonly version: number };
   readonly timeoutMs: number;
 };
-export type TargetHelloResult = { readonly ok: boolean; readonly error?: string };
+export type TargetHelloResult = { readonly ok: boolean; readonly error?: string; readonly code?: string };
 export type SshProfile = {
   readonly profileId: string;
   readonly transport: { readonly kind: 'ssh'; readonly endpoint?: string };

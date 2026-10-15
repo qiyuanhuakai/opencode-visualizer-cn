@@ -587,7 +587,12 @@ export function createBridgeProfileClient(options: RuntimeProfileClientOptions):
       return (await call('POST', `/api/v1/profiles/${encodeURIComponent(profileId)}/reconnect`)) as RuntimeConnectionStatus;
     },
     async inspect() {
-      return Object.freeze({ profiles: Object.freeze((await call('GET', '/api/v1/profiles')) as readonly RuntimeConnectionStatus[]) });
+      // The bridge serves NO lifecycle-inspection route: `PROFILE_ACTION` matches only
+      // connect|disconnect|reconnect|enabled, and `GET /api/v1/profiles` answers with a profile
+      // LIST whose entries carry neither `state` nor `generation`. So this reports NO statuses
+      // instead of asserting that list into a status array — a fabricated status would drive a
+      // status chip for a connection nobody observed. A real status route is read HERE, nowhere else.
+      return Object.freeze({ profiles: Object.freeze([] as readonly RuntimeConnectionStatus[]) });
     },
   };
   return Object.freeze(port);
@@ -615,6 +620,16 @@ export function useRuntimeProfiles(options: UseRuntimeProfilesOptions = {}) {
   const managedTransport = ref<boolean>(options.managedTransport === true);
   const profiles = shallowRef<readonly ConnectionProfile[]>(Object.freeze([...(options.profiles ?? [])]));
   const selectedProfileId = ref('');
+  /**
+   * The Slurm intent currently in focus.
+   *
+   * A profile UUID and the intent UUID a submission produces are DIFFERENT identities — one names
+   * a configured target, the other one run against it — so they are tracked separately and a
+   * lookup never matches one against the other.
+   */
+  const selectedIntentId = ref('');
+  /** profileId → the intent that profile submitted, recorded when the submission lands. */
+  const submittedIntents = new Map<string, string>();
   const statuses = shallowRef<readonly RuntimeConnectionStatus[]>(Object.freeze([]));
   const slurmStatuses = shallowRef<readonly SlurmLifecycleStatus[]>(Object.freeze([]));
   const challenge = ref<RuntimeChallenge | null>(null);
@@ -645,17 +660,49 @@ export function useRuntimeProfiles(options: UseRuntimeProfilesOptions = {}) {
   const statusOf = computed<RuntimeConnectionStatus | null>(() =>
     statuses.value.find((entry) => entry.profileId === selectedProfileId.value) ?? null);
 
+  /**
+   * The newest lifecycle request issued per profile.
+   *
+   * Ordering is tracked by REQUEST, never by the `generation` the port reports: the real
+   * `connectionManager.disconnect` deletes the record and answers with generation 0 while a connect
+   * answers with a monotonically increasing one, so comparing the two would discard a legitimate
+   * disconnect as "older" than the connect it superseded.
+   */
+  const newestStatusRequest = new Map<string, number>();
+  let statusRequestSequence = 0;
+
+  function beginStatusRequest(profileId: string): number {
+    statusRequestSequence += 1;
+    newestStatusRequest.set(profileId, statusRequestSequence);
+    return statusRequestSequence;
+  }
+
+  function recordStatus(profileId: string, request: number, next: RuntimeConnectionStatus) {
+    if (newestStatusRequest.get(profileId) !== request) return;
+    statuses.value = Object.freeze([...statuses.value.filter((entry) => entry.profileId !== profileId), next]);
+  }
+
   const attachedSlurm = computed<readonly SlurmLifecycleStatus[]>(() =>
     Object.freeze(slurmStatuses.value.filter((entry) => entry.attached)));
 
   const cancelPlan = computed<ConnectionCancelReceipt>(() =>
     planConnectionCancel({ profileId: selectedProfileId.value, intents: attachedSlurm.value }));
 
-  const selectedSlurm = computed<SlurmLifecycleStatus | null>(() =>
-    slurmStatuses.value.find((entry) => entry.intentId === selectedProfileId.value) ?? null);
+  const selectedSlurm = computed<SlurmLifecycleStatus | null>(() => {
+    const intentId = selectedIntentId.value;
+    return intentId === '' ? null : slurmStatuses.value.find((entry) => entry.intentId === intentId) ?? null;
+  });
 
   function selectProfile(profileId: string) {
     selectedProfileId.value = profileId;
+    // Selecting a profile brings back the intent it submitted, and only that one. Two profiles in
+    // the same environment must not share a job, so the intent is never resolved by environment.
+    selectedIntentId.value = profileId === '' ? '' : (submittedIntents.get(profileId) ?? '');
+  }
+
+  /** Focus one intent explicitly. The caller passes an INTENT id, never a profile id. */
+  function selectIntent(intentId: string) {
+    selectedIntentId.value = intentId;
   }
 
   function fail(message: string) {
@@ -715,11 +762,12 @@ export function useRuntimeProfiles(options: UseRuntimeProfilesOptions = {}) {
 
   async function connect(profileId: string) {
     if (profilePort === undefined) return fail('runtime.profile.unavailable');
+    const request = beginStatusRequest(profileId);
     busy.value = true;
     error.value = '';
     try {
       const status = await profilePort.connect(profileId);
-      statuses.value = Object.freeze([...statuses.value.filter((entry) => entry.profileId !== profileId), status]);
+      recordStatus(profileId, request, status);
       return status;
     } catch (cause) {
       return fail(cause instanceof Error ? cause.message : 'runtime.profile.connect');
@@ -741,6 +789,7 @@ export function useRuntimeProfiles(options: UseRuntimeProfilesOptions = {}) {
       profileId,
       intents: slurmStatuses.value.filter((entry) => entry.environmentId === (selectedIdentity.value?.environmentId ?? '')),
     });
+    const request = beginStatusRequest(profileId);
     busy.value = true;
     error.value = '';
     try {
@@ -752,7 +801,10 @@ export function useRuntimeProfiles(options: UseRuntimeProfilesOptions = {}) {
       slurmStatuses.value = Object.freeze(slurmStatuses.value.map((entry) => (
         detached.includes(entry.intentId) ? Object.freeze({ ...entry, attached: false }) : entry
       )));
-      if (profilePort !== undefined) await profilePort.disconnect(profileId);
+      if (profilePort !== undefined) {
+        const status = await profilePort.disconnect(profileId);
+        recordStatus(profileId, request, status);
+      }
       return Object.freeze({ ...plan, detached: Object.freeze(detached) });
     } catch (cause) {
       fail(cause instanceof Error ? cause.message : 'runtime.profile.disconnect');
@@ -764,11 +816,12 @@ export function useRuntimeProfiles(options: UseRuntimeProfilesOptions = {}) {
 
   async function reconnect(profileId: string) {
     if (profilePort === undefined) return fail('runtime.profile.unavailable');
+    const request = beginStatusRequest(profileId);
     busy.value = true;
     error.value = '';
     try {
       const status = await profilePort.reconnect(profileId);
-      statuses.value = Object.freeze([...statuses.value.filter((entry) => entry.profileId !== profileId), status]);
+      recordStatus(profileId, request, status);
       return status;
     } catch (cause) {
       return fail(cause instanceof Error ? cause.message : 'runtime.profile.reconnect');
@@ -785,6 +838,10 @@ export function useRuntimeProfiles(options: UseRuntimeProfilesOptions = {}) {
     error.value = '';
     try {
       const status = await slurmPort.submit(request);
+      // The submission is recorded against the profile it was made for. Without this association
+      // the resulting intent — whose UUID differs from the profile's — could not be resolved back.
+      if (selectedProfileId.value !== '') submittedIntents.set(selectedProfileId.value, status.intentId);
+      selectedIntentId.value = status.intentId;
       slurmStatuses.value = Object.freeze([...slurmStatuses.value.filter((entry) => entry.intentId !== status.intentId), status]);
       return status;
     } catch (cause) {
@@ -875,6 +932,7 @@ export function useRuntimeProfiles(options: UseRuntimeProfilesOptions = {}) {
     busy,
     selectedProfile,
     selectedProfileId,
+    selectedIntentId,
     selectedIdentity,
     selectedSlurm,
     capabilityEntry,
@@ -883,6 +941,7 @@ export function useRuntimeProfiles(options: UseRuntimeProfilesOptions = {}) {
     attachedSlurm,
     cancelPlan,
     selectProfile,
+    selectIntent,
     refresh,
     createProfile,
     setEnabled,
