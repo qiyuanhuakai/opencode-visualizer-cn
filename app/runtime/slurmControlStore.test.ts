@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   CONTROL_STORE_FILES,
@@ -188,6 +188,93 @@ describe('slurm control store: single-writer fence is atomic', () => {
     // The intruder's fence must not be overwritten with a release by the fenced-out owner.
     expect(JSON.parse(await readFile(fencePath, 'utf8'))).toMatchObject({ ownerInstanceId: 'intruder', released: false });
   }, 20000);
+
+  it('reloads the journal under the lock so a normal handoff cannot fork the chain', async () => {
+    // The pre-lock journal read cannot see records a previous owner appends while this open waits
+    // for the ownership lock. Owner B is parked between those two steps by its own liveness probe
+    // (the first probe runs right after loadJournal), so A can close — appending store.closed and
+    // releasing the lock — before B ever refreshes its view.
+    const root = await temporaryDirectory('vis-store-handoff-');
+    const control = await temporaryDirectory('vis-store-handoff-ctl-');
+    const reached = path.join(control, 'reached');
+    const release = path.join(control, 'release');
+    const storeModule = pathToFileURL(
+      path.resolve(import.meta.dirname, '../../bridge/runtime/transports/slurmControlStore.js'),
+    ).href;
+    const script = `
+import { existsSync, writeFileSync } from 'node:fs';
+const { createSlurmControlStore } = await import(process.env.STORE_MODULE);
+const result = { opened: false, writable: false, code: null, field: null };
+let announced = false;
+const nap = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+const store = createSlurmControlStore({
+  root: process.env.STORE_ROOT,
+  environmentId: process.env.STORE_ENV,
+  ownerInstanceId: 'owner-b',
+  platform: 'linux',
+  statfs: () => ({ type: 0xef53 }),
+  isProcessAlive: () => {
+    if (!announced) {
+      announced = true;
+      writeFileSync(process.env.STORE_REACHED, 'parked');
+    }
+    const deadline = Date.now() + 20000;
+    while (!existsSync(process.env.STORE_RELEASE) && Date.now() < deadline) nap();
+    return false;
+  },
+});
+try {
+  const status = await store.open('owner');
+  result.opened = status.opened;
+  result.writable = status.writable;
+  await store.close();
+} catch (error) {
+  result.code = error && error.code ? error.code : null;
+  result.field = error && error.field ? error.field : null;
+}
+process.stdout.write(JSON.stringify(result));
+`;
+    let racerStdout = '';
+    let racerStderr = '';
+    const ownerA = ownerStore(root, 'owner-a');
+    await ownerA.open('owner');
+    const racer = spawn(process.execPath, ['--input-type=module', '--eval', script], {
+      env: {
+        ...process.env,
+        STORE_MODULE: storeModule,
+        STORE_ROOT: root,
+        STORE_ENV: ENVIRONMENT,
+        STORE_REACHED: reached,
+        STORE_RELEASE: release,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    racer.stdout.on('data', (chunk: Buffer) => { racerStdout += chunk.toString('utf8'); });
+    racer.stderr.on('data', (chunk: Buffer) => { racerStderr += chunk.toString('utf8'); });
+    try {
+      await vi.waitFor(() => expect(existsSync(reached)).toBe(true));
+      // A closes normally: store.closed is appended and the lock is released while B is parked.
+      await ownerA.close();
+      await writeFile(release, 'go', 'utf8');
+      const exited = await new Promise<number | null>((resolve) => racer.on('exit', (code) => resolve(code)));
+      expect(exited).toBe(0);
+      expect(racerStderr).toBe('');
+      const outcome = JSON.parse(racerStdout || '{}') as {
+        opened: boolean;
+        writable: boolean;
+        code: string | null;
+      };
+      // B legitimately wins the handoff — the corruption is invisible to B itself.
+      expect(outcome).toMatchObject({ opened: true, writable: true, code: null });
+
+      // And the chain B appended must still verify: A's store.closed landed while B was parked,
+      // so B has to pick up A's record instead of forking from its pre-lock view.
+      const verifier = ownerStore(root, 'verifier');
+      await expect(verifier.verifyIntegrity()).resolves.toMatchObject({ ok: true, records: 4 });
+    } finally {
+      if (racer.exitCode === null) racer.kill('SIGKILL');
+    }
+  }, 30000);
 });
 
 describe('slurm control store: first-time creation cannot bypass the network-filesystem guard', () => {
