@@ -3,7 +3,7 @@ import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { chmodSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
-import { createServer } from 'node:net';
+import { createServer, connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -612,6 +612,62 @@ describe('ssh transport review fixes: real OpenSSH forwarding, spawn errors, lif
     });
   }
 
+  /** Resolves once a connect to `port` settles; `'refused'` means nothing is listening there. */
+  function connectOutcome(port: number): Promise<'refused' | 'other'> {
+    return new Promise((resolve) => {
+      const socket = connect({ host: '127.0.0.1', port });
+      const settle = (outcome: 'refused' | 'other') => {
+        socket.destroy();
+        resolve(outcome);
+      };
+      socket.once('error', (error) => settle((error as { code?: string }).code === 'ECONNREFUSED' ? 'refused' : 'other'));
+      socket.once('connect', () => settle('other'));
+      setTimeout(() => settle('other'), 500);
+    });
+  }
+
+  /**
+   * A port where a connect is REFUSED, i.e. the "forward not listening yet" precondition.
+   *
+   * A just-released ephemeral port still accepts connections on Linux (the listening socket
+   * lingers after close), so candidates come from BELOW the OS dynamic source range, where only a
+   * real listener can hold a port. Every candidate is probed before it is handed to the transport.
+   */
+  async function reserveRefusedPort(): Promise<number> {
+    for (let port = 20_000; port < 20_200; port += 1) {
+      if ((await connectOutcome(port)) === 'refused') return port;
+    }
+    throw new Error('no refused loopback port available');
+  }
+
+  /** A loopback target speaking the real relay framing and answering the shipped hello. */
+  function startHelloServer(port: number): ReturnType<typeof createServer> {
+    const server = createServer((socket) => {
+      let buffer: Buffer = Buffer.alloc(0);
+      socket.on('data', (chunk: Buffer) => {
+        buffer = Buffer.concat([buffer, chunk]);
+        let decoded;
+        try {
+          decoded = decodeRelayFrames(buffer);
+        } catch {
+          return;
+        }
+        buffer = decoded.remaining;
+        for (const payload of decoded.frames) {
+          let message: { kind?: string } | undefined;
+          try {
+            message = JSON.parse(payload.toString('utf8'));
+          } catch {
+            continue;
+          }
+          if (message?.kind === TARGET_HELLO.kind) socket.write(encodeRelayFrame(JSON.stringify(TARGET_HELLO_OK)));
+        }
+      });
+    });
+    server.listen(port, '127.0.0.1');
+    return server;
+  }
+
   function responderAccept() {
     return async (challenge: { kind: string }) => {
       if (challenge.kind === 'host-key') return { accept: true, persist: true };
@@ -799,4 +855,60 @@ try {
     expect(readdirSync(secretDirectory)).toHaveLength(0);
     expect(relay.ownedIds()).toHaveLength(0);
   });
+
+  it('waits for a local forward that is not listening yet instead of failing the hello', async () => {
+    // A real OpenSSH -L binds its local listener only once the SSH session is up, so the first
+    // connect lands on a closed port (ECONNREFUSED) while the child is perfectly healthy. This
+    // test uses the SHIPPED default target-hello client and a loopback target that starts
+    // listening 150 ms after the spawn, with helloTimeoutMs = 1000.
+    const port = await reserveRefusedPort();
+    const stopProcessTree = vi.fn(async () => {});
+    const relay = createProcessRelay({ spawn: () => fakeChild(9400), stopProcessTree });
+    const transport = createSshTransport(transportOptions({
+      relay,
+      readAllocatedPort: async () => port,
+      helloTimeoutMs: 1000,
+      secretDirectory: await temporaryDirectory('vis-ssh-listen-'),
+    }));
+    const servers: Array<ReturnType<typeof createServer>> = [];
+    const delayed = setTimeout(() => {
+      servers.push(startHelloServer(port));
+    }, 150);
+    try {
+      const dialed = await transport.open(sshProfile());
+      expect(dialed.ready).toBe(true);
+      expect(dialed.forward.port).toBe(port);
+      // The live child must not be torn down for a listener that simply was not up yet.
+      expect(stopProcessTree).not.toHaveBeenCalled();
+      await dialed.close?.();
+      expect(stopProcessTree).toHaveBeenCalledTimes(1);
+    } finally {
+      clearTimeout(delayed);
+      for (const server of servers) server.close();
+      await transport.close();
+    }
+  }, 20000);
+
+  it('still fails a hello whose target listens but never answers', async () => {
+    // The refusal-retry must not become an unbounded wait: a listener that accepts the
+    // connection and then stays silent is a terminal failure inside the same budget.
+    const port = await reserveRefusedPort();
+    const stopProcessTree = vi.fn(async () => {});
+    const relay = createProcessRelay({ spawn: () => fakeChild(9500), stopProcessTree });
+    const transport = createSshTransport(transportOptions({
+      relay,
+      readAllocatedPort: async () => port,
+      helloTimeoutMs: 300,
+      secretDirectory: await temporaryDirectory('vis-ssh-silent-'),
+    }));
+    const servers: Array<ReturnType<typeof createServer>> = [createServer()];
+    await new Promise<void>((resolve) => servers[0]!.listen(port, '127.0.0.1', resolve));
+    try {
+      await expect(transport.open(sshProfile())).rejects.toMatchObject({ code: 'timeout', field: 'target.hello' });
+      expect(stopProcessTree).toHaveBeenCalledTimes(1);
+    } finally {
+      for (const server of servers) server.close();
+      await transport.close();
+    }
+  }, 20000);
 });

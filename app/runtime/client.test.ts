@@ -288,6 +288,34 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     socket.reply(indexRequest, { version: 1, kind: 'snapshot', target, epoch: 'epoch', generation: 1, token: 'idx', revision: 10, watermark: 4, expiresAt: Date.now() + 60000, items: [], cursor: null });
     await reading;
   });
+  it('mints a new index view when the caller asks for a fresh one', async () => {
+    // Reviewer round 6138580284 item 7: the cached index view is reused for the whole TTL, so a
+    // second read after the index gained rows still serves the old view's rows. A caller that
+    // knows the cached view cannot answer (a new search, an explicit refresh) must be able to
+    // bypass the reuse and still page the new view.
+    const { client, socket } = await fixture();
+    const seen: unknown[][] = [];
+    const empty = { version: 1, kind: 'snapshot', target, epoch: 'epoch', generation: 1, token: 'idx-1', revision: 10, watermark: 4, expiresAt: Date.now() + 60000, items: [], cursor: null };
+    const first = client.readIndex(target, 'session_summaries', { onPage: (_collection, page) => { seen.push([...page.items]); } });
+    const firstRequest = await socket.next(); expect(firstRequest.params).not.toHaveProperty('token');
+    socket.reply(firstRequest, empty);
+    await first;
+    expect(seen).toEqual([[]]);
+
+    // The index gains a row behind the cached view. A plain read still reuses the cached token.
+    const reused = client.readIndex(target, 'session_summaries', { onPage: (_collection, page) => { seen.push([...page.items]); } });
+    const reusedRequest = await socket.next(); expect(reusedRequest.params).toMatchObject({ token: 'idx-1' });
+    socket.reply(reusedRequest, empty);
+    await reused;
+    expect(seen).toEqual([[], []]);
+
+    // A fresh read mints a new view and therefore sees the new row.
+    const fresh = client.readIndex(target, 'session_summaries', { fresh: true, onPage: (_collection, page) => { seen.push([...page.items]); } });
+    const freshRequest = await socket.next(); expect(freshRequest.params).not.toHaveProperty('token');
+    socket.reply(freshRequest, { ...empty, token: 'idx-2', revision: 11, items: [{ key: 'new-session', value: { title: 'new' } }], cursor: null });
+    await expect(fresh).resolves.toMatchObject({ token: 'idx-2', revision: 11 });
+    expect(seen.at(-1)).toEqual([{ key: 'new-session', value: { title: 'new' } }]);
+  });
   it('rejects mixed snapshot tokens and closes the pending observer', async () => {
     const { client, socket } = await fixture();
     const page = { version: 1, kind: 'snapshot', target, epoch: 'epoch', generation: 1, token: 'atomic', revision: 10, watermark: 4, expiresAt: Date.now() + 60000, items: [], cursor: null };

@@ -1,5 +1,7 @@
 export const RELAY_HANDSHAKE_KIND: string;
 export const RELAY_HELLO_ACK_KIND: string;
+export const RELAY_HELLO_CONFIRM_KIND: string;
+export const RELAY_HANDSHAKE_KINDS: readonly string[];
 export const COMPUTE_OPERATION_KINDS: readonly string[];
 
 export interface RelayBinding {
@@ -21,6 +23,7 @@ export function compareRelayBindings(
 export interface RelayHandshakeMessage {
   readonly kind: string;
   readonly nonce: string;
+  readonly challenge?: string;
   readonly binding: RelayBinding;
   readonly token: string;
 }
@@ -30,6 +33,7 @@ export interface RelayHandshake {
   readonly binding: RelayBinding;
   challenge(): RelayHandshakeMessage;
   ack(nonce: string): RelayHandshakeMessage;
+  confirm(nonce: string, challenge: string): RelayHandshakeMessage;
   verify(message: unknown): boolean;
 }
 
