@@ -277,3 +277,186 @@ describe('Codex result-first frame ownership after cancel', () => {
     }
   }, 20000);
 });
+
+/** Controlled-stdio stand-in for the reviewer round 6138580284 finding 4. `history` with
+ * `params.hold` is withheld; a plain `history` flushes the held queue in order and then answers
+ * itself, and `flush` with `params.order:'reverse'` flushes the held queue newest-first. A reply's
+ * frame size comes from its own request's `params.bytes`, so one frame can be oversized (>4 MiB,
+ * the ordinary bound) while another stays small. `echo` is always small. */
+const OVERSIZED_STALE_FIXTURE = [
+  "let buffer = '';",
+  'const held = [];',
+  'function reply(message) {',
+  "  const bytes = (message.params && Number(message.params.bytes)) || 64;",
+  "  const payload = 'x'.repeat(bytes);",
+  "  process.stdout.write(JSON.stringify({ result: { data: [{ turnId: 't1', item: { id: 'item-' + message.id, payload } }], nextCursor: null }, id: message.id }) + '\\n');",
+  '}',
+  "process.stdin.on('data', (chunk) => {",
+  "  buffer += chunk.toString('utf8');",
+  '  for (;;) {',
+  "    const index = buffer.indexOf('\\n');",
+  '    if (index < 0) break;',
+  '    const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);',
+  "    if (!line.trim()) continue;",
+  '    const message = JSON.parse(line);',
+  "    if (message.method === 'history') {",
+  '      if (message.params && message.params.hold === true) {',
+  '        held.push(message);',
+  "        process.stderr.write('held\\n');",
+  '      } else {',
+  '        while (held.length) reply(held.shift());',
+  '        reply(message);',
+  '      }',
+  "    } else if (message.method === 'flush') {",
+  "      if (message.params && message.params.order === 'reverse') held.reverse();",
+  '      while (held.length) reply(held.shift());',
+  "    } else if (message.method === 'echo') {",
+  "      process.stdout.write(JSON.stringify({ result: { ok: true, method: message.method }, id: message.id }) + '\\n');",
+  '    }',
+  '  }',
+  '});',
+].join('\n');
+
+const OVERSIZED = 6 * 1024 * 1024;
+
+describe('Codex oversized stale frame cannot enter a new raw sink (review round 6138580284 item 4)', () => {
+  async function spawnFixture() {
+    const { createCodexProcess } =
+      await import('../../../bridge/runtime/drivers/codexProcess.js');
+    const dir = await mkdtemp(path.join(tmpdir(), 'vis-codex-stale-'));
+    const script = path.join(dir, 'app-server.mjs');
+    await writeFile(script, OVERSIZED_STALE_FIXTURE, 'utf8');
+    const proc = createCodexProcess({ executable: process.execPath, args: [script] });
+    return { proc, dir };
+  }
+
+  async function waitFor(predicate: () => boolean, label: string, deadlineMs = 15000): Promise<void> {
+    const deadline = Date.now() + deadlineMs;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error(`${label} was not reached`);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  /** Parks a raw read on `next()`, waits until the app-server has withheld its response, cancels it. */
+  async function parkAndCancel(proc: CodexProcess, id: number, bytes: number) {
+    const requestRaw = proc.requestRaw;
+    if (!requestRaw) throw new TypeError('missing raw transport');
+    const stale = requestRaw(
+      JSON.stringify({ id, method: 'history', params: { hold: true, bytes } }),
+      id,
+    );
+    const iterator = stale[Symbol.asyncIterator]();
+    void iterator.next().catch(() => {});
+    await waitFor(() => proc.inspection().stderrBytes > 0, 'held history response');
+    stale.cancel?.();
+  }
+
+  it('drains an oversized stale frame instead of publishing it to the pending raw read', async () => {
+    const { proc, dir } = await spawnFixture();
+    const lines: string[] = [];
+    proc.subscribe(
+      (line) => lines.push(line),
+      () => {},
+    );
+    try {
+      const requestRaw = proc.requestRaw;
+      if (!requestRaw) throw new TypeError('missing raw transport');
+      // Given a raw read parked on next() whose OVERSIZED response is withheld, then cancelled.
+      await parkAndCancel(proc, 1, OVERSIZED);
+
+      // When a new raw read is issued: the withheld >4 MiB id=1 frame arrives first, then id=2's
+      // own (small) response.
+      const next = requestRaw(
+        JSON.stringify({ id: 2, method: 'history', params: { bytes: 64 } }),
+        2,
+      );
+      const parts: Buffer[] = [];
+      for await (const chunk of next) parts.push(Buffer.from(chunk));
+      const frame = JSON.parse(Buffer.concat(parts).toString('utf8')) as {
+        id: number;
+        result: { data: Array<{ item: { id: string; payload: string } }> };
+      };
+
+      // Then the live sink owns id=2's frame, and the stale id=1 bytes never reach it.
+      expect(frame.id).toBe(2);
+      expect(frame.result.data[0].item.id).toBe('item-2');
+      expect(frame.result.data[0].item.payload).toHaveLength(64);
+      // The real id=2 response must not be displaced into the ordinary channel.
+      expect(lines).toHaveLength(0);
+      expect(proc.inspection().failed).toBe(false);
+      expect(proc.inspection().rawPending).toBe(false);
+    } finally {
+      await proc.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it('fails the pending raw read when the drained frame was its own oversized response', async () => {
+    // The mirror ordering: the NEW oversized response arrives first, so draining it destroys the
+    // only bytes the pending read will ever get. The stale frame that follows proves it, and the
+    // read must fail rather than park forever.
+    const { proc, dir } = await spawnFixture();
+    const lines: string[] = [];
+    proc.subscribe(
+      (line) => lines.push(line),
+      () => {},
+    );
+    try {
+      const requestRaw = proc.requestRaw;
+      if (!requestRaw) throw new TypeError('missing raw transport');
+      await parkAndCancel(proc, 1, 64);
+
+      // Ask for the new read and withhold it too, then flush newest-first.
+      const next = requestRaw(
+        JSON.stringify({ id: 2, method: 'history', params: { hold: true, bytes: OVERSIZED } }),
+        2,
+      );
+      const pending = next[Symbol.asyncIterator]().next().catch((error: unknown) => error);
+      await waitFor(() => proc.inspection().stderrBytes >= 10, 'second held history response');
+      proc.send(JSON.stringify({ id: 3, method: 'flush', params: { order: 'reverse' } }));
+
+      // id=2's oversized frame is drained (its id is unknowable before the newline), then id=1's
+      // frame proves the drained bytes were the pending read's own response.
+      await expect(pending).resolves.toMatchObject({ code: 'reconcile_required' });
+      expect(lines).toHaveLength(0);
+      expect(proc.inspection().failed).toBe(false);
+      expect(proc.inspection().rawPending).toBe(false);
+    } finally {
+      await proc.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it('never parks the pending raw read when two unattributable oversized frames arrive', async () => {
+    // Both candidates are oversized, so neither can be attributed before its newline. The second
+    // drain proves the pending read's response is gone, and it must fail instead of hanging.
+    const { proc, dir } = await spawnFixture();
+    const lines: string[] = [];
+    proc.subscribe(
+      (line) => lines.push(line),
+      () => {},
+    );
+    try {
+      const requestRaw = proc.requestRaw;
+      if (!requestRaw) throw new TypeError('missing raw transport');
+      await parkAndCancel(proc, 1, OVERSIZED);
+
+      const next = requestRaw(
+        JSON.stringify({ id: 2, method: 'history', params: { hold: true, bytes: OVERSIZED } }),
+        2,
+      );
+      const pending = next[Symbol.asyncIterator]().next().catch((error: unknown) => error);
+      await waitFor(() => proc.inspection().stderrBytes >= 10, 'second held history response');
+      proc.send(JSON.stringify({ id: 3, method: 'flush', params: { order: 'reverse' } }));
+
+      await expect(pending).resolves.toMatchObject({ code: 'reconcile_required' });
+      expect(lines).toHaveLength(0);
+      expect(proc.inspection().failed).toBe(false);
+      expect(proc.inspection().rawPending).toBe(false);
+    } finally {
+      await proc.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+});

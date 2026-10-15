@@ -126,9 +126,11 @@
               v-model="secret"
               class="field-input"
               :type="challenge.kind === 'otp' ? 'text' : 'password'"
+              :key="challenge.challengeId"
               autocomplete="off"
               spellcheck="false"
               data-testid="challenge-secret"
+              @input="stampSecretChallenge"
               @keydown.enter.prevent="answer(true)"
             />
             <span class="field-hint">
@@ -150,7 +152,7 @@
             type="button"
             class="action-button save"
             data-testid="challenge-accept"
-            :disabled="!challengeAcceptable || (isSecretChallenge && secret.length === 0)"
+            :disabled="!challengeAcceptable || (isSecretChallenge && boundSecret.length === 0)"
             @click="answer(true)"
           >
             {{ isSecretChallenge ? 'Send' : 'Trust and continue' }}
@@ -203,6 +205,7 @@
         :unavailable-reason="slurmReason"
         :preview="preview"
         @submit="$emit('submit-slurm', $event)"
+        @preview-request="$emit('preview-request', $event)"
         @cancel="composer = ''"
       />
 
@@ -299,12 +302,26 @@ const emit = defineEmits<{
   (event: 'update'): void;
   (event: 'save-ssh', draft: unknown): void;
   (event: 'submit-slurm', request: unknown): void;
+  /**
+   * The Slurm form's resource draft changed. The container answers with a BRIDGE-produced preview
+   * for exactly this draft, so what is displayed is what will be submitted.
+   */
+  (event: 'preview-request', draft: Readonly<{ resources: unknown; ownership: unknown }>): void;
   (event: 'challenge-answer', answer: Readonly<{ challengeId: string; accept: boolean; secret?: string }>): void;
 }>();
 
 const dialogRef = ref<HTMLDialogElement | null>(null);
 const composer = ref('');
 const secret = ref('');
+/**
+ * The challengeId the current `secret` was typed against.
+ *
+ * A secret is only ever valid for the challenge that was on screen when it was entered. The stamp
+ * is what makes that enforceable: `answer()` refuses to pair a value with a challenge it was not
+ * typed for, so an externally revoked or replaced challenge can never receive an old secret even
+ * if some other path failed to clear the input.
+ */
+const secretChallengeId = ref('');
 
 watch(
   () => props.open,
@@ -318,6 +335,34 @@ watch(
     }
   },
 );
+
+/**
+ * The identity of the challenge currently presented. A new challengeId OR a new kind is a new
+ * challenge: the same id re-presented as a different kind is a different question, and the answer
+ * to the first one must not be offered to it.
+ */
+const challengeIdentity = computed<string>(() => {
+  const current = props.challenge;
+  return current === null ? '' : `${current.challengeId}\u0000${current.kind}`;
+});
+
+watch([challengeIdentity, () => props.selectedProfileId, () => props.open], () => {
+  secret.value = '';
+  secretChallengeId.value = '';
+});
+
+/** Stamp the typed value with the challenge it belongs to. */
+function stampSecretChallenge() {
+  const current = props.challenge;
+  secretChallengeId.value = secret.value.length === 0 || current === null ? '' : current.challengeId;
+}
+
+/** The secret that is still bound to the challenge on screen; anything else is stale. */
+const boundSecret = computed<string>(() => {
+  const current = props.challenge;
+  if (current === null || secretChallengeId.value !== current.challengeId) return '';
+  return secret.value;
+});
 
 const directOnly = computed(() => props.managedTransport !== true);
 
@@ -366,13 +411,22 @@ function environmentOf(profile: ConnectionProfile): string {
  * The secret is read out of the input, handed to the parent in the answer event, and then
  * DROPPED: the ref is cleared immediately so nothing in this component retains it. The parent
  * wraps it in a secret box before it can reach any log or error surface.
+ *
+ * Only a secret still BOUND to this challenge is handed over. A value typed against a challenge
+ * that has since been revoked, replaced, re-presented as another kind, or hidden by a close is
+ * dropped with the rest, so the answer can never carry a new challengeId with an old secret.
  */
 function answer(accept: boolean) {
   const challenge = props.challenge;
   if (challenge === null) return;
-  const value = accept && isSecretChallenge.value ? secret.value : undefined;
+  const value = accept && isSecretChallenge.value ? boundSecret.value : '';
   secret.value = '';
-  emit('challenge-answer', { challengeId: challenge.challengeId, accept, ...(value === undefined ? {} : { secret: value }) });
+  secretChallengeId.value = '';
+  emit('challenge-answer', {
+    challengeId: challenge.challengeId,
+    accept,
+    ...(value.length === 0 ? {} : { secret: value }),
+  });
 }
 
 function shortId(value: string): string {
