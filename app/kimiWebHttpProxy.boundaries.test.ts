@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import {
   createServer,
+  globalAgent,
   request as httpRequest,
   type IncomingHttpHeaders,
   type RequestOptions,
@@ -56,6 +57,7 @@ type StreamingClient = {
 };
 
 const servers: Server[] = [];
+const upstreamAgentKeys = new Set<string>();
 const tempDirectories: string[] = [];
 const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
 
@@ -89,6 +91,7 @@ async function createUpstream(handler: UpstreamHandler): Promise<FakeUpstream> {
   });
   servers.push(server);
   const port = await listen(server);
+  upstreamAgentKeys.add(globalAgent.getName({ host: '127.0.0.1', port }));
   return { origin: `http://127.0.0.1:${port}`, port, requests };
 }
 
@@ -213,7 +216,16 @@ function parseBody(body: Buffer): { error?: string; code?: string } {
   return JSON.parse(body.toString()) as { error?: string; code?: string };
 }
 
+function destroyOwnedUpstreamSockets() {
+  for (const key of upstreamAgentKeys) {
+    for (const socket of globalAgent.sockets[key] ?? []) socket.destroy();
+    for (const socket of globalAgent.freeSockets[key] ?? []) socket.destroy();
+  }
+}
+
 afterEach(async () => {
+  destroyOwnedUpstreamSockets();
+  upstreamAgentKeys.clear();
   for (const server of servers.splice(0)) {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
