@@ -73,6 +73,8 @@ class ReactiveClient {
   private readonly tombstones = new Set<string>();
   private readonly queue: ObserverDelivery[] = [];
   private indexView: { readonly collections: ReadonlySet<string>; readonly rows: Readonly<Record<string, AnyRecord[]>>; readonly revision: number } | null = null;
+  /** Every index view this client minted, in order, so a test can prove how many a read spent. */
+  readonly minted: ReadonlySet<string>[] = [];
   private revision = 1000;
   private seq = 0;
   constructor(readonly environment: string = ENV) {}
@@ -128,6 +130,7 @@ class ReactiveClient {
       const rows: Record<string, AnyRecord[]> = {};
       for (const name of names) rows[name] = [...(this.rows.get(name) ?? [])];
       this.indexView = { collections: new Set(names), rows, revision: this.revision };
+      this.minted.push(new Set(names));
     }
     const view = this.indexView;
     if (view === null) throw new TypeError('no index view was minted');
@@ -306,6 +309,26 @@ describe('useRuntimeSessionTree — index view freshness (review round 613858028
 
       const found = await tree.search('arrived-after-start');
       expect(found).toMatchObject({ status: 'complete', totalMatched: 1 });
+    } finally {
+      await tree.dispose();
+    }
+  });
+
+  it('spends ONE index view on an explicit refresh, shared by both topology collections', async () => {
+    // The bridge bounds live views per environment and cannot release one early, so a refresh that
+    // read harnesses and workspaces separately spent the target's whole budget on one refresh.
+    const client = new ReactiveClient();
+    seedTopology(client);
+    const { history } = historySpy();
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV, history: history as never });
+    try {
+      await tree.start();
+      client.minted.length = 0;
+
+      await tree.refresh();
+
+      expect(client.minted).toHaveLength(1);
+      expect([...(client.minted[0] ?? [])].sort()).toEqual(['harnesses', 'workspaces']);
     } finally {
       await tree.dispose();
     }

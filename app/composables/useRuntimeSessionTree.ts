@@ -37,7 +37,6 @@ import { computed, getCurrentScope, onScopeDispose, shallowRef } from 'vue';
 import type { ErrorCode } from '../../shared/runtime/capabilities.js';
 import { decodeSessionKey, encodeSessionKey } from '../../shared/runtime/identity.js';
 import type { EnvironmentId, HarnessInstanceId, SessionRef } from '../../shared/runtime/identity.js';
-import type { IndexCollection } from '../../shared/runtime/runtimeWire.js';
 import type { RuntimeClient } from '../runtime/client';
 import { createRuntimeState } from '../runtime/state';
 import type { RuntimeState, RuntimeStateOptions } from '../runtime/state';
@@ -440,28 +439,31 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     selection.value = state.capture();
     usage.value = state.usage();
   }
-  async function pageCollection(name: IndexCollection, fresh = false): Promise<Readonly<Record<string, unknown>>[]> {
-    const items: Readonly<Record<string, unknown>>[] = [];
-    const view = await client.readIndex(target, name, {
-      fresh,
-      onPage: (_collection, page) => {
-        for (const item of page.items) {
-          const record = asRecord(item);
-          if (record && typeof record.key === 'string') items.push(record);
-        }
-      },
-    });
-    lastIndexRevision = view.revision;
-    return items;
-  }
   async function readTopology(fresh = false): Promise<void> {
     // `state.start` already holds the target's single live observer; the index
     // reads must not open a second one (`runtime.observer_duplicate`) or take
     // the paging lock the state's running reader depends on. `client.readIndex`
     // is the non-contending path, so these reads are also serialized against
     // each other here.
-    const harnessValues = await pageCollection('harnesses', fresh);
-    const workspaceValues = await pageCollection('workspaces', fresh);
+    //
+    // ONE topology read shares ONE index view. The bridge bounds live views per
+    // environment and cannot release one early, so reading harnesses and
+    // workspaces as two reads would spend the target's whole budget on a single
+    // refresh and make the next search fail with `snapshot_limit`.
+    const harnessValues: Readonly<Record<string, unknown>>[] = [];
+    const workspaceValues: Readonly<Record<string, unknown>>[] = [];
+    const view = await client.readIndex(target, ['harnesses', 'workspaces'], {
+      fresh,
+      onPage: (collection, page) => {
+        if (collection !== 'harnesses' && collection !== 'workspaces') return;
+        const sink = collection === 'harnesses' ? harnessValues : workspaceValues;
+        for (const item of page.items) {
+          const record = asRecord(item);
+          if (record && typeof record.key === 'string') sink.push(record);
+        }
+      },
+    });
+    lastIndexRevision = view.revision;
     if (disposed) return;
     const entries: HarnessEntry[] = [];
     for (const value of harnessValues) {

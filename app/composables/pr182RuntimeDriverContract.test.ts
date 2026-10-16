@@ -18,6 +18,7 @@ import path from 'node:path';
 import { parseConnectionProfileId, parseSessionRef } from '../../shared/runtime/identity.js';
 import type { ConnectionProfileId, EnvironmentId, HarnessInstanceId, SessionRef } from '../../shared/runtime/identity.js';
 import { useRuntimeMessageSend } from './useRuntimeMessageSend';
+import type { RuntimeTurnLifecycle } from './useRuntimeMessageSend';
 import { useRuntimeInteractions } from './useRuntimeInteractions';
 import { createFakeCapture, createFakeRuntimeActionClient } from './runtimeActions.test-helpers';
 
@@ -227,4 +228,111 @@ describe('PR182 finding D — interaction replies must use the native answer fie
     });
     expect(result).toBeTruthy();
   });
+});
+
+describe('PR182 review P2-2 — an acknowledgment is not a turn completion', () => {
+  /** A `RuntimeActionClient` whose `session.send` runs the REAL driver send and whose
+   * `session.cancel` records the exact args the composable built, plus the turn-lifecycle seam the
+   * composable retires an owner on. */
+  function driverClient(harness: DriverHarness, cancels: unknown[]) {
+    const core = harness.driver.registration.driver.core;
+    const listeners = new Set<(terminal: Readonly<{ operationId: string }>) => void>();
+    const scope = Object.freeze({
+      binding: Object.freeze({ target: harness.environmentId, epoch: harness.epoch, generation: 1 }),
+      generation: 1,
+      isCurrent: () => true,
+    });
+    return {
+      scope,
+      lifecycle: {
+        onTerminal(listener: (terminal: Readonly<{ operationId: string }>) => void) {
+          listeners.add(listener);
+          return () => { listeners.delete(listener); };
+        },
+      } satisfies RuntimeTurnLifecycle,
+      terminate(operationId: string) {
+        for (const listener of Array.from(listeners)) listener({ operationId });
+      },
+      client: {
+        scope: () => scope,
+        mutate(_target: unknown, method: string, params: { args: unknown }, options: { idempotencyKey: string }) {
+          if (method === 'session.cancel') {
+            cancels.push(params.args);
+            return { accepted: Promise.resolve({ operationId: '' }), executed: Promise.resolve({ operationId: '', value: null }) };
+          }
+          const execution = Promise.resolve(requireMethod(core.send, 'send')({
+            ...harness.scope,
+            params: { ...(params.args as Record<string, unknown>), idempotencyKey: options.idempotencyKey },
+          })).then((value) => value as SentReceipt);
+          return {
+            accepted: execution.then((value) => value.accepted),
+            executed: execution.then((value) => ({ operationId: value.accepted.operationId, value: null })),
+          };
+        },
+        request: () => Promise.resolve({}),
+      },
+    };
+  }
+
+  it('cancelTurn still carries the active owner after the turn/start acknowledgment', async () => {
+    const harness = await driverHarness();
+    const cancels: unknown[] = [];
+    const { scope, client } = driverClient(harness, cancels);
+    const { capture: selection } = createFakeCapture(scope, PROFILE, harness.session);
+    const send = useRuntimeMessageSend({
+      client: client as unknown as Parameters<typeof useRuntimeMessageSend>[0]['client'],
+      profileId: PROFILE,
+      capture: () => selection,
+      harnessKind: 'codex',
+    });
+
+    // Given a real Codex turn whose turn/start RPC has been ACKNOWLEDGED. The real session keeps
+    // the operation active until a later terminal notification.
+    const turn = send.send(harness.session, { text: 'turn' });
+    await turn.accepted;
+    await turn.executed;
+
+    // When the user stops the turn, cancelTurn must still name the active operation.
+    send.cancelTurn(harness.session);
+    const cancelArgs = cancels.at(-1) as { operationId: string };
+    expect(cancelArgs).toMatchObject({ operationId: expect.any(String) });
+
+    // Then the REAL driver accepts it instead of refusing codex.cancel.owner, and the native
+    // interrupt is actually issued.
+    const outcome = await Promise.resolve(
+      requireMethod(harness.driver.registration.driver.core.cancel, 'cancel')({ ...harness.scope, params: cancelArgs }),
+    ).then(
+      () => 'accepted',
+      (error: unknown) => (error instanceof Error && 'code' in error ? String((error as { code: unknown }).code) : 'rejected'),
+    );
+    expect(outcome).toBe('accepted');
+    expect(harness.nativeMethods).toContain('turn/interrupt');
+  }, 30000);
+
+  it('retires the owner on the turn terminal notification, not on the send acknowledgment', async () => {
+    const harness = await driverHarness();
+    const cancels: unknown[] = [];
+    const { scope, client, lifecycle, terminate } = driverClient(harness, cancels);
+    const { capture: selection } = createFakeCapture(scope, PROFILE, harness.session);
+    const send = useRuntimeMessageSend({
+      client: client as unknown as Parameters<typeof useRuntimeMessageSend>[0]['client'],
+      profileId: PROFILE,
+      capture: () => selection,
+      harnessKind: 'codex',
+      turnLifecycle: lifecycle,
+    });
+
+    const turn = send.send(harness.session, { text: 'turn' });
+    const { operationId } = await turn.accepted;
+    await turn.executed;
+
+    // The acknowledgment alone must not retire the owner.
+    send.cancelTurn(harness.session);
+    expect(cancels.at(-1)).toMatchObject({ operationId });
+
+    // The turn's terminal notification retires it, so a later cancel carries no stale id.
+    terminate(operationId);
+    send.cancelTurn(harness.session);
+    expect(cancels.at(-1)).toEqual({});
+  }, 30000);
 });
