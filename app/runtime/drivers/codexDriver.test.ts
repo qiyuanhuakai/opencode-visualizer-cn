@@ -228,6 +228,50 @@ describe('Codex privacy and connection faults', () => {
     receive(JSON.stringify({ method: 'turn/completed', params: { secret: 'private-value' } }));
     expect(notifications).toEqual([]);
   });
+  it('classifies an explicit unmaterialized rejection without carrying the native error body', async () => {
+    // Given the fixed version's -32600 rejection that explicitly says the thread is not
+    // materialized yet, with the native message naming the thread.
+    const { createAppServerClient } =
+      await import('../../../shared/runtime/native/codex/appServerClient.js');
+    let receive: (raw: string) => void = () => {};
+    let requestId = 0;
+    const client = createAppServerClient({
+      transport: {
+        subscribe(callback) {
+          receive = callback;
+          return () => {};
+        },
+        send(raw) {
+          requestId = JSON.parse(raw).id;
+        },
+        close() {},
+      },
+      onMessage() {},
+    });
+    const pending = client.request('thread/turns/list', {});
+    receive(
+      JSON.stringify({
+        id: requestId,
+        error: {
+          code: -32600,
+          message:
+            'thread native-secret-thread is not materialized yet; thread/turns/list is unavailable before first user message',
+        },
+      }),
+    );
+    // When the rejection surfaces at the consumer.
+    const failure = await pending.catch((error: unknown) => error);
+    // Then only a boolean classification is kept and the native body never leaves the boundary.
+    expect(failure).toBeInstanceOf(ProtocolError);
+    expect(failure).toMatchObject({
+      code: 'invalid_request',
+      field: 'codex.rpc.thread/turns/list',
+      nativeCode: -32600,
+      unmaterialized: true,
+    });
+    expect(JSON.stringify(failure)).not.toContain('native-secret-thread');
+    expect(JSON.stringify(failure)).not.toContain('not materialized yet');
+  });
   it('closes oversized native frames and never emits partial payloads', async () => {
     const { createAppServerClient } =
       await import('../../../shared/runtime/native/codex/appServerClient.js');
@@ -873,9 +917,13 @@ describe('Codex history unmaterialized thread reads', () => {
     harnessInstanceId: '22222222-2222-4222-8222-222222222222',
     nativeSessionId: 'native-empty',
   });
+  // Mirrors appServerClient's classification: the explicit "not materialized yet" marker sets
+  // `unmaterialized` only alongside the -32600 native code, so a different code stays a plain
+  // refusal without the classification.
   const unmaterialized = (nativeCode: number) =>
     Object.assign(new ProtocolError('invalid_request', 'codex.rpc.thread/turns/list'), {
       nativeCode,
+      ...(nativeCode === -32600 ? { unmaterialized: true } : {}),
     });
   it('reads a brand-new thread with no first message as an empty complete page', async () => {
     // Given Codex answers thread/turns/list on an unmaterialized thread with -32600.
@@ -939,5 +987,74 @@ describe('Codex history unmaterialized thread reads', () => {
     await expect(read({ session, cursor: page.cursor })).rejects.toThrow(
       'codex.rpc.thread/turns/list',
     );
+  });
+  // Drives the real RPC boundary: only the native transport is substituted, so a native -32600
+  // frame is classified by appServerClient before the history reader ever sees it.
+  const nativeChain = async (nativeError: { code: number; message: string }) => {
+    const { createAppServerClient } =
+      await import('../../../shared/runtime/native/codex/appServerClient.js');
+    const { createCodexHistory } = await import('../../../bridge/runtime/drivers/codexHistory.js');
+    let receive: (raw: string) => void = () => {};
+    const client = createAppServerClient({
+      transport: {
+        subscribe(callback) {
+          receive = callback;
+          return () => {};
+        },
+        send(raw) {
+          const id = (JSON.parse(raw) as { id: number }).id;
+          queueMicrotask(() => receive(JSON.stringify({ id, error: nativeError })));
+        },
+        close() {},
+      },
+      onMessage() {},
+    });
+    return createCodexHistory({
+      processGeneration: 1,
+      epoch: 'epoch',
+      assertCurrent() {},
+      request: async (method: string): Promise<JsonValue> => client.request(method, {}),
+    });
+  };
+  const sameCodeRefusals = [
+    {
+      name: 'an ephemeral thread without persistent history',
+      nativeError: { code: -32600, message: 'ephemeral threads do not support thread/turns/list' },
+    },
+    {
+      name: 'a thread that is not loaded in this connection',
+      nativeError: { code: -32600, message: 'thread not loaded: native-empty' },
+    },
+    {
+      name: 'an illegal thread id',
+      nativeError: { code: -32600, message: 'invalid thread id: not-a-uuid' },
+    },
+  ];
+  it.each(sameCodeRefusals)('rejects $name with an explicit code, not empty history', async ({
+    nativeError,
+  }) => {
+    // Given a -32600 refusal on the same method that is not the explicit unmaterialized signal.
+    const read = await nativeChain(nativeError);
+    // When the initial history page is read.
+    const failure = await read({ session }).catch((error: unknown) => error);
+    // Then the refusal surfaces instead of masquerading as a complete empty history.
+    expect(failure).toBeInstanceOf(ProtocolError);
+    expect(failure).toMatchObject({
+      code: 'invalid_request',
+      field: 'codex.rpc.thread/turns/list',
+      nativeCode: -32600,
+    });
+  });
+  it('reads a genuinely unmaterialized thread through the real RPC boundary as empty and complete', async () => {
+    // Given the fixed version's explicit -32600 rejection for a thread with no first message.
+    const read = await nativeChain({
+      code: -32600,
+      message:
+        'thread native-empty is not materialized yet; thread/turns/list is unavailable before first user message',
+    });
+    // When the initial history page is read.
+    const page = await read({ session });
+    // Then the thread still reads as an empty, complete history.
+    expect(page).toEqual({ items: [], cursor: null, completeness: 'complete' });
   });
 });

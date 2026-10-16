@@ -7,17 +7,19 @@ const MAX_PAGE = 2 * 1024 * 1024;
 const CHUNK = 64 * 1024;
 
 /**
- * Codex answers thread/turns/list on a thread with no first user message with a
- * -32600 invalid_request ("not materialized yet"). appServerClient maps that to
- * invalid_request and drops the native message, so the classification is the
- * exact RPC method field plus the -32600 native code; a different native code
- * (e.g. -32602 invalid params) is not an unmaterialized thread and still fails.
+ * Codex answers thread/turns/list on a thread with no first user message with a -32600
+ * invalid_request carrying the explicit "not materialized yet" rejection (docs/codex.md:34).
+ * The fixed upstream reuses -32600 for ephemeral threads, unloaded threads and invalid ids, so
+ * the code alone is not the cause: appServerClient classifies the cause at the RPC boundary and
+ * drops the native message, leaving `unmaterialized` as the only unmaterialized signal. A
+ * different native code (e.g. -32602 invalid params) or a same-code refusal without that
+ * classification is not an unmaterialized thread and still fails.
  */
 function isUnmaterializedThreadListError(error) {
   return (
     error instanceof ProtocolError &&
     error.code === 'invalid_request' &&
-    error.nativeCode === -32600 &&
+    error.unmaterialized === true &&
     error.field === 'codex.rpc.thread/turns/list'
   );
 }
