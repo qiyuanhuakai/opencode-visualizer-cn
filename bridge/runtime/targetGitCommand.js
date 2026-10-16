@@ -104,7 +104,11 @@ export async function createTargetGitCommand({
     const policy = await policyFor(canonicalCommonDir);
     await authorize({ ...ref, canonicalPath: canonicalCommonDir, pathPolicy: policy }, 'write');
   }
-  async function destination(parent, name) {
+  // Authorize the destination parent and resolve the child path without testing
+  // the filesystem. The existence check belongs to the pre-send re-verification:
+  // an idempotent retry of a completed create must reach the journal, which owns
+  // the answer, instead of being refused by the bytes its own success produced.
+  async function destinationRef(parent, name) {
     requireValue(
       typeof name === 'string' &&
         name.length > 0 &&
@@ -115,14 +119,17 @@ export async function createTargetGitCommand({
       'git.destination',
     );
     const workspace = await authorize(parent, 'write');
-    const canonicalPath = path.join(workspace.canonicalPath, name);
+    return { ...workspace, canonicalPath: path.join(workspace.canonicalPath, name) };
+  }
+  async function destination(parent, name) {
+    const resolved = await destinationRef(parent, name);
     try {
-      await lstat(canonicalPath);
+      await lstat(resolved.canonicalPath);
       throw new ProtocolError('conflict', 'git.destination_exists');
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error;
     }
-    return { ...workspace, canonicalPath };
+    return resolved;
   }
   async function start({ workspace, args, mutation = false }) {
     requireValue(
@@ -201,8 +208,10 @@ export async function createTargetGitCommand({
   }
   return {
     authorize,
+    authorizeCommonDirectory,
     policyFor,
     destination,
+    destinationRef,
     start,
     async run(request) {
       return (await start(request)).wait();

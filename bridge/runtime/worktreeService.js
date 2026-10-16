@@ -9,8 +9,22 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
   const running = new Map();
   async function launch(accepted, request, retainWorkspace, authorizeDestination) {
     const job = await journal.launch(accepted.operationId, async () => {
-      await authorizeDestination();
-      return command.start(request);
+      // Pre-send re-verification runs after the durable sent marker but before
+      // the native mutation process exists. A refusal raised here proves no
+      // mutation started, so the operation fails terminally and releases its
+      // leases instead of awaiting reconciliation for a send that never happened.
+      try {
+        await authorizeDestination();
+        return await command.start(request);
+      } catch (error) {
+        try {
+          await journal.terminal(accepted.operationId, 'failed');
+        } catch {
+          // The operation stays for reconciliation when its terminal transition
+          // cannot commit; the refusal itself still reaches the caller.
+        }
+        throw error;
+      }
     });
     const completion = (async () => {
       try {
@@ -43,9 +57,13 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
     async create({ workspace, parent, name, idempotencyKey }) {
       const info = await git.repository(workspace);
       requireValue(info.kind === 'git', 'git.repository');
-      const destination = await command.destination(parent, name);
+      const destination = await command.destinationRef(parent, name);
       const baseCommit = gitLine(await git.checked(workspace, ['rev-parse', '--verify', 'HEAD']));
       requireValue(/^[0-9a-f]{40,64}$/.test(baseCommit), 'git.base_commit');
+      // Authorize the common directory before any durable state exists: a refusal
+      // here costs nothing, while the same refusal after acceptance would strand
+      // a repository-wide lease behind a sent marker.
+      await command.authorizeCommonDirectory(workspace);
       const accepted = await journal.accept({
         repoKey: info.repoKey,
         workspace: destination,
@@ -54,6 +72,9 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
         payload: { source: workspace, destination },
         baseCommit,
       });
+      // An operation that already reached a terminal phase is a durable replay:
+      // return it instead of re-validating the destination its completion produced.
+      if ((await journal.get(accepted.operationId)).phase === 'terminal') return accepted;
       return launch(
         accepted,
         {
@@ -81,6 +102,10 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
         'git.locked_or_prunable',
         'conflict',
       );
+      // Authorize the common directory before any durable state exists: a refusal
+      // here costs nothing, while the same refusal after acceptance would strand
+      // a repository-wide lease behind a sent marker.
+      await command.authorizeCommonDirectory(workspace);
       const accepted = await journal.accept({
         repoKey: info.repoKey,
         workspace: worktree,
