@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createAcpSessions } from '../../bridge/runtime/drivers/acpSessions.js';
 import { createIndexDiscovery } from '../../bridge/runtime/indexDiscovery.js';
 import { createDiscoveryScheduler } from '../../bridge/runtime/discoveryScheduler.js';
@@ -235,4 +235,186 @@ describe('ACP session pages', () => {
       expect(await discovery.discover(source)).toMatchObject({ status: 'complete', count: 1000, reason: 'native_exhausted' });
     });
   });
+});
+
+// ---------------------------------------------------------------------------
+// PR #180 reviewer findings P2-A and P2-B, both reproduced RED on f776b4027
+// before the fix. The measured numbers quoted below are recorded in
+// .omo/evidence/vis-v090/fix-pr180.
+// ---------------------------------------------------------------------------
+type PageItem = { session: { nativeSessionId: string } };
+function cursorOf(page: { cursor: string | null }): string {
+  if (page.cursor === null) throw new Error('expected the page to carry a cursor');
+  return page.cursor;
+}
+function churn(): number {
+  let total = 0;
+  for (let block = 0; block < 8; block++) {
+    total += Array.from({ length: 4096 }, () => ({ pad: 'x'.repeat(256) })).length;
+  }
+  return total;
+}
+// Run with NODE_OPTIONS=--expose-gc for a deterministic collection; the allocation churn is
+// the fallback so the probe still collects under a plain `pnpm test`.
+async function reclaim() {
+  for (let turn = 0; turn < 8; turn++) {
+    globalThis.gc?.();
+    churn();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+function heavyAnswer(prefix: string, count: number, nextCursor: string | null = null) {
+  // A legal native answer carries a free-form title per session, and one answer of that
+  // shape reaches roughly 1MiB - the size the reviewer measured, and the size that makes
+  // the cursor byte budget the bound that actually matters.
+  return {
+    sessions: Array.from({ length: count }, (_, index) => ({
+      sessionId: `${prefix}-${index}`,
+      cwd: '/repo',
+      title: `${prefix}-${index} ${'p'.repeat(900)}`,
+    })),
+    ...(nextCursor === null ? {} : { nextCursor }),
+  } as unknown as JsonValue;
+}
+
+describe('ACP session page buffers', () => {
+  it('reclaims a native answer once its scan completes instead of pinning it on the cursor', async () => {
+    const SCANS = 32;
+    const PER_SCAN = 1000;
+    const held: WeakRef<PageItem>[] = [];
+    // The adapter has to outlive the collection, or nothing it pins is measurable: with no
+    // live reference to it even its own summary cache is reclaimed and the probe reads 0.
+    const live: ReturnType<typeof createAcpSessions>[] = [];
+    const { rpc } = acpRpc([nativeAnswer('acp', PER_SCAN)]);
+    const adapter = createAcpSessions({ rpc, mutations: acpMutations(), capabilities: acpCapabilities(), queue: acpQueue(), cwd: '/repo', emit: () => {} });
+    live.push(adapter);
+    for (let scan = 0; scan < SCANS; scan++) {
+      for (const page of await drain(adapter)) for (const item of page.items) held.push(new WeakRef(item));
+    }
+    await reclaim();
+    const retained = held.filter((ref) => ref.deref() !== undefined).length;
+    // 32 completed scans registered 32000 summary objects and f776b4027 still held all
+    // 32000, because every cursor kept the whole buffer it had handed a page out of. Only
+    // one scan's worth may survive: the adapter's own summary cache, bounded independently.
+    expect(live).toHaveLength(1);
+    expect(retained).toBeLessThanOrEqual(PER_SCAN);
+  }, 120000);
+  it('removes a cursor once its page has been handed out', async () => {
+    const { rpc } = acpRpc([nativeAnswer('acp', 1000)]);
+    const adapter = createAcpSessions({ rpc, mutations: acpMutations(), capabilities: acpCapabilities(), queue: acpQueue(), cwd: '/repo', emit: () => {} });
+    const first = await adapter.list({});
+    const cursor = cursorOf(first);
+    const second = await adapter.list({ cursor });
+    expect(second.items).toHaveLength(INDEX_PAGE_SIZE);
+    await expect(adapter.list({ cursor })).rejects.toThrow(/session_cursor/);
+  });
+  it('expires a cursor the caller never resumes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { rpc } = acpRpc([nativeAnswer('acp', 1000)]);
+      const adapter = createAcpSessions({ rpc, mutations: acpMutations(), capabilities: acpCapabilities(), queue: acpQueue(), cwd: '/repo', emit: () => {} });
+      const cursor = cursorOf(await adapter.list({}));
+      vi.setSystemTime(new Date(Date.now() + 600000));
+      await expect(adapter.list({ cursor })).rejects.toThrow(/session_cursor/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('keeps the pinned native answers inside a total byte budget', async () => {
+    const { rpc } = acpRpc([heavyAnswer('acp', 1000, 'native-next')]);
+    const adapter = createAcpSessions({ rpc, mutations: acpMutations(), capabilities: acpCapabilities(), queue: acpQueue(), cwd: '/repo', emit: () => {} });
+    const abandoned: string[] = [];
+    for (let scan = 0; scan < 12; scan++) abandoned.push(cursorOf(await adapter.list({})));
+    // 12 answers of roughly 1MiB each is far past the 8MiB budget, so the oldest ones are
+    // reclaimed even though the 128-cursor count cap still has room for all of them.
+    await expect(adapter.list({ cursor: abandoned[0] })).rejects.toThrow(/session_cursor/);
+    expect((await adapter.list({ cursor: abandoned[11] })).items).toHaveLength(INDEX_PAGE_SIZE);
+  });
+  it('drains a large termination page in index-sized slices instead of handing it over whole', async () => {
+    for (const count of [1000, 801, 600, 401, 201, 200, 3, 1]) {
+      const { rpc, requests } = acpRpc([nativeAnswer('first', 1, 'native-loop'), heavyAnswer('bulk', count, 'native-loop')]);
+      const adapter = createAcpSessions({ rpc, mutations: acpMutations(), capabilities: acpCapabilities(), queue: acpQueue(), cwd: '/repo', emit: () => {} });
+      const pages = await drain(adapter);
+      const batches = pages.map((page) => page.items.length);
+      const identities = pages.flatMap((page) => page.items.map((item) => item.session.nativeSessionId));
+      expect(batches, `count ${count}`).toEqual([1, ...Array.from({ length: Math.ceil(count / INDEX_PAGE_SIZE) }, (_, index) => Math.min(INDEX_PAGE_SIZE, count - index * INDEX_PAGE_SIZE))]);
+      expect(pages, `count ${count}`).toHaveLength(1 + Math.ceil(count / INDEX_PAGE_SIZE));
+      // Nothing is truncated and nothing is handed over whole: every slice fits the index
+      // page budget and the union is exactly the native answer, in order, once each.
+      expect(identities, `count ${count}`).toEqual(['first-0', ...Array.from({ length: count }, (_, index) => `bulk-${index}`)]);
+      for (const [index, page] of pages.entries()) {
+        expect(page.items.length, `count ${count} page ${index}`).toBeLessThanOrEqual(INDEX_PAGE_SIZE);
+        if (index === pages.length - 1) {
+          expect(page, `count ${count}`).toMatchObject({ status: 'partial', cursor: null, reason: 'repeated_cursor' });
+        } else {
+          expect(page.status, `count ${count} page ${index}`).toBe('partial');
+          expect(cursorOf(page).length, `count ${count} page ${index}`).toBeGreaterThan(0);
+        }
+      }
+      // The termination is parked on the paging state, so the agent is never asked for the
+      // page it already refused to advance past.
+      expect(requests, `count ${count}`).toHaveLength(2);
+    }
+  });
+  it('drains a large termination page inside the real 15s scheduler deadline', async () => {
+    await withStore(async (store) => {
+      const { rpc } = acpRpc([nativeAnswer('first', 1, 'native-loop'), heavyAnswer('bulk', 1000, 'native-loop')]);
+      const adapter = createAcpSessions({ rpc, mutations: acpMutations(), capabilities: acpCapabilities(), queue: acpQueue(), cwd: '/repo', emit: () => {} });
+      const source: DiscoverySource = {
+        identity: sourceIdentity({ kind: 'acp', environmentId, harnessInstanceId }),
+        authority: () => ({ epoch: instanceId, processGeneration: 1 }),
+        serial: () => 0,
+        assertCurrent() {},
+        list: (params) => adapter.list(typeof params.cursor === 'string' ? { cursor: params.cursor } : {}),
+      };
+      const batches: number[] = [];
+      let applied = 0;
+      let written = 0;
+      const rounds: number[] = [];
+      const mutations: IndexMutations = {
+        async apply(scan, items) {
+          const started = performance.now();
+          batches.push(items.length);
+          for (let index = 0; index < items.length; index++) {
+            // The reviewer's controlled stand-in: 22ms per summary write, against the real
+            // 15000ms discovery deadline the index actually configures.
+            written++;
+            burn(22);
+            scan.assertCurrent();
+          }
+          applied += items.length;
+          rounds.push(performance.now() - started);
+          return items.length;
+        },
+        async complete() { return { count: applied, deleted: 0 }; },
+        async event(): Promise<boolean> { return unavailable('index event'); },
+        async progress(): Promise<void> {},
+      };
+      // The real scheduler at its real default deadline: no compression, no override.
+      const discovery = createIndexDiscovery({ store, scheduler: createDiscoveryScheduler(), mutations });
+      const outcome = await discovery.discover(source);
+      // f776b4027 handed the index one 1000-item round here, blew the 15s deadline mid-round
+      // after 677 of the 1001 summaries and committed only 1 of them, losing the tail.
+      // Draining in slices indexes all 1001 and reports the real reason for stopping.
+      expect({
+        status: outcome.status,
+        count: outcome.count,
+        reason: outcome.reason,
+        written,
+        applied,
+        batches,
+        active: discovery.active,
+      }).toEqual({
+        status: 'partial',
+        count: 1001,
+        reason: 'repeated_cursor',
+        written: 1001,
+        applied: 1001,
+        batches: [1, 200, 200, 200, 200, 200],
+        active: 0,
+      });
+      // No single round came near the deadline the index actually configures.
+      expect(Math.max(...rounds)).toBeLessThan(15000);
+    });
+  }, 120000);
 });

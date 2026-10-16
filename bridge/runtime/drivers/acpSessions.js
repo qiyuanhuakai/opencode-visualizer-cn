@@ -23,10 +23,17 @@ const ACP_SESSION_LIMITS = Object.freeze({
   cached: 1000,
   cursorRounds: 1000,
   cursors: 128,
+  // A cursor is a lease on one native answer's buffer. The expiry covers the only retry a
+  // caller really gets - the next page of the same scan, asked for within one scheduler
+  // round - and the byte budget is what actually bounds memory, because the count cap
+  // alone still admits 128 answers of roughly 1MiB each.
+  cursorTtlMs: 300000,
+  cursorBytes: 8388608,
 });
 export function createAcpSessions({ rpc, mutations, capabilities, queue, cwd, emit }) {
   const sessions = new Map();
   const cursors = new Map();
+  let cursorBytes = 0;
   const histories = new Map();
   function sessionFor(nativeSessionId) {
     return parseSessionRef({
@@ -85,10 +92,29 @@ export function createAcpSessions({ rpc, mutations, capabilities, queue, cwd, em
       };
     });
   }
+  // Reading a value is not releasing its container: a cursor that has been handed its page
+  // still pins the whole native buffer it was cut from, so spending the token deletes it.
+  // Cursors the caller never resumes are reclaimed here, oldest first (Map iteration is
+  // insertion order), never the one just issued - evicting that would return a dead cursor.
+  function sweep(fresh) {
+    const now = Date.now();
+    for (const [cursor, state] of cursors) {
+      if (cursor === fresh) continue;
+      if (
+        now - state.at < ACP_SESSION_LIMITS.cursorTtlMs &&
+        cursors.size <= ACP_SESSION_LIMITS.cursors &&
+        cursorBytes <= ACP_SESSION_LIMITS.cursorBytes
+      )
+        break;
+      cursors.delete(cursor);
+      cursorBytes -= state.bytes;
+    }
+  }
   function keep(state) {
     const cursor = randomUUID();
     cursors.set(cursor, state);
-    if (cursors.size > ACP_SESSION_LIMITS.cursors) cursors.delete(cursors.keys().next().value);
+    cursorBytes += state.bytes;
+    sweep(cursor);
     return cursor;
   }
   async function list(input = {}) {
@@ -99,8 +125,13 @@ export function createAcpSessions({ rpc, mutations, capabilities, queue, cwd, em
         cursor: null,
         reason: 'native_session_list_unsupported',
       };
+    sweep(null);
     const held = input.cursor ? cursors.get(input.cursor) : null;
     if (input.cursor && !held) throw new StoreError('invalid_request', 'session_cursor');
+    if (held !== null) {
+      cursors.delete(input.cursor);
+      cursorBytes -= held.bytes;
+    }
     let state = held;
     if (state === null || state.offset >= state.buffer.length) {
       const send = state === null ? null : state.next;
@@ -116,24 +147,40 @@ export function createAcpSessions({ rpc, mutations, capabilities, queue, cwd, em
         throw new StoreError('reconcile_required', 'index_duplicate_page');
       const next = response.nextCursor ?? null;
       const seen = state === null ? [] : state.seen;
+      // Ending the walk is not a licence to hand the index an unbounded page: the reason is
+      // parked on the paging state, the native cursor is dropped so no further page is
+      // requested, and the slices below still drain this answer one index page at a time.
+      let termination = null;
       if (next !== null) {
         text(next);
-        if (send === next || seen.includes(next))
-          return { items: buffer, status: 'partial', cursor: null, reason: 'repeated_cursor' };
-        if (seen.length >= ACP_SESSION_LIMITS.cursorRounds)
-          return { items: buffer, status: 'partial', cursor: null, reason: 'cursor_budget' };
+        if (send === next || seen.includes(next)) termination = 'repeated_cursor';
+        else if (seen.length >= ACP_SESSION_LIMITS.cursorRounds) termination = 'cursor_budget';
       }
-      state = { next, seen: next === null ? seen : [...seen, next], buffer, offset: 0 };
+      state = {
+        next: termination === null ? next : null,
+        seen: next === null ? seen : [...seen, next],
+        buffer,
+        offset: 0,
+        bytes: Buffer.byteLength(JSON.stringify(response.sessions)),
+        at: Date.now(),
+        termination,
+      };
     }
     const items = state.buffer.slice(state.offset, state.offset + ACP_SESSION_LIMITS.internalPage);
     const drained = state.offset + items.length;
     if (drained < state.buffer.length)
       return { items, status: 'partial', cursor: keep({ ...state, offset: drained }) };
+    if (state.termination !== null)
+      return { items, status: 'partial', cursor: null, reason: state.termination };
     if (state.next === null)
       return capabilities.listCompleteness === 'bounded'
         ? { items, status: 'partial', cursor: null, reason: 'native_session_list_bounded' }
         : { items, status: 'complete', cursor: null };
-    return { items, status: 'partial', cursor: keep({ next: state.next, seen: state.seen, buffer: [], offset: 0 }) };
+    return {
+      items,
+      status: 'partial',
+      cursor: keep({ next: state.next, seen: state.seen, buffer: [], offset: 0, bytes: 0, at: Date.now(), termination: null }),
+    };
   }
   function update(params) {
     const input = record(params);
