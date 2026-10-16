@@ -162,6 +162,9 @@ type ControlledDsh = {
   readonly cancelledFollows: string[];
   readonly liveFollows: () => number;
   readonly follow: (value: Record<string, unknown>, nativeSessionId: string) => void;
+  readonly holdPage: () => void;
+  readonly releasePage: () => void;
+  readonly heldPageCount: () => number;
   readonly disconnect: () => void;
   readonly close: () => Promise<void>;
 };
@@ -174,6 +177,7 @@ async function createControlledDsh(summaries: Array<Record<string, unknown>>): P
   const sockets = new Set<Duplex>();
   const openedFollows = new Set<string>();
   const cancelledFollows: string[] = [];
+  let pageGate: Promise<void> | undefined, releasePageGate: (() => void) | undefined, heldPages = 0;
   const snapshotFrame = (nativeSessionId: string) => {
     const stored = snapshots.get(nativeSessionId);
     const cursor = stored?.cursor ?? 2;
@@ -195,6 +199,7 @@ async function createControlledDsh(summaries: Array<Record<string, unknown>>): P
       let value: unknown;
       if (method === 'session/list') value = { items: summaries };
       else if (method === 'session/page') {
+        if (pageGate) { heldPages += 1; await pageGate; }
         const sessionId = String((args.request as { address: { sessionId: string } }).address.sessionId);
         const entry = snapshots.get(sessionId);
         value = { records: (entry?.records ?? []).filter((row) => Number((row.event as { seq: number }).seq) < Number(args.request?.beforeSeq)), hasMore: false };
@@ -248,6 +253,9 @@ async function createControlledDsh(summaries: Array<Record<string, unknown>>): P
       }
       for (const entry of streams) if (entry.endpoint === 'session/follow' && entry.nativeSessionId === nativeSessionId) entry.send(value);
     },
+    holdPage() { pageGate = new Promise<void>((resolve) => { releasePageGate = resolve; }); },
+    releasePage() { const release = releasePageGate; pageGate = undefined; releasePageGate = undefined; release?.(); },
+    heldPageCount: () => heldPages,
     disconnect() { for (const socket of sockets) socket.destroy(); },
     async close() { for (const socket of sockets) socket.destroy(); await new Promise<void>((resolve) => server.close(() => resolve())); },
   };
@@ -257,29 +265,32 @@ type DshHarness = {
   readonly driver: ReturnType<typeof createDshDriver>;
   readonly controlled: ControlledDsh;
   readonly store: RuntimeStore;
+  readonly events: Array<Record<string, unknown>>;
   readonly leaseKey: (session: SessionRef) => string;
   readonly leaseRows: () => Promise<number>;
   readonly operationPhase: (operationId: string) => Promise<string | undefined>;
   dispose: () => Promise<void>;
 };
 
-async function withDshDriver(summaries: Array<Record<string, unknown>>, action: (harness: DshHarness) => Promise<void>): Promise<void> {
+async function withDshDriver(summaries: Array<Record<string, unknown>>, action: (harness: DshHarness) => Promise<void>, decorate?: (store: RuntimeStore) => RuntimeStore): Promise<void> {
   const controlled = await createControlledDsh(summaries);
   const directory = await mkdtemp(path.join(tmpdir(), 'dsh-driver-test-'));
-  const store = createRuntimeStore({ stateDirectory: directory, environmentId: identity.environmentId, ownerId: identity.harnessInstanceId, epoch });
-  await store.ready;
+  const created = createRuntimeStore({ stateDirectory: directory, environmentId: identity.environmentId, ownerId: identity.harnessInstanceId, epoch });
+  await created.ready;
+  const events: Array<Record<string, unknown>> = [];
+  const store = decorate ? decorate(created) : created;
   const driver = createDshDriver({
-    ...driverIdentity, store, onEvent: () => {},
+    ...driverIdentity, store, onEvent: (event) => { events.push(event as Record<string, unknown>); },
     getOwnedEndpoint: () => ({ state: 'ready', ownership: 'owned', nativeVersion: '0.2.0-rc.2', origin: controlled.origin, generation: 1 }),
     auth: { getCookie: async () => 'private-fixture-cookie', invalidate: () => {} },
   });
   const harness: DshHarness = {
-    driver, controlled, store,
+    driver, controlled, store, events,
     leaseKey: (session) => `lease:${fingerprint(encodeSessionKey(session))}`,
     leaseRows: async () => (await store.page({ collection: 'operations', limit: 200 })).items
       .filter((item) => item.key.startsWith('lease:') && item.value != null).length,
     operationPhase: async (operationId) => ((await store.getControl({ collection: 'operations', key: operationId }))?.value as { phase?: string } | undefined)?.phase,
-    dispose: async () => { await driver.close(); await store.close(); await controlled.close(); await rm(directory, { recursive: true, force: true }); },
+    dispose: async () => { await driver.close(); await created.close(); await controlled.close(); await rm(directory, { recursive: true, force: true }); },
   };
   try { await action(harness); } finally { await harness.dispose(); }
 }
@@ -342,6 +353,76 @@ describe('DSH driver selected-slot lifecycle', () => {
       expect(controlled.cancelledFollows).not.toContain('held');
       expect(controlled.liveFollows()).toBeGreaterThanOrEqual(2);
       await held.return();
+    });
+  });
+});
+
+describe('DSH driver reclaim and paging interleaving', () => {
+  it('keeps a subscription acquired while the reclaim query is in flight from being cancelled by the stale answer', { timeout: 30000 }, async () => {
+    const browsed = Array.from({ length: 5 }, (_, index) => `race-${index + 1}`);
+    type LeaseReadGate = { readonly key: string; entered: number; readonly held: Promise<void>; readonly release: () => void };
+    let leaseGate: LeaseReadGate | undefined;
+    await withDshDriver(browsed.map(summaryOf), async ({ driver, controlled, events }) => {
+      for (const nativeSessionId of browsed) controlled.snapshots.set(nativeSessionId, { cursor: 2, records: snapshotRecords(2) });
+      for (const nativeSessionId of browsed.slice(0, SELECTED_SLOTS)) await getSession(driver, sessionRef(nativeSessionId));
+      expect(controlled.liveFollows()).toBe(SELECTED_SLOTS);
+      let releaseLeaseRead = () => {};
+      const leaseReadHeld = new Promise<void>((resolve) => { releaseLeaseRead = resolve; });
+      leaseGate = { key: `lease:${fingerprint(encodeSessionKey(sessionRef('race-1')))}`, entered: 0, held: leaseReadHeld, release: releaseLeaseRead };
+      // The fifth selection fills the last slot, so the reclaim query for race-1 is issued and held in flight.
+      const fifth = getSession(driver, sessionRef('race-5'));
+      expect(leaseGate.entered).toBe(1);
+      // The re-subscription is fully acquired (snapshot delivered) while that query is still in flight.
+      const subscription = await subscribeSession(driver, sessionRef('race-1'));
+      await subscription.ready;
+      const snapshotItem = await subscription.next();
+      expect(snapshotItem.done).toBe(false);
+      expect(snapshotItem.value).toMatchObject({ type: 'session-snapshot', session: { nativeSessionId: 'race-1' } });
+      leaseGate.release();
+      await fifth;
+      expect(leaseGate.entered).toBe(1);
+      // Only the subscribe refresh may cancel race-1; the reclaim must never cancel the re-acquired follow.
+      expect(controlled.cancelledFollows.filter((nativeSessionId) => nativeSessionId === 'race-1')).toEqual(['race-1']);
+      expect(controlled.liveFollows()).toBe(2);
+      expect(events.filter((event) => event.type === 'source-disconnected' || event.type === 'source-error')).toEqual([]);
+      controlled.follow({ type: 'event', event: { seq: 3, type: 'assistant/message', data: { text: 'after-reacquire' } } }, 'race-1');
+      const eventItem = await subscription.next();
+      expect(eventItem.done).toBe(false);
+      expect(eventItem.value).toMatchObject({ type: 'session-event', value: { type: 'event', event: { seq: 3 } } });
+      await subscription.return();
+    }, (created) => ({
+      ...created,
+      getControl: async (params) => {
+        const gate = leaseGate;
+        if (gate && params.collection === 'operations' && params.key === gate.key) {
+          gate.entered += 1;
+          await gate.held;
+        }
+        return created.getControl(params);
+      },
+    }));
+  });
+
+  it('holds the read token across in-flight history paging while another session takes the slot', { timeout: 30000 }, async () => {
+    const browsed = Array.from({ length: 5 }, (_, index) => `page-${index + 1}`);
+    await withDshDriver(browsed.map(summaryOf), async ({ driver, controlled, events }) => {
+      for (const nativeSessionId of browsed) controlled.snapshots.set(nativeSessionId, { cursor: 2, records: snapshotRecords(2) });
+      for (const nativeSessionId of browsed.slice(0, SELECTED_SLOTS)) await getSession(driver, sessionRef(nativeSessionId));
+      expect(controlled.liveFollows()).toBe(SELECTED_SLOTS);
+      // The native page response is held in flight while the fifth session is selected.
+      controlled.holdPage();
+      const reading = coreMethod(driver, 'readHistoryPage')(coreContext({}, sessionRef('page-1')));
+      const deadline = Date.now() + 10000;
+      while (controlled.heldPageCount() === 0 && Date.now() < deadline) await sleep(5);
+      expect(controlled.heldPageCount()).toBe(1);
+      await getSession(driver, sessionRef('page-5'));
+      controlled.releasePage();
+      const page = await reading;
+      expect(page).toMatchObject({ completeness: 'complete', cursor: null, nativeHasMore: false, throughSeq: 2 });
+      expect((page as { records: unknown[] }).records).toHaveLength(3);
+      expect(controlled.cancelledFollows).not.toContain('page-1');
+      expect(controlled.liveFollows()).toBe(2);
+      expect(events.filter((event) => event.type === 'source-disconnected' || event.type === 'source-error')).toEqual([]);
     });
   });
 });

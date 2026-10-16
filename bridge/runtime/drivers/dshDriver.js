@@ -43,13 +43,19 @@ export function createDshDriver(options) {
       if (!tokens.size) retained.delete(key);
     };
   }
-  async function reclaimable(entry) {
+  function stillIdle(entry) {
     const key = entry.session.nativeSessionId;
-    if (entry.waiting || retained.get(key)?.size) return false;
+    if (selected.get(key) !== entry || entry.waiting || retained.get(key)?.size) return false;
     for (const delivery of deliveries.values()) if (delivery.live && delivery.session?.nativeSessionId === key) return false;
+    return true;
+  }
+  async function reclaimable(entry) {
+    if (!stillIdle(entry)) return false;
     try { if (await operations.pendingPrompt(entry.session)) return false; }
     catch { return false; }
-    return true;
+    // The pending-prompt query yields, so a subscription, read or interaction can acquire this session
+    // meanwhile: re-verify synchronously so the judgement always matches the eviction that follows it.
+    return stillIdle(entry);
   }
   async function evictIdleFollows() {
     for (const [key, entry] of selected) {
@@ -339,7 +345,9 @@ export function createDshDriver(options) {
     },
     async readHistoryPage(input) {
       const { session, params } = context(input, true), release = retain(session, 'read');
-      try { const entry = await select(session); return readDshHistoryPage({ transport, session, state: entry.state, beforeSeq: params.beforeSeq, throughSeq: params.throughSeq, limit: params.limit }); }
+      // The await keeps the read token held across the whole paging lifecycle: releasing it in a bare
+      // `return` would let the reclaimer evict the session mid-page and fence the read as history_stale.
+      try { const entry = await select(session); return await readDshHistoryPage({ transport, session, state: entry.state, beforeSeq: params.beforeSeq, throughSeq: params.throughSeq, limit: params.limit }); }
       finally { release(); }
     },
     async createSession(input) {
