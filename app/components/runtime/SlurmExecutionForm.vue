@@ -187,7 +187,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import Dropdown from '../Dropdown.vue';
 import DropdownItem from '../Dropdown/Item.vue';
 import type { SlurmOwnership, SlurmResourceInput, SlurmResourcePreview } from '../../composables/useRuntimeProfiles';
-import { slurmTimePreview, validateSlurmResourceInput } from '../../composables/useRuntimeProfiles';
+import { slurmMemoryMiB, slurmTimePreview, slurmTimeSeconds, validateSlurmResourceInput } from '../../composables/useRuntimeProfiles';
 
 const props = withDefaults(
   defineProps<{
@@ -233,25 +233,18 @@ const draft = computed<SlurmResourceInput>(() => Object.freeze({
   gres: form.gres,
 }));
 
-function memoryMiBOf(value: SlurmResourceInput['memory']): number | null {
-  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value), 10);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function timeSecondsOf(value: string): number | null {
-  const parts = value.split(':');
-  if (parts.length !== 3) return null;
-  const numbers = parts.map((part) => Number(part));
-  if (!numbers.every((entry) => Number.isFinite(entry))) return null;
-  return (numbers[0] ?? 0) * 3600 + (numbers[1] ?? 0) * 60 + (numbers[2] ?? 0);
-}
-
 /**
  * Whether the bridge preview on screen describes the request the form would submit.
  *
- * The comparison is field-by-field against the SAME normalization the submit path uses, so a
- * preview that still shows the previous resources can never be presented as the request that is
- * actually sent.
+ * `memoryMiB` and `timeSeconds` are read out of the draft by the ONE normalizer
+ * (`shared/runtime/slurmResources.js` — the same code the bridge runs to build the preview), never
+ * by a second parse written here. Two parsers for one value are two truths that drift: the local
+ * `parseInt` read `8G` as 8 while the bridge reads 8192 MiB, so a preview answering `8` still
+ * looked like a match after the field became `8G` (submitting 8192 MiB behind an 8 MiB preview),
+ * and a correct 8192 MiB preview was refused as stale. The local colon-split also rejected the
+ * bridge's own legal shorthand `60`. A preview that answers a DIFFERENT request — an older memory
+ * unit, an unreadable wall-clock, or a superseded draft whose answer has not landed — is stale, and
+ * a stale preview refuses the submit rather than sending a request the user cannot see.
  */
 const previewDescribesDraft = computed<boolean>(() => {
   const current = props.preview;
@@ -259,8 +252,8 @@ const previewDescribesDraft = computed<boolean>(() => {
   const resources = draft.value;
   return current.partition === resources.partition
     && current.cpus === resources.cpus
-    && current.memoryMiB === memoryMiBOf(resources.memory)
-    && current.timeSeconds === timeSecondsOf(resources.time)
+    && current.memoryMiB === slurmMemoryMiB(resources.memory)
+    && current.timeSeconds === slurmTimeSeconds(resources.time)
     && current.gres === resources.gres
     && current.account === resources.account;
 });

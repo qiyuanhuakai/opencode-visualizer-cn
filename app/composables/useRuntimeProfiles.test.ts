@@ -39,7 +39,7 @@ import {
   useRuntimeProfiles,
   validateSlurmResourceInput,
 } from './useRuntimeProfiles';
-import type { RuntimeChallenge, SlurmLifecycleStatus } from './useRuntimeProfiles';
+import type { RuntimeChallenge, RuntimeConnectionStatus, SlurmLifecycleStatus } from './useRuntimeProfiles';
 
 const CLUSTER_ENVIRONMENT = '11111111-1111-4111-8111-111111111111';
 const OTHER_ENVIRONMENT = '22222222-2222-4222-8222-222222222222';
@@ -879,5 +879,245 @@ describe('a profile and the intent it submits are different identities', () => {
     expect(target).not.toBe(PROFILE_ID);
     expect(record.detached).toEqual([INTENT_ID]);
     expect(record.stopped).toEqual([INTENT_ID]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #184 finding 2 (P2-2) — a job belongs to the profile that submitted it
+// ---------------------------------------------------------------------------
+
+describe('a submission is attributed to the profile that submitted it, not to the profile in focus', () => {
+  const PROFILE_ID = '99999999-9999-4999-8999-999999999999';
+  const OTHER_PROFILE_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const INTENT_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const RESOURCES = Object.freeze({
+    partition: 'cpu', account: null, cpus: 4, memory: '8G', time: '01:00:00', gres: 'none',
+  });
+  const slurmProfile = Object.freeze({
+    profileId: PROFILE_ID,
+    name: 'Lab cluster',
+    transport: Object.freeze({ kind: 'slurm' as const }),
+    target: Object.freeze({ kind: 'slurm' as const, clusterEnvironmentId: CLUSTER_ENVIRONMENT }),
+    role: 'manager' as const,
+    credentialRef: 'cred-1',
+    enabled: true,
+  }) as ConnectionProfile;
+  const otherProfile = Object.freeze({ ...slurmProfile, profileId: OTHER_PROFILE_ID }) as ConnectionProfile;
+
+  /**
+   * A port whose `submit` answer is held until the test releases it, so the profile switch can
+   * happen WHILE the submission is in flight — the exact window the finding is about.
+   */
+  function gatedRuntime() {
+    const gate: { release?: () => void } = {};
+    const submitted: unknown[] = [];
+    const port = {
+      preview: () => Object.freeze({
+        nodes: 1, ntasks: 1, cpus: 4, memory: '8G', memoryMiB: 8192, time: '01:00:00', timeSeconds: 3600,
+        gres: 'none', requestsGpu: false, partition: 'cpu', account: null,
+      }),
+      submit: async (request: unknown) => {
+        submitted.push(request);
+        await new Promise<void>((resolve) => { gate.release = resolve; });
+        return lifecycle({ intentId: INTENT_ID, jobId: '1001', attached: true });
+      },
+      detach: async (intentId: string) => Object.freeze({ intentId, cancelled: false, signalled: false }),
+      stop: async (intentId: string) => Object.freeze({ intentId, cancelled: true, signalled: true }),
+      state: async (intentId: string) => lifecycle({ intentId }),
+    };
+    const runtime = useRuntimeProfiles({
+      profiles: [slurmProfile, otherProfile], slurmPort: port as never, managedTransport: true,
+    });
+    runtime.selectProfile(PROFILE_ID);
+    return { runtime, gate, submitted };
+  }
+
+  it('records a job against the profile it was submitted FOR when the user switches profiles mid-flight', async () => {
+    const { runtime, gate } = gatedRuntime();
+
+    const submitting = runtime.submitSlurm({ resources: RESOURCES });
+    // The user moves to the OTHER profile while the submit is still in flight.
+    runtime.selectProfile(OTHER_PROFILE_ID);
+    gate.release?.();
+    await submitting;
+
+    // The intent is A's, so only A's mapping may hold it. Reading the current selection after the
+    // await would have written it into B's map instead.
+    expect(runtime.selectedIntentId.value).toBe('');
+    runtime.selectProfile(OTHER_PROFILE_ID);
+    expect(runtime.selectedIntentId.value).toBe('');
+    runtime.selectProfile(PROFILE_ID);
+    expect(runtime.selectedIntentId.value).toBe(INTENT_ID);
+    expect(runtime.selectedSlurm.value?.intentId).toBe(INTENT_ID);
+  });
+
+  it('leaves the focused intent alone when the user has moved on before the answer landed', async () => {
+    const { runtime, gate } = gatedRuntime();
+
+    const submitting = runtime.submitSlurm({ resources: RESOURCES });
+    runtime.selectProfile(OTHER_PROFILE_ID);
+    // The user focuses an unrelated intent on the new profile before the submit answers.
+    runtime.selectIntent('');
+    gate.release?.();
+    await submitting;
+
+    expect(runtime.selectedIntentId.value).toBe('');
+    expect(runtime.selectedSlurm.value).toBeNull();
+  });
+
+  it('still focuses the submitted intent when the user stayed on the same profile', async () => {
+    const { runtime, gate } = gatedRuntime();
+
+    const submitting = runtime.submitSlurm({ resources: RESOURCES });
+    gate.release?.();
+    await submitting;
+
+    expect(runtime.selectedIntentId.value).toBe(INTENT_ID);
+    expect(runtime.selectedSlurm.value?.intentId).toBe(INTENT_ID);
+  });
+
+  it('clears the focused intent when a new profile is created and selected', async () => {
+    const created = Object.freeze({
+      profileId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      name: 'Second cluster',
+      transport: Object.freeze({ kind: 'slurm' as const }),
+      target: Object.freeze({ kind: 'slurm' as const, clusterEnvironmentId: CLUSTER_ENVIRONMENT }),
+      role: 'manager' as const,
+      credentialRef: 'cred-2',
+      enabled: false,
+    }) as ConnectionProfile;
+    const port = {
+      preview: () => Object.freeze({
+        nodes: 1, ntasks: 1, cpus: 4, memory: '8G', memoryMiB: 8192, time: '01:00:00', timeSeconds: 3600,
+        gres: 'none', requestsGpu: false, partition: 'cpu', account: null,
+      }),
+      submit: async () => lifecycle({ intentId: INTENT_ID, jobId: '1001', attached: true }),
+      detach: async (intentId: string) => Object.freeze({ intentId, cancelled: false, signalled: false }),
+      stop: async (intentId: string) => Object.freeze({ intentId, cancelled: true, signalled: true }),
+      state: async (intentId: string) => lifecycle({ intentId }),
+    };
+    const runtime = useRuntimeProfiles({
+      profiles: [slurmProfile], slurmPort: port as never, managedTransport: true,
+      profilePort: {
+        async list() { return Object.freeze([slurmProfile] as readonly ConnectionProfile[]); },
+        async create() { return created; },
+        async update() { return undefined; },
+        async setEnabled() { return undefined; },
+        async remove() { return undefined; },
+        async connect() { return Object.freeze({ profileId: PROFILE_ID, state: 'connected' as const, environmentId: CLUSTER_ENVIRONMENT, generation: 1 }); },
+        async disconnect() { return Object.freeze({ profileId: PROFILE_ID, state: 'disconnected' as const, environmentId: CLUSTER_ENVIRONMENT, generation: 2 }); },
+        async reconnect() { return Object.freeze({ profileId: PROFILE_ID, state: 'connected' as const, environmentId: CLUSTER_ENVIRONMENT, generation: 3 }); },
+        async inspect() { return Object.freeze({ profiles: Object.freeze([] as readonly RuntimeConnectionStatus[]) }); },
+      } as never,
+    });
+    runtime.selectProfile(PROFILE_ID);
+    await runtime.submitSlurm({ resources: RESOURCES });
+    expect(runtime.selectedIntentId.value).toBe(INTENT_ID);
+
+    const made = await runtime.createProfile({
+      name: 'Second cluster',
+      transport: { kind: 'slurm' },
+      target: { kind: 'slurm', clusterEnvironmentId: CLUSTER_ENVIRONMENT as EnvironmentId },
+      role: 'manager',
+      credentialRef: 'cred-2',
+      enabled: false,
+    });
+
+    // Creating and selecting a new profile must not keep showing the OLD profile's job.
+    expect(made?.profileId).toBe(created.profileId);
+    expect(runtime.selectedProfileId.value).toBe(created.profileId);
+    expect(runtime.selectedIntentId.value).toBe('');
+    expect(runtime.selectedSlurm.value).toBeNull();
+    // The old profile's job is still there for it, and only for it.
+    runtime.selectProfile(PROFILE_ID);
+    expect(runtime.selectedIntentId.value).toBe(INTENT_ID);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #184 finding 3 (P2-3) — "no status route" is not "no connections"
+// ---------------------------------------------------------------------------
+
+describe('a target that cannot answer status queries is not read as disconnected', () => {
+  const PROFILE_ID = '88888888-8888-4888-8888-888888888888';
+  const slurmProfile = Object.freeze({
+    profileId: PROFILE_ID,
+    name: 'Lab cluster',
+    transport: Object.freeze({ kind: 'ssh' as const, endpoint: 'cluster.example.edu' }),
+    target: Object.freeze({ kind: 'ssh' as const, environmentId: CLUSTER_ENVIRONMENT }),
+    role: 'manager' as const,
+    credentialRef: 'cred-1',
+    enabled: true,
+  }) as ConnectionProfile;
+
+  it('keeps an observed connected status across a refresh from the REAL bridge client, which serves no status route', async () => {
+    // The real client's `inspect()` reports NO statuses, because the bridge serves no
+    // lifecycle-inspection route at all. That is an absent ANSWER, never an answer of "none".
+    const calls: Array<{ method: string; url: string }> = [];
+    const profileList = [{
+      profileId: PROFILE_ID,
+      name: 'Lab cluster',
+      transport: { kind: 'ssh', endpoint: 'cluster.example.edu' },
+      target: { kind: 'ssh', environmentId: CLUSTER_ENVIRONMENT },
+      role: 'manager',
+      credentialRef: 'cred-1',
+      enabled: true,
+    }];
+    const fetchImpl = (async (input: unknown, init?: { method?: string }) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      calls.push({ method, url });
+      // Only `connect` answers with a status; the profile list answers with profiles, and there is
+      // no status route at all — which is what `inspect()` must report as "cannot answer".
+      const payload = url.endsWith('/connect')
+        ? { profileId: PROFILE_ID, state: 'connected', environmentId: CLUSTER_ENVIRONMENT, generation: 1 }
+        : { profiles: profileList };
+      return { ok: true, status: 200, text: async () => JSON.stringify(payload) };
+    }) as unknown as typeof fetch;
+    const port = createBridgeProfileClient({ baseUrl: 'http://bridge.test', fetchImpl });
+    const runtime = useRuntimeProfiles({ profilePort: port, profiles: [slurmProfile], managedTransport: true });
+    runtime.selectProfile(PROFILE_ID);
+
+    const connected = await runtime.connect(PROFILE_ID);
+    expect(connected?.state).toBe('connected');
+    expect(runtime.statusOf.value).toMatchObject({ state: 'connected', generation: 1 });
+
+    await runtime.refresh();
+
+    // The bridge connection was never closed; a refresh that cannot answer must not erase it.
+    expect(runtime.statusOf.value).toMatchObject({ state: 'connected', generation: 1 });
+    expect(runtime.error.value).toBe('');
+    expect(calls).toContainEqual({ method: 'POST', url: `http://bridge.test/api/v1/profiles/${PROFILE_ID}/connect` });
+    expect(calls).toContainEqual({ method: 'GET', url: 'http://bridge.test/api/v1/profiles' });
+  });
+
+  it('separates "cannot answer" from "confirmed no connections", and only the latter clears', async () => {
+    function inspectPort(answer: Readonly<{ profiles: readonly RuntimeConnectionStatus[]; supported?: boolean }>) {
+      return {
+        async list() { return Object.freeze([slurmProfile] as readonly ConnectionProfile[]); },
+        async create() { return slurmProfile; },
+        async update() { return undefined; },
+        async setEnabled() { return undefined; },
+        async remove() { return undefined; },
+        async inspect() { return Object.freeze(answer); },
+        async connect() { return Object.freeze({ profileId: PROFILE_ID, state: 'connected' as const, environmentId: CLUSTER_ENVIRONMENT, generation: 1 }); },
+        async disconnect() { return Object.freeze({ profileId: PROFILE_ID, state: 'disconnected' as const, environmentId: CLUSTER_ENVIRONMENT, generation: 2 }); },
+        async reconnect() { return Object.freeze({ profileId: PROFILE_ID, state: 'connected' as const, environmentId: CLUSTER_ENVIRONMENT, generation: 3 }); },
+      };
+    }
+
+    const cannotAnswer = useRuntimeProfiles({ profilePort: inspectPort({ profiles: [], supported: false }) as never, profiles: [slurmProfile], managedTransport: true });
+    cannotAnswer.selectProfile(PROFILE_ID);
+    await cannotAnswer.connect(PROFILE_ID);
+    await cannotAnswer.refresh();
+    expect(cannotAnswer.statusOf.value).toMatchObject({ state: 'connected' });
+    expect(cannotAnswer.statusQuerySupported.value).toBe(false);
+
+    const confirmedNone = useRuntimeProfiles({ profilePort: inspectPort({ profiles: [], supported: true }) as never, profiles: [slurmProfile], managedTransport: true });
+    confirmedNone.selectProfile(PROFILE_ID);
+    await confirmedNone.connect(PROFILE_ID);
+    await confirmedNone.refresh();
+    expect(confirmedNone.statusOf.value).toBeNull();
+    expect(confirmedNone.statusQuerySupported.value).toBe(true);
   });
 });
