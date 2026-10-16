@@ -75,6 +75,7 @@ interface InteractionHarness {
   readonly replies: (string | number)[];
   readonly requests: string[];
   readonly events: AcpObject[];
+  readonly reusePromises: Promise<unknown>[];
   startParent(key: string, scope: SessionRef): Promise<{
     readonly parent: string;
     readonly prompt: Promise<unknown>;
@@ -82,11 +83,15 @@ interface InteractionHarness {
   }>;
 }
 
-async function openInteractions(store: RuntimeStore): Promise<InteractionHarness> {
+async function openInteractions(
+  store: RuntimeStore,
+  options: { readonly reuseOnReply?: boolean } = {},
+): Promise<InteractionHarness> {
   const mutations = await createAcpMutations({ store, ...binding, assertCurrent() {} });
   const replies: (string | number)[] = [];
   const requests: string[] = [];
   const events: AcpObject[] = [];
+  const reusePromises: Promise<unknown>[] = [];
   const rpc: AcpRpc = {
     async request(method: string, params: Json) {
       requests.push(`${method}:${String(record(params).value ?? '')}`);
@@ -94,6 +99,10 @@ async function openInteractions(store: RuntimeStore): Promise<InteractionHarness
     },
     reply(id: string | number) {
       replies.push(id);
+      if (options.reuseOnReply)
+        // The native ID is free the instant the reply is written, so the peer's next
+        // request for it races this run's database finalization.
+        reusePromises.push(interactions.receive(permissionRequest(Number(id))));
     },
     notify() {},
     assertCurrent() {},
@@ -127,6 +136,7 @@ async function openInteractions(store: RuntimeStore): Promise<InteractionHarness
     replies,
     requests,
     events,
+    reusePromises,
     async startParent(key, scope) {
       const started = Promise.withResolvers<string>();
       const gate = Promise.withResolvers<void>();
@@ -226,6 +236,80 @@ test('cross-session concurrent completion retries only the finishing CAS and rel
     ]);
   }));
 
+test('five and eight in-flight sessions completing together all finalize and release every lease', async () => {
+  for (const count of [5, 8]) {
+    await withStore(async (store) => {
+      const mutations = await createAcpMutations({ store, ...binding, assertCurrent() {} });
+      const gate = Promise.withResolvers<void>();
+      const nativeCalls: number[] = [];
+      const runs: { scope: SessionRef; run: Promise<{ phase: string }> }[] = [];
+      // Every session enters native execution before the next one starts, so each claim is
+      // durable and holds its own lease, and only the completions are concurrent.
+      for (let index = 0; index < count; index++) {
+        const scope = parseSessionRef({ ...session, nativeSessionId: `sess-${index}` });
+        const entered = Promise.withResolvers<void>();
+        nativeCalls.push(0);
+        runs.push({
+          scope,
+          run: mutations.run(
+            { session: scope, idempotencyKey: `prompt-${index}`, method: 'session/prompt', payload: {} },
+            async () => {
+              nativeCalls[index] += 1;
+              entered.resolve();
+              await gate.promise;
+              return { stopReason: 'end_turn' };
+            },
+          ),
+        });
+        await entered.promise;
+      }
+      gate.resolve();
+      const settled = await Promise.allSettled(runs.map((item) => item.run));
+      const outcomes = settled.map((item) =>
+        item.status === 'fulfilled' ? item.value.phase : reasonOf(item.reason),
+      );
+      const leases = await Promise.all(
+        runs.map((item) =>
+          store.getControl({
+            collection: 'operations',
+            key: mutations.leaseKey(mutations.scopeFor(item.scope)),
+          }),
+        ),
+      );
+      const followUps: string[] = [];
+      for (const item of runs) {
+        try {
+          await mutations.run(
+            {
+              session: item.scope,
+              idempotencyKey: `follow-${item.scope.nativeSessionId}`,
+              method: 'session/prompt',
+              payload: {},
+            },
+            async () => ({ stopReason: 'end_turn' }),
+          );
+          followUps.push('ok');
+        } catch (error) {
+          followUps.push(reasonOf(error));
+        }
+      }
+      expect([
+        count,
+        outcomes,
+        leases.map((item) => item?.value ?? null),
+        followUps,
+        nativeCalls,
+      ]).toEqual([
+        count,
+        Array.from({ length: count }, () => 'native-executed'),
+        Array.from({ length: count }, () => null),
+        Array.from({ length: count }, () => 'ok'),
+        Array.from({ length: count }, () => 1),
+      ]);
+    });
+  }
+});
+
 test('permission-reply idempotency summary folds in the interaction identity', () =>
   withStore(async (store) => {
     const harness = await openInteractions(store);
@@ -300,6 +384,47 @@ test('sequential reuse of a native request ID inside one prompt is not judged a 
       pending[0].nativeRequestId,
       pending[0].interactionId !== firstId,
     ]).toEqual(['ok', [7, 7], 7, true]);
+  }));
+
+test('a native ID is reusable the moment its reply is on the wire', () =>
+  withStore(async (store) => {
+    const harness = await openInteractions(store, { reuseOnReply: true });
+    const parent = await harness.startParent('prompt', session);
+    await harness.interactions.receive(permissionRequest(7));
+    const [firstId] = interactionIds(harness.events);
+    await harness.interactions.respond({
+      interactionId: firstId,
+      session,
+      answer,
+      idempotencyKey: 'reply-one',
+    });
+    const reuseResults = await Promise.allSettled(harness.reusePromises);
+    const reuse = reuseResults.map((item) =>
+      item.status === 'fulfilled' ? 'ok' : reasonOf(item.reason),
+    );
+    const visible = await harness.interactions.list();
+    let second = 'no-pending';
+    if (visible.length)
+      try {
+        await harness.interactions.respond({
+          interactionId: visible[0].interactionId,
+          session,
+          answer,
+          idempotencyKey: 'reply-two',
+        });
+        second = 'ok';
+      } catch (error) {
+        second = reasonOf(error);
+      }
+    parent.release();
+    await parent.prompt;
+    expect([
+      reuse,
+      visible.map((item) => item.nativeRequestId),
+      visible.length ? visible[0].interactionId !== firstId : false,
+      second,
+      harness.replies,
+    ]).toEqual([['ok'], [7], true, 'ok', [7, 7]]);
   }));
 
 test('genuinely concurrent occupancy of one native request ID is still rejected', () =>

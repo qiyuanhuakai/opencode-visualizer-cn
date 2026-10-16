@@ -270,22 +270,28 @@ export async function createAcpMutations({
         phase: 'terminal',
         outcome: result?.stopReason === 'cancelled' ? 'cancelled' : 'completed',
       });
-      // A concurrent cross-session completion moves the shared process row, so re-read per attempt.
+      // The shared process row stays out of this CAS: a guard rewriting a byte-identical
+      // value only bumped its revision, so concurrent completions invalidated each other's
+      // precondition. Generation is re-validated instead - authority() per attempt plus the
+      // synchronous assertCurrent() immediately before the commit - and a completion only
+      // writes its own operation, lease and interaction rows.
       let finished = false;
       for (let attempt = 0; attempt < 4 && !finished; attempt++) {
-        const terminalGuards = [await authority()];
+        await authority();
         const current = await readRecord(store, 'operations', leaseId);
         if (
           current?.value?.operationId !== leaseValue.operationId ||
           current.value.runtimeOwner !== owner
         )
           throw new StoreError('reconcile_required', 'original_lease');
-        terminalGuards.push({
-          collection: 'operations',
-          key: leaseId,
-          expectedRevision: current.revision,
-          value: control ? current.value : null,
-        });
+        const terminalGuards = [];
+        if (!control)
+          terminalGuards.push({
+            collection: 'operations',
+            key: leaseId,
+            expectedRevision: current.revision,
+            value: null,
+          });
         if (input.interaction) {
           const interaction = await readRecord(store, 'interactions', input.interaction);
           if (interaction?.value.operationId !== key)
@@ -297,6 +303,7 @@ export async function createAcpMutations({
             value: { ...interaction.value, phase: 'replied' },
           });
         }
+        assertCurrent();
         try {
           await compareRecord(store, 'operations', key, record, terminalValue(), terminalGuards);
           finished = true;

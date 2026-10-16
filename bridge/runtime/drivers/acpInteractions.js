@@ -15,6 +15,10 @@ export function createAcpInteractions({ store, mutations, rpc, active, emit, ses
   const pending = new Map();
   const controls = new Set();
   const receipts = new Map();
+  // Occupancy keys whose native reply has been written. The RPC layer frees a native ID
+  // as it writes the reply, so a receipt answered on the wire no longer occupies the ID
+  // even though its durable row is only released after the database finalization.
+  const answered = new Set();
   const occupancyKey = (scope, parent, nativeRequestId) =>
     `acp-interaction-native:${fingerprint([scope, parent, nativeRequestId])}`;
   function track(promise) {
@@ -41,7 +45,12 @@ export function createAcpInteractions({ store, mutations, rpc, active, emit, ses
     await writePayload(store, 'interactions', prepared, false, new AbortController().signal);
     const occupancy = occupancyKey(scope, parent, message.id);
     const claimed = await readRecord(store, 'interactions', occupancy);
-    if (claimed?.value) throw new StoreError('conflict', 'duplicate_native_request');
+    // Only a request that is still outstanding rejects a same-ID receipt. Once the reply
+    // is on the wire the RPC layer has freed the ID, so the peer may re-use it inside the
+    // same prompt while the durable row is still being finalized.
+    if (claimed?.value && !answered.has(occupancy))
+      throw new StoreError('conflict', 'duplicate_native_request');
+    answered.delete(occupancy);
     try {
       await compareRecord(
         store,
@@ -86,13 +95,17 @@ export function createAcpInteractions({ store, mutations, rpc, active, emit, ses
   async function release(key) {
     const receipt = receipts.get(key);
     if (!receipt) return;
-    receipts.delete(key);
     for (let attempt = 0; attempt < 4; attempt++) {
       const current = await readRecord(store, 'interactions', receipt.occupancy);
-      if (!current || current.value === null) return;
-      if (record(current.value).interactionId !== key) return;
+      if (!current || current.value === null || record(current.value).interactionId !== key) {
+        receipts.delete(key);
+        answered.delete(receipt.occupancy);
+        return;
+      }
       try {
         await compareRecord(store, 'interactions', receipt.occupancy, current, null);
+        receipts.delete(key);
+        answered.delete(receipt.occupancy);
         return;
       } catch (error) {
         if (!isRevisionConflict(error)) throw error;
@@ -139,7 +152,18 @@ export function createAcpInteractions({ store, mutations, rpc, active, emit, ses
             method: 'session/request_permission',
             payload: answer,
           },
-          () => rpc.reply(item.nativeRequestId, answer),
+          () => {
+            rpc.reply(item.nativeRequestId, answer);
+            // The reply itself frees the native ID, so the occupancy ends here rather
+            // than after the database finalization this run still has to perform.
+            answered.add(
+              occupancyKey(
+                mutations.scopeFor(item.session),
+                item.parent,
+                item.nativeRequestId,
+              ),
+            );
+          },
         );
         await release(interactionId);
         pending.delete(interactionId);
@@ -167,7 +191,12 @@ export function createAcpInteractions({ store, mutations, rpc, active, emit, ses
             method: 'session/request_permission',
             payload: answer,
           },
-          () => rpc.reply(item.nativeRequestId, answer),
+          () => {
+            rpc.reply(item.nativeRequestId, answer);
+            answered.add(
+              occupancyKey(mutations.scopeFor(item.session), item.parent, item.nativeRequestId),
+            );
+          },
         );
         persisted = await readRecord(store, 'interactions', key);
         await compareRecord(store, 'interactions', key, persisted, {
