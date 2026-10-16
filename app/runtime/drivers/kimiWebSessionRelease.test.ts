@@ -15,10 +15,12 @@ type FixtureFrame = { readonly direction: string; readonly frame: { readonly typ
 type KimiFixture = {
   readonly endpoint: string;
   readonly wire: readonly FixtureFrame[];
-  readonly mode: { holdHistory: boolean };
+  readonly calls: readonly { readonly method: string; readonly path: string; readonly authorized: boolean }[];
+  readonly mode: { holdHistory: boolean; loseSendAck: boolean };
   readonly held: number;
   authorization(): string;
   stream(nativeSessionId: string): { readonly turnId: number; readonly active: string | null };
+  frame(nativeSessionId: string, type: string, payload: Record<string, unknown>, volatile?: boolean): unknown;
   terminal(nativeSessionId: string, reason?: string): void;
   releaseHistory(): void;
   close(): Promise<unknown>;
@@ -47,6 +49,11 @@ describe('Kimi Web driver session reclamation', () => {
   let store: RuntimeStore;
   let driver: KimiWebDriver;
   let stateDirectory: string;
+  let authFailures = 0;
+  const authorization = () => {
+    if (authFailures > 0) { authFailures -= 1; throw new Error('credential provider unavailable'); }
+    return fixture.authorization();
+  };
 
   beforeEach(async () => {
     const { startKimiFixture } = await loadFixtureModule();
@@ -54,8 +61,9 @@ describe('Kimi Web driver session reclamation', () => {
     stateDirectory = await mkdtemp(path.join(tmpdir(), 'kimi-web-release-'));
     store = createRuntimeStore({ stateDirectory, environmentId, ownerId: randomUUID(), epoch });
     await store.ready;
+    authFailures = 0;
     driver = await createKimiWebDriver({
-      ...scope, store, endpoint: fixture.endpoint, getAuthorization: fixture.authorization,
+      ...scope, store, endpoint: fixture.endpoint, getAuthorization: authorization,
       getAuthority: () => ({ epoch, processGeneration: 1 }), ownership: 'borrowed', deadlineMs: 3000,
     });
   });
@@ -67,14 +75,16 @@ describe('Kimi Web driver session reclamation', () => {
     await rm(stateDirectory, { recursive: true, force: true });
   });
 
-  const call = async <T>(operation: 'subscribe' | 'send' | 'readHistoryPage', nativeSessionId: string, params: Record<string, Json> = {}): Promise<T> => {
+  const call = async <T>(operation: 'subscribe' | 'send' | 'readHistoryPage' | 'cancel' | 'respondInteraction', nativeSessionId: string, params: Record<string, Json> = {}): Promise<T> => {
     const method = driver.registration.driver.core[operation];
     if (!method) throw new Error(`kimi web driver does not support ${operation}`);
     return (await method({ ...scope, session: sessionRef(nativeSessionId), params })) as T;
   };
   const nativeFrames = (type: string) => fixture.wire.filter((entry) => entry.direction === 'driver-to-native' && entry.frame.type === type);
+  const nativePrompts = () => fixture.calls.filter((entry) => entry.method === 'POST' && entry.path.endsWith('/prompts')).length;
   const isRecord = (value: Json | undefined): value is { readonly [key: string]: Json } => typeof value === 'object' && value !== null && !Array.isArray(value);
   const pendingInteractions = async () => (await store.page({ collection: 'interactions', limit: 100 })).items.filter((item) => isRecord(item.value) && item.value.phase === 'pending');
+  const sendOperations = async (): Promise<{ readonly [key: string]: Json }[]> => (await store.page({ collection: 'operations', limit: 200 })).items.map((item) => item.value).filter((value): value is { readonly [key: string]: Json } => isRecord(value) && value.method === 'send');
 
   it('reclaims every session slot once the last subscription of a session is released', async () => {
     // Given 33 distinct idle sessions opened and closed one after another.
@@ -174,5 +184,150 @@ describe('Kimi Web driver session reclamation', () => {
     await expect(reading).resolves.toMatchObject({ agentId: 'main' });
     const after = driver.diagnostics();
     expect({ selected: after.selected, historySessions: after.historySessions }).toEqual({ selected: 0, historySessions: 0 });
+  }, 60000);
+
+  it('keeps monitoring the running main task when a sub-agent turn ends first', async () => {
+    // Given an observed session whose main turn is submitted and still running.
+    const stream = await call<ObserverStream>('subscribe', sessionId(0));
+    const sent = await call<{ operationId: string; promptId: string }>('send', sessionId(0), { content: [{ type: 'text', text: 'main task' }], idempotencyKey: 'subagent-end-1' });
+    await until(async () => (await pendingInteractions()).length > 0, 'pending native approval');
+    const operations = driver.operations;
+    if (!operations) throw new Error('kimi web driver exposes no operations');
+    await until(async () => (await operations.journal.get(sent.operationId)).phase === 'observed', 'observed native turn');
+
+    // When the last observation window closes while the main task is still running.
+    await stream.return();
+
+    // Then a legally-shaped sub-agent terminal event does not end the main task: the session stays selected, cached and subscribed.
+    const lifecycleBefore = driver.diagnostics().lifecycleFrames;
+    fixture.frame(sessionId(0), 'turn.ended', { agentId: 'explore-subagent', turnId: 'subagent-turn-1', reason: 'completed' });
+    await until(async () => driver.diagnostics().lifecycleFrames > lifecycleBefore, 'sub-agent terminal lifecycle frame');
+    await driver.flush();
+    const afterSubagent = driver.diagnostics();
+    expect({ observers: afterSubagent.observers, selected: afterSubagent.selected, historySessions: afterSubagent.historySessions, lifecycleSubscriptions: afterSubagent.lifecycleSubscriptions }).toEqual({ observers: 0, selected: 1, historySessions: 1, lifecycleSubscriptions: 1 });
+    expect(await operations.journal.get(sent.operationId)).toMatchObject({ phase: 'observed' });
+    expect(fixture.stream(sessionId(0)).active).toBe(sent.promptId);
+
+    // And the genuine main-task terminal still ends the turn durably and only then reclaims the session.
+    fixture.terminal(sessionId(0));
+    await driver.flush();
+    await until(async () => (await operations.journal.get(sent.operationId)).phase === 'terminal', 'terminal native turn');
+    expect(await operations.journal.get(sent.operationId)).toMatchObject({ phase: 'terminal', outcome: 'completed' });
+    await until(async () => nativeFrames('unsubscribe_v2').length === 1 && nativeFrames('unsubscribe').length === 1, 'native unsubscribe pair');
+    const reclaimed = driver.diagnostics();
+    expect({ selected: reclaimed.selected, historySessions: reclaimed.historySessions, lifecycleSubscriptions: reclaimed.lifecycleSubscriptions, reclaimed: reclaimed.reclaimed }).toEqual({ selected: 0, historySessions: 0, lifecycleSubscriptions: 0, reclaimed: 1 });
+
+    // And the released lease lets the same session be sent to again.
+    await expect(call<{ phase: string }>('send', sessionId(0), { content: [{ type: 'text', text: 'after sub-agent end' }], idempotencyKey: 'subagent-end-2' })).resolves.toMatchObject({ phase: 'native-executed' });
+  }, 60000);
+
+  it('keeps monitoring the running main task when a stale main turn ends first', async () => {
+    // Given an observed session whose main turn is submitted and still running.
+    const stream = await call<ObserverStream>('subscribe', sessionId(0));
+    const sent = await call<{ operationId: string; promptId: string }>('send', sessionId(0), { content: [{ type: 'text', text: 'main task' }], idempotencyKey: 'stale-turn-1' });
+    await until(async () => (await pendingInteractions()).length > 0, 'pending native approval');
+    const operations = driver.operations;
+    if (!operations) throw new Error('kimi web driver exposes no operations');
+    await until(async () => (await operations.journal.get(sent.operationId)).phase === 'observed', 'observed native turn');
+
+    // When the last observation window closes and a main-agent terminal arrives for a turn the running task never claimed.
+    await stream.return();
+    const lifecycleBefore = driver.diagnostics().lifecycleFrames;
+    fixture.frame(sessionId(0), 'turn.ended', { agentId: 'main', turnId: 'stale-turn-0', reason: 'completed' });
+    await until(async () => driver.diagnostics().lifecycleFrames > lifecycleBefore, 'stale-turn terminal lifecycle frame');
+    await driver.flush();
+
+    // Then the running task is not released: the session stays selected, cached and subscribed.
+    const afterStale = driver.diagnostics();
+    expect({ observers: afterStale.observers, selected: afterStale.selected, historySessions: afterStale.historySessions, lifecycleSubscriptions: afterStale.lifecycleSubscriptions }).toEqual({ observers: 0, selected: 1, historySessions: 1, lifecycleSubscriptions: 1 });
+    expect(await operations.journal.get(sent.operationId)).toMatchObject({ phase: 'observed' });
+    expect(fixture.stream(sessionId(0)).active).toBe(sent.promptId);
+
+    // And the genuine main-task terminal still ends the turn durably and reclaims the session.
+    fixture.terminal(sessionId(0));
+    await driver.flush();
+    await until(async () => (await operations.journal.get(sent.operationId)).phase === 'terminal', 'terminal native turn');
+    const reclaimed = driver.diagnostics();
+    expect({ selected: reclaimed.selected, historySessions: reclaimed.historySessions, reclaimed: reclaimed.reclaimed }).toEqual({ selected: 0, historySessions: 0, reclaimed: 1 });
+  }, 60000);
+
+  it('reclaims every session whose send never entered the native boundary', async () => {
+    // Given 32 distinct idle sessions, each subscribed and then sent to while the credential provider fails.
+    for (let index = 0; index < 32; index += 1) {
+      const id = sessionId(index);
+      const stream = await call<ObserverStream>('subscribe', id);
+      authFailures = 1;
+      await expect(call('send', id, { content: [{ type: 'text', text: 'never reaches native' }], idempotencyKey: `unsent-${index}` }))
+        .rejects.toMatchObject({ code: 'unauthorized', field: 'native_authorization' });
+      authFailures = 0;
+      await stream.return();
+    }
+
+    // Then no unreferenced session keeps a slot: the send provably never reached the journal acceptance, so nothing has to be reconciled.
+    const after = driver.diagnostics();
+    expect({ observers: after.observers, selected: after.selected, historySessions: after.historySessions, lifecycleSubscriptions: after.lifecycleSubscriptions, reclaimed: after.reclaimed }).toEqual({ observers: 0, selected: 0, historySessions: 0, lifecycleSubscriptions: 0, reclaimed: 32 });
+    await until(async () => nativeFrames('unsubscribe_v2').length === 32 && nativeFrames('unsubscribe').length === 32, '32 native unsubscribe pairs');
+    expect(nativePrompts()).toBe(0);
+
+    // And the 32-session cap still admits a new session.
+    await expect(call<ObserverStream>('subscribe', sessionId(32))).resolves.toBeDefined();
+  }, 60000);
+
+  it('reclaims an idle session whose cancel is refused before any parent operation', async () => {
+    // Given a subscribed idle session with no submitted turn.
+    const stream = await call<ObserverStream>('subscribe', sessionId(0));
+    expect(driver.diagnostics().selected).toBe(1);
+
+    // When a cancel is refused because its parent operation does not exist.
+    await expect(call('cancel', sessionId(0), { operationId: 'op:missing-parent', idempotencyKey: 'cancel-missing-1' }))
+      .rejects.toMatchObject({ code: 'conflict', field: 'parent_scope' });
+
+    // Then closing the last observation window reclaims the session: the refused control never created a running task.
+    await stream.return();
+    await until(async () => nativeFrames('unsubscribe_v2').length === 1 && nativeFrames('unsubscribe').length === 1, 'native unsubscribe pair');
+    expect({ observers: driver.diagnostics().observers, selected: driver.diagnostics().selected, historySessions: driver.diagnostics().historySessions }).toEqual({ observers: 0, selected: 0, historySessions: 0 });
+  }, 60000);
+
+  it('reclaims an idle session whose interaction reply is refused before any interaction', async () => {
+    // Given a subscribed idle session with no pending interaction.
+    const stream = await call<ObserverStream>('subscribe', sessionId(0));
+    expect(driver.diagnostics().selected).toBe(1);
+
+    // When an interaction reply is refused because the interaction does not exist.
+    await expect(call('respondInteraction', sessionId(0), { interactionId: 'interaction-missing', answer: { decision: 'approved' }, idempotencyKey: 'reply-missing-1' }))
+      .rejects.toMatchObject({ code: 'conflict', field: 'interaction_scope' });
+
+    // Then closing the last observation window reclaims the session.
+    await stream.return();
+    await until(async () => nativeFrames('unsubscribe_v2').length === 1 && nativeFrames('unsubscribe').length === 1, 'native unsubscribe pair');
+    expect({ observers: driver.diagnostics().observers, selected: driver.diagnostics().selected, historySessions: driver.diagnostics().historySessions }).toEqual({ observers: 0, selected: 0, historySessions: 0 });
+  }, 60000);
+
+  it('retains a session whose send reached the native boundary but lost its acknowledgement', async () => {
+    // Given a subscribed session whose native prompt acknowledgement is lost after the durable SENT marker.
+    fixture.mode.loseSendAck = true;
+    const stream = await call<ObserverStream>('subscribe', sessionId(0));
+    await expect(call('send', sessionId(0), { content: [{ type: 'text', text: 'ambiguous acknowledgement' }], idempotencyKey: 'ambiguous-1' }))
+      .rejects.toMatchObject({ code: 'source_unavailable' });
+    const operations = driver.operations;
+    if (!operations) throw new Error('kimi web driver exposes no operations');
+    expect(await sendOperations()).toMatchObject([{ phase: 'reconciling' }]);
+
+    // When the last observation window closes while the native turn may still be running.
+    await stream.return();
+
+    // Then the session stays selected, cached and subscribed for reconciliation instead of being reclaimed.
+    const retained = driver.diagnostics();
+    expect({ observers: retained.observers, selected: retained.selected, historySessions: retained.historySessions, lifecycleSubscriptions: retained.lifecycleSubscriptions }).toEqual({ observers: 0, selected: 1, historySessions: 1, lifecycleSubscriptions: 1 });
+    expect(nativeFrames('unsubscribe_v2').length).toBe(0);
+
+    // And the native turn's genuine terminal ends the task durably and reclaims the session.
+    fixture.mode.loseSendAck = false;
+    fixture.terminal(sessionId(0));
+    await driver.flush();
+    await until(async () => (await sendOperations())[0]?.phase === 'terminal', 'terminal native turn');
+    expect(await sendOperations()).toMatchObject([{ phase: 'terminal', outcome: 'completed' }]);
+    const reclaimed = driver.diagnostics();
+    expect({ selected: reclaimed.selected, historySessions: reclaimed.historySessions, reclaimed: reclaimed.reclaimed }).toEqual({ selected: 0, historySessions: 0, reclaimed: 1 });
   }, 60000);
 });

@@ -56,7 +56,7 @@ export async function createKimiWebDriver(options) {
   const observers = new Set();
   const selected = new Map();
   const retained = new Map();
-  const runningTasks = new Set();
+  const runningTasks = new Map();
   const invalidated = new Set();
   let eventWork = Promise.resolve(), eventCount = 0, eventBytes = 0;
   let lastEventError;
@@ -72,6 +72,18 @@ export async function createKimiWebDriver(options) {
       if (count > 0) retained.set(sessionId, count);
       else { retained.delete(sessionId); reclaim(sessionId); }
     };
+  }
+  // A submitted turn is tracked by the identity of the operation that submitted it, so only that turn's terminal frame can release it.
+  function registerTask(sessionId, operationId) {
+    const tasks = runningTasks.get(sessionId);
+    if (tasks) { tasks.add(operationId); return; }
+    runningTasks.set(sessionId, new Set([operationId]));
+  }
+  function releaseTask(sessionId, operationId) {
+    const tasks = runningTasks.get(sessionId);
+    if (!tasks) return;
+    tasks.delete(operationId);
+    if (!tasks.size) runningTasks.delete(sessionId);
   }
   function reclaim(sessionId) {
     if (closed || retained.get(sessionId) || runningTasks.has(sessionId)) return;
@@ -179,8 +191,8 @@ export async function createKimiWebDriver(options) {
     const payload = frame.payload ?? {};
     if (frame.type === 'turn.started') scheduled(() => operations.started(captured, payload));
     else if (frame.type === 'turn.ended') scheduled(async () => {
-      await operations.terminal(captured, payload);
-      runningTasks.delete(sessionId);
+      const ended = await operations.terminal(captured, payload);
+      if (ended) releaseTask(sessionId, ended.operationId);
       reclaim(sessionId);
       emit({ type: 'turn.ended', session, reason: payload.reason }, sessionId);
     });
@@ -314,21 +326,29 @@ export async function createKimiWebDriver(options) {
       try {
         await subscribeSession(captured.session.nativeSessionId, params.agentId ?? 'main');
         fence(captured);
+        const executed = await operations.send(captured, payload, params.idempotencyKey);
         // The submitted turn outlives this call, so the session stays monitored until its terminal frame.
-        runningTasks.add(captured.session.nativeSessionId);
-        return await operations.send(captured, payload, params.idempotencyKey);
+        registerTask(captured.session.nativeSessionId, executed.operationId);
+        return executed;
+      } catch (error) {
+        // A task that provably reached the send boundary, or whose acknowledgement cannot be accounted for, stays monitored for reconciliation; one that never entered it is reclaimed by the release below.
+        const live = await operations.liveTask(captured);
+        if (live) registerTask(captured.session.nativeSessionId, live);
+        throw error;
       } finally { release(); }
     },
     async cancel(context) {
       const captured = capture(context, true); requireCapability('cancel');
       const params = record(context.params);
-      runningTasks.add(captured.session.nativeSessionId);
-      return operations.cancel(captured, params.operationId, params.idempotencyKey);
+      const release = retain(captured.session.nativeSessionId);
+      try { return await operations.cancel(captured, params.operationId, params.idempotencyKey); }
+      finally { release(); }
     },
     async respondInteraction(context) {
       const captured = capture(context, true); const params = record(context.params);
-      runningTasks.add(captured.session.nativeSessionId);
-      return operations.reply(captured, params.interactionId, record(params.answer), params.idempotencyKey);
+      const release = retain(captured.session.nativeSessionId);
+      try { return await operations.reply(captured, params.interactionId, record(params.answer), params.idempotencyKey); }
+      finally { release(); }
     },
     async subscribe(context) {
       const captured = capture(context); requireCapability('subscribeV2');

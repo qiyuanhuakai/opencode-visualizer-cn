@@ -13,7 +13,8 @@ export interface KimiWebOperations {
   cancel(scope: OperationScope, operationId: string, idempotencyKey: string): Promise<KimiExecution>;
   pending(scope: OperationScope, kind: 'approval' | 'question', nativeRequestId: string, payload: Json): Promise<string>;
   reply(scope: OperationScope, interactionId: string, answer: Json, idempotencyKey: string): Promise<KimiExecution>;
-  terminal(scope: OperationScope, payload: Readonly<Record<string, Json>>): Promise<void>;
+  terminal(scope: OperationScope, payload: Readonly<Record<string, Json>>): Promise<{ readonly operationId: string; readonly turnId: Json } | null>;
+  liveTask(scope: OperationScope): Promise<string | null>;
   invalidate(scope: OperationScope): Promise<void>; close(): Promise<void>;
   readonly journal: OperationJournal; readonly interactions: InteractionStore; readonly admission: AdmissionQueue;
 }
