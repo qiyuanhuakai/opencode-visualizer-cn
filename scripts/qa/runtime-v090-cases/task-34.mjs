@@ -586,7 +586,7 @@ export async function run(context) {
         unknownThread: { code: 'invalid_request', field: 'thread_unknown' },
         emptyEntries: { code: 'invalid_request', field: 'handoff_entries' },
         prepareBeforeAttach: { code: 'conflict', field: 'handoff_state' },
-        observeBeforeDeliver: { code: 'conflict', field: 'handoff_state' },
+        observeBeforeDeliver: { code: null, field: null },
         emptyPrompt: { code: 'invalid_request', field: 'handoff_prompt' },
         badAtZero: { code: 'invalid_request', field: 'handoff_time' },
         badAtFraction: { code: 'invalid_request', field: 'handoff_time' },
@@ -601,6 +601,43 @@ export async function run(context) {
           handoffs: { code: 'cancelled', field: 'handoff_closed' },
           ops: { code: 'cancelled', field: 'handoff_closed' },
         },
+      });
+    }
+
+    // ── C4b: an early native observation is HELD, then applied when the ack reports the delivery ──
+    {
+      const world = makeWorld();
+      const { thread, owner } = await bindThread(world, SESSION_CODEX, [SESSION_ACP]);
+      const target = world.threads.get(thread.threadId).participants[1].participantId;
+      const begun = await world.service.begin({ threadId: thread.threadId, sourceParticipantId: owner, targetParticipantId: target, entries: ENTRIES, at: 1 });
+      await world.service.attach({ handoffId: begun.handoffId, at: 2 });
+      await world.service.prepare({ handoffId: begun.handoffId, prompt: PROMPT, at: 3 });
+      const held = await world.service.observe({ handoffId: begun.handoffId, nativeEventId: 'ev-early', at: 4 });
+      const delivered = await world.service.deliver({ handoffId: begun.handoffId, at: 5 });
+      const after = world.service.handoff(begun.handoffId);
+      const ops = world.service.ops(begun.handoffId).map((op) => [op.kind, op.outcome]);
+      check('a native event that arrives BEFORE the delivery ack is HELD and then applied: the early observe is accepted without observing yet, the delivery ack still lands, and the handoff reaches active on the HELD event id with the thread selection moved to the target — the early observation is never discarded', {
+        heldState: held.state,
+        heldObserved: held.observed,
+        deliveredState: delivered.state,
+        deliveredBy: delivered.deliveredBy,
+        finalState: after.state,
+        observedBy: after.observedBy,
+        observedAt: after.observedAt,
+        activeSelection: world.threads.active(thread.threadId)?.participantId === target,
+        ops,
+        sends: after.sends,
+      }, {
+        heldState: 'prepared',
+        heldObserved: false,
+        deliveredState: 'active',
+        deliveredBy: 'ack-1',
+        finalState: 'active',
+        observedBy: 'ev-early',
+        observedAt: 4,
+        activeSelection: true,
+        ops: [['checkpoint', 'applied'], ['attach', 'applied'], ['prepare', 'applied'], ['deliver', 'applied'], ['observe', 'applied']],
+        sends: 1,
       });
     }
 

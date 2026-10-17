@@ -43,6 +43,8 @@ export const HANDOFF_STATES = Object.freeze([...HANDOFF_LADDER, ...HANDOFF_RESOL
 export const MAX_HANDOFF_PROMPT_CHARS = 65536;
 
 const RUNG_PREDECESSOR = Object.freeze({ attach: 'checkpoint', prepare: 'attached', deliver: 'prepared', observe: 'delivered' });
+/** The resolution enum differs from the Host sink method name, so resolve maps instead of indexing. */
+const RESOLUTION_SINK = Object.freeze({ reconcile: 'reconcile', failed: 'fail', cancelled: 'cancel' });
 const UUID_PATTERN = /^[\da-f]{8}-[\da-f]{4}-[1-8][\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i;
 const MAX_TEXT_CHARS = 512;
 
@@ -280,6 +282,7 @@ export function createHandoffService({
   const handoffsById = new Map();
   /** checkpointId → { digest, scope, entriesFingerprint }: a carried context hash is never rewritten. */
   const carriedCheckpoints = new Map();
+  const beginInflight = new Map();
   const journal = {
     ops: [],
     byHandoff: new Map(),
@@ -290,6 +293,21 @@ export function createHandoffService({
 
   function assertOpen() {
     if (closed) throw new HandoffError('cancelled', 'handoff_closed');
+  }
+
+  /**
+   * Serialize every mutation of one handoffId across its whole async window, so the duplicate
+   * check, the cancel await and the record write are one atomic unit.
+   */
+  function serializeBegin(handoffId, task) {
+    const previous = beginInflight.get(handoffId) ?? Promise.resolve();
+    const run = previous.then(task, task);
+    const settled = run.then(
+      () => { if (beginInflight.get(handoffId) === settled) beginInflight.delete(handoffId); },
+      () => { if (beginInflight.get(handoffId) === settled) beginInflight.delete(handoffId); },
+    );
+    beginInflight.set(handoffId, settled);
+    return run;
   }
 
   function requireHandoff(handoffId) {
@@ -435,11 +453,8 @@ export function createHandoffService({
     const target = thread.participants.find((entry) => entry.participantId === targetParticipantId);
     if (source === undefined || target === undefined) throw new HandoffError('invalid_request', 'handoff_participant');
 
-    let handoffId;
-    if (input.handoffId === undefined) {
-      handoffId = randomUUID();
-    } else {
-      handoffId = parseHandoffId(input.handoffId);
+    const handoffId = input.handoffId === undefined ? randomUUID() : parseHandoffId(input.handoffId);
+    return serializeBegin(handoffId, async () => {
       const existing = handoffsById.get(handoffId);
       if (existing !== undefined) {
         // A re-opened handoff must carry the same identity, or the reopen is a conflict.
@@ -451,57 +466,60 @@ export function createHandoffService({
         stats.duplicates += 1;
         return handoffView(existing);
       }
-    }
 
-    // A busy source NEVER auto-migrates: without an explicit cancel the handoff is refused
-    // before anything is created, attached or sent.
-    if (isSourceBusy !== undefined && isSourceBusy({ threadId, participantId: sourceParticipantId }) === true) {
-      if (input.cancel !== true) throw new HandoffError('conflict', 'handoff_source_busy');
-      if (cancelSource !== undefined) await cancelSource({ threadId, participantId: sourceParticipantId });
-    }
+      // A busy source NEVER auto-migrates: without an explicit cancel the handoff is refused
+      // before anything is created, attached or sent. An explicit cancel intent is not a
+      // substitute for a working cancel adapter, so the adapter must exist.
+      if (isSourceBusy !== undefined && isSourceBusy({ threadId, participantId: sourceParticipantId }) === true) {
+        if (input.cancel !== true) throw new HandoffError('conflict', 'handoff_source_busy');
+        if (typeof cancelSource !== 'function') throw new HandoffError('conflict', 'handoff_source_busy');
+        await cancelSource({ threadId, participantId: sourceParticipantId });
+      }
 
-    const at = parseHandoffAt(input.at);
-    const scope = { threadId, environmentId: thread.environmentId };
-    const checkpoint = resolveCheckpoint({ checkpointId: input.checkpointId, scope, entries: input.entries });
+      const at = parseHandoffAt(input.at);
+      const scope = { threadId, environmentId: thread.environmentId };
+      const checkpoint = resolveCheckpoint({ checkpointId: input.checkpointId, scope, entries: input.entries });
 
-    const activeNow = threads.active(threadId);
-    const record = {
-      handoffId,
-      threadId,
-      environmentId: thread.environmentId,
-      source: { participantId: sourceParticipantId, session: source.session },
-      target: { participantId: targetParticipantId, session: target.session },
-      originalParticipantId: activeNow?.participantId ?? sourceParticipantId,
-      host: {
-        checkpoint: null,
-        attachedAt: null,
-        preparedAt: null,
-        promptFingerprint: null,
-        cancelledAt: null,
-        failedAt: null,
-        reconcileAt: null,
-      },
-      delivery: { delivered: false, deliveredAt: null, deliveredBy: null },
-      observation: { observed: false, observedAt: null, observedBy: null },
-      resolution: { value: null },
-      prompt: null,
-      sends: 0,
-      createdAt: at,
-      updatedAt: at,
-    };
-    handoffsById.set(handoffId, record);
-    stats.handoffs += 1;
-    const view = checkpointView(checkpoint);
-    const op = journalOp({
-      handoffId,
-      kind: 'checkpoint',
-      fingerprint: fingerprintOf({ handoffId, kind: 'checkpoint', checkpointId: view.checkpointId, digest: view.digest }),
-      at,
-      detail: { checkpointId: view.checkpointId, digest: view.digest },
-    }).op;
-    createHostSink(hostScope(record)).checkpoint({ checkpoint: view, at });
-    finalizeOp(op, 'applied');
-    return handoffView(record);
+      const activeNow = threads.active(threadId);
+      const record = {
+        handoffId,
+        threadId,
+        environmentId: thread.environmentId,
+        source: { participantId: sourceParticipantId, session: source.session },
+        target: { participantId: targetParticipantId, session: target.session },
+        originalParticipantId: activeNow?.participantId ?? sourceParticipantId,
+        host: {
+          checkpoint: null,
+          attachedAt: null,
+          preparedAt: null,
+          promptFingerprint: null,
+          cancelledAt: null,
+          failedAt: null,
+          reconcileAt: null,
+        },
+        delivery: { delivered: false, deliveredAt: null, deliveredBy: null },
+        observation: { observed: false, observedAt: null, observedBy: null },
+        resolution: { value: null },
+        pendingObservations: [],
+        prompt: null,
+        sends: 0,
+        createdAt: at,
+        updatedAt: at,
+      };
+      handoffsById.set(handoffId, record);
+      stats.handoffs += 1;
+      const view = checkpointView(checkpoint);
+      const op = journalOp({
+        handoffId,
+        kind: 'checkpoint',
+        fingerprint: fingerprintOf({ handoffId, kind: 'checkpoint', checkpointId: view.checkpointId, digest: view.digest }),
+        at,
+        detail: { checkpointId: view.checkpointId, digest: view.digest },
+      }).op;
+      createHostSink(hostScope(record)).checkpoint({ checkpoint: view, at });
+      finalizeOp(op, 'applied');
+      return handoffView(record);
+    });
   }
 
   async function attach(input = {}) {
@@ -587,7 +605,17 @@ export function createHandoffService({
         promptFingerprint: record.host.promptFingerprint,
       });
     } catch (error) {
-      failRecord(record, op, error, { code: 'source_unavailable', field: 'handoff_send' }, at);
+      // A typed protocol refusal is the adapter stating the prompt was never issued; anything
+      // else is an UNKNOWN outcome after the committed send, so it stops at reconcile.
+      if (error instanceof ProtocolError) {
+        failRecord(record, op, error, { code: 'source_unavailable', field: 'handoff_send' }, at);
+      }
+      createHostSink(hostScope(record)).reconcile({ code: 'reconcile_required', field: 'handoff_send_ambiguous', at });
+      finalizeOp(op, 'reconcile', 'reconcile_required', 'handoff_send_ambiguous');
+      stats.reconciles += 1;
+      restoreOriginalSelection({ threads, threadId: record.threadId, participantId: record.originalParticipantId });
+      record.updatedAt = at;
+      throw new HandoffError('reconcile_required', 'handoff_send_ambiguous');
     }
     const ackId = result !== null && typeof result === 'object' ? result.ackId : undefined;
     if (typeof ackId !== 'string' || ackId.length === 0) {      // The send outcome is unreadable: an ambiguous send stops at reconcile. It is never
@@ -602,7 +630,35 @@ export function createHandoffService({
     createAckSink({ delivery: record.delivery }).deliver({ ackId, at });
     finalizeOp(op, 'applied');
     record.updatedAt = at;
+    flushPendingObservations(record);
     return handoffView(record);
+  }
+
+  function applyObservation(record, op, nativeEventId, at) {
+    createObserveSink({ observation: record.observation }).observe({ nativeEventId, at });
+    finalizeOp(op, 'applied');
+    // Only a REAL native observation moves the thread's active selection to the target.
+    threads.activate({ threadId: record.threadId, participantId: record.target.participantId });
+    record.updatedAt = at;
+  }
+
+  /**
+   * Apply every observation that arrived before the ack reported the delivery. The native event
+   * stream and the RPC receipt have no ordering guarantee, so an early observation is real and
+   * must be applied the moment the delivery is known — never discarded.
+   */
+  function flushPendingObservations(record) {
+    const held = record.pendingObservations.splice(0);
+    for (const entry of held) {
+      const op = journalOp({
+        handoffId: record.handoffId,
+        kind: 'observe',
+        fingerprint: fingerprintOf({ handoffId: record.handoffId, kind: 'observe' }),
+        at: entry.at,
+        detail: { nativeEventId: entry.nativeEventId },
+      }).op;
+      applyObservation(record, op, entry.nativeEventId, entry.at);
+    }
   }
 
   async function observe(input = {}) {
@@ -610,6 +666,20 @@ export function createHandoffService({
     const record = requireHandoff(input.handoffId);
     const at = parseHandoffAt(input.at);
     const nativeEventId = requireText(input.nativeEventId, 'handoff_native_event_id');
+    const replayed = journal.byKey.get(`${record.handoffId}\u0000observe`);
+    if (replayed !== undefined) {
+      if (replayed.outcome !== 'applied') throw new HandoffError('conflict', 'handoff_state');
+      stats.duplicates += 1;
+      return handoffView(record);
+    }
+    if (projectHandoffState(record) !== RUNG_PREDECESSOR.observe) {
+      // Only a handoff that already has a resolution refuses an observation; one still waiting for
+      // its ack holds the observation and applies it as soon as the delivery is known.
+      if (record.resolution.value !== null) throw new HandoffError('conflict', 'handoff_state');
+      record.pendingObservations.push({ nativeEventId, at });
+      record.updatedAt = at;
+      return handoffView(record);
+    }
     const op = enterStep(
       record,
       'observe',
@@ -618,11 +688,7 @@ export function createHandoffService({
       { nativeEventId },
     );
     if (op === null) return handoffView(record);
-    createObserveSink({ observation: record.observation }).observe({ nativeEventId, at });
-    finalizeOp(op, 'applied');
-    // Only a REAL native observation moves the thread's active selection to the target.
-    threads.activate({ threadId: record.threadId, participantId: record.target.participantId });
-    record.updatedAt = at;
+    applyObservation(record, op, nativeEventId, at);
     return handoffView(record);
   }
 
@@ -671,7 +737,7 @@ export function createHandoffService({
       return handoffView(record);
     }
     const sink = createHostSink(hostScope(record));
-    sink[resolution]({ code: input.code, field: input.field, reason: input.reason ?? null, at });
+    sink[RESOLUTION_SINK[resolution]]({ code: input.code, field: input.field, reason: input.reason ?? null, at });
     if (resolution === 'reconcile') stats.reconciles += 1;
     if (resolution === 'failed') stats.failures += 1;
     record.updatedAt = at;

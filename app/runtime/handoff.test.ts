@@ -305,6 +305,7 @@ interface WorldOverrides {
   readonly sourceBusy?: boolean;
   readonly openTarget?: (input: OpenTargetInput) => Promise<{ readonly nativeSessionId: string }>;
   readonly sendPrompt?: (input: SendPromptInput) => Promise<SendPromptResult>;
+  readonly cancelSource?: (input: { readonly threadId: string; readonly participantId: string }) => Promise<void>;
 }
 
 function sessionView(session: SessionRef): ThreadSessionView {
@@ -337,8 +338,10 @@ async function makeWorld(overrides: WorldOverrides = {}): Promise<HarnessFixture
     counters.sendPrompt += 1;
     return sendPromptBehavior(input);
   };
-  const cancelSource = async (): Promise<void> => {
+  const cancelSourceBehavior = overrides.cancelSource ?? (async (): Promise<void> => {});
+  const cancelSource = async (input: { readonly threadId: string; readonly participantId: string }): Promise<void> => {
     counters.cancelSource += 1;
+    return cancelSourceBehavior(input);
   };
 
   const checkpoints = loadCheckpoints().createCheckpointService();
@@ -1059,14 +1062,15 @@ describe('handoff rejections carry explicit codes', () => {
         entries: [],
       }),
     ).rejects.toMatchObject({ code: 'invalid_request', field: 'handoff_entries' });
-    // Rung order is enforced: prepare before attach and observe before deliver are refused.
+    // Rung order is enforced: prepare before attach is refused. An early OBSERVATION is not a
+    // rung violation, so it is held and applied once the delivery is known.
     await expect(world.service.prepare({ handoffId: begun.handoffId, prompt: PROMPT })).rejects.toMatchObject({
       code: 'conflict',
       field: 'handoff_state',
     });
-    await expect(world.service.observe({ handoffId: begun.handoffId, nativeEventId: 'evt-early' })).rejects.toMatchObject({
-      code: 'conflict',
-      field: 'handoff_state',
+    await expect(world.service.observe({ handoffId: begun.handoffId, nativeEventId: 'evt-early' })).resolves.toMatchObject({
+      observed: false,
+      state: 'checkpoint',
     });
     await expect(world.service.attach({ handoffId: begun.handoffId })).resolves.toMatchObject({ state: 'attached' });
     await expect(world.service.prepare({ handoffId: begun.handoffId, prompt: '' })).rejects.toMatchObject({
@@ -1093,5 +1097,188 @@ describe('handoff rejections carry explicit codes', () => {
       code: 'cancelled',
       field: 'handoff_closed',
     });
+  });
+});
+
+/* ------------------------------------------------------------------ review findings */
+
+function gate(): { promise: Promise<void>; release: () => void } {
+  let release: () => void = () => {};
+  const promise = new Promise<void>((resolve) => { release = resolve; });
+  return { promise, release };
+}
+
+async function beginOne(world: HarnessFixture, handoffId?: string): Promise<HandoffView> {
+  return world.service.begin({
+    threadId: world.thread.threadId,
+    sourceParticipantId: world.participantA,
+    targetParticipantId: world.participantB,
+    entries: CONTEXT_ENTRIES,
+    ...(handoffId === undefined ? {} : { handoffId }),
+  });
+}
+
+describe('concurrent begin of one handoffId', () => {
+  it('serializes the duplicate check across the cancel await so the record survives', async () => {
+    const pause = gate();
+    const world = await makeWorld({
+      sourceBusy: true,
+      cancelSource: async () => { await pause.promise; },
+    });
+    const handoffId = '99999999-9999-4999-8999-999999999999';
+    const input = {
+      threadId: world.thread.threadId,
+      sourceParticipantId: world.participantA,
+      targetParticipantId: world.participantB,
+      handoffId,
+      cancel: true,
+      entries: CONTEXT_ENTRIES,
+    };
+
+    const first = world.service.begin({ ...input, at: 1 });
+    const second = world.service.begin({ ...input, at: 2 });
+    pause.release();
+    const results = await Promise.allSettled([first, second]);
+
+    expect(world.service.state.handoffs).toBe(1);
+    expect(world.service.state.ops).toBe(1);
+    expect(world.calls.cancelSource()).toBe(1);
+    const view = world.service.handoff(handoffId);
+    expect(view.checkpoint).not.toBeNull();
+    expect(view.checkpoint?.digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(results.filter((r) => r.status === 'rejected')).toHaveLength(0);
+    expect((results[0] as PromiseFulfilledResult<HandoffView>).value.handoffId).toBe(handoffId);
+    expect((results[1] as PromiseFulfilledResult<HandoffView>).value.handoffId).toBe(handoffId);
+  });
+});
+
+describe('a native observation that arrives before the ack', () => {
+  it('holds the early observation and completes the handoff once the ack lands', async () => {
+    const ack = gate();
+    const world = await makeWorld({
+      sendPrompt: async () => { await ack.promise; return { ackId: 'ack-late' }; },
+    });
+    const begun = await beginOne(world);
+    await driveToPrepared(world, begun.handoffId);
+    const delivering = world.service.deliver({ handoffId: begun.handoffId });
+
+    await expect(world.service.observe({ handoffId: begun.handoffId, nativeEventId: 'ev-early' })).resolves.toMatchObject({
+      observed: false,
+      state: 'prepared',
+    });
+
+    ack.release();
+    await delivering;
+    const after = world.service.handoff(begun.handoffId);
+    expect(after.state).toBe('active');
+    expect(after.delivered).toBe(true);
+    expect(after.deliveredBy).toBe('ack-late');
+    expect(after.observed).toBe(true);
+    expect(after.observedBy).toBe('ev-early');
+    expect(world.threads.active(world.thread.threadId)?.participantId).toBe(world.participantB);
+  });
+
+  it('refuses an observation once the handoff already has a resolution', async () => {
+    const world = await makeWorld();
+    const begun = await beginOne(world);
+    world.service.resolve({ handoffId: begun.handoffId, resolution: 'cancelled', code: 'test', field: 'test_field' });
+    await expect(
+      world.service.observe({ handoffId: begun.handoffId, nativeEventId: 'ev-1' }),
+    ).rejects.toMatchObject({ code: 'conflict', field: 'handoff_state' });
+  });
+});
+
+describe('a transport error after the send was issued', () => {
+  it('keeps reconcile_required instead of marking the handoff failed', async () => {
+    const world = await makeWorld({
+      sendPrompt: async () => { throw new Error('ack timeout after the target applied the prompt'); },
+    });
+    const begun = await beginOne(world);
+    await driveToPrepared(world, begun.handoffId);
+
+    await expect(world.service.deliver({ handoffId: begun.handoffId })).rejects.toMatchObject({
+      code: 'reconcile_required',
+      field: 'handoff_send_ambiguous',
+    });
+    const after = world.service.handoff(begun.handoffId);
+    expect(after.state).toBe('reconcile');
+    expect(after.resolution?.code).toBe('reconcile_required');
+  });
+
+  it('still reports a pre-send refusal as a definite failure', async () => {
+    const refusal = new (loadHandoff().HandoffError)('source_unavailable', 'handoff_target_gone');
+    const world = await makeWorld({
+      sendPrompt: async () => { throw refusal; },
+    });
+    const begun = await beginOne(world);
+    await driveToPrepared(world, begun.handoffId);
+
+    await expect(world.service.deliver({ handoffId: begun.handoffId })).rejects.toMatchObject({
+      code: 'source_unavailable',
+      field: 'handoff_target_gone',
+    });
+    expect(world.service.handoff(begun.handoffId).state).toBe('failed');
+  });
+});
+
+describe('a busy source without a cancel capability', () => {
+  it('refuses the migration instead of silently skipping the cancel', async () => {
+    const threads = createThreadService({
+      resolveSession: async () => ({ session: SESSION_A, archived: false, parentSession: null }),
+    });
+    const thread = await threads.bind({ session: SESSION_A, repo: REPO });
+    const joined = await threads.join({ threadId: thread.threadId, session: SESSION_B, repo: REPO });
+    const checkpoints = loadCheckpoints().createCheckpointService();
+    const service = loadHandoff().createHandoffService({
+      threads,
+      checkpoints,
+      openTarget: async ({ target }) => ({ nativeSessionId: target.session.nativeSessionId }),
+      sendPrompt: async () => ({ ackId: 'ack-1' }),
+      isSourceBusy: () => true,
+    });
+
+    await expect(service.begin({
+      threadId: thread.threadId,
+      sourceParticipantId: thread.participants[0]!.participantId,
+      targetParticipantId: joined.participantId,
+      cancel: true,
+      entries: CONTEXT_ENTRIES,
+    })).rejects.toMatchObject({ code: 'conflict', field: 'handoff_source_busy' });
+    expect(service.state.handoffs).toBe(0);
+  });
+});
+
+describe('resolve marks a live record terminal', () => {
+  it('maps both terminal resolutions onto their sink methods', async () => {
+    for (const resolution of ['failed', 'cancelled'] as const) {
+      const world = await makeWorld();
+      const begun = await beginOne(world);
+      const resolved = world.service.resolve({
+        handoffId: begun.handoffId,
+        resolution,
+        code: 'test',
+        field: 'test_field',
+      });
+      expect(resolved.state).toBe(resolution);
+      expect(resolved.resolution?.resolution).toBe(resolution);
+      expect(world.service.resolve({
+        handoffId: begun.handoffId,
+        resolution,
+        code: 'test',
+        field: 'test_field',
+      })).toEqual(resolved);
+    }
+  });
+
+  it('still refuses a second, different resolution', async () => {
+    const world = await makeWorld();
+    const begun = await beginOne(world);
+    world.service.resolve({ handoffId: begun.handoffId, resolution: 'cancelled', code: 'test', field: 'test_field' });
+    expect(rejectionOf(() => world.service.resolve({
+      handoffId: begun.handoffId,
+      resolution: 'failed',
+      code: 'test',
+      field: 'test_field',
+    }))).toMatchObject({ code: 'conflict', field: 'handoff_state' });
   });
 });
