@@ -19,5 +19,7 @@ export async function loadBrowserKernel(env = process.env) {
   const specifier = browserKernelSpecifier(env);
   const loaded = await import(pathToFileURL(specifier).href);
   if (typeof loaded.loadOmowright !== 'function') throw new Error(`${specifier} does not export loadOmowright`);
-  return loaded.loadOmowright();
+  // The kernel module resolves its bundled runtime and returns it under `omowright`.
+  const { omowright } = await loaded.loadOmowright();
+  return omowright;
 }

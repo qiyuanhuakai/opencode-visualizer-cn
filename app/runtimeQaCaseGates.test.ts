@@ -61,7 +61,7 @@ describe('QA browser kernel resolution (review finding 3)', () => {
 
   it('loads the configured kernel module and rejects one that does not export it', async () => {
     const kernel = path.join(temporary, 'kernel.mjs');
-    writeFileSync(kernel, 'export function loadOmowright() { return { kernel: true }; }');
+    writeFileSync(kernel, 'export function loadOmowright() { return { omowright: { kernel: true } }; }');
     expect(await loadBrowserKernel({ VIS_QA_BROWSER_KERNEL: kernel })).toEqual({ kernel: true });
 
     const wrong = path.join(temporary, 'wrong.mjs');
