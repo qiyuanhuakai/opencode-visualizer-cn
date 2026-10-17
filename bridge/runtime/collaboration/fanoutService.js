@@ -270,6 +270,11 @@ export function createFanoutService({ deliver } = {}) {
         prompt: record.prompt,
       });
     } catch (error) {
+      // A failure that lands after this recipient was reconciled, cancelled or otherwise
+      // settled while the send was in flight is a LATE result: it must not overwrite the
+      // decision already written — the same guard the success path applies below. A late
+      // failure also leaves updatedAt alone, so the record never regresses to the send time.
+      if (recipient.outcome !== 'pending') return;
       const failure = classifyFailure(error, { code: 'source_unavailable', field: 'fanout_send' });
       recipient.outcome = 'failed';
       recipient.resolution = Object.freeze({ code: failure.code, field: failure.field });
@@ -315,13 +320,24 @@ export function createFanoutService({ deliver } = {}) {
     return fanoutView(record);
   }
 
-  /** Cancel ONE recipient individually. A sibling is never touched; a terminal recipient is left as-is. */
+  /**
+   * Cancel ONE recipient individually. A sibling is never touched; a terminal recipient is
+   * left as-is. A recipient whose send is still IN FLIGHT cannot be stopped — this service has
+   * no cancel port and deliver takes no AbortSignal — so it is RETAINED as ambiguous rather
+   * than claimed cancelled: the read model must never say a send was stopped when the remote
+   * work may still happen.
+   */
   function cancelRecipient(input = {}) {
     assertOpen();
     const record = requireFanout(input.fanoutId);
     const at = parseAt(input.at);
     const recipient = requireRecipient(record, input.recipientId);
-    if (recipient.outcome === 'pending' || recipient.outcome === 'sent') {
+    if (recipient.outcome === 'pending' && recipient.dispatched === true) {
+      recipient.outcome = 'ambiguous';
+      recipient.resolution = Object.freeze({ code: 'reconcile_required', field: 'fanout_ambiguous' });
+      recipient.updatedAt = at;
+      stats.reconciles += 1;
+    } else if (recipient.outcome === 'pending' || recipient.outcome === 'sent') {
       recipient.outcome = 'cancelled';
       recipient.resolution = Object.freeze({ code: 'cancelled', field: 'fanout_cancelled' });
       recipient.updatedAt = at;
