@@ -112,6 +112,15 @@ function isSendable(recipient) {
 }
 
 /**
+ * Advance the fan-out's top-level clock. A LATE event must never regress it below a decision
+ * already written — the same monotonicity a recipient's own updatedAt keeps — so a dispatch
+ * whose sends settled late cannot write its start time back over a later reconcile or cancel.
+ */
+function touchFanout(record, at) {
+  if (at > record.updatedAt) record.updatedAt = at;
+}
+
+/**
  * Derive the overall fan-out state from the observed per-recipient outcomes. This pure function is
  * the ONLY source of the overall state; an ambiguous recipient makes the whole operation ambiguous,
  * and every other value is the honest read of how the recipients actually settled.
@@ -316,7 +325,7 @@ export function createFanoutService({ deliver } = {}) {
     }
     if (selected.length > 0) stats.dispatches += 1;
     await Promise.all(selected.map((recipient) => sendRecipient(record, recipient, at)));
-    record.updatedAt = at;
+    touchFanout(record, at);
     return fanoutView(record);
   }
 
@@ -362,7 +371,7 @@ export function createFanoutService({ deliver } = {}) {
         stats.reconciles += 1;
       }
     }
-    record.updatedAt = at;
+    touchFanout(record, at);
     return fanoutView(record);
   }
 
