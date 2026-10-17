@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -161,6 +162,36 @@ describe('runtime reverse terminal lifetime', () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(processesWithMarker(marker), 'orphaned terminal process outlived shutdown').toEqual([]);
   });
+});
+
+describe('runtime reverse file lifetime', () => {
+  it('failure closes the service while a FIFO inside the granted root is being read', async () => {
+    // Given a registered reverse owner with one established session over a legal workspace root.
+    const f = await fixture();
+    const owner = f.client.reverse.register({
+      workspaceKey: f.workspaceKey,
+      harnessInstanceId: '22222222-2222-4222-8222-222222222222',
+      processGeneration: 1,
+      agentId: 'kimi-code',
+      assertProcessCurrent() {},
+    });
+    owner.observeClientMessage({ id: 1, method: 'session/new', params: { cwd: f.root } });
+    owner.observeAgentMessage({ id: 1, result: { sessionId: 'session-1' } });
+    const fifo = path.join(f.root, 'pipe.fifo');
+    execFileSync('mkfifo', [fifo]);
+
+    // When an established session reads that FIFO through the public owner handle: with no
+    // writer and no EOF the read can never settle, so the request is refused instead of
+    // becoming an in-flight request the shutdown would wait on forever.
+    const reading = owner.handle({ method: 'fs/read_text_file', params: { sessionId: 'session-1', path: fifo } });
+    await expect(reading).rejects.toThrow(/not a regular file/);
+
+    // Then the service closes without any external writer helping it.
+    await expect(Promise.race([
+      f.service.close(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('service close did not settle')), 5000)),
+    ])).resolves.toBeUndefined();
+  }, 30000);
 });
 
 describe('runtime repeated interruption', () => {
