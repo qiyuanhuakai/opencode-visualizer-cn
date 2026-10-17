@@ -7,10 +7,12 @@ import {
   parseCriteria,
   parseOwner,
   parseSessionMutationKey,
+  parseStopPayload,
   parseTeamId,
   parseTeamName,
   parseTaskTitle,
   parseLeaseInput,
+  TERMINAL_TASK_STATES,
 } from '../../../shared/runtime/collaboration.js';
 import { createTaskGraph } from './taskGraph.js';
 import { createAttemptService } from './attemptService.js';
@@ -347,6 +349,9 @@ export function createCollaborationCoordinator({
     for (const view of graph.tasks()) {
       if (view.state !== 'paused') continue;
       const record = graph.record(view.taskId);
+      // The scheduler admits only live work: a terminal task is never re-admitted, whatever a
+      // stale pause field claims.
+      if (TERMINAL_TASK_STATES.includes(record.host.state)) continue;
       if (budgetReasonsFor(record).length > 0) continue;
       if (graph.blockedBy(record.taskId).length > 0) continue;
       const result = await dispatch({ taskId: view.taskId, at });
@@ -429,17 +434,25 @@ export function createCollaborationCoordinator({
     const at = parseAt(input.at);
     const record = graph.record(input.taskId);
     if (record.host.state === 'accepted') throw new CollaborationError('conflict', 'task_state');
+    // Parse the WHOLE stop payload BEFORE touching a single reservation. A payload the
+    // attempt service would reject — an over-long reason, a missing code — must leave every
+    // budget share exactly where it was: a refused stop frees nothing, so no other task can
+    // spend the session slot this one still holds.
+    const failure = parseStopPayload({ code: input.code, field: input.field, reason: input.reason ?? null });
     for (const attemptId of record.attempts) {
       const state = attempts.attempt(attemptId).state;
       if (!RUNNING_ATTEMPT_STATES.includes(state)) continue;
-      // Release the reservation BEFORE the stop rewrites the projected state: the release keys
-      // off the reservation actually held, never off the post-stop projection.
+      attempts.fail({ attemptId, code: failure.code, field: failure.field, reason: failure.reason, at });
+      // Release only AFTER the stop was accepted, keyed off the reservation this attempt
+      // actually holds — never off the post-stop projection, and never for a refused stop.
       markRunning(attempts.record(attemptId), false);
-      attempts.fail({ attemptId, code: input.code, field: input.field, reason: input.reason ?? null, at });
     }
     record.host.state = 'failed';
     record.host.endedAt = at;
     record.updatedAt = at;
+    // A terminated task keeps no scheduling pause: the graph refresh preserves dynamic
+    // reasons, and a retained one would resurrect this task into the scheduler.
+    record.paused = null;
     stats.failures += 1;
     return graph.task(record.taskId);
   }
@@ -449,17 +462,19 @@ export function createCollaborationCoordinator({
     const at = parseAt(input.at);
     const record = graph.record(input.taskId);
     if (record.host.state === 'accepted') throw new CollaborationError('conflict', 'task_state');
+    // The same ordering as failTask: validate the whole payload first, stop second, release
+    // last — a refused cancel frees no slot and journals no op.
+    const stop = parseStopPayload({ code: 'cancelled', field: 'task_cancelled', reason: input.reason ?? null });
     for (const attemptId of record.attempts) {
       const state = attempts.attempt(attemptId).state;
       if (!RUNNING_ATTEMPT_STATES.includes(state)) continue;
-      // Release the reservation BEFORE the stop rewrites the projected state, exactly like
-      // failTask: a task-level stop must free every slot its running attempts hold.
+      attempts.cancel({ attemptId, code: stop.code, field: stop.field, reason: stop.reason, at });
       markRunning(attempts.record(attemptId), false);
-      attempts.cancel({ attemptId, code: 'cancelled', field: 'task_cancelled', reason: input.reason ?? null, at });
     }
     record.host.state = 'cancelled';
     record.host.endedAt = at;
     record.updatedAt = at;
+    record.paused = null;
     return graph.task(record.taskId);
   }
 

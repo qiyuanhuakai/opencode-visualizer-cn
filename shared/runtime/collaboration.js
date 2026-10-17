@@ -38,6 +38,11 @@ export const COLLABORATION_BUDGETS = Object.freeze({
 
 /** The task lifecycle. `paused` is the VISIBLE budget state — never a silent drop, never a silent run. */
 export const TASK_STATES = Object.freeze(['pending', 'dispatched', 'review', 'accepted', 'failed', 'cancelled', 'paused']);
+/**
+ * The task states that END a task's lifecycle. No scheduler, graph refresh, stop or acceptance
+ * may revive them: a terminated task is never re-admitted, whatever a stale pause field claims.
+ */
+export const TERMINAL_TASK_STATES = Object.freeze(['accepted', 'failed', 'cancelled']);
 /** The attempt ladder: accepted → sent → observed → terminal, or the reconcile stop. */
 export const ATTEMPT_STATES = Object.freeze(['accepted', 'sent', 'observed', 'terminal', 'reconcile']);
 /** The native terminal reasons an attempt can report. `completed` is NOT a task acceptance. */
@@ -125,6 +130,24 @@ export function parseReviewState(value) {
 export function parseAcceptanceState(value) {
   if (!ACCEPTANCE_STATES.includes(value)) throw new CollaborationError('invalid_request', 'acceptance_state');
   return value;
+}
+
+/**
+ * The parsed Host stop payload every task-level and attempt-level stop shares: a code and a
+ * field (both required, bounded) plus an optional bounded reason. Parsing runs BEFORE anything
+ * is written — before a reservation is released and before an op is journaled — so a payload
+ * the attempt service would reject leaves the attempt, its task and every budget share
+ * byte-identical, and a refused stop can never free a slot another task then spends.
+ */
+export function parseStopPayload(input) {
+  if (input === null || typeof input !== 'object') throw new CollaborationError('invalid_request', 'attempt_resolution');
+  const code = requireText(input.code, 'attempt_resolution', 128);
+  const field = requireText(input.field, 'attempt_resolution', 128);
+  let reason = null;
+  if (input.reason !== undefined && input.reason !== null) {
+    reason = requireText(input.reason, 'attempt_resolution', 256);
+  }
+  return Object.freeze({ code, field, reason });
 }
 
 /** A monotonic-ish clock reading: an explicit `at` is required for every observable transition. */

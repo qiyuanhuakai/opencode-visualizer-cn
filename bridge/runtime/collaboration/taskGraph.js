@@ -20,6 +20,13 @@ import {
 const STRUCTURAL_REASONS = Object.freeze(['collaboration_depth', 'collaboration_children']);
 
 /**
+ * The task states a shape refresh may park. A refresh re-derives SHAPE pauses only: it must
+ * never rewrite a terminal state (cancelled/failed/accepted) or an in-flight one
+ * (dispatched/review) into `paused`, or a stopped task would be resurrected into the scheduler.
+ */
+const SHAPE_PARKABLE_STATES = Object.freeze(['pending', 'paused']);
+
+/**
  * Canonical Task graph (task 37): the durable Team task DAG.
  *
  * Every task carries its acceptance criteria, its evidence-bearing deliverables, its owner and its
@@ -164,7 +171,10 @@ export function createTaskGraph() {
    * structural budgets, so a task can never be paused by a caller's say-so. The coordinator's
    * dynamic pauses (concurrency, session mutation, mailbox) are PRESERVED across the refresh:
    * creating an unrelated task re-derives the shape, never the live counters, so a
-   * budget-parked task stays visibly parked and the scheduler can still admit it.
+   * budget-parked task stays visibly parked and the scheduler can still admit it. That
+   * preservation applies to a task the scheduler may still admit — never to a terminal one:
+   * a refresh must not rewrite cancelled/failed/accepted into `paused`, or a stopped task
+   * would be resurrected and dispatched again.
    */
   function refreshShape() {
     const depths = computeDepths();
@@ -181,7 +191,7 @@ export function createTaskGraph() {
           reasons: Object.freeze(reasons),
           at: structural.length > 0 ? record.updatedAt : record.paused?.at ?? record.updatedAt,
         });
-        if (record.host.state !== 'dispatched' && record.host.state !== 'review') record.host.state = 'paused';
+        if (SHAPE_PARKABLE_STATES.includes(record.host.state)) record.host.state = 'paused';
       } else if (record.paused !== null && record.host.state === 'paused') {
         record.paused = null;
         record.host.state = 'pending';

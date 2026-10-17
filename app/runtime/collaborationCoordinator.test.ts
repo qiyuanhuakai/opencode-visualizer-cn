@@ -1281,4 +1281,130 @@ describe('budget accounting and retry transitions', () => {
     expect(world.coordinator.task(task.taskId).acceptance.state).toBe('none');
     expect(world.coordinator.state().running).toBe(1);
   });
+
+  /* ---- PR #193 round 2: a REJECTED task stop must free nothing ---- */
+
+  it('a rejected cancelTask leaves the reservation its running attempt still holds', async () => {
+    const world = await makeWorld();
+    // Two tasks on ONE native session: the session budget admits exactly one at a time.
+    const a = world.makeTask({ title: 'a', ownerIndex: 0 });
+    const b = world.makeTask({ title: 'b', ownerIndex: 0 });
+    const aDispatched = await world.coordinator.dispatch({ taskId: a.taskId, at: T0 + 1 });
+    if (aDispatched.attempt === null) throw new Error('dispatch did not mint an attempt');
+    await world.coordinator.send({ attemptId: aDispatched.attempt.attemptId, at: T0 + 2 });
+    expect(world.coordinator.state().sessionMutations).toBe(1);
+    // The stop payload the attempt service must reject: a reason past the frozen 256-char bound.
+    const rejected = rejectionOf(() => world.coordinator.cancelTask({ taskId: a.taskId, reason: 'x'.repeat(257), at: T0 + 3 }));
+    expect(rejected.code).toBe('invalid_request');
+    expect(rejected.field).toBe('attempt_resolution');
+    // The rejected stop changed NOTHING: no journaled stop op, the attempt still sent…
+    expect(world.coordinator.ops(aDispatched.attempt.attemptId).filter((op) => op.kind === 'cancelled')).toEqual([]);
+    expect(world.coordinator.attempt(aDispatched.attempt.attemptId).state).toBe('sent');
+    expect(world.coordinator.task(a.taskId).state).toBe('dispatched');
+    // …and the session reservation is still held, so B is still paused by the budget.
+    expect(world.coordinator.state().running).toBe(1);
+    expect(world.coordinator.state().sessionMutations).toBe(1);
+    const bPaused = await world.coordinator.dispatch({ taskId: b.taskId, at: T0 + 4 });
+    expect(bPaused.task.state).toBe('paused');
+    expect(bPaused.task.paused?.reasons).toEqual(['collaboration_session_mutation']);
+    expect(bPaused.attempt).toBeNull();
+  });
+
+  it('a rejected failTask leaves the reservation its running attempt still holds', async () => {
+    const world = await makeWorld();
+    const a = world.makeTask({ title: 'a', ownerIndex: 0 });
+    const b = world.makeTask({ title: 'b', ownerIndex: 0 });
+    const aDispatched = await world.coordinator.dispatch({ taskId: a.taskId, at: T0 + 1 });
+    if (aDispatched.attempt === null) throw new Error('dispatch did not mint an attempt');
+    await world.coordinator.send({ attemptId: aDispatched.attempt.attemptId, at: T0 + 2 });
+    expect(world.coordinator.state().sessionMutations).toBe(1);
+    // A legal code/field with the same over-long reason: still a refusal, still no release.
+    const rejected = rejectionOf(() => world.coordinator.failTask({
+      taskId: a.taskId,
+      code: 'source_unavailable',
+      field: 'task_failed',
+      reason: 'x'.repeat(257),
+      at: T0 + 3,
+    }));
+    expect(rejected.code).toBe('invalid_request');
+    expect(rejected.field).toBe('attempt_resolution');
+    expect(world.coordinator.ops(aDispatched.attempt.attemptId).filter((op) => op.kind === 'failed')).toEqual([]);
+    expect(world.coordinator.attempt(aDispatched.attempt.attemptId).state).toBe('sent');
+    expect(world.coordinator.task(a.taskId).state).toBe('dispatched');
+    expect(world.coordinator.state().running).toBe(1);
+    expect(world.coordinator.state().sessionMutations).toBe(1);
+    const bPaused = await world.coordinator.dispatch({ taskId: b.taskId, at: T0 + 4 });
+    expect(bPaused.task.state).toBe('paused');
+    expect(bPaused.task.paused?.reasons).toEqual(['collaboration_session_mutation']);
+    expect(bPaused.attempt).toBeNull();
+  });
+
+  /* ---- PR #193 round 2: a graph refresh must not resurrect a stopped task ---- */
+
+  it('a graph refresh never resurrects a cancelled queued task into paused', async () => {
+    const world = await makeWorld();
+    const tasks = [0, 1, 2, 3, 4].map((index) => world.makeTask({ title: `slot ${index}`, ownerIndex: index }));
+    const running: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const task = tasks[index];
+      if (task === undefined) throw new Error('missing task');
+      const dispatched = await world.coordinator.dispatch({ taskId: task.taskId, at: T0 + 1 + index });
+      if (dispatched.attempt === null) throw new Error('dispatch did not mint an attempt');
+      running.push(dispatched.attempt.attemptId);
+    }
+    const fifth = tasks[4];
+    if (fifth === undefined) throw new Error('missing fifth task');
+    const paused = await world.coordinator.dispatch({ taskId: fifth.taskId, at: T0 + 20 });
+    expect(paused.task.state).toBe('paused');
+    expect(paused.task.paused?.reasons).toEqual(['collaboration_concurrency']);
+    // The queued task is stopped while it still carries its dynamic pause reason…
+    world.coordinator.cancelTask({ taskId: fifth.taskId, at: T0 + 21 });
+    expect(world.coordinator.task(fifth.taskId).state).toBe('cancelled');
+    // …and an unrelated create plus an unrelated dependency edge re-derive the graph shape.
+    const unrelated = world.makeTask({ title: 'unrelated', ownerIndex: 0 });
+    world.coordinator.addDependency({ taskId: unrelated.taskId, dependsOn: tasks[0]?.taskId ?? '', at: T0 + 22 });
+    const afterRefresh = world.coordinator.task(fifth.taskId);
+    expect(afterRefresh.state).toBe('cancelled');
+    expect(afterRefresh.paused).toBeNull();
+    // Free a budget: the explicit scheduler must NOT mint a second life for the stopped task.
+    await world.coordinator.send({ attemptId: running[0] ?? '', at: T0 + 23 });
+    world.coordinator.observeNativeEnd({ attemptId: running[0] ?? '', reason: 'completed', at: T0 + 24 });
+    const admitted = await world.coordinator.pump({ at: T0 + 25 });
+    expect(admitted).toEqual([]);
+    expect(world.coordinator.task(fifth.taskId).state).toBe('cancelled');
+    expect(world.coordinator.attempts(fifth.taskId)).toEqual([]);
+    expect(world.coordinator.state().dispatches).toBe(4);
+  });
+
+  it('a graph refresh never resurrects a failed queued task into paused', async () => {
+    const world = await makeWorld();
+    const tasks = [0, 1, 2, 3, 4].map((index) => world.makeTask({ title: `slot ${index}`, ownerIndex: index }));
+    const running: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const task = tasks[index];
+      if (task === undefined) throw new Error('missing task');
+      const dispatched = await world.coordinator.dispatch({ taskId: task.taskId, at: T0 + 1 + index });
+      if (dispatched.attempt === null) throw new Error('dispatch did not mint an attempt');
+      running.push(dispatched.attempt.attemptId);
+    }
+    const fifth = tasks[4];
+    if (fifth === undefined) throw new Error('missing fifth task');
+    const paused = await world.coordinator.dispatch({ taskId: fifth.taskId, at: T0 + 20 });
+    expect(paused.task.state).toBe('paused');
+    expect(paused.task.paused?.reasons).toEqual(['collaboration_concurrency']);
+    world.coordinator.failTask({ taskId: fifth.taskId, code: 'source_unavailable', field: 'task_failed', at: T0 + 21 });
+    expect(world.coordinator.task(fifth.taskId).state).toBe('failed');
+    const unrelated = world.makeTask({ title: 'unrelated', ownerIndex: 0 });
+    world.coordinator.addDependency({ taskId: unrelated.taskId, dependsOn: tasks[1]?.taskId ?? '', at: T0 + 22 });
+    const afterRefresh = world.coordinator.task(fifth.taskId);
+    expect(afterRefresh.state).toBe('failed');
+    expect(afterRefresh.paused).toBeNull();
+    await world.coordinator.send({ attemptId: running[1] ?? '', at: T0 + 23 });
+    world.coordinator.observeNativeEnd({ attemptId: running[1] ?? '', reason: 'completed', at: T0 + 24 });
+    const admitted = await world.coordinator.pump({ at: T0 + 25 });
+    expect(admitted).toEqual([]);
+    expect(world.coordinator.task(fifth.taskId).state).toBe('failed');
+    expect(world.coordinator.attempts(fifth.taskId)).toEqual([]);
+    expect(world.coordinator.state().dispatches).toBe(4);
+  });
 });
