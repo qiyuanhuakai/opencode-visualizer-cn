@@ -65,9 +65,11 @@ import { createHarnessRegistry } from '../../../shared/runtime/harnessContract.j
 import { parseEnvironmentId, parseHarnessInstanceId, parseSessionRef, encodeSessionKey } from '../../../shared/runtime/identity.js';
 import { createInstanceOperations } from '../../../shared/runtime/native/opencode/instanceOperations.js';
 import { fingerprint } from '../../../bridge/runtime/operationJournal.js';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import type { Json, RuntimeStore } from '../../../bridge/runtime/storage/runtimeStore.js';
 import { OPEN_CODE_OPERATIONS } from '../../../shared/runtime/native/opencode/operations.js';
+import { createHistoryStream, createHistoryDiskBudget, HISTORY_STREAM_LIMITS } from '../../../bridge/runtime/historyStream.js';
+import type { InternalNativeHistoryHandle } from '../../../bridge/runtime/historyService.js';
 
 const environmentId = parseEnvironmentId('11111111-1111-4111-8111-111111111111');
 const harnessInstanceId = parseHarnessInstanceId('22222222-2222-4222-8222-222222222222');
@@ -86,6 +88,13 @@ async function controlledNative() {
   for (const route of ['/session/{sessionID}', '/session/{sessionID}/fork', '/session/{sessionID}/revert', '/session/{sessionID}/unrevert', '/session/{sessionID}/diff', '/session/{sessionID}/children', '/session/{sessionID}/message/{messageID}', '/session/{sessionID}/todo', '/session/{sessionID}/command', '/session/{sessionID}/message/{messageID}/part/{partID}', '/global/config', '/provider', '/provider/auth', '/provider/{providerID}/oauth/authorize', '/provider/{providerID}/oauth/callback', '/auth/{providerID}', '/agent', '/command', '/session/status', '/permission', '/question', '/mcp', '/lsp', '/skill']) paths[route] = { get: {}, post: {}, patch: {}, put: {}, delete: {} };
   function publish(type: string, properties: Json) { for (const stream of streams) stream.write(`data: ${JSON.stringify({ directory: '/non-git', payload: { type, properties } })}\n\n`); }
   let responseGate: Promise<void> | undefined;
+  const historyPulls: { path: string; before: string | null; authorization: string | undefined }[] = [];
+  let historyBody: string | undefined;
+  let historyCursor: string | undefined;
+  let historyStatus = 0;
+  let historyRedirect = false;
+  let historyGate: Promise<void> | undefined;
+  let historyChunks = 0;
   const server = createServer(async (request, response) => {
     const route = new URL(request.url ?? '/', 'http://fixture');
     const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -100,6 +109,23 @@ async function controlledNative() {
     if (route.pathname === '/session' && request.method === 'GET') { response.end(JSON.stringify([nativeSession])); return; }
     if (route.pathname === '/session/ses_real') { response.end(JSON.stringify(nativeSession)); return; }
     if (route.pathname.endsWith('/prompt_async')) { response.statusCode = 204; response.end(); return; }
+    if (route.pathname.endsWith('/message') && route.searchParams.get('limit') === '200') {
+      // Given the native selected-history producer pull, the raw body is served before any concat or parse.
+      historyPulls.push({ path: route.pathname + route.search, before: route.searchParams.get('before'), authorization: request.headers.authorization });
+      response.on('error', () => {});
+      if (historyGate) await historyGate;
+      if (historyRedirect) { response.statusCode = 302; response.setHeader('Location', 'http://redirected.invalid/message'); response.end(); return; }
+      if (historyStatus) { response.statusCode = historyStatus; response.end('{}'); return; }
+      if (historyBody !== undefined) {
+        if (historyCursor) response.setHeader('X-Next-Cursor', historyCursor);
+        const bytes = Buffer.from(historyBody, 'utf8'); historyChunks = Math.ceil(bytes.byteLength / 65536);
+        response.write(bytes.subarray(0, Math.min(65536, bytes.byteLength)));
+        for (let offset = 65536; offset < bytes.byteLength; offset += 65536) response.write(bytes.subarray(offset, Math.min(offset + 65536, bytes.byteLength)));
+        response.end(); return;
+      }
+      response.end(JSON.stringify([{ info: { id: 'msg_native', sessionID: session.nativeSessionId, role: 'assistant', time: { created: 11, completed: 12 } }, parts: [{ type: 'text', text: 'native selected history' }], providerID: 'native-provider', modelID: 'native/model', unknownNativeField: { nested: ['preserved', 1, true, null] } }]));
+      return;
+    }
     if (route.pathname.endsWith('/message')) {
       const before = route.searchParams.get('before');
       if (before && before !== 'opaque-native-page-token') { response.statusCode = 400; response.end('{}'); return; }
@@ -114,7 +140,7 @@ async function controlledNative() {
   const store = createRuntimeStore({ stateDirectory: path.join(dir, 'runtime'), environmentId, ownerId, epoch }); await store.ready;
   const runtime = createRuntimeHost({ environmentId, role: 'local' }); runtime.start();
   const options = { environmentId, harnessInstanceId, epoch, processGeneration: 1, endpoint: `http://127.0.0.1:${address.port}`, store, runtime, currentProcess: () => ({ epoch, processGeneration: generation }) };
-  return { options, store, calls, publish, get connections() { return connections; }, setGeneration(value: number) { generation = value; }, gate(value: Promise<void> | undefined) { responseGate = value; }, async close() { await runtime.stop(); for (const stream of streams) stream.end(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); await store.close(); } };
+  return { options, store, calls, publish, get connections() { return connections; }, setGeneration(value: number) { generation = value; }, gate(value: Promise<void> | undefined) { responseGate = value; }, historyPulls, historyChunks: () => historyChunks,   history(value: { body?: string; cursor?: string; status?: number; redirect?: boolean; gate?: Promise<void> } | undefined) { historyBody = value?.body; historyCursor = value?.cursor; historyStatus = value?.status ?? 0; historyRedirect = value?.redirect ?? false; historyGate = value?.gate; }, async close() { await runtime.stop(); for (const stream of streams) stream.end(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); await store.close(); } };
 }
 
 describe('OpenCode Bridge driver over controlled HTTP/SSE with real durable store', () => {
@@ -171,6 +197,220 @@ describe('OpenCode Bridge driver over controlled HTTP/SSE with real durable stor
       expect(driver.registration.manifest.extensions.map((entry) => entry.name).sort()).toEqual(Object.keys(OPEN_CODE_OPERATIONS).sort());
       expect(driver.registration.manifest.capabilities.sessionPin).toMatchObject({ state: 'unsupported' });
     } finally { await fixture.close(); }
+  });
+});
+
+const historyAuthority = { epoch, processGeneration: 1 };
+const historySignal = () => new AbortController().signal;
+async function historyStore(scope: string) {
+  return createHistoryStream({ scope, createDirectory: () => mkdtemp(path.join(tmpdir(), 'vis-opencode-history-spool-')), globalDisk: createHistoryDiskBudget() });
+}
+async function historyProducer(fixture: Awaited<ReturnType<typeof controlledNative>>) {
+  const driver = await createOpenCodeDriver(fixture.options);
+  const method = driver.registration.driver.core.openHistory;
+  if (typeof method !== 'function') throw new TypeError('missing openHistory producer');
+  return { driver, handle: await method({ environmentId, harnessInstanceId, session, params: historyAuthority }) as InternalNativeHistoryHandle };
+}
+async function drainDescriptor(handle: InternalNativeHistoryHandle, pageId: string, descriptorId: string) {
+  const parts: Buffer[] = [];
+  let offset = 0;
+  for (;;) {
+    const chunk = await handle.chunk({ pageId, descriptorId, offset, signal: historySignal() });
+    parts.push(Buffer.from(chunk.bytes.buffer, chunk.bytes.byteOffset, chunk.bytes.byteLength));
+    const next = chunk.nextOffset;
+    chunk.release();
+    if (next === null) break;
+    offset = next;
+  }
+  return Buffer.concat(parts);
+}
+async function waitFor(predicate: () => boolean) {
+  const deadline = Date.now() + 5000;
+  while (!predicate()) { if (Date.now() > deadline) throw new Error('native condition was not reached'); await new Promise((resolve) => setTimeout(resolve, 5)); }
+}
+function nativeMessages(count: number, padding: number) {
+  return Array.from({ length: count }, (_, index) => ({ info: { id: `msg_${index}`, sessionID: session.nativeSessionId, role: index % 2 ? 'user' : 'assistant', time: { created: 100 + index, completed: 200 + index } }, parts: [{ type: 'text', text: 'x'.repeat(padding) }], providerID: 'native-provider', modelID: 'native/model', unknownNativeField: { nested: ['preserved', index, true, null] } }));
+}
+
+describe('OpenCode native selected-history producer over controlled raw HTTP', () => {
+  it('declares the native selected-history producer supported and leaves every other operation unchanged', async () => {
+    // Given one Runtime-owned native driver registering its manifest.
+    const fixture = await controlledNative();
+    try {
+      const driver = await createOpenCodeDriver(fixture.options);
+      // When the manifest is structurally validated by the strict shared contract.
+      expect(driver.registration.manifest.core.openHistory).toEqual({ state: 'supported' });
+      expect(typeof driver.registration.driver.core.openHistory).toBe('function');
+      // Then no other core operation and no legacy capability mark changed.
+      for (const support of Object.values(driver.registration.manifest.core)) expect(support).toEqual({ state: 'supported' });
+      expect(driver.registration.manifest.capabilities.sessionPin).toMatchObject({ state: 'unsupported' });
+      expect(driver.registration.manifest.capabilities.sessionCompact).toMatchObject({ state: 'unsupported' });
+      expect(driver.registration.manifest.extensions.map((entry) => entry.name).sort()).toEqual(Object.keys(OPEN_CODE_OPERATIONS).sort());
+    } finally { await fixture.close(); }
+  });
+  it('streams the raw native message body through the bounded substrate before any concat or parse', async () => {
+    // Given a real-shaped native history document far past the legacy 2MiB concat bound.
+    const fixture = await controlledNative();
+    const root = await mkdtemp(path.join(tmpdir(), 'vis-opencode-history-')); temporary.push(root);
+    const body = JSON.stringify(nativeMessages(6, 600000));
+    fixture.history({ body });
+    const { handle } = await historyProducer(fixture);
+    const store = await historyStore(JSON.stringify([environmentId, harnessInstanceId, session]));
+    try {
+      await handle.open({ signal: historySignal(), streamStore: store });
+      // When the selected session's history page is opened over the raw native HTTP body.
+      const page = await handle.page({ signal: historySignal() });
+      if (!page.document) throw new TypeError('missing native document');
+      // Then every native record is one immutable streamed descriptor and the envelope is complete.
+      expect(page.items.map((item) => item.recordId)).toEqual(['msg_0', 'msg_1', 'msg_2', 'msg_3', 'msg_4', 'msg_5']);
+      expect(page.items.every((item) => item.kind === 'stream')).toBe(true);
+      expect(page).toMatchObject({ completeness: 'complete', cursor: null });
+      expect(fixture.historyPulls).toHaveLength(1);
+      expect(fixture.historyPulls[0]?.path).toContain('limit=200');
+      expect(fixture.historyPulls[0]?.path).not.toContain('before=');
+      expect(Buffer.byteLength(body)).toBeGreaterThan(2097152);
+      expect(fixture.historyChunks()).toBeGreaterThan(32);
+      // And the whole native envelope, unknown fields included, is served byte-exactly.
+      const document = await drainDescriptor(handle, page.pageId, page.document.id);
+      expect(createHash('sha256').update(document).digest('hex')).toBe(page.document.sha256);
+      expect(document.toString('utf8')).toBe(body);
+      const first = page.items[0];
+      if (first?.kind !== 'stream') throw new TypeError('missing native record');
+      const record = await drainDescriptor(handle, page.pageId, first.descriptor.id);
+      expect(record.toString('utf8')).toBe(JSON.stringify(nativeMessages(6, 600000)[0]));
+      // And the substrate ledger stays bounded independently of the body size.
+      expect(store.usage().peakMemoryBytes).toBeLessThanOrEqual(HISTORY_STREAM_LIMITS.workingBytes + 2097152);
+      expect(store.usage().diskBytes).toBe(page.document.totalBytes);
+    } finally { await handle.close(); await store.close(); }
+  });
+  it('failure rejects a late foreign session record instead of publishing a page', async () => {
+    // Given a native body whose record arrives for another session.
+    const fixture = await controlledNative();
+    fixture.history({ body: JSON.stringify([{ info: { id: 'msg_foreign', sessionID: 'ses_other' }, parts: [] }]) });
+    const { handle } = await historyProducer(fixture);
+    const store = await historyStore(JSON.stringify([environmentId, harnessInstanceId, session]));
+    try {
+      await handle.open({ signal: historySignal(), streamStore: store });
+      // When the page is ingested.
+      await expect(handle.page({ signal: historySignal() })).rejects.toMatchObject({ code: 'reconcile_required', field: 'opencode.history_scope' });
+      // Then no spool survives and no page is published.
+      expect(store.usage()).toMatchObject({ diskBytes: 0, pages: 0, fileHandles: 0, pendingWrites: 0, outputs: 0 });
+    } finally { await handle.close(); await store.close(); }
+  });
+  it('failure rejects a repeated native cursor instead of serving the same page twice', async () => {
+    // Given a native page that always reports the same opaque next cursor.
+    const fixture = await controlledNative();
+    fixture.history({ body: JSON.stringify(nativeMessages(1, 16)), cursor: 'opaque-native-token' });
+    const { handle } = await historyProducer(fixture);
+    const store = await historyStore(JSON.stringify([environmentId, harnessInstanceId, session]));
+    try {
+      await handle.open({ signal: historySignal(), streamStore: store });
+      const first = await handle.page({ signal: historySignal() });
+      expect(first).toMatchObject({ cursor: 'opaque-native-token', completeness: 'partial' });
+      // When the same native cursor is replayed.
+      await expect(handle.page({ cursor: 'opaque-native-token', signal: historySignal() })).rejects.toMatchObject({ code: 'replay_required', field: 'opencode.history_repeated_cursor' });
+      // Then a forged cursor is refused before any native request.
+      const before = fixture.historyPulls.length;
+      await expect(handle.page({ cursor: 'forged-native-token', signal: historySignal() })).rejects.toMatchObject({ code: 'replay_required', field: 'opencode.history_cursor' });
+      expect(fixture.historyPulls).toHaveLength(before);
+    } finally { await handle.close(); await store.close(); }
+  });
+  it('holds one native admission slot for the whole pulled body and releases it exactly at drain', async () => {
+    // Given a history body held open at the native boundary.
+    const fixture = await controlledNative();
+    const held = Promise.withResolvers<void>();
+    fixture.history({ body: JSON.stringify(nativeMessages(1, 16)), gate: held.promise });
+    const { driver, handle } = await historyProducer(fixture);
+    const store = await historyStore(JSON.stringify([environmentId, harnessInstanceId, session]));
+    try {
+      await handle.open({ signal: historySignal(), streamStore: store });
+      const pulling = handle.page({ signal: historySignal() });
+      await waitFor(() => fixture.historyPulls.length === 1);
+      // When ordinary native requests are in flight beside the streaming pull.
+      const registry = createHarnessRegistry(); registry.register(driver.registration);
+      const legacy = Array.from({ length: 9 }, () => registry.invoke({ ...input(), channel: 'core', operation: 'getSession' }));
+      await waitFor(() => fixture.calls.filter((call) => call.path === '/session/ses_real').length === 9);
+      // Then the pull occupies its own admission slot for the entire unread body.
+      expect(fixture.historyPulls).toHaveLength(1);
+      expect(fixture.calls.filter((call) => call.path === '/session/ses_real')).toHaveLength(9);
+      // And draining the body releases exactly that slot for the next native request.
+      held.resolve(); fixture.history(undefined);
+      expect(await pulling).toMatchObject({ completeness: 'complete' });
+      await Promise.all(legacy);
+      expect(await registry.invoke({ ...input(), channel: 'core', operation: 'getSession' })).toMatchObject({ session });
+    } finally { fixture.history(undefined); fixture.gate(undefined); await handle.close(); await store.close(); }
+    await fixture.close();
+  });
+  it('carries the native authorization header and refuses a redirected history endpoint', async () => {
+    // Given a native history endpoint that answers with a redirect.
+    const fixture = await controlledNative();
+    fixture.history({ body: JSON.stringify(nativeMessages(1, 16)), redirect: true });
+    const driver = await createOpenCodeDriver({ ...fixture.options, authorization: 'Bearer native-secret' });
+    const method = driver.registration.driver.core.openHistory;
+    if (typeof method !== 'function') throw new TypeError('missing openHistory producer');
+    const handle = await method({ environmentId, harnessInstanceId, session, params: historyAuthority }) as InternalNativeHistoryHandle;
+    const store = await historyStore(JSON.stringify([environmentId, harnessInstanceId, session]));
+    try {
+      await handle.open({ signal: historySignal(), streamStore: store });
+      // When the raw pull follows the driver origin and redirect policy.
+      await expect(handle.page({ signal: historySignal() })).rejects.toMatchObject({ code: 'source_unavailable', field: 'opencode.http' });
+      // Then the pull carried the native authorization and never followed the redirect.
+      expect(fixture.historyPulls).toHaveLength(1);
+      expect(fixture.historyPulls[0]?.authorization).toBe('Bearer native-secret');
+      expect(fixture.historyPulls[0]?.path).not.toContain('redirected.invalid');
+      expect(store.usage()).toMatchObject({ diskBytes: 0, pages: 0 });
+    } finally { fixture.history(undefined); await handle.close(); await store.close(); }
+    await fixture.close();
+  });
+  it('failure holds the native deadline on the raw history pull and releases its admission slot', async () => {
+    // Given a native body that never answers within the driver deadline.
+    const fixture = await controlledNative();
+    const held = Promise.withResolvers<void>();
+    fixture.history({ body: JSON.stringify(nativeMessages(1, 16)), gate: held.promise });
+    const driver = await createOpenCodeDriver({ ...fixture.options, requestTimeoutMs: 150 });
+    const method = driver.registration.driver.core.openHistory;
+    if (typeof method !== 'function') throw new TypeError('missing openHistory producer');
+    const handle = await method({ environmentId, harnessInstanceId, session, params: historyAuthority }) as InternalNativeHistoryHandle;
+    const store = await historyStore(JSON.stringify([environmentId, harnessInstanceId, session]));
+    try {
+      await handle.open({ signal: historySignal(), streamStore: store });
+      // When the raw pull exceeds the native deadline.
+      await expect(handle.page({ signal: historySignal() })).rejects.toMatchObject({ code: 'timeout', field: 'opencode.http' });
+      expect(fixture.historyPulls).toHaveLength(1);
+    } finally { held.resolve(); fixture.history(undefined); await handle.close(); await store.close(); }
+    // Then the released slot admits the next ordinary native request.
+    const registry = createHarnessRegistry(); registry.register(driver.registration);
+    expect(await registry.invoke({ ...input(), channel: 'core', operation: 'getSession' })).toMatchObject({ session });
+    await fixture.close();
+  });
+  it('reports native invalidation from the selected observer and releases it without cancelling driver activity', async () => {
+    // Given an opened selected history with a live native observer.
+    const fixture = await controlledNative();
+    const { driver, handle } = await historyProducer(fixture);
+    const registry = createHarnessRegistry(); registry.register(driver.registration);
+    const store = await historyStore(JSON.stringify([environmentId, harnessInstanceId, session]));
+    try {
+      await handle.open({ signal: historySignal(), streamStore: store });
+      const waiting = handle.read({ after: 0, signal: historySignal() });
+      let settled = false; void waiting.then(() => { settled = true; }, () => { settled = true; });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // When a native event arrives for a different session.
+      fixture.publish('message.updated', { info: { id: 'msg_other', sessionID: 'ses_other', role: 'user', time: { created: 1 } } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Then the selected owner stays unsettled and retains no transcript.
+      expect(settled).toBe(false);
+      // And the selected session's own native event settles the read.
+      fixture.publish('message.updated', { info: { id: 'msg_mine', sessionID: session.nativeSessionId, role: 'user', time: { created: 2 } } });
+      expect(await waiting).toMatchObject({ through: 1, changed: true, status: 'current' });
+      const later = handle.read({ after: 1, signal: historySignal() });
+      fixture.publish('session.idle', { sessionID: session.nativeSessionId });
+      expect(await later).toMatchObject({ through: 2, changed: true, status: 'current' });
+    } finally { await handle.close(); await store.close(); }
+    // Then releasing the selected observer leaves operation, control and global driver activity intact.
+    expect(await registry.invoke({ ...input(), channel: 'core', operation: 'inspect' })).toEqual({ state: 'ready', protocolVersion: 1 });
+    expect(fixture.connections).toBe(1);
+    expect(await registry.invoke({ ...input({ limit: 1 }), channel: 'core', operation: 'readHistoryPage' })).toMatchObject({ completeness: 'partial' });
+    await fixture.close();
   });
 });
 

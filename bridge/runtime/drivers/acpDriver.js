@@ -8,7 +8,7 @@ import {
 import { createAcpMutations } from './acpMutations.js';
 import { createAcpSubscriptions } from '../../../shared/runtime/native/acp/subscriptions.js';
 import { createAcpExtensions } from './acpExtensions.js';
-import { createAcpSessions } from './acpSessions.js';
+import { createAcpSessions, createAcpHistory } from './acpSessions.js';
 import { createAcpInteractions } from './acpInteractions.js';
 import {
   parseEnvironmentId,
@@ -201,6 +201,16 @@ export async function createAcpDriver(options) {
       readHistoryPage: (input) => {
         requireSession(input);
         return sessions.history(input);
+      },
+      openHistory: async (input) => {
+        const session = requireSession(input);
+        return createAcpHistory({
+          session,
+          authority: Object.freeze({ epoch, processGeneration: rpc.processGeneration }),
+          current: () => rpc.active,
+          assertCurrent: rpc.assertCurrent,
+          attachRaw: (tap) => rpc.setRawTap(tap),
+        });
       },
       createSession: sessions.create,
       send,
