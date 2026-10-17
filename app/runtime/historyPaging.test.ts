@@ -311,22 +311,27 @@ describe('failure classes — history page gap / corrupt record, old-generation 
     expect(service.usage().dirtyCount).toBe(1); // the stale write added nothing
   });
 
-  it('a single message larger than the 2 MiB inline ceiling is chunked and never fully resident', async () => {
+  it('a single message larger than the 2 MiB inline ceiling is chunked and charged at its real size', async () => {
     const bigText = 'A'.repeat(3 * 1024 * 1024); // 3 MiB > 2 MiB entryInlineBytes
     const reader = async () => ({ entries: [textEntry('big', bigText)] as unknown[], nextCursor: null });
     const service = createAuxiliaryHistoryService({ reader, limits: { entryInlineBytes: 2 * 1024 * 1024, chunkBytes: 65536 } });
     disposables.push(service);
     const page = await service.page(null);
-    // The oversized entry is represented as a chunked reference, not held whole.
+    // The oversized entry is represented as a chunked reference, and its body is CHARGED to the
+    // resident budget at its real size — a reference that costs nothing would let the page hold
+    // unbounded bytes while the budget reported a rounding error.
     expect(page.oversized).toHaveLength(1);
     expect(page.oversized[0]!.entryId).toBe('big');
-    expect(page.bytes).toBeLessThan(bigText.length); // resident bytes exclude the 3 MiB body
-    expect(service.usage().residentBytes).toBeLessThan(2 * 1024 * 1024);
-    // Reading a chunk returns a bounded slice.
+    expect(page.bytes).toBeGreaterThan(bigText.length - 64);
+    expect(service.usage().residentBytes).toBe(page.bytes);
+    // Reading a chunk returns a bounded BYTE slice of the real body.
     const descriptorId = page.oversized[0]!.descriptorId;
     const chunk = await service.chunk(page.pageId, descriptorId, 0);
-    expect(chunk.bytes).toBeLessThanOrEqual(65536);
-    expect(chunk.bytes).toBeGreaterThan(0);
+    expect(chunk.bytes).toBeInstanceOf(Uint8Array);
+    expect(chunk.bytes.byteLength).toBeLessThanOrEqual(65536);
+    expect(chunk.bytes.byteLength).toBeGreaterThan(0);
+    const serialized = JSON.stringify(textEntry('big', bigText));
+    expect(new TextDecoder().decode(chunk.bytes)).toBe(serialized.slice(0, 65536));
   });
 });
 
@@ -361,5 +366,104 @@ describe('wiring — the storage modules expose the bounded paging under the NEW
   it('returns undefined (not a cache) when no database is available', () => {
     expect(openNativeAuxiliaryPaging(undefined, 'thread-1')).toBeUndefined();
     expect(openBackendHistoryPaging(undefined, 'child-1', 'opencode', 'scope-x')).toBeUndefined();
+  });
+});
+
+describe('review findings — the paging budget, the chunk payload, the dirty buffer and the ack window', () => {
+  const bigText = (size: number): string => 'A'.repeat(size);
+  const body = (id: string, text: string): unknown[] => [textEntry(id, text)] as unknown[];
+
+  it('an oversized body is charged to the resident budget, so a page that would blow it is refused', async () => {
+    const over = 20 * 1024 * 1024;
+    const service = createAuxiliaryHistoryService({
+      reader: async () => ({ entries: body('huge', bigText(over)), nextCursor: null }),
+      limits: { entryInlineBytes: 2 * 1024 * 1024, residentBytes: 16 * 1024 * 1024 },
+    });
+    disposables.push(service);
+    await expect(service.page(null)).rejects.toMatchObject({ code: 'source_unavailable', field: 'history.memory' });
+    expect(service.usage().residentBytes).toBe(0);
+    expect(service.usage().pageCount).toBe(0);
+  });
+
+  it('a chunk carries the real bytes, and a non-ASCII body walks to the end at the declared size', async () => {
+    const han = '汉'.repeat(800000);
+    const serialized = JSON.stringify(textEntry('han', han));
+    const service = createAuxiliaryHistoryService({
+      reader: async () => ({ entries: body('han', han), nextCursor: null }),
+      limits: { entryInlineBytes: 1024, chunkBytes: 65536 },
+    });
+    disposables.push(service);
+    const page = await service.page(null);
+    const descriptorId = page.oversized[0]!.descriptorId;
+
+    const decoder = new TextDecoder();
+    let reassembled = '';
+    let offset = 0;
+    let chunks = 0;
+    for (let step = 0; step < 100000; step += 1) {
+      const chunk = await service.chunk(page.pageId, descriptorId, offset);
+      expect(chunk.bytes).toBeInstanceOf(Uint8Array);
+      expect(chunk.bytes.byteLength).toBeLessThanOrEqual(65536);
+      reassembled += decoder.decode(chunk.bytes, { stream: true });
+      chunks += 1;
+      if (chunk.nextOffset === null) break;
+      offset = chunk.nextOffset;
+    }
+    reassembled += decoder.decode();
+    expect(chunks).toBeGreaterThan(1);
+    expect(reassembled).toBe(serialized);
+  });
+
+  it('a same-id record staged again replaces the staged version instead of dropping it', async () => {
+    const persisted: { parts: { text: string }[] }[] = [];
+    const service = createAuxiliaryHistoryService({
+      reader: async () => ({ entries: [], nextCursor: null }),
+      persister: async (batch) => { persisted.push(...(batch as unknown as { parts: { text: string }[] }[])); },
+    });
+    disposables.push(service);
+    service.stage([textEntry('m-1', 'partial stream')], 1);
+    service.stage([textEntry('m-1', 'the final complete answer')], 2);
+    await service.commit();
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]!.parts[0]!.text).toBe('the final complete answer');
+    expect(service.usage().dirtyCount).toBe(0);
+  });
+
+  it('a record staged while an ack is in flight survives that commit', async () => {
+    let release = (): void => {};
+    const ack = new Promise<void>((resolve) => { release = resolve; });
+    const persisted: string[][] = [];
+    const service = createAuxiliaryHistoryService({
+      reader: async () => ({ entries: [], nextCursor: null }),
+      persister: async (batch) => {
+        await ack;
+        persisted.push((batch as unknown as { info: { id: string } }[]).map((entry) => entry.info.id));
+      },
+    });
+    disposables.push(service);
+    service.stage([textEntry('a-1', 'first')]);
+    const committing = service.commit();
+    await Promise.resolve();
+    service.stage([textEntry('b-1', 'second')]);
+    expect(service.usage().dirtyCount).toBe(2);
+    release();
+    await committing;
+
+    expect(service.usage().dirtyCount).toBe(1);
+    const second = await service.commit();
+    expect(second).toEqual({ committed: 1, bytes: second.bytes });
+    expect(persisted).toEqual([['a-1'], ['b-1']]);
+  });
+
+  it('a failed ack keeps the whole batch dirty for recovery', async () => {
+    const service = createAuxiliaryHistoryService({
+      reader: async () => ({ entries: [], nextCursor: null }),
+      persister: async () => { throw new Error('durable store unreachable'); },
+    });
+    disposables.push(service);
+    service.stage([textEntry('a-1', 'first')]);
+    service.stage([textEntry('a-2', 'second')]);
+    await expect(service.commit()).rejects.toMatchObject({ code: 'source_unavailable', field: 'history.durable_ack' });
+    expect(service.usage().dirtyCount).toBe(2);
   });
 });

@@ -290,21 +290,19 @@ async function chunks(): Promise<AnyRecord> {
   const page = await cache.page(null);
   const reference = page.oversized[0]!;
   const walk: AnyRecord[] = [];
+  const decoder = new TextDecoder();
+  let reassembled = '';
   let offset = 0;
   for (let step = 0; step < 200; step += 1) {
-    const chunk = await cache.chunk(page.pageId, reference.descriptorId, offset);
-    walk.push({ offset, bytes: chunk.bytes, nextOffset: chunk.nextOffset });
-    if (chunk.nextOffset === null) break;
-    offset = chunk.nextOffset;
+    const slice = await cache.chunk(page.pageId, reference.descriptorId, offset);
+    const payload = slice.bytes as unknown as Uint8Array;
+    walk.push({ offset, bytes: payload.byteLength, nextOffset: slice.nextOffset });
+    // The body is reassembled ONLY from what the service hands back, never from the fixture.
+    reassembled += decoder.decode(payload, { stream: true });
+    if (slice.nextOffset === null) break;
+    offset = slice.nextOffset;
   }
-  let reassembled = '';
-  let readOffset = 0;
-  for (let step = 0; step < 200; step += 1) {
-    const chunk = await cache.chunk(page.pageId, reference.descriptorId, readOffset);
-    reassembled += serialized.slice(readOffset, readOffset + chunk.bytes);
-    if (chunk.nextOffset === null) break;
-    readOffset = chunk.nextOffset;
-  }
+  reassembled += decoder.decode();
   domHost.textContent = JSON.stringify({ chunkCount: walk.length, totalBytes }, null, 2);
   const result = {
     serializedBytes: totalBytes,

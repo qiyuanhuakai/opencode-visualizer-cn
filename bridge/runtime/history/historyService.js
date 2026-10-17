@@ -51,6 +51,7 @@ export function createAuxiliaryHistoryService(options) {
   let dirtyBytes = 0;
   let generation = 0;
   let bufferedHistory = false;
+  let committing = null;
   let disposed = false;
 
   function assertOpen() {
@@ -108,16 +109,18 @@ export function createAuxiliaryHistoryService(options) {
     const entries = [];
     const oversized = [];
     const descriptors = [];
+    // An oversized body IS resident, so it is charged in full and staged only once the ceiling holds.
+    const staged = [];
     let bytes = 0;
     for (const value of raw.entries) {
       assertAuxiliaryEntry(value);
       const size = encodedSize(value);
       if (size > limits.entryInlineBytes) {
         const descriptorId = newId();
-        spool.set(descriptorId, { body: JSON.stringify(value), totalBytes: size, pageId: '' });
+        staged.push({ descriptorId, bytes: encoder.encode(JSON.stringify(value)), totalBytes: size });
         oversized.push(Object.freeze({ entryId: value.info.id, descriptorId, totalBytes: size }));
         descriptors.push(descriptorId);
-        bytes += 256; // a chunked reference, not the oversized body
+        bytes += size;
       } else {
         entries.push(Object.freeze({ info: Object.freeze({ ...value.info }), parts: Object.freeze(value.parts.map(part => Object.freeze({ ...part }))) }));
         bytes += size;
@@ -125,6 +128,8 @@ export function createAuxiliaryHistoryService(options) {
     }
     const nextCursor = raw.nextCursor ?? null;
     if (nextCursor !== null && nextCursor === cursor) throw new ProtocolError('source_unavailable', 'history.cursor');
+    requireValue(bytes <= limits.residentBytes, 'history.memory', 'source_unavailable');
+    for (const item of staged) spool.set(item.descriptorId, { bytes: item.bytes, totalBytes: item.totalBytes, pageId: '' });
     return { cursor, nextCursor, entries, bytes, oversized, descriptors };
   }
 
@@ -159,10 +164,14 @@ export function createAuxiliaryHistoryService(options) {
     requireValue(Number.isInteger(offset) && offset >= 0, 'history.offset');
     const spooled = spool.get(descriptorId);
     requireValue(spooled !== undefined, 'history.descriptor', 'invalid_request');
-    const slice = spooled.body.slice(offset, offset + limits.chunkBytes);
-    const bytes = encoder.encode(slice).length;
-    const end = offset + bytes;
-    return Promise.resolve({ bytes, nextOffset: end >= spooled.totalBytes ? null : end });
+    // The body is addressed by UTF-8 BYTE offset, not by UTF-16 code unit: a `String.slice` over a
+    // non-ASCII body both over-reads (one chunk holds more than chunkBytes bytes) and stalls (the
+    // remainder is shorter than a slice unit, so bytes comes back 0 forever).
+    const body = spooled.bytes;
+    requireValue(offset < body.length, 'history.offset');
+    const slice = body.subarray(offset, offset + limits.chunkBytes);
+    const end = offset + slice.length;
+    return Promise.resolve({ bytes: slice, nextOffset: end >= body.length ? null : end });
   }
 
   async function legacyExport() {
@@ -194,26 +203,55 @@ export function createAuxiliaryHistoryService(options) {
     }
     const incoming = [...entries];
     for (const entry of incoming) assertAuxiliaryEntry(entry);
-    const fresh = incoming.filter(entry => !dirty.has(entry.info.id));
-    requireValue(dirty.size + fresh.length <= limits.dirtyMaxCount, 'history.dirty_budget');
-    const addedBytes = fresh.reduce((sum, entry) => sum + encodedSize(entry), 0);
-    requireValue(dirtyBytes + addedBytes <= limits.dirtyMaxBytes, 'history.dirty_budget');
-    for (const entry of fresh) dirty.set(entry.info.id, Object.freeze({ info: Object.freeze({ ...entry.info }), parts: Object.freeze(entry.parts.map(part => Object.freeze({ ...part }))) }));
-    dirtyBytes += addedBytes;
+    // An already-dirty record is UPDATED, not dropped: the byte budget is re-charged for the delta.
+    for (const entry of incoming) {
+      const existing = dirty.get(entry.info.id);
+      if (existing === undefined) {
+        requireValue(dirty.size + 1 <= limits.dirtyMaxCount, 'history.dirty_budget');
+        const size = encodedSize(entry);
+        requireValue(dirtyBytes + size <= limits.dirtyMaxBytes, 'history.dirty_budget');
+        dirty.set(entry.info.id, Object.freeze({ info: Object.freeze({ ...entry.info }), parts: Object.freeze(entry.parts.map(part => Object.freeze({ ...part }))) }));
+        dirtyBytes += size;
+        continue;
+      }
+      const next = Object.freeze({ info: Object.freeze({ ...entry.info }), parts: Object.freeze(entry.parts.map(part => Object.freeze({ ...part }))) });
+      const before = encodedSize(existing);
+      const after = encodedSize(next);
+      requireValue(dirtyBytes - before + after <= limits.dirtyMaxBytes, 'history.dirty_budget');
+      dirty.set(entry.info.id, next);
+      dirtyBytes += after - before;
+    }
+  }
+
+  function removeCommitted(batch) {
+    // Only this batch's records that have not been re-staged since are removed.
+    for (const entry of batch) {
+      const current = dirty.get(entry.info.id);
+      if (current === entry) dirty.delete(entry.info.id);
+    }
+    dirtyBytes = [...dirty.values()].reduce((sum, entry) => sum + encodedSize(entry), 0);
   }
 
   async function commit() {
     assertOpen();
     if (dirty.size === 0) return { committed: 0, bytes: 0 };
+    // Commits are serialized: a second caller waits for the in-flight ack.
+    while (committing !== null) await committing;
     const batch = [...dirty.values()];
     const bytes = dirtyBytes;
+    committing = (async () => {
+      try {
+        if (persister) await persister(batch);
+      } catch {
+        throw new ProtocolError('source_unavailable', 'history.durable_ack');
+      }
+      removeCommitted(batch);
+    })();
     try {
-      if (persister) await persister(batch);
-    } catch {
-      throw new ProtocolError('source_unavailable', 'history.durable_ack');
+      await committing;
+    } finally {
+      committing = null;
     }
-    dirty.clear();
-    dirtyBytes = 0;
     return { committed: batch.length, bytes };
   }
 
