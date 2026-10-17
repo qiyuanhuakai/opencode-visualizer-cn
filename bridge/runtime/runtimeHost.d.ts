@@ -1,5 +1,8 @@
 import type { Hello } from '../../shared/runtime/protocol.js';
 import type { JsonValue } from '../../shared/runtime/capabilities.js';
+import type { RuntimeServices } from './runtimeServices.js';
+import type { RuntimeTransport, RuntimeDispatch } from './runtimeDispatch.js';
+import type { TargetGrant } from '../../shared/runtime/runtimeWire.js';
 export interface RuntimeSource {
   readonly id: string;
   readonly ownership?: 'owned' | 'borrowed';
@@ -19,6 +22,7 @@ export interface RuntimeConnection {
   disconnect(): void;
   hello(): Hello;
   inspect(): RuntimeInspection;
+  openRuntime(transport: RuntimeTransport): RuntimeDispatch | null;
 }
 export interface RuntimeHost {
   start(): void;
@@ -39,4 +43,7 @@ export function createRuntimeHost(options: {
   readonly role: RuntimeInspection['role'];
   readonly sources?: readonly RuntimeSource[];
   readonly cachedTopology?: readonly JsonValue[];
+  readonly services?: RuntimeServices;
+  readonly targets?: readonly RuntimeServices[];
+  readonly grants?: readonly TargetGrant[];
 }): RuntimeHost;

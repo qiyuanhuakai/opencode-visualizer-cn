@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { createBridgeConfigStore } from './bridgeConfig.js';
 import { createDaemonPaths, isProcessAlive, readDaemonState } from './daemonState.js';
 import { assertSafeDaemonTarget } from './daemonCredentials.js';
+import { parseEnvironmentId } from '../shared/runtime/identity.js';
 
 const DEFAULT_PORT = 23004;
 const DEFAULT_PATH = '/codex';
@@ -25,6 +27,8 @@ Usage:
   vis_bridge stop
   vis_bridge restart [options]
   vis_bridge config [--config <path>]
+  vis_bridge control-store --state-root <dir> [--environment <uuid>]
+  vis_bridge relay --environment <uuid> --job <uuid> --bridge-instance <uuid> --compute-node <name> (--socket <path>|--port <n>) [--step <uuid>] [--epoch <n>] [--stdio-forward]
   vis_bridge update [--check] [--yes|-y]
   vis_bridge upgrade [--check] [--yes|-y]
   vis_bridge --version
@@ -38,6 +42,16 @@ Options:
   --upstream-token     Bearer token sent to Codex app-server during WebSocket handshake.
   --upstream-token-file Read upstream bearer token from file.
   --config             Bridge supervisor config path.
+  --state-root         Login-local state root owned by the control-store role.
+  --environment        Persistent cluster environment UUID the control store fences.
+  --job                Slurm intent UUID the relay belongs to (relay role).
+  --bridge-instance    Compute Bridge instance UUID currently serving the job (relay role).
+  --compute-node       Verified compute node the relay is bound to (relay role).
+  --socket             Compute-local socket path the relay listens on (relay role, no compute TCP).
+  --stdio-forward      Forward this process's stdio to the compute-local socket (the srun relay step).
+  --port               Authenticated local TCP port the relay listens on (relay role).
+  --step               Relay step UUID (relay role; generated when omitted).
+  --epoch              Control-store fencing epoch the relay binds (relay role; default 0).
   --help               Show this help.
 
 Environment:
@@ -50,6 +64,8 @@ Environment:
   VIS_BRIDGE_CODEX_TOKEN_FILE       Same as --upstream-token-file.
   VIS_BRIDGE_CODEX_AUTHORIZATION    Raw Authorization header for upstream.
   VIS_BRIDGE_CONFIG                 Same as --config.
+  VIS_BRIDGE_CONTROL_STORE_ROOT     Same as --state-root for the control-store role.
+  VIS_BRIDGE_ENVIRONMENT            Same as --environment.
   EDITOR                            Editor command used by vis_bridge config.
   VIS_BRIDGE_STATE_DIR              Override the per-user daemon state directory.
 `;
@@ -88,7 +104,7 @@ function createDaemonArgs(options) {
 
 export function parseCliOptions(argv = process.argv.slice(2), env = process.env) {
   const explicitCommand = argv[0]?.startsWith('-') ? undefined : argv[0];
-  if (explicitCommand && !['start', 'stop', 'restart', 'config', '__daemon'].includes(explicitCommand)) {
+  if (explicitCommand && !['start', 'stop', 'restart', 'config', 'control-store', 'relay', '__daemon'].includes(explicitCommand)) {
     throw new Error(`Unknown vis_bridge command: ${explicitCommand}`);
   }
   const command = explicitCommand ?? 'start';
@@ -104,6 +120,15 @@ export function parseCliOptions(argv = process.argv.slice(2), env = process.env)
       'upstream-token': { type: 'string' },
       'upstream-token-file': { type: 'string' },
       config: { type: 'string' },
+      'state-root': { type: 'string' },
+      environment: { type: 'string' },
+      job: { type: 'string' },
+      'bridge-instance': { type: 'string' },
+      'compute-node': { type: 'string' },
+      socket: { type: 'string' },
+      step: { type: 'string' },
+      epoch: { type: 'string' },
+      'stdio-forward': { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
     allowPositionals: false,
@@ -125,6 +150,106 @@ export function parseCliOptions(argv = process.argv.slice(2), env = process.env)
       command,
       help: Boolean(values.help),
       configPath: values.config ?? (env.VIS_BRIDGE_CONFIG?.trim() || undefined),
+    };
+  }
+
+  if (command === 'control-store') {
+    const unexpectedOption = Object.keys(values).find(
+      (key) => !['help', 'state-root', 'environment'].includes(key),
+    );
+    if (unexpectedOption) throw new Error(`vis_bridge control-store does not accept --${unexpectedOption}.`);
+    const stateRoot =
+      values['state-root'] ?? env.VIS_BRIDGE_CONTROL_STORE_ROOT?.trim() ?? env.VIS_BRIDGE_STATE_DIR?.trim();
+    if (!values.help && !stateRoot) {
+      throw new Error('vis_bridge control-store requires --state-root or VIS_BRIDGE_CONTROL_STORE_ROOT.');
+    }
+    const environmentText = values.environment ?? env.VIS_BRIDGE_ENVIRONMENT;
+    let environmentId;
+    if (environmentText !== undefined) {
+      try {
+        environmentId = parseEnvironmentId(environmentText);
+      } catch {
+        throw new Error(`Invalid vis_bridge control-store environment: ${environmentText}`);
+      }
+    }
+    return {
+      command,
+      role: 'control-store',
+      help: Boolean(values.help),
+      serverArgs: [],
+      ...(stateRoot === undefined ? {} : { stateRoot }),
+      ...(environmentId === undefined ? {} : { environmentId }),
+    };
+  }
+
+  if (command === 'relay') {
+    const unexpectedOption = Object.keys(values).find(
+      (key) =>
+        ![
+          'help',
+          'environment',
+          'job',
+          'bridge-instance',
+          'compute-node',
+          'socket',
+          'step',
+          'epoch',
+          'host',
+          'port',
+          'stdio-forward',
+        ].includes(key),
+    );
+    if (unexpectedOption) throw new Error(`vis_bridge relay does not accept --${unexpectedOption}.`);
+    const environmentText = values.environment ?? env.VIS_BRIDGE_ENVIRONMENT;
+    let environmentId;
+    if (!values.help || environmentText !== undefined) {
+      if (environmentText === undefined) throw new Error('vis_bridge relay requires --environment <uuid>.');
+      try {
+        environmentId = parseEnvironmentId(environmentText);
+      } catch {
+        throw new Error(`Invalid vis_bridge relay environment: ${environmentText}`);
+      }
+    }
+    const socketPath = values.socket ?? env.VIS_BRIDGE_RELAY_SOCKET?.trim() ?? undefined;
+    const portText = values.port ?? env.VIS_BRIDGE_RELAY_PORT;
+    let port;
+    if (portText !== undefined) {
+      port = Number.parseInt(String(portText), 10);
+      if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+        throw new Error(`Invalid vis_bridge relay port: ${portText}`);
+      }
+    }
+    if (!values.help) {
+      if (!values.job) throw new Error('vis_bridge relay requires --job <uuid>.');
+      if (!values['bridge-instance']) throw new Error('vis_bridge relay requires --bridge-instance <uuid>.');
+      if (!values['compute-node']) throw new Error('vis_bridge relay requires --compute-node <name>.');
+      if (values['stdio-forward'] === true && socketPath === undefined) {
+        throw new Error('vis_bridge relay --stdio-forward requires --socket <path> (the compute-local socket).');
+      }
+      if (socketPath === undefined && port === undefined) {
+        throw new Error('vis_bridge relay requires --socket <path> or --port <n>.');
+      }
+    }
+    let epoch = 0;
+    if (values.epoch !== undefined) {
+      epoch = Number.parseInt(values.epoch, 10);
+      if (!Number.isSafeInteger(epoch) || epoch < 0) throw new Error(`Invalid vis_bridge relay epoch: ${values.epoch}`);
+    }
+    return {
+      command,
+      role: 'relay',
+      help: Boolean(values.help),
+      serverArgs: [],
+      stdioForward: values['stdio-forward'] === true,
+      ...(environmentId === undefined ? {} : { environmentId }),
+      ...(values.job === undefined ? {} : { intentId: values.job }),
+      ...(values['bridge-instance'] === undefined ? {} : { bridgeInstanceId: values['bridge-instance'] }),
+      ...(values['compute-node'] === undefined ? {} : { computeNode: values['compute-node'] }),
+      ...(values.step === undefined ? {} : { stepId: values.step }),
+      ...(socketPath === undefined ? {} : { socketPath }),
+      ...(port === undefined ? {} : { port }),
+      ...(values.host === undefined ? {} : { host: values.host }),
+      epoch,
     };
   }
 
@@ -227,4 +352,185 @@ export async function runBridgeConfigCommand(options, env = process.env) {
     });
   });
   console.log(`Config saved at ${store.configPath}. Run vis_bridge restart to apply service changes.`);
+}
+
+/** Node's maximum timer delay; the referenced handle keeps the event loop alive indefinitely. */
+const LIVENESS_HEARTBEAT_MS = 2_147_483_647;
+
+/**
+ * Explicit, closable process-liveness token for the long-lived lifecycle roles. Registering a
+ * SIGINT/SIGTERM listener alone does NOT keep Node's event loop alive, so a command that only
+ * listens for signals exits as soon as `main` returns. One referenced timer is an event-loop
+ * handle that keeps the process resident until the role calls `release()`, after which the loop
+ * can drain and the process exits normally. `release()` is idempotent.
+ */
+function createLivenessToken() {
+  const timer = setInterval(() => {
+    // Intentionally empty: the referenced timer itself is the liveness handle.
+  }, LIVENESS_HEARTBEAT_MS);
+  let released = false;
+  return {
+    release() {
+      if (released) return;
+      released = true;
+      clearInterval(timer);
+    },
+  };
+}
+
+/**
+ * Runs the login-side control-store role: opens the durable Slurm control store on the
+ * login-local disk (verifying local FS + acquiring the single-owner fence) and holds it
+ * until SIGINT/SIGTERM. The compute Runtime never writes here directly; it reaches this
+ * store through the login-owned relay (task 29).
+ *
+ * Liveness is an explicit referenced timer (not an accidental open handle): without it the
+ * process would exit immediately after claiming ownership, since a signal listener does not
+ * keep the event loop alive. Every terminating path (SIGINT, SIGTERM, an unexpected error, or
+ * an explicit `close()`) releases the on-disk fence before the process ends.
+ */
+export async function runControlStoreCommand(options, dependencies = {}) {
+  const stateRoot = options.stateRoot ?? dependencies.stateRoot;
+  if (!stateRoot) throw new Error('vis_bridge control-store requires --state-root or VIS_BRIDGE_CONTROL_STORE_ROOT.');
+  const environmentId = options.environmentId ?? dependencies.environmentId;
+  if (!environmentId) throw new Error('vis_bridge control-store requires an environment id (--environment).');
+  const { createSlurmControlStore } = await import('./runtime/transports/slurmControlStore.js');
+  const store = createSlurmControlStore({
+    root: stateRoot,
+    environmentId,
+    ownerInstanceId: dependencies.ownerInstanceId ?? `control-store-${process.pid}`,
+  });
+  const status = await store.open('owner');
+  console.log(
+    `vis_bridge control-store owns environment ${status.environmentId} at ${status.root} (epoch ${status.epoch}).`,
+  );
+
+  const liveness = createLivenessToken();
+  let released = false;
+  const releaseFence = async () => {
+    if (released) return;
+    released = true;
+    liveness.release();
+    await store.close();
+  };
+  const exitAfterRelease = (code) => {
+    void releaseFence().then(
+      () => process.exit(code),
+      () => process.exit(1),
+    );
+  };
+  const onSignal = () => exitAfterRelease(0);
+  const onFatalError = (error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    exitAfterRelease(1);
+  };
+  const onUnhandledRejection = (reason) => {
+    console.error(reason instanceof Error ? reason.message : String(reason));
+    exitAfterRelease(1);
+  };
+  const removeLivenessListeners = () => {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
+    process.off('uncaughtException', onFatalError);
+    process.off('unhandledRejection', onUnhandledRejection);
+  };
+
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+  process.once('uncaughtException', onFatalError);
+  process.once('unhandledRejection', onUnhandledRejection);
+
+  return {
+    store,
+    /**
+     * Releases ownership (writes the fence with `released: true`) and stops holding the event
+     * loop open. Signal-driven exits call this internally; an in-process caller uses it to
+     * relinquish the role without a signal.
+     */
+    async close() {
+      removeLivenessListeners();
+      await releaseFence();
+    },
+  };
+}
+
+/**
+ * Runs the compute-side relay role: holds the login-owned long-term relay open (an authenticated
+ * TCP listener or a compute-local socket) for the live job + bridge instance. A client disconnect
+ * removes only that connection; the relay and the job stay alive until SIGINT/SIGTERM.
+ *
+ * With `--stdio-forward` the process is the `srun` relay step instead: it connects to the
+ * compute-local socket the long-term relay listens on and pipes its own stdio to it, so the
+ * framed bytes travel over the step's pipes. stdout carries protocol bytes only — every
+ * diagnostic goes to stderr — because the login side decodes the binary handshake off stdout.
+ */
+export async function runRelayCommand(options, dependencies = {}) {
+  if (options.stdioForward === true) return runRelayStdioCommand(options, dependencies);
+  const socketPath = options.socketPath ?? dependencies.socketPath;
+  const port = options.port ?? dependencies.port;
+  if (!socketPath && port === undefined) throw new Error('vis_bridge relay requires --socket <path> or --port <n>.');
+  const environmentId = options.environmentId ?? dependencies.environmentId;
+  if (!environmentId) throw new Error('vis_bridge relay requires an environment id (--environment).');
+  if (!options.intentId) throw new Error('vis_bridge relay requires --job (the job intent UUID).');
+  if (!options.bridgeInstanceId) throw new Error('vis_bridge relay requires --bridge-instance.');
+  if (!options.computeNode) throw new Error('vis_bridge relay requires --compute-node.');
+  const { createComputeRelay } = await import('./runtime/transports/computeRelay.js');
+  const { createRelayBinding, createRelayHandshake } = await import('./runtime/transports/relayHandshake.js');
+  const binding = createRelayBinding({
+    environmentId,
+    intentId: options.intentId,
+    bridgeInstanceId: options.bridgeInstanceId,
+    epoch: options.epoch ?? 0,
+    computeNode: options.computeNode,
+    stepId: options.stepId ?? dependencies.stepId ?? randomUUID(),
+  });
+  const credential = options.credential ?? dependencies.credential ?? process.env.VIS_BRIDGE_RELAY_CREDENTIAL ?? '';
+  const relay = createComputeRelay({
+    handshake: createRelayHandshake({ credential, binding }),
+    mode: socketPath ? 'local-socket' : 'tcp',
+    ...(socketPath ? { socketPath } : {}),
+    ...(options.host === undefined ? {} : { host: options.host }),
+    ...(port === undefined ? {} : { port }),
+  });
+  const address = await relay.listen();
+  const location = address.mode === 'tcp' ? `${address.host}:${address.port}` : address.path;
+  console.log(`vis_bridge relay listening (${address.mode}) for job ${binding.intentId} at ${location} (epoch ${binding.epoch}).`);
+  const shutdown = () => {
+    void relay.close().then(
+      () => process.exit(0),
+      () => process.exit(1),
+    );
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+  return relay;
+}
+
+/**
+ * The `srun` relay step's entry: connects this process's stdio to the compute-local socket the
+ * long-term relay already listens on and pipes bytes both ways. The credential proof is
+ * end-to-end between the login channel and that relay, so this forwarder never needs the
+ * credential. stdout stays protocol-bytes-only (diagnostics on stderr); the process exits when
+ * the socket or the stdin pipe closes, and a connect failure exits non-zero with the cause.
+ */
+export async function runRelayStdioCommand(options, dependencies = {}) {
+  const socketPath = options.socketPath ?? dependencies.socketPath;
+  if (!socketPath) throw new Error('vis_bridge relay --stdio-forward requires --socket <path>.');
+  const { connect } = await import('node:net');
+  const socket = connect(socketPath);
+  await new Promise((resolve, reject) => {
+    socket.once('connect', resolve);
+    socket.once('error', (error) => reject(new Error(`vis_bridge relay --stdio-forward cannot reach ${socketPath}: ${error.message}`)));
+  });
+  process.stdin.pipe(socket);
+  socket.pipe(process.stdout);
+  const shutdown = (code) => {
+    socket.destroy();
+    process.exit(code);
+  };
+  socket.on('error', () => shutdown(1));
+  socket.on('close', () => shutdown(0));
+  process.stdin.on('end', () => socket.end());
+  process.stdin.on('error', () => shutdown(1));
+  return new Promise(() => {});
 }

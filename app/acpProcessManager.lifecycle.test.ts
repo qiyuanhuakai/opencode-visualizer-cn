@@ -91,4 +91,39 @@ describe('ACP process generation lifecycle', () => {
       await manager.stopAll();
     }
   });
+
+  it('keeps the agent running and clears the raw tap when a runtime client disconnects', async () => {
+    const manager = createAcpProcessManager();
+    try {
+      await manager.reconcile([
+        {
+          id: 'runtime-detach',
+          name: 'Runtime detach',
+          command: process.execPath,
+          args: ['-e', agentScript],
+          enabled: true,
+        },
+      ]);
+      const client = new TestClient();
+      const attachment = manager.attach('runtime-detach', client, { runtime: true });
+      const tapped: string[] = [];
+      attachment.setRawTap((chunk) => tapped.push(Buffer.from(chunk).toString('utf8')));
+
+      client.close();
+
+      expect(manager.getStatus()[0]).toMatchObject({
+        state: 'running',
+        owned: true,
+        connected: false,
+      });
+      client.emit(
+        'message',
+        JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping', params: {} }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(tapped).toEqual([]);
+    } finally {
+      await manager.stopAll();
+    }
+  });
 });
