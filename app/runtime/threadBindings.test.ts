@@ -376,3 +376,152 @@ describe('participant service in isolation', () => {
     ).rejects.toMatchObject({ code: 'conflict', field: 'participant_duplicate' });
   });
 });
+
+type SessionGate = { promise: Promise<ThreadSessionView | null>; resolve: (value: ThreadSessionView | null) => void };
+
+function gatedHarness(views: ThreadSessionView[] = []) {
+  const catalog = new Map(views.map((entry) => [catalogKey(entry.session), entry]));
+  const gates = new Map<string, SessionGate>();
+  const park = (session: SessionRef): void => {
+    const key = catalogKey(session);
+    if (gates.has(key)) return;
+    let resolve!: (value: ThreadSessionView | null) => void;
+    const promise = new Promise<ThreadSessionView | null>((res) => {
+      resolve = res;
+    });
+    gates.set(key, { promise, resolve });
+  };
+  const resolveSession = (session: SessionRef): Promise<ThreadSessionView | null> => {
+    const gate = gates.get(catalogKey(session));
+    if (gate !== undefined) return gate.promise;
+    return Promise.resolve(catalog.get(catalogKey(session)) ?? null);
+  };
+  const release = (session: SessionRef, resolved: ThreadSessionView | null = catalog.get(catalogKey(session)) ?? null): void => {
+    gates.get(catalogKey(session))?.resolve(resolved);
+  };
+  const service: ThreadService = createThreadService({ resolveSession });
+  return { service, catalog, park, release, resolveSession };
+}
+
+describe('canonical binding index survives concurrent bind, join and close', () => {
+  it('serializes concurrent binds of one SessionRef so both windows receive the same wrapper', async () => {
+    const owner = sessionRef(ENV_A, HARNESS_A, 'native:owner');
+    const harness = gatedHarness([view(owner)]);
+    const repo = repoRef(ENV_A, '/srv/repo');
+
+    harness.park(owner);
+    const first = harness.service.bind({ session: owner, repo });
+    const second = harness.service.bind({ session: sessionRef(ENV_A, HARNESS_A, 'native:owner'), repo });
+    harness.release(owner);
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(b).toBe(a);
+    expect(a.participants).toHaveLength(1);
+    expect(harness.service.state).toMatchObject({ threads: 1, bindings: 1, active: 1 });
+  });
+
+  it('rejects a concurrent duplicate join instead of admitting a second participant for one session', async () => {
+    const owner = sessionRef(ENV_A, HARNESS_A, 'native:owner');
+    const guest = sessionRef(ENV_A, HARNESS_B, 'native:guest');
+    const harness = gatedHarness([view(owner), view(guest)]);
+    const repo = repoRef(ENV_A, '/srv/repo');
+    const thread = await harness.service.bind({ session: owner, repo });
+
+    harness.park(guest);
+    const first = harness.service.join({ threadId: thread.threadId, session: guest, repo });
+    const second = harness.service.join({ threadId: thread.threadId, session: sessionRef(ENV_A, HARNESS_B, 'native:guest'), repo });
+    harness.release(guest);
+    const settled = await Promise.allSettled([first, second]);
+
+    expect(settled.filter((entry) => entry.status === 'fulfilled')).toHaveLength(1);
+    expect(settled.find((entry) => entry.status === 'rejected')).toMatchObject({
+      reason: { code: 'conflict', field: 'participant_duplicate' },
+    });
+    expect(harness.service.get(thread.threadId).participants).toHaveLength(2);
+    expect(harness.service.state.bindings).toBe(2);
+  });
+
+  it('refuses a join that would steal a canonical binding already owned by another thread', async () => {
+    const first = sessionRef(ENV_A, HARNESS_A, 'native:first');
+    const second = sessionRef(ENV_A, HARNESS_B, 'native:second');
+    const harness = makeHarness([view(first), view(second)]);
+    const repo = repoRef(ENV_A, '/srv/repo');
+
+    const threadA = await harness.service.bind({ session: first, repo });
+    const threadB = await harness.service.bind({ session: second, repo });
+
+    await expect(harness.service.join({ threadId: threadB.threadId, session: first, repo })).rejects.toMatchObject({
+      code: 'conflict',
+      field: 'thread_binding_taken',
+    });
+    expect(harness.service.get(threadB.threadId).participants).toHaveLength(1);
+    expect(await harness.service.bind({ session: first, repo })).toBe(threadA);
+    expect(harness.service.state).toMatchObject({ threads: 2, bindings: 2 });
+  });
+
+  it('rejects a bind whose async submit lands after the service was closed', async () => {
+    const owner = sessionRef(ENV_A, HARNESS_A, 'native:owner');
+    const harness = gatedHarness([view(owner)]);
+    const repo = repoRef(ENV_A, '/srv/repo');
+
+    harness.park(owner);
+    const pending = harness.service.bind({ session: owner, repo });
+    await harness.service.close();
+    harness.release(owner);
+
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled', field: 'thread_closed' });
+    expect(harness.service.state).toMatchObject({ closed: true, threads: 0, bindings: 0, active: 0 });
+  });
+
+  it('rejects a join whose async submit lands after the service was closed', async () => {
+    const owner = sessionRef(ENV_A, HARNESS_A, 'native:owner');
+    const guest = sessionRef(ENV_A, HARNESS_B, 'native:guest');
+    const harness = gatedHarness([view(owner), view(guest)]);
+    const repo = repoRef(ENV_A, '/srv/repo');
+    const thread = await harness.service.bind({ session: owner, repo });
+
+    harness.park(guest);
+    const joining = harness.service.join({ threadId: thread.threadId, session: guest, repo });
+    await harness.service.close();
+    harness.release(guest);
+
+    await expect(joining).rejects.toMatchObject({ code: 'cancelled', field: 'thread_closed' });
+    expect(harness.service.state).toMatchObject({ closed: true, active: 0 });
+    expect(() => harness.service.get(thread.threadId)).toThrow(ThreadError);
+    expect(errorOf(() => harness.service.get(thread.threadId))).toMatchObject({ code: 'invalid_request', field: 'thread_unknown' });
+  });
+
+  it('keeps the last leave when a resume was already in flight', async () => {
+    const owner = sessionRef(ENV_A, HARNESS_A, 'native:owner');
+    const harness = gatedHarness([view(owner)]);
+    const repo = repoRef(ENV_A, '/srv/repo');
+    const thread = await harness.service.bind({ session: owner, repo });
+    const participantId = ownerParticipant(thread).participantId;
+
+    harness.service.leave({ threadId: thread.threadId, participantId });
+    harness.park(owner);
+    const resuming = harness.service.resume({ threadId: thread.threadId, participantId });
+    harness.service.leave({ threadId: thread.threadId, participantId });
+    harness.release(owner);
+    const resumed = await resuming;
+
+    expect(resumed.state).toBe('left');
+    expect(harness.service.get(thread.threadId).participants[0]?.state).toBe('left');
+  });
+
+  it('still resumes an unraced leave so the newer intent never blocks the older one', async () => {
+    const owner = sessionRef(ENV_A, HARNESS_A, 'native:owner');
+    const harness = gatedHarness([view(owner)]);
+    const repo = repoRef(ENV_A, '/srv/repo');
+    const thread = await harness.service.bind({ session: owner, repo });
+    const participantId = ownerParticipant(thread).participantId;
+
+    harness.service.leave({ threadId: thread.threadId, participantId });
+    harness.park(owner);
+    const resuming = harness.service.resume({ threadId: thread.threadId, participantId });
+    harness.release(owner);
+
+    expect((await resuming).state).toBe('active');
+    expect(harness.service.get(thread.threadId).participants[0]?.state).toBe('active');
+  });
+});
