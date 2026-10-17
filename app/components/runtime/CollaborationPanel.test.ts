@@ -42,7 +42,7 @@ import CollaborationPanel from './CollaborationPanel.vue';
 vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 
 const require = createRequire(import.meta.url);
-const COLLAB = '/home/qiyuaner/apps/vis_app/vis-wt/vis-v090-task-20/bridge/runtime/collaboration';
+const COLLAB = '../../../bridge/runtime/collaboration';
 const { createCollaborationCoordinator } = require(`${COLLAB}/coordinator.js`) as {
   createCollaborationCoordinator(options?: { deliver?: (payload: unknown) => Promise<{ ackId: string }> }): RuntimeCollaborationPorts['coordinator'];
 };
