@@ -49,6 +49,10 @@ async function withStore(action: (store: RuntimeStore) => Promise<void>) {
   }
 }
 
+function isJsonObject(value: Json): value is { readonly [key: string]: Json } {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function reasonOf(error: unknown) {
   if (typeof error === 'object' && error !== null && 'reason' in error) {
     const { reason } = error;
@@ -434,7 +438,7 @@ test('an older receipt finalization does not clear a newer receipt answered mark
     const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
     let finalizations = 0;
     const terminalPhase = (value: Json) =>
-      typeof value === 'object' && value !== null && !Array.isArray(value) && value.phase === 'terminal';
+      isJsonObject(value) && value.phase === 'terminal';
     const wrapped: RuntimeStore = {
       ...store,
       async mutateControl(input) {
