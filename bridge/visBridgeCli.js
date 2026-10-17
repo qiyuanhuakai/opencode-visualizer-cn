@@ -394,26 +394,20 @@ export async function runControlStoreCommand(options, dependencies = {}) {
   if (!stateRoot) throw new Error('vis_bridge control-store requires --state-root or VIS_BRIDGE_CONTROL_STORE_ROOT.');
   const environmentId = options.environmentId ?? dependencies.environmentId;
   if (!environmentId) throw new Error('vis_bridge control-store requires an environment id (--environment).');
-  const { createSlurmControlStore } = await import('./runtime/transports/slurmControlStore.js');
-  const store = createSlurmControlStore({
-    root: stateRoot,
-    environmentId,
-    ownerInstanceId: dependencies.ownerInstanceId ?? `control-store-${process.pid}`,
-  });
-  const status = await store.open('owner');
-  console.log(
-    `vis_bridge control-store owns environment ${status.environmentId} at ${status.root} (epoch ${status.epoch}).`,
-  );
 
-  const liveness = createLivenessToken();
-  let released = false;
+  // Installed before the first await: a signal landing while the store is still opening would
+  // otherwise take the default disposition and kill the process with the fence held, and
+  // close() is a no-op until the open has begun.
+  const role = { store: undefined, liveness: undefined, released: false, exiting: false };
   const releaseFence = async () => {
-    if (released) return;
-    released = true;
-    liveness.release();
-    await store.close();
+    if (role.released) return;
+    role.released = true;
+    role.liveness?.release();
+    await role.store?.close();
   };
   const exitAfterRelease = (code) => {
+    if (role.exiting) return;
+    role.exiting = true;
     void releaseFence().then(
       () => process.exit(code),
       () => process.exit(1),
@@ -428,17 +422,23 @@ export async function runControlStoreCommand(options, dependencies = {}) {
     console.error(reason instanceof Error ? reason.message : String(reason));
     exitAfterRelease(1);
   };
-  const removeLivenessListeners = () => {
-    process.off('SIGINT', onSignal);
-    process.off('SIGTERM', onSignal);
-    process.off('uncaughtException', onFatalError);
-    process.off('unhandledRejection', onUnhandledRejection);
-  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+  process.on('uncaughtException', onFatalError);
+  process.on('unhandledRejection', onUnhandledRejection);
 
-  process.once('SIGINT', onSignal);
-  process.once('SIGTERM', onSignal);
-  process.once('uncaughtException', onFatalError);
-  process.once('unhandledRejection', onUnhandledRejection);
+  const { createSlurmControlStore } = await import('./runtime/transports/slurmControlStore.js');
+  const store = createSlurmControlStore({
+    root: stateRoot,
+    environmentId,
+    ownerInstanceId: dependencies.ownerInstanceId ?? `control-store-${process.pid}`,
+  });
+  role.store = store;
+  const status = await store.open('owner');
+  console.log(
+    `vis_bridge control-store owns environment ${status.environmentId} at ${status.root} (epoch ${status.epoch}).`,
+  );
+  role.liveness = createLivenessToken();
 
   return {
     store,
@@ -448,7 +448,10 @@ export async function runControlStoreCommand(options, dependencies = {}) {
      * relinquish the role without a signal.
      */
     async close() {
-      removeLivenessListeners();
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
+      process.off('uncaughtException', onFatalError);
+      process.off('unhandledRejection', onUnhandledRejection);
       await releaseFence();
     },
   };
