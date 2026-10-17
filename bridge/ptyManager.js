@@ -30,7 +30,7 @@ export function packagedNodePtyEntries(execPath = process.execPath, platform = p
   ];
 }
 
-async function loadNodePty(ptyModule) {
+export async function loadNodePty(ptyModule) {
   if (ptyModule) return ptyModule;
   const runtimeImport = new Function('specifier', 'return import(specifier)');
   try {
