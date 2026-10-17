@@ -55,7 +55,16 @@ export function parseRequest(method, input = {}) {
       break;
     case 'page': case 'snapshot':
       collection(params.collection);
-      if (params.cursor !== undefined && params.cursor !== null) text(params.cursor);
+      if (params.collections !== undefined) {
+        requireStore(method === 'snapshot' && Array.isArray(params.collections) && params.collections.length > 0 && params.collections.length <= COLLECTIONS.length, 'snapshot_collections');
+        params.collections.forEach(collection);
+        requireStore(new Set(params.collections).size === params.collections.length && params.collections.includes(params.collection), 'snapshot_collections');
+        params = { ...params, collections: [...params.collections].sort() };
+      }
+      if (params.cursor !== undefined && params.cursor !== null) {
+        if (method === 'snapshot') requireStore(typeof params.cursor === 'string' && params.cursor.length > 0 && params.cursor.length <= 32768, 'snapshot_cursor');
+        else text(params.cursor);
+      }
       if (params.token !== undefined) text(params.token);
       if (params.limit !== undefined) requireStore(Number.isInteger(params.limit) && params.limit > 0 && params.limit <= STORE_LIMITS.maxPage, 'limit');
       break;
