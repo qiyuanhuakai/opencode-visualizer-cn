@@ -72,7 +72,12 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
       });
       if (replayed && replayed.phase !== 'accepted')
         return { phase: 'durable-accepted', operationId: replayed.operationId };
-      const baseCommit = gitLine(await git.checked(workspace, ['rev-parse', '--verify', 'HEAD']));
+      // An accepted replay resumes the send its acceptance already recorded, so its base commit
+      // comes from that record. Re-resolving the source HEAD here would check out a different
+      // snapshot than the one the completed record and the writer lease describe.
+      const baseCommit = replayed
+        ? replayed.baseCommit
+        : gitLine(await git.checked(workspace, ['rev-parse', '--verify', 'HEAD']));
       requireValue(/^[0-9a-f]{40,64}$/.test(baseCommit), 'git.base_commit');
       // Authorize the common directory before any durable state exists: a refusal
       // here costs nothing, while the same refusal after acceptance would strand

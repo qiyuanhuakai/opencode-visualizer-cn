@@ -630,6 +630,76 @@ describe('durable worktree mutations', () => {
   });
 });
 
+describe('accepted-stage resume across a moved source HEAD', () => {
+  it('failure checks out the base commit its acceptance recorded, not the HEAD at retry time', async () => {
+    // Given a durable acceptance whose acknowledgement was lost before the mutation was sent.
+    const f = await fixture();
+    const tracked = path.join(f.repo, 'tracked.txt');
+    await writeFile(tracked, 'version A', 'utf8');
+    f.gitExec(['add', 'tracked.txt']);
+    f.gitExec(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'A']);
+    const commitA = f.gitExec(['rev-parse', 'HEAD']).trim();
+
+    const originalMutate = f.store.mutateControl.bind(f.store);
+    let acknowledgementLost = false;
+    f.store.mutateControl = async (mutation) => {
+      const ack = await originalMutate(mutation);
+      if (!acknowledgementLost) {
+        acknowledgementLost = true;
+        throw new Error('lost acceptance acknowledgement');
+      }
+      return ack;
+    };
+    const argvSeen: string[] = [];
+    const command: TargetGitCommand = {
+      ...f.command,
+      async start(request) {
+        if (request.args[0] === 'worktree' && request.args[1] === 'add') argvSeen.push(...request.args);
+        return f.command.start(request);
+      },
+    };
+    const service = authorizedService(f.store, command);
+
+    // When the acceptance is durable but its acknowledgement never reaches the caller.
+    await expect(
+      service.create({
+        workspace: f.workspace,
+        parent: f.ref(f.root),
+        name: 'moved base',
+        idempotencyKey: 'moved-base',
+      }),
+    ).rejects.toThrow('lost acceptance acknowledgement');
+    expect(acknowledgementLost).toBe(true);
+    // And the durable record keeps the base commit the first attempt resolved.
+    const durable = await durableState(f.store);
+    expect(durable.operations).toMatchObject([{ value: { phase: 'accepted', baseCommit: commitA } }]);
+    expect(durable.leases).toHaveLength(2);
+
+    // And the source HEAD then moves, with the store state preserved and a fresh adapter.
+    await writeFile(tracked, 'version B', 'utf8');
+    f.gitExec(['add', 'tracked.txt']);
+    f.gitExec(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'B']);
+    const commitB = f.gitExec(['rev-parse', 'HEAD']).trim();
+    expect(commitB).not.toBe(commitA);
+
+    // Then the retried request must launch against the base commit the acceptance recorded.
+    const replayed = await service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'moved base',
+      idempotencyKey: 'moved-base',
+    });
+    const completed = await service.wait(replayed.operationId);
+    expect(completed).toMatchObject({ phase: 'terminal', outcome: 'completed', baseCommit: commitA });
+    expect(argvSeen[argvSeen.length - 1]).toBe(commitA);
+
+    // And the completed record, the writer lease and the native worktree HEAD all agree.
+    const worktree = path.join(f.root, 'moved base');
+    expect(f.gitExec(['-C', worktree, 'rev-parse', 'HEAD']).trim()).toBe(commitA);
+    expect(await readFile(path.join(worktree, 'tracked.txt'), 'utf8')).toBe('version A');
+  }, 60000);
+});
+
 describe('Git topology refresh and retention', () => {
   it('refreshes external worktree changes after the bounded topology cache expires', async () => {
     // Given an observed repository followed by an external native mutation.
