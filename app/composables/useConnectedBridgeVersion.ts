@@ -1,4 +1,5 @@
 import { onScopeDispose, readonly, ref, watch, type Ref } from 'vue';
+import { isNewerVersion } from '../../electron/updateVersion.js';
 
 export type ConnectedBridgeVersion =
   | { status: 'disconnected' }
@@ -12,6 +13,12 @@ export type ConnectedBridgeVersionReporter = (
   state: ConnectedBridgeVersion,
 ) => void;
 
+export interface ConnectedBridgeUpgradePath {
+  readonly action: 'upgrade';
+  readonly fromVersion: string;
+  readonly requiredVersion: string;
+}
+
 const HEALTH_TIMEOUT_MS = 5000;
 
 function parseHealthVersion(body: unknown): string | null {
@@ -22,14 +29,33 @@ function parseHealthVersion(body: unknown): string | null {
 
 export function useConnectedBridgeVersion(
   healthUrl: Ref<string>,
-  options?: { onConnectionChange?: ConnectedBridgeVersionReporter },
+  options?: { onConnectionChange?: ConnectedBridgeVersionReporter; minimumVersion?: string },
 ) {
   const state = ref<ConnectedBridgeVersion>({ status: 'disconnected' });
+  const upgradePath = ref<ConnectedBridgeUpgradePath | null>(null);
   let generation = 0;
   let controller: AbortController | null = null;
   let connectionId = '';
 
+  function updateUpgradePath(next: ConnectedBridgeVersion) {
+    const requiredVersion = options?.minimumVersion;
+    if (requiredVersion === undefined || next.status !== 'ready') {
+      upgradePath.value = null;
+      return;
+    }
+    let needsUpgrade = false;
+    try {
+      needsUpgrade = isNewerVersion(requiredVersion, next.version);
+    } catch {
+      needsUpgrade = false;
+    }
+    upgradePath.value = needsUpgrade
+      ? { action: 'upgrade', fromVersion: next.version, requiredVersion }
+      : null;
+  }
+
   function report(next: ConnectedBridgeVersion) {
+    updateUpgradePath(next);
     if (!connectionId) return;
     options?.onConnectionChange?.(connectionId, next);
   }
@@ -106,5 +132,5 @@ export function useConnectedBridgeVersion(
     connectionId = '';
   });
 
-  return { state: readonly(state), refresh };
+  return { state: readonly(state), refresh, upgradePath: readonly(upgradePath) };
 }

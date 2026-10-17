@@ -2,6 +2,15 @@ import { parseHarnessInstanceId } from './identity.js';
 
 export const ERROR_CODES = Object.freeze(['invalid_request', 'unsupported', 'version_mismatch', 'unauthorized', 'conflict', 'cancelled', 'timeout', 'source_unavailable', 'reconcile_required', 'replay_required']);
 export const METHODS = Object.freeze({
+  'runtime.history.open': 'control', 'runtime.history.page': 'read', 'runtime.history.chunk': 'read', 'runtime.history.read': 'read', 'runtime.history.close': 'control',
+  'runtime.target.attach': 'control', 'runtime.target.detach': 'control',
+  'runtime.snapshot.chunk': 'read', 'runtime.entity.resolve': 'read',
+  'runtime.observer.open': 'control', 'runtime.observer.read': 'control',
+  'runtime.observer.resume': 'control', 'runtime.observer.close': 'control',
+  'runtime.channel.open': 'control', 'runtime.channel.ack': 'control',
+  'runtime.channel.finish': 'control', 'runtime.channel.cancel': 'control',
+  'runtime.pty.create': 'control', 'runtime.pty.read': 'control', 'runtime.pty.write': 'control',
+  'runtime.pty.resize': 'control', 'runtime.pty.detach': 'control',
   'runtime.inspect': 'read', 'runtime.snapshot': 'read', 'runtime.replay': 'read',
   'session.list': 'read', 'session.get': 'read', 'session.history': 'read',
   'session.create': 'mutation', 'session.send': 'mutation', 'session.cancel': 'mutation',

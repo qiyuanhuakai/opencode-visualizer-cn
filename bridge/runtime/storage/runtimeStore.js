@@ -50,6 +50,7 @@ export function createRuntimeStore(input) {
     getControl: (params) => dispatch('getControl', params, true),
     get: (params) => dispatch('get', params), page: (params) => dispatch('page', params),
     snapshot: (params) => dispatch('snapshot', params), replay: (params) => dispatch('replay', params), readChunk: (params) => dispatch('readChunk', params),
+    releaseSnapshot: (params) => dispatch('releaseSnapshot', params, true),
     inspect: () => dispatch('inspect', {}, true),
     async close() { if (!stopped) { try { await dispatch('close', {}, true); } finally { worker.kill('SIGTERM'); } } return exited; },
     async terminate() { if (!stopped) { stopped = true; worker.kill('SIGKILL'); } return exited; },

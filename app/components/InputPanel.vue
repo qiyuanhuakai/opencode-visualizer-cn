@@ -541,7 +541,7 @@
             class="input-button stop send-button"
             :disabled="props.disabled || !canAbort"
             :title="$t('inputPanel.stop')"
-            @click="$emit('abort')"
+            @click="requestAbort"
           >
             <Icon icon="ph:stop-fill" :width="16" :height="16" />
           </button>
@@ -551,7 +551,7 @@
             class="input-button primary send-button"
             :disabled="props.readOnly || (!canRunCodexCommand && !canRunForgeCommand && (props.disabled || !canSend))"
             :title="sendTooltip"
-            @click="$emit('send')"
+            @click="requestSend"
           >
             <Icon icon="lucide:send" :width="16" :height="16" />
           </button>
@@ -590,6 +590,12 @@ import {
 import { truncateTextTransformerString, validateTextTransformerLibrary } from '../utils/snippets';
 import type { CodexSkill } from '../backends/codex/codexAdapter';
 import { parseLeadingSlashCommand } from '../utils/codexSlashCommands';
+import {
+  RUNTIME_SESSION_ACTIONS_KEY,
+  bindRuntimeAction,
+  type RuntimeSendInput,
+  type RuntimeSessionRuntime,
+} from '../composables/useRuntimeSessionActions';
 type ModelOption = {
   id: string;
   modelID: string;
@@ -694,6 +700,49 @@ const emit = defineEmits<{
   (event: 'open-snippet-settings'): void;
   (event: 'status-error', message: string): void;
 }>();
+
+// Task 22: when a container provides the qualified runtime action port, send
+// and abort go through the new path (routed by full SessionRef). Without a
+// provider the component keeps its legacy emits, so existing parents are
+// unaffected.
+const runtimeSessionActions = inject<RuntimeSessionRuntime | null>(RUNTIME_SESSION_ACTIONS_KEY, null);
+
+function runtimeBinding() {
+  return runtimeSessionActions ? bindRuntimeAction(runtimeSessionActions) : null;
+}
+
+function runtimeSendInput(): RuntimeSendInput {
+  return {
+    text: props.messageInput,
+    mode: props.selectedMode,
+    model: props.selectedModel,
+    thinking: props.selectedThinking,
+    attachments: props.attachments.map((attachment) => ({
+      filename: attachment.filename,
+      mime: attachment.mime,
+      dataUrl: attachment.dataUrl,
+      lineComment: attachment.lineComment ?? null,
+    })),
+  };
+}
+
+function requestSend() {
+  const binding = runtimeBinding();
+  if (binding && runtimeSessionActions) {
+    void runtimeSessionActions.router.sendMessage(binding, runtimeSendInput());
+    return;
+  }
+  emit('send');
+}
+
+function requestAbort() {
+  const binding = runtimeBinding();
+  if (binding && runtimeSessionActions) {
+    void runtimeSessionActions.router.cancel(binding);
+    return;
+  }
+  emit('abort');
+}
 
 const messageValue = computed({
   get: () => props.messageInput,
@@ -1612,7 +1661,7 @@ function handleKeydown(event: KeyboardEvent) {
   // Ctrl+Enter: always send
   if (isAlwaysSend) {
     event.preventDefault();
-    emit('send');
+    requestSend();
     return;
   }
   // Enter (no modifiers): send or newline depending on setting
@@ -1625,7 +1674,7 @@ function handleKeydown(event: KeyboardEvent) {
     enterToSend.value
   ) {
     event.preventDefault();
-    emit('send');
+    requestSend();
   }
 }
 
