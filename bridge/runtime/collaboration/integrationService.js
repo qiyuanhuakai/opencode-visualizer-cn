@@ -18,24 +18,34 @@ import { createGitRunner } from './writerLeases.js';
  *   1. the APPROVED artifact hash is re-hashed out of the durable object. The approval binds the
  *      hash; the bytes are hashed again here, independently, so "the approved hash matches the
  *      actual bytes" is measured rather than assumed. A mismatch refuses before anything is
- *      written.
+ *      written. The artifact's own declared base commit is read out of the same object and must
+ *      equal the base the approval bound, so a stale snapshot can never replay over newer work.
  *   2. the repository lock is acquired. Two integrations against one target are therefore
  *      serialized by the lock's data structure, not by a convention.
- *   3. the target is re-checked: HEAD must still be the reviewed base and the tree must still be
- *      clean. A dirty target or a moved HEAD refuses, and NOTHING is written.
+ *   3. the target is re-checked: HEAD must still be the reviewed base, the target ref must still
+ *      be that base, the tree must still be clean, and the target branch must NOT be checked out
+ *      in any worktree — advancing a checked-out branch would leave that worktree reading as a
+ *      reverse modification, which is a change to the user's directory this module never makes.
+ *      A dirty target, a moved HEAD or a checked-out target refuses, and NOTHING is written.
  *   4. a temporary clean integration worktree of the reviewed base is created. It belongs to this
  *      operation and to nobody else.
- *   5. the artifact is applied into that worktree, using task 40's lossless apply.
+ *   5. the artifact is applied into that worktree, using task 40's lossless apply, and the tree
+ *      that produced is recorded.
  *   6. the frozen criteria's tests run in that worktree. The child's stdin is IGNORED — the test
  *      runner's type has no member that can write to a child's stdin — and any input blob reaches
  *      the test as a temp file, which is how `bridge/workspaceCommand.js`'s stdin limitation is
- *      honoured. A failing test refuses, and only THIS operation's temp is cleaned.
+ *      honoured. A failing test refuses, a runner failure (timeout, spawn error, output overflow)
+ *      is recorded as a refusal rather than thrown, and a tree that the tests changed is refused:
+ *      the commit may record the reviewed artifact and nothing else. Only THIS operation's temp is
+ *      cleaned.
  *   7. the commit is created in that worktree, through a sink whose only member is `commit` and
  *      which is constructed from the operation's own worktree path. The sink's type has no member
  *      that accepts a directory, so it cannot be aimed at the user's original directory.
- *   8. the target branch is fast-forwarded with `git update-ref <ref> <new> <old>`, where `<old>`
- *      is the reviewed base. The update is atomic: if the branch moved, git refuses. There is no
- *      push, no `reset --hard`, no `stash` and no force anywhere in this module.
+ *   8. the target is re-checked again immediately before the ref moves — the repository lock
+ *      serializes this service, not the user or another git command — and then fast-forwarded
+ *      with `git update-ref <ref> <new> <old>`, where `<old>` is the reviewed base. The update is
+ *      atomic: if the branch moved, git refuses. There is no push, no `reset --hard`, no `stash`
+ *      and no force anywhere in this module.
  *
  * What is NEVER done, and is structurally impossible here:
  *   * the user's original directory is never committed to and never pushed;
@@ -94,8 +104,11 @@ function requireText(value, field, max) {
  * limitation is honoured by the runner's TYPE rather than by a rule: there is no `input` member,
  * so no caller can write to a child's stdin through this object. A test that needs a blob reads it
  * from the temp file the service writes and names in `VIS_INTEGRATION_INPUT`.
+ *
+ * Exported so the runner's own stop guarantee (a timeout or an output overflow STOPS the child,
+ * exactly once) is directly observable rather than only observable through a full integration.
  */
-function createTestRunner(options = {}) {
+export function createTestRunner(options = {}) {
   const spawnProcess = options.spawnProcess ?? spawn;
   const stopChild = options.stopChild ?? stopProcessTree;
   const outputLimit = Number.isSafeInteger(options.outputLimit) && options.outputLimit > 0
@@ -147,7 +160,10 @@ function createTestRunner(options = {}) {
     const sizes = { stdout: 0, stderr: 0 };
     const buffers = { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
     let failure = null;
-    let stopping = false;
+    // The memoized stop: null until the first stop request, so the child is stopped AT MOST once
+    // no matter how many times a timeout or an output overflow asks for it. It must start null —
+    // a `false` initializer would make `??=` a no-op and the child would never be stopped at all.
+    let stopping = null;
     const stop = () => (stopping ??= Promise.resolve(stopChild(child)).catch(() => undefined));
     const done = new Promise((resolve) => {
       child.once('error', (error) => {
@@ -221,6 +237,10 @@ async function pathExists(fsLike, target) {
  * The observed on-disk shape of a directory: a file count and a digest over (relative path,
  * content hash). `.git` is skipped — in a repository it is a directory, in a worktree it is a
  * gitfile, and neither is part of the user's content (the task-40 tree-comparison lesson).
+ *
+ * A symlink is observed by its RAW link target, read with readlink: git allows a committed link
+ * whose target does not exist, and resolving one (realpath) would both throw ENOENT on a legal
+ * tree and record a host-absolute path that changes when the repository moves.
  */
 async function observeTree(fsLike, root) {
   const files = {};
@@ -235,7 +255,7 @@ async function observeTree(fsLike, root) {
         continue;
       }
       if (info.isSymbolicLink()) {
-        files[child] = `symlink:${await fsLike.realpath(path.join(root, child))}`;
+        files[child] = `symlink:${await fsLike.readlink(path.join(root, child))}`;
         continue;
       }
       files[child] = createHash('sha256').update(await fsLike.readFile(path.join(root, child)))
@@ -247,6 +267,34 @@ async function observeTree(fsLike, root) {
   const hash = createHash('sha256');
   for (const name of names) hash.update(`${name}\0${files[name]}\0`);
   return Object.freeze({ fileCount: names.length, treeDigest: hash.digest('hex') });
+}
+
+/**
+ * The branches that are CHECKED OUT in any worktree of a repository, read with git in the NAMED
+ * repository directory. `git worktree list --porcelain -z` reports the main worktree and every
+ * linked one, each with its `branch refs/heads/<name>` line, so this is the complete set.
+ */
+async function checkedOutBranches(runGit, repository) {
+  const listed = await runGit({ cwd: repository, args: ['worktree', 'list', '--porcelain', '-z'] });
+  if (listed.exitCode !== 0) {
+    throw new CollaborationError('source_unavailable', 'integration_worktree_list', {
+      repository,
+      stderr: listed.stderr.slice(0, 512),
+    });
+  }
+  const fields = listed.stdout.split('\0');
+  const branches = [];
+  let current = null;
+  for (const field of fields) {
+    if (field.startsWith('worktree ')) {
+      current = field.slice('worktree '.length);
+      continue;
+    }
+    if (field.startsWith('branch ') && current !== null) {
+      branches.push(Object.freeze({ worktree: current, branch: field.slice('branch '.length) }));
+    }
+  }
+  return Object.freeze(branches);
 }
 
 /* ------------------------------------------------------------------ the service */
@@ -526,6 +574,7 @@ export function createIntegrationService(options = {}) {
       fastForwardIsFF: false,
       grant: null,
       lockHeldMs: 0,
+      worktreeAfterApply: null,
     };
 
     async function run() {
@@ -557,6 +606,21 @@ export function createIntegrationService(options = {}) {
         throw error;
       }
 
+      // 1b — the artifact's OWN declared base must be the base this approval bound. An artifact
+      // captured against an older commit would otherwise replay its whole-file content over
+      // whatever landed since, silently reverting newer work (a full-file overwrite is not a
+      // three-way merge, so a stale snapshot is refused rather than "applied cleanly").
+      const declaredBase = artifacts.deserialize(await store.read(artifactHash)).baseCommit;
+      if (declaredBase !== base) {
+        state.outcome = 'base_mismatch';
+        state.rejection = refusal('conflict', 'integration_artifact_base', {
+          artifactHash,
+          artifactBase: declaredBase,
+          base,
+        });
+        return;
+      }
+
       // 2 — the repository lock: two integrations against one target are serialized here.
       state.grant = await locks.acquire({ repository, operationId });
 
@@ -585,6 +649,22 @@ export function createIntegrationService(options = {}) {
           repository,
           target,
           dirtyPaths: state.targetBefore.dirtyPaths,
+        });
+        return;
+      }
+      // A target branch that is CHECKED OUT somewhere is refused: moving its ref leaves that
+      // worktree's HEAD, index and files at the old commit, so the workspace reads as a reverse
+      // modification of everything the integration just landed, and the next commit there would
+      // revert it. Advancing such a branch means updating the user's directory, which this module
+      // structurally never does, so the integration refuses and names the worktrees that hold it.
+      const holders = (await checkedOutBranches(runGit, repository))
+        .filter((entry) => entry.branch === `refs/heads/${target}`);
+      if (holders.length > 0) {
+        state.outcome = 'target_checked_out';
+        state.rejection = refusal('conflict', 'integration_target_checked_out', {
+          repository,
+          target,
+          worktrees: Object.freeze(holders.map((entry) => entry.worktree)),
         });
         return;
       }
@@ -621,8 +701,14 @@ export function createIntegrationService(options = {}) {
         }
         throw error;
       }
+      // The approved content is the applied artifact and nothing else. The tree the artifact
+      // produced is recorded here, so step 6 can prove the tests did not add to it.
+      state.worktreeAfterApply = await observeTree(fsLike, worktreePath);
 
-      // 6 — the frozen criteria's tests, in the worktree, with stdin IGNORED.
+      // 6 — the frozen criteria's tests, in the worktree, with stdin IGNORED. A runner failure
+      // (a timeout, a spawn error, an output overflow) is a REFUSAL recorded here, never an
+      // exception that escapes without a durable result: "every failure has a result" is the
+      // module's own contract, and a test that must be stopped is exactly such a failure.
       for (const spec of tests) {
         const inputFile = Buffer.isBuffer(spec.input) && spec.input.length > 0
           ? path.join(inputRoot, `${spec.criterionId}.bin`)
@@ -631,19 +717,34 @@ export function createIntegrationService(options = {}) {
           await fsLike.mkdir(inputRoot, { recursive: true });
           await fsLike.writeFile(inputFile, spec.input);
         }
-        const record = await runTest({
-          command: spec.command,
-          args: [...spec.args],
-          cwd: worktreePath,
-          env: {
-            ...gitEnv,
-            LC_ALL: 'C',
-            VIS_INTEGRATION_WORKTREE: worktreePath,
-            VIS_INTEGRATION_ARTIFACT_HASH: artifactHash,
-            VIS_INTEGRATION_INPUT: inputFile ?? '',
-          },
-          timeoutMs: testTimeoutMs,
-        });
+        let record;
+        try {
+          record = await runTest({
+            command: spec.command,
+            args: [...spec.args],
+            cwd: worktreePath,
+            env: {
+              ...gitEnv,
+              LC_ALL: 'C',
+              VIS_INTEGRATION_WORKTREE: worktreePath,
+              VIS_INTEGRATION_ARTIFACT_HASH: artifactHash,
+              VIS_INTEGRATION_INPUT: inputFile ?? '',
+            },
+            timeoutMs: testTimeoutMs,
+          });
+        } catch (error) {
+          if (error instanceof CollaborationError) {
+            state.outcome = 'test_runner_failed';
+            // The runner's own fields are already integration_-prefixed, so they travel verbatim.
+            state.rejection = refusal(error.code, error.field, {
+              criterionId: spec.criterionId,
+              command: spec.command,
+              detail: error.detail ?? null,
+            });
+            return;
+          }
+          throw error;
+        }
         state.testRecords.push(Object.freeze({
           criterionId: spec.criterionId,
           command: spec.command,
@@ -666,10 +767,53 @@ export function createIntegrationService(options = {}) {
           return;
         }
       }
+      // 6b — the tree the commit will record must be exactly the tree the artifact produced. A
+      // test that writes into the worktree would otherwise be swept into the commit by `add -A`
+      // and land on the target under the reviewed artifact's hash, un-reviewed.
+      const afterTests = await observeTree(fsLike, worktreePath);
+      if (afterTests.treeDigest !== state.worktreeAfterApply.treeDigest) {
+        state.outcome = 'tree_changed';
+        state.rejection = refusal('conflict', 'integration_tree_changed', {
+          artifactHash,
+          expectedTreeDigest: state.worktreeAfterApply.treeDigest,
+          observedTreeDigest: afterTests.treeDigest,
+          expectedFileCount: state.worktreeAfterApply.fileCount,
+          observedFileCount: afterTests.fileCount,
+        });
+        return;
+      }
 
       // 7 — the commit, in the operation's own worktree and nowhere else.
       const commitSink = createCommitSink({ worktree: worktreePath });
       state.commitSha = await commitSink.commit(commitMessage);
+
+      // 8a — the target is re-checked immediately before the ref moves. The pre-check at step 3
+      // is not a lock: the repository can be dirtied or its HEAD moved by the user or by another
+      // git command while the tests run, and the repository lock only serializes THIS service.
+      // Anything that changed since the review means the approval no longer describes reality,
+      // so the integration stops here and the target ref never advances.
+      const rechecked = await observeTarget(repository, target);
+      if (rechecked.head !== state.targetBefore.head
+        || rechecked.targetHead !== state.targetBefore.targetHead
+        || rechecked.clean !== state.targetBefore.clean) {
+        state.outcome = 'target_moved';
+        state.rejection = refusal('conflict', 'integration_target_moved', {
+          repository,
+          target,
+          before: Object.freeze({
+            head: state.targetBefore.head,
+            targetHead: state.targetBefore.targetHead,
+            clean: state.targetBefore.clean,
+          }),
+          after: Object.freeze({
+            head: rechecked.head,
+            targetHead: rechecked.targetHead,
+            clean: rechecked.clean,
+            dirtyPaths: rechecked.dirtyPaths,
+          }),
+        });
+        return;
+      }
 
       // 8 — the controlled fast-forward: atomic, forward only, never a push.
       const ancestor = await runGit({
@@ -753,6 +897,7 @@ export function createIntegrationService(options = {}) {
         created: state.worktreeCreated,
         removed: state.worktreeRemoved,
         removedAt: state.removedAt,
+        treeAfterApply: state.worktreeAfterApply,
       }),
       commit: Object.freeze({
         created: state.commitSha !== null,

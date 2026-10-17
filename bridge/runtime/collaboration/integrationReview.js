@@ -66,12 +66,38 @@ export function createIntegrationReviewService(options = {}) {
   const hasArtifact = options.hasArtifact ?? (store === null
     ? null
     : async (artifactHash) => store.has(artifactHash));
+  // The artifact's OWN declared base commit, read out of the durable object's header. A review may
+  // only bind a base the artifact was actually captured against; binding any other base would let
+  // an old snapshot replay whole-file content over newer commits and silently revert them.
+  const artifactBase = options.artifactBase ?? (store === null
+    ? null
+    : async (artifactHash) => {
+      const bytes = await store.read(artifactHash);
+      const newline = bytes.indexOf(0x0a);
+      if (newline <= 0) {
+        throw new CollaborationError('invalid_request', 'integration_artifact_header', { artifactHash });
+      }
+      let header;
+      try {
+        header = JSON.parse(bytes.subarray(0, newline).toString('utf8'));
+      } catch {
+        throw new CollaborationError('invalid_request', 'integration_artifact_header', { artifactHash });
+      }
+      if (header === null || typeof header !== 'object' || typeof header.baseCommit !== 'string'
+        || !COMMIT_PATTERN.test(header.baseCommit)) {
+        throw new CollaborationError('invalid_request', 'integration_artifact_header', { artifactHash });
+      }
+      return header.baseCommit;
+    });
 
   if (typeof runGit !== 'function') {
     throw new CollaborationError('invalid_request', 'integration_review_git');
   }
   if (typeof hasArtifact !== 'function') {
     throw new CollaborationError('invalid_request', 'integration_review_artifact_probe');
+  }
+  if (typeof artifactBase !== 'function') {
+    throw new CollaborationError('invalid_request', 'integration_review_artifact_base');
   }
 
   /** reviewId → the frozen review record. */
@@ -198,7 +224,18 @@ export function createIntegrationReviewService(options = {}) {
     if (!(await hasArtifact(artifactHash))) {
       throw new CollaborationError('invalid_request', 'integration_artifact_missing', { artifactHash });
     }
+    const declaredBase = await artifactBase(artifactHash);
     const observed = await observeRepository(repository, target);
+    // The artifact must have been captured against the very base this review would bind. An
+    // artifact from an older commit is a stale snapshot: applying it would overwrite whatever
+    // landed since, so it is refused here rather than approved and reverted later.
+    if (declaredBase !== observed.head) {
+      throw new CollaborationError('conflict', 'integration_artifact_base', {
+        artifactHash,
+        artifactBase: declaredBase,
+        base: observed.head,
+      });
+    }
     const record = {
       reviewId: newReviewId(),
       repository,
