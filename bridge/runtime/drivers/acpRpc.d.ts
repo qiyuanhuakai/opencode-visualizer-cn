@@ -16,6 +16,8 @@ export interface AcpRpc {
   ): Promise<JsonValue>;
   reply(id: string | number, result: JsonValue): void;
   notify(method: string, params: JsonValue): void;
+  /** Installs or clears the trusted raw stdout tap for the runtime-owned agent process. */
+  setRawTap(tap: ((chunk: Uint8Array) => void) | undefined): void;
   assertCurrent(): void;
   readonly active: boolean;
   readonly processGeneration: number;

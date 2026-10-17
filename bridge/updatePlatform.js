@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { UPDATE_LOCATIONS } from './runtime/transports/remoteBootstrap.js';
 import {
   collectLinuxAncestors,
   readLinuxExecutableWithSudo,
@@ -12,6 +13,9 @@ export {
   privilegedLinuxReadlinkCommand,
   readLinuxExecutableWithSudo,
 } from './updateLinuxAncestry.js';
+export { UPDATE_LOCATIONS } from './runtime/transports/remoteBootstrap.js';
+
+export const SUPPORTED_HOST_PLATFORMS = Object.freeze(['darwin', 'linux', 'win32']);
 
 const DEB_FAMILIES = new Set(['debian', 'linuxmint', 'pop', 'ubuntu']);
 const RPM_FAMILIES = new Set(['almalinux', 'amzn', 'centos', 'fedora', 'opensuse', 'rhel', 'rocky', 'sles', 'suse']);
@@ -31,6 +35,24 @@ export function assertManagedInstallation(execPath, platform, env = process.env)
     throw new Error(`Run the update command from the installed vis_bridge executable at ${installedPath}.`);
   }
   return installedPath;
+}
+
+export function hostInstallPath(host, env = process.env) {
+  const platform = host?.platform;
+  if (!SUPPORTED_HOST_PLATFORMS.includes(platform)) {
+    throw new Error(`Unsupported vis_bridge host platform: ${String(platform)}`);
+  }
+  return managedBridgePath(platform, env);
+}
+
+export function assertLocalInstallerLocation(location) {
+  if (!UPDATE_LOCATIONS.includes(location)) {
+    throw new Error(`Unknown vis_bridge update location: ${String(location)}`);
+  }
+  if (location !== 'local') {
+    throw new Error(`Update location ${location} must not use the local installer path.`);
+  }
+  return location;
 }
 
 export function hasBridgeHostedAncestor(ancestors, installedPath, platform) {
