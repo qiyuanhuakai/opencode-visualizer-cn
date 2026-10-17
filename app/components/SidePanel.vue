@@ -61,14 +61,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, toRefs } from 'vue';
+import { computed, defineAsyncComponent, toRefs } from 'vue';
 import TodoList from './TodoList.vue';
-import SessionTree from './SessionTree.vue';
 import type { BranchEntry, GitBranchInfo, GitDiffStats, GitFileStatus } from '../types/git';
 import type { ContainerPinPayload } from '../types/pin';
 import type { SessionTreeData } from '../types/session-tree';
 import type { TreeNode } from '../types/tree';
 import TreeView from './TreeView.vue';
+
+// The unified session tree is a 1000+ line virtualized sidebar surface used only
+// on the session tab. Load it as its own async chunk (defineAsyncComponent) so
+// it stays out of the entry bundle and within the frozen entry-js budget, while
+// every prop, emitted event and theme token behaves exactly as before.
+const SessionTree = defineAsyncComponent(() => import('./SessionTree.vue'));
 
 type TodoItem = {
   content: string;

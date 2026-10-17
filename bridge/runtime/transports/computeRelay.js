@@ -1,0 +1,508 @@
+import { randomUUID } from 'node:crypto';
+import { createServer as createNetServer } from 'node:net';
+
+import { ProtocolError, requireValue } from '../../../shared/runtime/capabilities.js';
+import { RELAY_MAX_FRAME_BYTES, decodeRelayFrames, encodeRelayFrame } from './processRelay.js';
+import { RELAY_HELLO_ACK_KIND, RELAY_HANDSHAKE_KIND, RELAY_HANDSHAKE_KINDS, RELAY_HELLO_CONFIRM_KIND } from './relayHandshake.js';
+
+/**
+ * Compute relay (plan task 29 / Scope 13).
+ *
+ * The relay is the login-owned long-term endpoint. It presents either an authenticated TCP
+ * listener (for the login-SSH-forward channel) or a compute-local socket (for the batch-owned
+ * Bridge that the `srun` relay step forwards bytes to). On top of the binary-clean length-prefix
+ * framing from `processRelay` it carries three things:
+ *
+ *  - control messages (JSON, tag 1) — the relay handshake and future control verbs;
+ *  - data messages (tag 2) — opaque framed bytes, never coerced through a string;
+ *  - reverse storage RPCs (tags 3/4) — the compute Runtime asks the login control store to
+ *    perform a durable mutation and awaits the store's durable acknowledgement.
+ *
+ * A client connection is a short-lived laptop session. Closing it removes only that connection:
+ * the relay stays `listening` and keeps serving the same live job, so the job is never killed by
+ * a client disconnect.
+ */
+export const RELAY_TAG = Object.freeze({ control: 1, data: 2, storageRequest: 3, storageAck: 4 });
+export const RELAY_STORAGE_OPS = Object.freeze(['readIntent', 'writeIntent', 'updateIntent', 'listIntents', 'bumpEpoch', 'verifyIntegrity']);
+export const RELAY_ROLES = Object.freeze(['login', 'compute']);
+const DATA_TAGS = Object.freeze(Object.values(RELAY_TAG));
+
+/** Wraps a payload in a length-prefixed relay frame with a one-byte channel tag. */
+export function encodeRelayMessage(tag, payload, options = {}) {
+  requireValue(DATA_TAGS.includes(tag), 'relay.tag');
+  const body = Buffer.isBuffer(payload)
+    ? payload
+    : Buffer.from(typeof payload === 'string' ? payload : JSON.stringify(payload), 'utf8');
+  return encodeRelayFrame(Buffer.concat([Buffer.from([tag]), body]), options);
+}
+
+/** Decodes tagged relay messages from a byte stream; `remaining` is the incomplete tail. */
+export function decodeRelayMessages(buffer, options = {}) {
+  const max = options.maxFrameBytes ?? RELAY_MAX_FRAME_BYTES;
+  const { frames, remaining } = decodeRelayFrames(buffer, { maxFrameBytes: max });
+  const messages = frames.map((frame) => {
+    requireValue(frame.length >= 1, 'relay.frame');
+    return Object.freeze({ tag: frame[0], payload: Buffer.from(frame.subarray(1)) });
+  });
+  return { messages, remaining };
+}
+
+function jsonParse(payload) {
+  try {
+    return JSON.parse(payload.toString('utf8'));
+  } catch {
+    throw new ProtocolError('invalid_request', 'relay.control');
+  }
+}
+
+/**
+ * A duplex tagged relay channel over any stream (a net socket or an srun stdio pipe). The
+ * `login` role opens the handshake; the `compute` role verifies it and answers with a fresh
+ * challenge of its own. `ready` resolves only after both ends verified the credential-protected
+ * binding, and every termination path (handshake timeout, EOF, stream error, explicit close)
+ * settles `ready` instead of leaving the caller's `open` pending forever.
+ */
+export function createRelayChannel(stream, options = {}) {
+  const handshake = options.handshake;
+  requireValue(handshake !== null && typeof handshake === 'object', 'relay.handshake');
+  const role = options.role;
+  requireValue(RELAY_ROLES.includes(role), 'relay.role', 'unsupported');
+  requireValue(stream !== null && typeof stream === 'object', 'relay.stream');
+  const timeoutMs = options.timeoutMs ?? 15_000;
+
+  let state = 'handshaking';
+  let buffer = Buffer.alloc(0);
+  const pendingStore = new Map();
+  const dataHandlers = [];
+  const controlHandlers = [];
+  const storageHandlers = [];
+  const closeHandlers = [];
+  // Handlers registered through `onReady` run SYNCHRONOUSLY when the handshake completes,
+  // before `ready` settles. One read block can carry the final handshake message and the
+  // first business frame together, and `onData` dispatches the rest of that block
+  // synchronously, so a consumer registered one microtask later would still be absent when
+  // the first frame dispatched — and that frame would be silently dropped.
+  const readyHandlers = [];
+  let settleReady;
+  let failReady;
+  const ready = new Promise((resolve, reject) => {
+    settleReady = resolve;
+    failReady = reject;
+  });
+  ready.catch(() => {});
+
+  // The handshake must settle within `timeoutMs`: a silent peer must not hang `open` forever.
+  let handshakeTimer = setTimeout(() => fail(new ProtocolError('timeout', 'relay.handshake')), timeoutMs);
+  // Per-connection handshake state. The login remembers the nonce it challenged with; the
+  // compute side remembers the hello nonce it verified and the fresh challenge it issued. Both
+  // are matched exactly, so a message captured on another connection never verifies here.
+  let issuedNonce = null;
+  let verifiedNonce = null;
+  let peerChallenge = null;
+  let closing = false;
+
+  function clearHandshakeTimer() {
+    if (handshakeTimer !== null) {
+      clearTimeout(handshakeTimer);
+      handshakeTimer = null;
+    }
+  }
+
+  function emitClose() {
+    if (state === 'closed') return;
+    state = state === 'rejected' ? state : 'closed';
+    clearHandshakeTimer();
+    for (const handler of closeHandlers) handler();
+  }
+
+  function fail(error) {
+    if (state === 'closed' || state === 'rejected') return;
+    state = 'rejected';
+    clearHandshakeTimer();
+    for (const [, record] of pendingStore) {
+      clearTimeout(record.timer);
+      record.reject(error);
+    }
+    pendingStore.clear();
+    failReady(error);
+    try {
+      stream.destroy?.();
+    } catch {
+      // A destroy failure must not mask the rejection cause.
+    }
+    emitClose();
+  }
+
+  function becomeReady() {
+    state = 'ready';
+    clearHandshakeTimer();
+    // Consumer registration completes synchronously with the handshake success, BEFORE
+    // `ready` settles: every observer of `ready` therefore sees registered consumers, and a
+    // final handshake message merged with the first business frame in one read block loses
+    // no frame. Registering from `ready.then` instead would leave `dataHandlers` empty for
+    // the remainder of that block.
+    for (const handler of readyHandlers) handler();
+    settleReady({ role, binding: handshake.binding });
+  }
+
+  function write(tag, payload) {
+    try {
+      stream.write?.(encodeRelayMessage(tag, payload));
+    } catch (error) {
+      fail(error instanceof ProtocolError ? error : new ProtocolError('source_unavailable', 'relay.write'));
+    }
+  }
+
+  function handleHandshake(message) {
+    if (role === 'login') {
+      // The login awaits the ack to the challenge THIS connection issued: the nonce must match
+      // exactly and the ack must carry the peer's fresh challenge.
+      if (
+        message?.kind !== RELAY_HELLO_ACK_KIND ||
+        message.nonce !== issuedNonce ||
+        typeof message.challenge !== 'string' ||
+        handshake.verify(message) !== true
+      ) {
+        fail(new ProtocolError('unauthorized', 'relay.handshake'));
+        return;
+      }
+      // The ack proved the peer holds the credential; the confirm proves the login does.
+      write(RELAY_TAG.control, handshake.confirm(message.nonce, message.challenge));
+      becomeReady();
+      return;
+    }
+    if (verifiedNonce === null) {
+      if (message?.kind !== RELAY_HANDSHAKE_KIND || handshake.verify(message) !== true) {
+        fail(new ProtocolError('unauthorized', 'relay.handshake'));
+        return;
+      }
+      verifiedNonce = message.nonce;
+      const ack = handshake.ack(message.nonce);
+      peerChallenge = ack.challenge;
+      write(RELAY_TAG.control, ack);
+      return;
+    }
+    // The compute side becomes ready only after the login answers the compute side's own
+    // challenge, so a replayed hello can never produce a ready channel.
+    if (
+      message?.kind !== RELAY_HELLO_CONFIRM_KIND ||
+      message.nonce !== verifiedNonce ||
+      message.challenge !== peerChallenge ||
+      handshake.verify(message) !== true
+    ) {
+      fail(new ProtocolError('unauthorized', 'relay.handshake'));
+      return;
+    }
+    becomeReady();
+  }
+
+  function handleStorageRequest(payload) {
+    let request;
+    try {
+      request = jsonParse(payload);
+    } catch (error) {
+      fail(error);
+      return;
+    }
+    const handler = storageHandlers[0];
+    if (handler === undefined) {
+      write(RELAY_TAG.storageAck, { id: request.id, ok: false, error: { code: 'unsupported', field: 'relay.storage.op' } });
+      return;
+    }
+    Promise.resolve(handler(request)).then(
+      (result) => write(RELAY_TAG.storageAck, { id: request.id, ...(result ?? { ok: true }) }),
+      (error) =>
+        write(RELAY_TAG.storageAck, {
+          id: request.id,
+          ok: false,
+          error: { code: error?.code ?? 'source_unavailable', field: error?.field ?? 'relay.storage' },
+        }),
+    );
+  }
+
+  function handleStorageAck(payload) {
+    let message;
+    try {
+      message = jsonParse(payload);
+    } catch (error) {
+      fail(error);
+      return;
+    }
+    const record = pendingStore.get(message.id);
+    if (record === undefined) return;
+    pendingStore.delete(message.id);
+    clearTimeout(record.timer);
+    if (message.ok === true) record.resolve(message);
+    else record.reject(new ProtocolError(message.error?.code ?? 'source_unavailable', message.error?.field ?? 'relay.storage'));
+  }
+
+  function dispatch(message) {
+    if (state === 'handshaking') {
+      // Before the credential proof only the expected handshake message is accepted. Every
+      // other tag — data, storageRequest, storageAck, any other control verb — is a
+      // credential-boundary failure, and the failed handshake stops the rest of the batch.
+      if (message.tag !== RELAY_TAG.control) {
+        fail(new ProtocolError('unauthorized', 'relay.handshake'));
+        return;
+      }
+      let value;
+      try {
+        value = jsonParse(message.payload);
+      } catch (error) {
+        fail(error);
+        return;
+      }
+      handleHandshake(value);
+      return;
+    }
+    if (state !== 'ready') return;
+    const { tag, payload } = message;
+    if (tag === RELAY_TAG.control) {
+      let value;
+      try {
+        value = jsonParse(payload);
+      } catch (error) {
+        fail(error);
+        return;
+      }
+      // The handshake is never renegotiated once the proof is complete.
+      if (RELAY_HANDSHAKE_KINDS.includes(value?.kind)) {
+        fail(new ProtocolError('unauthorized', 'relay.handshake'));
+        return;
+      }
+      for (const handler of controlHandlers) handler(value);
+      return;
+    }
+    if (tag === RELAY_TAG.data) {
+      for (const handler of dataHandlers) handler(payload);
+      return;
+    }
+    if (tag === RELAY_TAG.storageRequest) {
+      handleStorageRequest(payload);
+      return;
+    }
+    if (tag === RELAY_TAG.storageAck) handleStorageAck(payload);
+  }
+
+  function onData(chunk) {
+    if (state === 'closed' || state === 'rejected') return;
+    buffer = Buffer.concat([buffer, chunk]);
+    let decoded;
+    try {
+      decoded = decodeRelayMessages(buffer);
+    } catch {
+      fail(new ProtocolError('invalid_request', 'relay.frame'));
+      return;
+    }
+    buffer = decoded.remaining;
+    for (const message of decoded.messages) dispatch(message);
+  }
+
+  function onStreamEnd() {
+    if (closing) return;
+    // A peer that EOFs (or a stream that closes) before the credential proof must reject
+    // `ready`; after the proof it is an ordinary disconnect.
+    if (state === 'handshaking') {
+      fail(new ProtocolError('source_unavailable', 'relay.stream'));
+      return;
+    }
+    emitClose();
+  }
+
+  stream.on?.('data', onData);
+  stream.on?.('error', () => fail(new ProtocolError('source_unavailable', 'relay.stream')));
+  stream.on?.('end', onStreamEnd);
+  stream.on?.('close', onStreamEnd);
+
+  if (role === 'login') {
+    const hello = handshake.challenge();
+    issuedNonce = hello.nonce;
+    write(RELAY_TAG.control, hello);
+  }
+
+  return Object.freeze({
+    role,
+    binding: handshake.binding,
+    ready,
+    state: () => state,
+    onReady(handler) {
+      readyHandlers.push(handler);
+      // An already-ready channel notifies immediately, so registration order never decides
+      // whether a consumer observes the channel.
+      if (state === 'ready') handler();
+      return this;
+    },
+    onData(handler) {
+      dataHandlers.push(handler);
+      return this;
+    },
+    onControl(handler) {
+      controlHandlers.push(handler);
+      return this;
+    },
+    onStorageRequest(handler) {
+      storageHandlers.push(handler);
+      return this;
+    },
+    onClose(handler) {
+      closeHandlers.push(handler);
+      if (state === 'closed' || state === 'rejected') handler();
+      return this;
+    },
+    sendData(payload) {
+      requireValue(state === 'ready', 'relay.state', 'conflict');
+      write(RELAY_TAG.data, payload);
+    },
+    sendControl(message) {
+      requireValue(state === 'ready', 'relay.state', 'conflict');
+      write(RELAY_TAG.control, message);
+    },
+    /** Reverse storage RPC: the compute asks the login store to mutate durably and awaits the ack. */
+    requestStore(op, params = {}) {
+      requireValue(state === 'ready', 'relay.state', 'conflict');
+      requireValue(RELAY_STORAGE_OPS.includes(op), 'relay.storage.op', 'unsupported');
+      const id = randomUUID();
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pendingStore.delete(id);
+          reject(new ProtocolError('timeout', 'relay.storage'));
+        }, timeoutMs);
+        pendingStore.set(id, { resolve, reject, timer });
+        write(RELAY_TAG.storageRequest, { id, op, params });
+      });
+    },
+    close() {
+      if (state === 'closed') return;
+      closing = true;
+      const wasHandshaking = state === 'handshaking';
+      for (const [, record] of pendingStore) {
+        clearTimeout(record.timer);
+        record.reject(new ProtocolError('cancelled', 'relay.storage'));
+      }
+      pendingStore.clear();
+      clearHandshakeTimer();
+      try {
+        stream.end?.();
+        stream.destroy?.();
+      } catch {
+        // Ignore teardown races.
+      }
+      // An intentional close before the credential proof settles `ready` as cancelled;
+      // leaving it pending would hang the caller's `open` forever.
+      if (wasHandshaking) failReady(new ProtocolError('cancelled', 'relay.handshake'));
+      state = 'closed';
+      emitClose();
+    },
+  });
+}
+
+/** Dispatches one reverse storage operation to the login control store, returning a durable ack body. */
+export async function dispatchStoreOperation(store, request) {
+  const op = request?.op;
+  requireValue(RELAY_STORAGE_OPS.includes(op), 'relay.storage.op', 'unsupported');
+  const params = request?.params ?? {};
+  switch (op) {
+    case 'readIntent':
+      return Object.freeze({ ok: true, durable: true, value: (await store.readIntent(params.intentId)) ?? null });
+    case 'writeIntent':
+      return Object.freeze({ ok: true, durable: true, value: await store.writeIntent(params) });
+    case 'updateIntent':
+      return Object.freeze({ ok: true, durable: true, value: await store.updateIntent(params.intentId, params.patch ?? {}) });
+    case 'listIntents':
+      return Object.freeze({ ok: true, durable: true, value: await store.listIntents() });
+    case 'bumpEpoch':
+      return Object.freeze({ ok: true, durable: true, value: await store.bumpEpoch(params) });
+    case 'verifyIntegrity':
+      return Object.freeze({ ok: true, durable: true, value: await store.verifyIntegrity() });
+    default:
+      throw new ProtocolError('unsupported', 'relay.storage.op');
+  }
+}
+
+/**
+ * The long-term relay endpoint. `mode: 'tcp'` opens an authenticated listener (combined with a
+ * login SSH forward by the TCP transport); `mode: 'local-socket'` opens a compute-local socket
+ * for the `srun` relay step to forward to. Each accepted client becomes a relay channel; a client
+ * disconnect removes only that channel and leaves the listener (and its job bindings) alive.
+ */
+export function createComputeRelay(options = {}) {
+  const handshake = options.handshake;
+  requireValue(handshake !== null && typeof handshake === 'object', 'relay.handshake');
+  const mode = options.mode;
+  requireValue(mode === 'tcp' || mode === 'local-socket', 'relay.mode', 'unsupported');
+  const connectionHandlers = [];
+  const channels = new Set();
+  const bindings = new Map();
+  let state = 'idle';
+  let server;
+
+  function track(channel) {
+    channels.add(channel);
+    const key = `${channel.binding.intentId}:${channel.binding.epoch}`;
+    bindings.set(key, channel.binding);
+    for (const handler of connectionHandlers) handler(channel);
+    channel.onClose(() => {
+      channels.delete(channel);
+    });
+  }
+
+  function attach(socket) {
+    const channel = createRelayChannel(socket, {
+      handshake,
+      role: 'compute',
+      timeoutMs: options.timeoutMs,
+    });
+    // The consumer is registered synchronously with the handshake success. Registering it
+    // from `ready.then` instead would leave the channel's data handlers empty for the rest
+    // of the read block that carried the confirm: a legal peer that sends its first business
+    // frame immediately after the confirm can have both frames merged into one read, and
+    // that first frame would be dispatched to nobody and dropped.
+    channel.onReady(() => track(channel));
+    channel.ready.catch(() => channels.delete(channel));
+  }
+
+  async function listen() {
+    requireValue(state === 'idle', 'relay.state', 'conflict');
+    server = options.createServer ? options.createServer() : createNetServer();
+    server.on('connection', attach);
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      if (mode === 'tcp') server.listen({ host: options.host ?? '127.0.0.1', port: options.port ?? 0 }, resolve);
+      else server.listen(options.socketPath, resolve);
+    });
+    state = 'listening';
+    const address = server.address();
+    return Object.freeze(
+      mode === 'tcp'
+        ? { mode, host: typeof address === 'object' && address !== null ? address.address : options.host, port: typeof address === 'object' && address !== null ? address.port : options.port }
+        : { mode, path: options.socketPath },
+    );
+  }
+
+  async function close() {
+    if (state === 'closed') return;
+    state = 'closed';
+    for (const channel of channels) channel.close();
+    channels.clear();
+    await new Promise((resolve) => {
+      if (server === undefined || typeof server.close !== 'function') {
+        resolve();
+        return;
+      }
+      server.close(() => resolve());
+    });
+  }
+
+  return Object.freeze({
+    mode,
+    state: () => state,
+    connectionCount: () => channels.size,
+    jobBindings: () => Object.freeze([...bindings.values()]),
+    onConnection(handler) {
+      connectionHandlers.push(handler);
+      return this;
+    },
+    listen,
+    close,
+  });
+}

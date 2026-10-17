@@ -4,7 +4,7 @@ export interface SnapshotConnection {
   page(input?: Partial<SnapshotOptions>): Promise<Snapshot>;
   readChunk(input: { readonly collection: Collection; readonly key: string; readonly revision: number; readonly offset: number; readonly token: string }): ReturnType<RuntimeStore['readChunk']>;
   replay(input: { readonly after: number; readonly limit?: number }): Promise<Replay>;
-  close(): void;
+  close(): Promise<void>;
 }
 export interface RuntimeSnapshots {
   connect(binding: Binding, isCurrent: () => boolean): Promise<SnapshotConnection>;
