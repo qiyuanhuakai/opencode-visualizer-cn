@@ -1,8 +1,12 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { mountHistoryApp } from './test/appHarness';
 
 const mountedApps: Array<{ readonly unmount: () => void }> = [];
+
+beforeAll(async () => {
+  await import('./App.vue');
+});
 
 afterEach(() => {
   mountedApps.splice(0).forEach(({ unmount }) => unmount());
