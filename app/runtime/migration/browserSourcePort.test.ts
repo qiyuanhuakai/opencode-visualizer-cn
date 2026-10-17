@@ -320,3 +320,130 @@ describe('browser legacy source port binding hints', () => {
     }
   });
 });
+
+// Controlled IndexedDB double: serves one `histories` row per call of
+// openCursor, then a null cursor to end the traversal. The rows are handed
+// over exactly as the REAL writer puts them — key `[storageKey, entryId]`,
+// value `{ session, entry }` — so the source under test sees the real
+// on-disk shape instead of a fixture's prefixed convenience key.
+function createIndexedDbDouble(rows: readonly Readonly<{ key: unknown; value: unknown }>[]): IDBFactory {
+  // A cursor opened WITHOUT a lower bound starts a fresh traversal and serves the
+  // first row; one opened with a bound continues past it and finds nothing, so
+  // every traversal of the source is repeatable (openLegacyExport scans twice
+  // to prove the revision is stable) and still terminates after one row.
+  const database = {
+    objectStoreNames: { contains: (name: string) => name === 'histories' },
+    transaction: () => {
+      const cursorRequest: { onsuccess: (() => void) | null; result: unknown } = { onsuccess: null, result: null };
+      const store = {
+        openCursor: (range?: unknown) => {
+          queueMicrotask(() => {
+            cursorRequest.result = range === undefined ? { key: rows[0]?.key, value: rows[0]?.value } : null;
+            cursorRequest.onsuccess?.();
+            // A real transaction completes only after its cursor request settled.
+            queueMicrotask(() => { transaction.oncomplete?.(); });
+          });
+          return cursorRequest;
+        },
+      };
+      const transaction: { objectStore: () => typeof store; oncomplete: (() => void) | null; onabort: (() => void) | null; onerror: (() => void) | null } = { objectStore: () => store, oncomplete: null, onabort: null, onerror: null };
+      return transaction;
+    },
+    close: () => {},
+  };
+  return {
+    databases: async () => [{ name: 'opencode.backendHistory' }],
+    open: () => {
+      const request: { onsuccess: (() => void) | null; onerror: (() => void) | null; onupgradeneeded: (() => void) | null; onblocked: (() => void) | null; result: unknown } = { onsuccess: null, onerror: null, onupgradeneeded: null, onblocked: null, result: null };
+      queueMicrotask(() => { request.result = database; request.onsuccess?.(); });
+      return request;
+    },
+  } as unknown as IDBFactory;
+}
+
+describe('browser legacy source binding for the REAL IndexedDB writer format', () => {
+  it('binds a history row the real writer stored, instead of silently detaching it', async () => {
+    vi.resetModules();
+    // happy-dom implements neither IndexedDB nor IDBKeyRange; the controlled boundary
+    // below stands in for the whole API, including the key range the source builds
+    // to page past the first row.
+    (globalThis as { IDBKeyRange?: { lowerBound: (value: unknown, open?: boolean) => unknown } }).IDBKeyRange ??= { lowerBound: () => ({}) };
+    const { createBrowserLegacySource } = await import('./legacyBrowserSource');
+    const { createBrowserLegacySourcePort } = await import('./browserSourcePort');
+    const { createImportCoordinator } = await import('./importCoordinator');
+    const { legacyDigest } = await import('./legacyExport');
+    const { bindLegacySource } = await import('./legacyBinding');
+
+    // The REAL writer (`backendHistoryStorage.ts`) stores the row under the key
+    // `state.backendHistory.v1.<scope>.<session>` — WITHOUT the `opencode.` prefix
+    // that `storageKey` adds for the localStorage copy — as the tuple
+    // `[key, entryId]`. A fixture that pre-fills the prefixed key and the
+    // namespace proves nothing about this path.
+    const writerKey = `state.backendHistory.v1.${FIXTURE_SCOPE_HEX}.${encodeURIComponent(FIXTURE_SESSION_ID)}`;
+    const entryId = 'entry-0001';
+    const source = createBrowserLegacySource({
+      storage: { length: 0, key: () => null, getItem: () => null } as unknown as Storage,
+      indexedDB: createIndexedDbDouble([{ key: [writerKey, entryId], value: { session: writerKey, entry: { info: { id: entryId } } } }]),
+      origin: globalThis.location.origin,
+    });
+
+    // When the REAL port pages that source and resolves the binding hint.
+    const port = createBrowserLegacySourcePort(source);
+    const token = await port.open();
+    const sourceKeys: string[] = [];
+    let request: { token: typeof token } | null = { token };
+    while (request) {
+      const page = await port.page({ token: request.token, limit: 200 });
+      for (const chunk of page.chunks) if (!sourceKeys.includes(chunk.sourceKey)) sourceKeys.push(chunk.sourceKey);
+      request = page.next === null ? null : { token: page.next };
+    }
+    expect(sourceKeys).toHaveLength(1);
+    const hint = await port.binding(sourceKeys[0]);
+
+    // Then the hint is a history hint carrying the native session id and the
+    // scope fingerprint, so the REAL binder can match the proven mapping.
+    expect(hint.kind).toBe('history');
+    expect(hint.nativeSessionId).toBe(FIXTURE_SESSION_ID);
+    expect(hint.scopeFingerprint).toBe(await legacyDigest(`backend-history-v1:${FIXTURE_SCOPE_HEX}`));
+    const bound = bindLegacySource(hint, [{
+      profileId: 'profile-1', environmentId, harnessInstanceId: 'harness-1',
+      nativeSessionId: FIXTURE_SESSION_ID,
+      scopeFingerprint: await legacyDigest(`backend-history-v1:${FIXTURE_SCOPE_HEX}`),
+      evidence: 'user-confirmed' as const,
+    }]);
+    expect(bound).toEqual({ kind: 'bound', binding: { environmentId, harnessInstanceId: 'harness-1', nativeSessionId: FIXTURE_SESSION_ID, profileId: 'profile-1' } });
+
+    // And the REAL coordinator routes the record to the target instead of
+    // reporting a cutover that silently skipped the history import.
+    const accepted: Readonly<{ total: number; chunks: readonly Readonly<{ authority: string; end: boolean; binding: unknown }>[] }>[] = [];
+    const target = {
+      environmentId,
+      service: {
+        accept: async (batch: never) => { accepted.push(JSON.parse(JSON.stringify(batch))); return { phase: 'durable-accepted' as const, intentId: 'migration', revision: 0, watermark: 0 }; },
+        verify: async () => ({ phase: 'durable-accepted' as const, intentId: 'migration', revision: 0, watermark: 0 }),
+      },
+    };
+    const coordinator = createImportCoordinator({
+      source: createBrowserLegacySourcePort(createBrowserLegacySource({
+        storage: { length: 0, key: () => null, getItem: () => null } as unknown as Storage,
+        indexedDB: createIndexedDbDouble([{ key: [writerKey, entryId], value: { session: writerKey, entry: { info: { id: entryId } } } }]),
+        origin: globalThis.location.origin,
+      })),
+      local: createArchiveMemoryStore(), target,
+      currentEnvironment: () => environmentId, mappings: [{
+        profileId: 'profile-1', environmentId, harnessInstanceId: 'harness-1',
+        nativeSessionId: FIXTURE_SESSION_ID,
+        scopeFingerprint: await legacyDigest(`backend-history-v1:${FIXTURE_SCOPE_HEX}`),
+        evidence: 'user-confirmed' as const,
+      }], clientOrigin: 'client-test',
+    });
+    const result = await coordinator.run();
+    expect(result.records).toBe(1);
+    expect(result.boundRecords).toBe(1);
+    expect(result.localOnlyRecords).toBe(0);
+    expect(accepted).toHaveLength(1);
+    expect(accepted[0].total).toBe(1);
+    expect(accepted[0].chunks.map((chunk) => chunk.authority)).toEqual(['indexeddb']);
+    expect(accepted[0].chunks[0].binding).toEqual({ environmentId, harnessInstanceId: 'harness-1', nativeSessionId: FIXTURE_SESSION_ID, profileId: 'profile-1' });
+  });
+});
