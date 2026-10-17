@@ -308,6 +308,29 @@ describe('ACP session page buffers', () => {
     expect(second.items).toHaveLength(INDEX_PAGE_SIZE);
     await expect(adapter.list({ cursor })).rejects.toThrow(/session_cursor/);
   });
+  it('expires a stale continuation cursor even when a newer cursor precedes it in the sweep order', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // Two scans of the same 1000-session account: A is fetched first, B 100s later.
+      const { rpc } = acpRpc([nativeAnswer('acp', 1000, 'native-next'), nativeAnswer('acp', 1000, 'native-next')]);
+      const adapter = createAcpSessions({ rpc, mutations: acpMutations(), capabilities: acpCapabilities(), queue: acpQueue(), cwd: '/repo', emit: () => {} });
+      const first = cursorOf(await adapter.list({}));
+      vi.setSystemTime(new Date(Date.now() + 100000));
+      const second = cursorOf(await adapter.list({}));
+      // Consuming A's first internal page re-inserts A's remaining buffer with its original
+      // timestamp, so the sweep order becomes B (newer) before A (older).
+      vi.setSystemTime(new Date(Date.now() + 100000));
+      const continuation = cursorOf(await adapter.list({ cursor: first }));
+      expect(continuation).not.toBe(first);
+      // A's buffer is now past the 5-minute cursor TTL while B is not, so A must be refused
+      // instead of serving titles that the account changed 210s ago.
+      vi.setSystemTime(new Date(Date.now() + 110000));
+      await expect(adapter.list({ cursor: continuation })).rejects.toThrow(/session_cursor/);
+      expect(second.length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('expires a cursor the caller never resumes', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {

@@ -96,18 +96,30 @@ export function createAcpSessions({ rpc, mutations, capabilities, queue, cwd, em
   // still pins the whole native buffer it was cut from, so spending the token deletes it.
   // Cursors the caller never resumes are reclaimed here, oldest first (Map iteration is
   // insertion order), never the one just issued - evicting that would return a dead cursor.
+  function expired(state) {
+    return Date.now() - state.at >= ACP_SESSION_LIMITS.cursorTtlMs;
+  }
+  function drop(cursor, state) {
+    cursors.delete(cursor);
+    cursorBytes -= state.bytes;
+  }
   function sweep(fresh) {
+    // Expiry is per cursor, not per position: resuming a mid-buffer page re-inserts an older
+    // buffer at the tail, so Map order stops tracking age and stopping at the first live
+    // entry would leave expired state readable. Every live cursor is therefore checked for
+    // its lease, and only then are the count and byte budgets enforced, oldest first.
     const now = Date.now();
     for (const [cursor, state] of cursors) {
-      if (cursor === fresh) continue;
-      if (
-        now - state.at < ACP_SESSION_LIMITS.cursorTtlMs &&
-        cursors.size <= ACP_SESSION_LIMITS.cursors &&
-        cursorBytes <= ACP_SESSION_LIMITS.cursorBytes
-      )
-        break;
-      cursors.delete(cursor);
-      cursorBytes -= state.bytes;
+      if (cursor !== fresh && now - state.at >= ACP_SESSION_LIMITS.cursorTtlMs) drop(cursor, state);
+    }
+    for (const budget of [() => cursors.size > ACP_SESSION_LIMITS.cursors, () => cursorBytes > ACP_SESSION_LIMITS.cursorBytes]) {
+      while (budget()) {
+        const oldest = [...cursors.keys()].find((cursor) => cursor !== fresh);
+        if (oldest === undefined) break;
+        const state = cursors.get(oldest);
+        if (state === undefined) break;
+        drop(oldest, state);
+      }
     }
   }
   function keep(state) {
@@ -127,7 +139,10 @@ export function createAcpSessions({ rpc, mutations, capabilities, queue, cwd, em
       };
     sweep(null);
     const held = input.cursor ? cursors.get(input.cursor) : null;
-    if (input.cursor && !held) throw new StoreError('invalid_request', 'session_cursor');
+    // A cursor is a lease on one native answer: resuming one whose lease has lapsed is a
+    // replay of a buffer the account may have moved on from, so it is refused here even if
+    // the sweep has not reached it yet.
+    if (input.cursor && (!held || expired(held))) throw new StoreError('invalid_request', 'session_cursor');
     if (held !== null) {
       cursors.delete(input.cursor);
       cursorBytes -= held.bytes;
