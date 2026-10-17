@@ -216,7 +216,14 @@ export function createMailbox() {
     });
   }
 
-  /** Restore a snapshot into a FRESH mailbox, re-validating every record on the way in. */
+  /**
+   * Restore a snapshot into a FRESH mailbox. Every record is re-validated on the way in — the
+   * message shape, the parent causality, the PARTICIPANT MEMBERSHIP of both endpoints, the
+   * per-team message count against the shared budget and message-id uniqueness — and nothing is
+   * published until every team validates, so a rejected snapshot leaves the mailbox empty. A
+   * corrupted or externally supplied snapshot therefore cannot smuggle in messages a live post
+   * would have refused.
+   */
   function rehydrate(snapshotInput) {
     assertOpen();
     if (teamsById.size > 0) throw new CollaborationError('conflict', 'mailbox_team');
@@ -224,6 +231,7 @@ export function createMailbox() {
       || snapshotInput.version !== 1 || !Array.isArray(snapshotInput.teams)) {
       throw new CollaborationError('invalid_request', 'mailbox_snapshot');
     }
+    const staged = new Map();
     let participants = 0;
     let messages = 0;
     for (const teamSnapshot of snapshotInput.teams) {
@@ -236,21 +244,42 @@ export function createMailbox() {
         throw new CollaborationError('invalid_request', 'mailbox_snapshot');
       }
       const teamId = parseTeamId(teamSnapshot.teamId);
-      if (teamsById.has(teamId)) throw new CollaborationError('conflict', 'mailbox_team', { teamId });
+      if (staged.has(teamId)) throw new CollaborationError('conflict', 'mailbox_team', { teamId });
       const team = { teamId, participants: new Set(), messages: [], createdAt: teamSnapshot.createdAt };
       for (const participant of teamSnapshot.participants) team.participants.add(parseParticipantId(participant));
       for (const message of teamSnapshot.messages) {
         const restored = validateStoredMessage(message, teamId);
+        // The same bounds a live post obeys: both endpoints must be registered participants of
+        // THIS team, the count may not exceed the shared budget, and each message id is unique.
+        if (!team.participants.has(restored.from) || !team.participants.has(restored.to)) {
+          throw new CollaborationError('unauthorized', 'mailbox_scope', {
+            teamId,
+            from: restored.from,
+            to: restored.to,
+          });
+        }
+        if (team.messages.length >= MAILBOX_LIMITS.maxMessages) {
+          throw new CollaborationError('conflict', 'mailbox_full', {
+            teamId,
+            limit: MAILBOX_LIMITS.maxMessages,
+            used: team.messages.length,
+          });
+        }
+        if (team.messages.some((entry) => entry.messageId === restored.messageId)) {
+          throw new CollaborationError('conflict', 'mailbox_snapshot', { teamId, messageId: restored.messageId });
+        }
         if (restored.parentMessageId !== null
           && !team.messages.some((entry) => entry.messageId === restored.parentMessageId)) {
           throw new CollaborationError('invalid_request', 'mailbox_parent', { teamId, parentMessageId: restored.parentMessageId });
         }
         team.messages.push(restored);
       }
-      teamsById.set(teamId, team);
+      staged.set(teamId, team);
       participants += team.participants.size;
       messages += team.messages.length;
     }
+    // Publish only after EVERY team validated, so a rejected snapshot restores nothing at all.
+    for (const [teamId, team] of staged) teamsById.set(teamId, team);
     posted += messages;
     return Object.freeze({ teams: teamsById.size, participants, messages });
   }

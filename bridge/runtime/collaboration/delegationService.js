@@ -508,6 +508,37 @@ export function createDelegationService({ deliver, mailbox: injectedMailbox } = 
   }
 
   /**
+   * Walk a task's whole subtree breadth-first, settling every non-terminal task with the
+   * cancelling ancestor recorded, and reporting the already-terminal ones as skipped. The
+   * subtree is WALKED even through terminal tasks, so the skip list is complete. Shared by
+   * control and the deadline sweep, so an explicit stop and an expired deadline terminate
+   * exactly the same way.
+   */
+  function settleSubtree(target, state, at, resolution, action, reason) {
+    const transitioned = [];
+    const skipped = [];
+    const queue = [target];
+    const seen = new Set();
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (seen.has(current.taskId)) continue;
+      seen.add(current.taskId);
+      for (const childId of current.children) {
+        const child = tasksById.get(childId);
+        if (child !== undefined) queue.push(child);
+      }
+      if (TERMINAL_TASK_STATES.includes(current.state)) {
+        skipped.push(current.taskId);
+        continue;
+      }
+      settle(current, state, at, resolution, { taskId: target.taskId, action, at }, reason);
+      countTerminal(state);
+      transitioned.push(current.taskId);
+    }
+    return { transitioned, skipped };
+  }
+
+  /**
    * Walk UP from a task that settled non-successfully, settling each ancestor whose RECORDED
    * childFailure policy is `cascade`. The walk stops at the first `independent` or terminal
    * ancestor, so it is bounded by the depth-4 limit and always terminates.
@@ -595,11 +626,20 @@ export function createDelegationService({ deliver, mailbox: injectedMailbox } = 
         prompt,
       });
     } catch (error) {
+      // A control, a sweep or a reconcile can settle this task while the send is in flight. A
+      // late rejection must then be ignored: it may not rewrite the terminal state, re-count
+      // it, or append a notice for a task that already ended.
+      if (task.state !== 'delegated') return taskView(task);
       const failure = classifyFailure(error, { code: 'source_unavailable', field: 'delegation_send' });
       settle(task, 'failed', at, failure, null, null);
       countTerminal('failed');
+      // A send failure is a non-success exactly like a worker's failed claim: it propagates
+      // through the parent's RECORDED childFailure policy, never bypassing it.
+      cascadeUp(task, 'failed', at);
       return taskView(task);
     }
+    // Everything after the await is a LATE result once the task has left `delegated`.
+    if (task.state !== 'delegated') return taskView(task);
     const ackId = result !== null && typeof result === 'object' ? result.ackId : undefined;
     if (typeof ackId !== 'string' || ackId.length === 0) {
       // An unreadable outcome is a STOP at ambiguous: retained, never retried by this service.
@@ -619,6 +659,7 @@ export function createDelegationService({ deliver, mailbox: injectedMailbox } = 
       const failure = classifyFailure(error, { code: 'source_unavailable', field: 'delegation_notice' });
       settle(task, 'failed', at, failure, null, null);
       countTerminal('failed');
+      cascadeUp(task, 'failed', at);
     }
     return taskView(task);
   }
@@ -746,32 +787,17 @@ export function createDelegationService({ deliver, mailbox: injectedMailbox } = 
     const resolution = action === 'cancel'
       ? { code: 'cancelled', field: 'delegation_cancel' }
       : { code: 'timeout', field: 'delegation_timeout' };
-    const transitioned = [];
-    const skipped = [];
     // Cascade DOWN the whole subtree, breadth-first: every non-terminal descendant settles with
     // the cancelling ancestor recorded, and an already-terminal task is skipped, never re-settled.
-    const queue = [target];
-    const seen = new Set();
-    while (queue.length > 0) {
-      const current = queue.shift();
-      if (seen.has(current.taskId)) continue;
-      seen.add(current.taskId);
-      // The subtree is WALKED even through already-terminal tasks, so `skipped` reports every
-      // task the cascade found settled rather than silently stopping at the first one.
-      for (const childId of current.children) {
-        const child = tasksById.get(childId);
-        if (child !== undefined) queue.push(child);
-      }
-      if (TERMINAL_TASK_STATES.includes(current.state)) {
-        skipped.push(current.taskId);
-        continue;
-      }
-      settle(current, state, at, resolution, { taskId: target.taskId, action, at }, parseReason(input.reason));
-      countTerminal(state);
-      transitioned.push(current.taskId);
+    const walked = settleSubtree(target, state, at, resolution, action, parseReason(input.reason));
+    const transitioned = [...walked.transitioned];
+    const skipped = walked.skipped;
+    // The target's own parent reacts only through its recorded policy, and ONLY when the target
+    // itself actually transitioned: stopping an already-terminal task changes nothing, so it
+    // must not cascade a non-transition up to a parent that is still running.
+    if (walked.transitioned.includes(target.taskId)) {
+      for (const taskId of cascadeUp(target, state, at)) transitioned.push(taskId);
     }
-    // The target's own parent reacts only through its recorded policy.
-    for (const taskId of cascadeUp(target, state, at)) transitioned.push(taskId);
     return Object.freeze({
       action,
       taskId: target.taskId,
@@ -781,7 +807,7 @@ export function createDelegationService({ deliver, mailbox: injectedMailbox } = 
     });
   }
 
-  /** Retire every non-terminal delegation whose deadline has passed. */
+  /** Retire every non-terminal delegation whose deadline has passed, cascading DOWN its subtree. */
   function sweep(input = {}) {
     assertOpen();
     const at = parseAt(input.at);
@@ -789,10 +815,12 @@ export function createDelegationService({ deliver, mailbox: injectedMailbox } = 
     for (const task of tasksById.values()) {
       if (TERMINAL_TASK_STATES.includes(task.state)) continue;
       if (task.deadlineAt === null || task.deadlineAt > at) continue;
-      settle(task, 'timeout', at, { code: 'timeout', field: 'delegation_timeout' },
-        { taskId: task.taskId, action: 'timeout', at }, null);
-      countTerminal('timeout');
-      timedOut.push(task.taskId);
+      // The deadline cascades DOWN the whole subtree exactly like an explicit control timeout:
+      // a child with no deadline of its own must not outlive its parent's deadline and hold a
+      // concurrency or Session slot forever. The expired task is the recorded causing ancestor.
+      const walked = settleSubtree(task, 'timeout', at,
+        { code: 'timeout', field: 'delegation_timeout' }, 'timeout', null);
+      timedOut.push(...walked.transitioned);
       for (const taskId of cascadeUp(task, 'timeout', at)) timedOut.push(taskId);
     }
     return Object.freeze({ timedOut: Object.freeze(timedOut), count: timedOut.length });

@@ -1599,6 +1599,71 @@ describe('participant mailbox', () => {
     restored.close();
   });
 
+  it('rehydrate enforces the participant, count and uniqueness bounds a live post obeys', () => {
+    const messageAt = (index: number, from: string, to: string, teamId: string = TEAM): MessageView => ({
+      messageId: `15151515-1515-4111-8111-${String(index).padStart(12, '0')}`,
+      teamId,
+      from,
+      to,
+      text: `message ${index}`,
+      parentMessageId: null,
+      at: T0 + index,
+    });
+    const snapshotWith = (messages: readonly MessageView[]): MailboxSnapshot => ({
+      version: 1,
+      teams: [{ teamId: TEAM, createdAt: T0, participants: [W_ACP, W_CODEX], messages }],
+    });
+    const rehydrateInto = (snapshot: MailboxSnapshot) => {
+      const restored = mailboxModule.createMailbox();
+      const rejection = rejectionOf(() => restored.rehydrate(snapshot));
+      return { restored, rejection };
+    };
+
+    // An unregistered SENDER is a scope violation, exactly like a live post.
+    const forgedSender = rehydrateInto(snapshotWith([messageAt(1, STRANGER, W_ACP)]));
+    expect(forgedSender.rejection.code).toBe('unauthorized');
+    expect(forgedSender.rejection.field).toBe('mailbox_scope');
+    expect(forgedSender.restored.state().teams).toBe(0);
+    expect(forgedSender.restored.state().messages).toBe(0);
+    forgedSender.restored.close();
+
+    // An unregistered RECIPIENT is refused the same way.
+    const forgedRecipient = rehydrateInto(snapshotWith([messageAt(1, W_ACP, STRANGER)]));
+    expect(forgedRecipient.rejection.code).toBe('unauthorized');
+    expect(forgedRecipient.rejection.field).toBe('mailbox_scope');
+    forgedRecipient.restored.close();
+
+    // A duplicate message id inside one team is a conflict, never a silent second copy.
+    const duplicate = rehydrateInto(snapshotWith([messageAt(1, W_ACP, W_CODEX), messageAt(2, W_ACP, W_CODEX), messageAt(1, W_ACP, W_CODEX)]));
+    expect(duplicate.rejection.code).toBe('conflict');
+    expect(duplicate.rejection.field).toBe('mailbox_snapshot');
+    duplicate.restored.close();
+
+    // The per-team message count may not exceed the shared budget, however the snapshot reads.
+    const overCapacity = rehydrateInto(snapshotWith(
+      Array.from({ length: mailboxModule.MAILBOX_LIMITS.maxMessages + 1 }, (_entry, index) => messageAt(index + 1, W_ACP, W_CODEX)),
+    ));
+    expect(overCapacity.rejection.code).toBe('conflict');
+    expect(overCapacity.rejection.field).toBe('mailbox_full');
+    expect(overCapacity.restored.state().messages).toBe(0);
+    overCapacity.restored.close();
+
+    // A rejected snapshot publishes NOTHING: a later invalid team leaves no earlier team behind.
+    const otherTeam = '15151515-1515-4515-8515-151515151542';
+    const partial = rehydrateInto({
+      version: 1,
+      teams: [
+        { teamId: TEAM, createdAt: T0, participants: [W_ACP, W_CODEX], messages: [messageAt(1, W_ACP, W_CODEX)] },
+        { teamId: otherTeam, createdAt: T0, participants: [W_ACP], messages: [messageAt(2, STRANGER, W_ACP, otherTeam)] },
+      ],
+    });
+    expect(partial.rejection.code).toBe('unauthorized');
+    expect(partial.rejection.field).toBe('mailbox_scope');
+    expect(partial.restored.state().teams).toBe(0);
+    expect(partial.restored.state().messages).toBe(0);
+    partial.restored.close();
+  });
+
   it('refuses a reply whose parent is unknown or belongs to another team', () => {
     const mailbox = mailboxModule.createMailbox();
     mailbox.openTeam({ teamId: TEAM, at: T0 });
@@ -1677,5 +1742,162 @@ describe('participant mailbox', () => {
     const rejection = rejectionOf(() => mailbox.post({ teamId: TEAM, from: W_ACP, to: W_CODEX, text: 'late', at: T0 }));
     expect(rejection.code).toBe('cancelled');
     expect(rejection.field).toBe('mailbox_closed');
+  });
+});
+
+/* ------------------------------------------------------------------ late outcomes and termination propagation */
+
+describe('late delegation outcomes and termination propagation', () => {
+  it('a late deliver rejection cannot rewrite a terminal state written while the send was in flight', async () => {
+    const gate: { reject?: () => void } = {};
+    const deliver = (): Promise<{ readonly ackId: string }> => new Promise<{ readonly ackId: string }>((_resolve, reject) => {
+      gate.reject = () => reject(new CollaborationError('source_unavailable', 'delegation_send'));
+    });
+    const service = makeService(deliver);
+    const seed = seedTeam(service, ['acp']);
+    // The send hangs in flight; the task is registered synchronously by the delegate prefix.
+    const pending = seed.lead.scope.delegate({
+      title: 'in flight', criteria: [CRITERION], workerParticipantId: W_ACP, at: T0 + 1,
+    });
+    const taskId = service.tasks(seed.team.teamId)[0]?.taskId ?? '';
+    // The lead cancels the task while the send is still in flight.
+    const cancelled = seed.lead.scope.control({ taskId, action: 'cancel', at: T0 + 2 });
+    expect(cancelled.transitioned).toEqual([taskId]);
+    expect(service.task(taskId).state).toBe('cancelled');
+    // The hung send now rejects: the late failure must not rewrite the terminal state.
+    gate.reject?.();
+    const settled = await pending;
+    expect(settled.state).toBe('cancelled');
+    const view = service.task(taskId);
+    expect(view.state).toBe('cancelled');
+    expect(view.resolution).toEqual({ code: 'cancelled', field: 'delegation_cancel' });
+    expect(view.endedBy).toEqual({ taskId, action: 'cancel', at: T0 + 2 });
+    expect(view.endedAt).toBe(T0 + 2);
+    expect(service.state().failed).toBe(0);
+    service.close();
+  });
+
+  it('a late deliver result without an ack cannot rewrite a swept timeout', async () => {
+    const gate: { resolve?: () => void } = {};
+    const deliver = (): Promise<undefined> => new Promise<undefined>((resolve) => {
+      gate.resolve = () => resolve(undefined);
+    });
+    const service = makeService(deliver);
+    const seed = seedTeam(service, ['acp']);
+    const pending = seed.lead.scope.delegate({
+      title: 'slow work', criteria: [CRITERION], workerParticipantId: W_ACP, timeoutMs: 5000, at: T0,
+    });
+    const taskId = service.tasks(seed.team.teamId)[0]?.taskId ?? '';
+    // The deadline sweep retires the task while the send is still in flight.
+    const swept = service.sweep({ at: T0 + 5000 });
+    expect(swept.timedOut).toEqual([taskId]);
+    // The hung send now resolves WITHOUT an ack: the late ambiguous result is ignored.
+    gate.resolve?.();
+    const settled = await pending;
+    expect(settled.state).toBe('timeout');
+    const view = service.task(taskId);
+    expect(view.state).toBe('timeout');
+    expect(view.resolution).toEqual({ code: 'timeout', field: 'delegation_timeout' });
+    expect(view.endedAt).toBe(T0 + 5000);
+    expect(service.state().ambiguous).toBe(0);
+    service.close();
+  });
+
+  it('cancelling an already-succeeded task never cascades to a running parent', async () => {
+    const service = makeService(ackAll);
+    const seed = seedTeam(service, ['acp', 'codex']);
+    const parent = await seed.lead.scope.delegate({
+      title: 'cascading parent', criteria: [CRITERION], workerParticipantId: W_ACP, childFailure: 'cascade', at: T0,
+    });
+    const child = await seed.lead.scope.delegate({
+      title: 'succeeded child', criteria: [CRITERION], workerParticipantId: W_CODEX, parentTaskId: parent.taskId, at: T0 + 1,
+    });
+    await seed.workers[1]!.scope.submitEvidence({ taskId: child.taskId, outcome: 'succeeded', evidence: [EVIDENCE], at: T0 + 2 });
+    expect(service.task(child.taskId).state).toBe('succeeded');
+    // The lead cancels the already-succeeded child: nothing transitions, so nothing cascades.
+    const result = seed.lead.scope.control({ taskId: child.taskId, action: 'cancel', at: T0 + 3 });
+    expect(result.transitioned).toEqual([]);
+    expect(result.skipped).toEqual([child.taskId]);
+    expect(service.task(child.taskId).state).toBe('succeeded');
+    const parentView = service.task(parent.taskId);
+    expect(parentView.state).toBe('delegated');
+    expect(parentView.endedBy).toBeNull();
+    expect(parentView.endedAt).toBeNull();
+    expect(service.state().cancelled).toBe(0);
+    expect(service.state().inFlight).toBe(1);
+    service.close();
+  });
+
+  it('the deadline sweep cascades the timeout down the whole subtree', async () => {
+    const service = makeService(ackAll);
+    const seed = seedTeam(service, ['acp', 'codex']);
+    const parent = await seed.lead.scope.delegate({
+      title: 'parent with deadline', criteria: [CRITERION], workerParticipantId: W_ACP, timeoutMs: 5000, at: T0,
+    });
+    const child = await seed.lead.scope.delegate({
+      title: 'child without deadline', criteria: [CRITERION], workerParticipantId: W_CODEX, parentTaskId: parent.taskId, at: T0 + 1,
+    });
+    expect(service.sweep({ at: T0 + 4999 }).count).toBe(0);
+    const after = service.sweep({ at: T0 + 5000 });
+    expect(after.timedOut).toEqual([parent.taskId, child.taskId]);
+    expect(service.task(parent.taskId).state).toBe('timeout');
+    const childView = service.task(child.taskId);
+    expect(childView.state).toBe('timeout');
+    expect(childView.endedBy).toEqual({ taskId: parent.taskId, action: 'timeout', at: T0 + 5000 });
+    expect(childView.resolution).toEqual({ code: 'timeout', field: 'delegation_timeout' });
+    expect(service.state().inFlight).toBe(0);
+    // A later sweep finds nothing left to retire: the child never outlived the deadline.
+    expect(service.sweep({ at: T0 + 6000 }).count).toBe(0);
+    service.close();
+  });
+
+  it('a deliver failure propagates through the recorded childFailure policy', async () => {
+    let codexFailed = false;
+    const deliver = async (input: DelegationDeliverInput): Promise<{ readonly ackId: string }> => {
+      if (input.participantId === W_CODEX && !codexFailed) {
+        codexFailed = true;
+        throw new CollaborationError('source_unavailable', 'delegation_send');
+      }
+      return { ackId: `ack-${input.taskId}` };
+    };
+    const service = makeService(deliver);
+    const seed = seedTeam(service, ['acp', 'codex']);
+    const parent = await seed.lead.scope.delegate({
+      title: 'cascading parent', criteria: [CRITERION], workerParticipantId: W_ACP, childFailure: 'cascade', at: T0,
+    });
+    const failed = await seed.lead.scope.delegate({
+      title: 'unreachable child', criteria: [CRITERION], workerParticipantId: W_CODEX, parentTaskId: parent.taskId, at: T0 + 1,
+    });
+    expect(failed.state).toBe('failed');
+    expect(failed.resolution).toEqual({ code: 'source_unavailable', field: 'delegation_send' });
+    const parentView = service.task(parent.taskId);
+    expect(parentView.state).toBe('failed');
+    expect(parentView.endedBy).toEqual({ taskId: failed.taskId, action: 'child-failed', at: T0 + 1 });
+    expect(parentView.resolution).toEqual({ code: 'delegation_failed', field: 'delegation_child_failure' });
+    service.close();
+  });
+
+  it('a deliver failure on an independent parent leaves the parent running', async () => {
+    let codexFailed = false;
+    const deliver = async (input: DelegationDeliverInput): Promise<{ readonly ackId: string }> => {
+      if (input.participantId === W_CODEX && !codexFailed) {
+        codexFailed = true;
+        throw new CollaborationError('source_unavailable', 'delegation_send');
+      }
+      return { ackId: `ack-${input.taskId}` };
+    };
+    const service = makeService(deliver);
+    const seed = seedTeam(service, ['acp', 'codex']);
+    const parent = await seed.lead.scope.delegate({
+      title: 'independent parent', criteria: [CRITERION], workerParticipantId: W_ACP, childFailure: 'independent', at: T0,
+    });
+    const failed = await seed.lead.scope.delegate({
+      title: 'unreachable child', criteria: [CRITERION], workerParticipantId: W_CODEX, parentTaskId: parent.taskId, at: T0 + 1,
+    });
+    expect(failed.state).toBe('failed');
+    const parentView = service.task(parent.taskId);
+    expect(parentView.state).toBe('delegated');
+    expect(parentView.endedBy).toBeNull();
+    service.close();
   });
 });
