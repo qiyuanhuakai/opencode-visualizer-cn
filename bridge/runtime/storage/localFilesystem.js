@@ -7,18 +7,29 @@ export function classifyFilesystem(platform, type) {
   return { platform, type, local: true };
 }
 /** Darwin assigns filesystem type numbers at runtime, so the mount table's type name is the
- * stable identity; stat(1) has no statfs mode there and its %T is the file type, not the fs. */
+ * stable identity; stat(1) has no statfs mode there and its %T is the file type, not the fs.
+ * mount(1) prints "<source> on <mount point> (<type>, ...)" and either side may itself contain
+ * " on ", so a single split of the line cannot identify the mount point: every split the printed
+ * grammar allows is collected, only mount points covering canonicalPath compete, and covering
+ * records that disagree refuse the probe instead of guessing a volume. */
 export function darwinMountType(mountOutput, canonicalPath) {
-  let matched;
+  const covering = [];
   for (const line of mountOutput.split('\n')) {
-    const entry = /^(.+) on (.+) \(([^,)]+)[,)]/.exec(line);
-    if (!entry) continue;
-    const mountPoint = entry[2];
-    if (mountPoint !== '/' && canonicalPath !== mountPoint && !canonicalPath.startsWith(`${mountPoint}/`)) continue;
-    if (matched === undefined || mountPoint.length > matched.mountPoint.length) matched = { mountPoint, type: entry[3] };
+    const options = line.lastIndexOf(' (');
+    if (options < 0) continue;
+    const type = /^\(([^,)]+)[,)]/.exec(line.slice(options + 1))?.[1];
+    if (type === undefined) continue;
+    const record = line.slice(0, options);
+    for (let at = record.indexOf(' on '); at >= 0; at = record.indexOf(' on ', at + 4)) {
+      const mountPoint = record.slice(at + 4);
+      if (mountPoint !== '' && (mountPoint === '/' || canonicalPath === mountPoint || canonicalPath.startsWith(`${mountPoint}/`))) covering.push({ mountPoint, type });
+    }
   }
-  if (matched === undefined) throw new StoreError('unsupported', 'unverified_local_filesystem');
-  return matched.type;
+  if (covering.length === 0) throw new StoreError('unsupported', 'unverified_local_filesystem');
+  const deepest = Math.max(...covering.map((candidate) => candidate.mountPoint.length));
+  const records = covering.filter((candidate) => candidate.mountPoint.length === deepest);
+  if (new Set(records.map((candidate) => candidate.type)).size > 1) throw new StoreError('unsupported', 'unverified_local_filesystem');
+  return records[0].type;
 }
 export function probeLocalFilesystem(directory) {
   const canonicalPath = realpathSync(directory);
