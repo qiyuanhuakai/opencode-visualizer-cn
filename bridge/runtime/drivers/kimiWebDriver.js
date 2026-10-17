@@ -59,10 +59,17 @@ export async function createKimiWebDriver(options) {
   const runningTasks = new Map();
   const endedTasks = new Map();
   const uncertain = new Set();
+  // A durable read that fails is not evidence about the session, but it is also not a reason to
+  // retry forever: one pending re-check per session on a bounded backoff re-reads the lease after
+  // a transient refusal (the store rejects with queue_full while it is saturated) and, once the
+  // schedule is exhausted, leaves the session conservatively uncertain instead of pinning its slot.
+  const recheckTimers = new Map();
+  const recheckAttempts = new Map();
+  const RECHECK_DELAYS_MS = [50, 100, 200, 400, 800];
   const invalidated = new Set();
   let eventWork = Promise.resolve(), eventCount = 0, eventBytes = 0;
   let lastEventError;
-  const stats = { recoveries: 0, nativeFrames: 0, lifecycleFrames: 0, sourceDisconnects: 0, reclaimed: 0 };
+  const stats = { recoveries: 0, nativeFrames: 0, lifecycleFrames: 0, sourceDisconnects: 0, reclaimed: 0, rechecks: 0 };
   // A session is retained while an observer watches it, while a read or send is in flight, or while a submitted turn still has to be observed to completion.
   function retain(sessionId) {
     retained.set(sessionId, (retained.get(sessionId) ?? 0) + 1);
@@ -101,6 +108,28 @@ export async function createKimiWebDriver(options) {
     if (!ended.size) endedTasks.delete(sessionId);
     return true;
   }
+  // A re-read that failed is rescheduled once per session on the bounded backoff above: the
+  // pending timer is the de-duplication, so a burst of uncertain sessions cannot pile up
+  // concurrent re-reads, and the attempt counter stops the schedule instead of retrying forever.
+  function scheduleRecheck(sessionId) {
+    if (closed || recheckTimers.has(sessionId)) return;
+    const attempt = (recheckAttempts.get(sessionId) ?? 0) + 1;
+    if (attempt > RECHECK_DELAYS_MS.length) return;
+    recheckAttempts.set(sessionId, attempt);
+    const timer = setTimeout(() => {
+      recheckTimers.delete(sessionId);
+      stats.rechecks++;
+      if (uncertain.has(sessionId)) void verify(sessionId);
+    }, RECHECK_DELAYS_MS[attempt - 1]);
+    timer.unref?.();
+    recheckTimers.set(sessionId, timer);
+  }
+  function forgetRecheck(sessionId) {
+    const timer = recheckTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    recheckTimers.delete(sessionId);
+    recheckAttempts.delete(sessionId);
+  }
   function reclaim(sessionId) {
     if (closed || retained.get(sessionId) || runningTasks.has(sessionId)) return;
     // A session whose durable state could not be read is not evidence of an idle session:
@@ -113,6 +142,7 @@ export async function createKimiWebDriver(options) {
     lifecycleCursors.delete(sessionId);
     endedTasks.delete(sessionId);
     uncertain.delete(sessionId);
+    forgetRecheck(sessionId);
     for (const key of lifecycleSubscriptions.keys()) if (key.endsWith(`:${sessionId}`)) lifecycleSubscriptions.delete(key);
     history.release(sessionId);
     stats.reclaimed++;
@@ -124,7 +154,8 @@ export async function createKimiWebDriver(options) {
     // OperationScope of the session being verified: a flat identifier has no scope.session and
     // fails identity parsing before any durable read, which would strand the session forever.
     try { live = await operations.liveTask(capture({ ...scope, session: { ...scope, nativeSessionId: sessionId } })); }
-    catch { return; }
+    catch { scheduleRecheck(sessionId); return; }
+    forgetRecheck(sessionId);
     uncertain.delete(sessionId);
     if (live) { registerTask(sessionId, live); return; }
     reclaim(sessionId);
@@ -226,7 +257,7 @@ export async function createKimiWebDriver(options) {
       const ended = await operations.terminal(captured, payload);
       // A genuine terminal of the session's own main task is reliable evidence about its
       // durable state, so it also resolves a session kept only by an unreadable read.
-      if (ended) { noteEndedTask(sessionId, ended.operationId); releaseTask(sessionId, ended.operationId); uncertain.delete(sessionId); }
+      if (ended) { noteEndedTask(sessionId, ended.operationId); releaseTask(sessionId, ended.operationId); uncertain.delete(sessionId); forgetRecheck(sessionId); }
       reclaim(sessionId);
       emit({ type: 'turn.ended', session, reason: payload.reason }, sessionId);
     });
@@ -437,6 +468,8 @@ export async function createKimiWebDriver(options) {
       await operations?.close();
       for (const entry of observers) await entry.stream.return();
       history?.clear(); selected.clear(); retained.clear(); runningTasks.clear(); endedTasks.clear(); uncertain.clear();
+      for (const timer of recheckTimers.values()) clearTimeout(timer);
+      recheckTimers.clear(); recheckAttempts.clear();
       if (options.ownership === 'owned') await options.stopOwned();
       return { closed: true };
     })();

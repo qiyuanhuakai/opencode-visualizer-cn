@@ -435,4 +435,81 @@ describe('Kimi Web driver session reclamation', () => {
     // And the 32-session cap admits new sessions, because the uncertain one no longer occupies it.
     await expect(call<ObserverStream>('subscribe', sessionId(39))).resolves.toBeDefined();
   }, 60000);
+
+  it('re-checks an uncertain session whose first re-read also failed', async () => {
+    // Given a subscribed idle session whose three durable reads that decide its fate are each
+    // refused once with a transient queue_full: the send path's read, the send catch's lease
+    // read, and the re-read that runs when the last observation window closes.
+    const stream = await call<ObserverStream>('subscribe', sessionId(0));
+    const originalGet = store.get.bind(store);
+    const originalGetControl = store.getControl.bind(store);
+    let sendReadFailed = false, leaseReads = 0, leaseReadsFailed = 0;
+    store.get = async (params) => {
+      if (!sendReadFailed) { sendReadFailed = true; throw new ProtocolError('source_unavailable', 'runtime.store.queue_full'); }
+      return originalGet(params);
+    };
+    store.getControl = async (params) => {
+      if (params.key.startsWith('lease:')) {
+        leaseReads += 1;
+        if (leaseReadsFailed < 2) { leaseReadsFailed += 1; throw new ProtocolError('source_unavailable', 'runtime.store.queue_full'); }
+      }
+      return originalGetControl(params);
+    };
+
+    // When the send fails before it reaches the native boundary and its own live-task read is refused as well.
+    await expect(call('send', sessionId(0), { content: [{ type: 'text', text: 'uncertain re-read retry' }], idempotencyKey: 'uncertain-reread-2' }))
+      .rejects.toMatchObject({ code: 'source_unavailable' });
+    expect({ sendReadFailed, leaseReadsFailed }).toEqual({ sendReadFailed: true, leaseReadsFailed: 1 });
+    store.get = originalGet;
+
+    // Then closing the last observation window re-reads once more, that read is refused too, and
+    // the session is re-checked on a bounded schedule until a read succeeds: no native terminal
+    // will ever arrive for it, so without the re-check the slot would stay pinned forever.
+    await stream.return();
+    await until(async () => driver.diagnostics().reclaimed === 1, 'uncertain session reclaimed after a refused first re-read');
+    expect({ observers: driver.diagnostics().observers, selected: driver.diagnostics().selected, historySessions: driver.diagnostics().historySessions, lifecycleSubscriptions: driver.diagnostics().lifecycleSubscriptions }).toEqual({ observers: 0, selected: 0, historySessions: 0, lifecycleSubscriptions: 0 });
+    await until(async () => nativeFrames('unsubscribe_v2').length === 1 && nativeFrames('unsubscribe').length === 1, 'native unsubscribe pair');
+    expect(nativePrompts()).toBe(0);
+
+    // And the recovery needed exactly one bounded re-check, not a retry storm.
+    expect({ leaseReads, leaseReadsFailed }).toEqual({ leaseReads: 3, leaseReadsFailed: 2 });
+
+    // And the 32-session cap admits new sessions, because the uncertain one no longer occupies it.
+    await expect(call<ObserverStream>('subscribe', sessionId(39))).resolves.toBeDefined();
+  }, 60000);
+
+  it('bounds the re-checks of an uncertain session whose re-read keeps failing', async () => {
+    // Given a subscribed idle session whose send fails before the native boundary, and whose
+    // durable lease read stays refused for the rest of the test.
+    const stream = await call<ObserverStream>('subscribe', sessionId(0));
+    const originalGet = store.get.bind(store);
+    const originalGetControl = store.getControl.bind(store);
+    let sendReadFailed = false, leaseReads = 0;
+    store.get = async (params) => {
+      if (!sendReadFailed) { sendReadFailed = true; throw new ProtocolError('source_unavailable', 'runtime.store.queue_full'); }
+      return originalGet(params);
+    };
+    store.getControl = async (params) => {
+      if (params.key.startsWith('lease:')) { leaseReads += 1; throw new ProtocolError('source_unavailable', 'runtime.store.queue_full'); }
+      return originalGetControl(params);
+    };
+
+    // When the send fails and the read that decides whether a task is still running is refused too.
+    await expect(call('send', sessionId(0), { content: [{ type: 'text', text: 'never readable' }], idempotencyKey: 'uncertain-bounded-1' }))
+      .rejects.toMatchObject({ code: 'source_unavailable' });
+    expect(sendReadFailed).toBe(true);
+    store.get = originalGet;
+    await stream.return();
+
+    // Then the re-checks stop after the bounded schedule instead of retrying forever.
+    await until(async () => leaseReads >= 7, 'bounded re-check schedule exhausted');
+    const settled = leaseReads;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(leaseReads).toBe(settled);
+
+    // And the session stays conservatively selected: an unreadable state is not an idle session.
+    expect({ observers: driver.diagnostics().observers, selected: driver.diagnostics().selected, reclaimed: driver.diagnostics().reclaimed }).toEqual({ observers: 0, selected: 1, reclaimed: 0 });
+    expect(nativeFrames('unsubscribe_v2').length).toBe(0);
+    expect(nativePrompts()).toBe(0);
+  }, 60000);
 });
