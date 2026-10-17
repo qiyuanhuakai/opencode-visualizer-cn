@@ -14,7 +14,9 @@ export function createRuntimeSnapshots({ store }) {
       if (binding.epoch !== inspection.epoch) throw new StoreError('replay_required', 'snapshot_epoch');
       if (typeof isCurrent !== 'function') throw new StoreError('invalid_request', 'snapshot_connection');
       const tokens = new Map();
+      const pending = new Set();
       let active = true;
+      let closing;
       function current() {
         if (!active || !isCurrent()) throw new StoreError('reconcile_required', 'snapshot_generation');
       }
@@ -24,7 +26,8 @@ export function createRuntimeSnapshots({ store }) {
       }
       current();
       return {
-        async page(input = {}) {
+        page(input = {}) {
+          const operation = (async () => {
           current(); token(input);
           const collection = input.collection ?? 'workspaces';
           const owned = input.token ? tokens.get(input.token) : undefined;
@@ -32,6 +35,14 @@ export function createRuntimeSnapshots({ store }) {
           if (input.cursor != null && (!position || position.collection !== collection)) throw new StoreError('replay_required', 'snapshot_connection_cursor');
           const params = { ...input, collection, cursor: position?.cursor ?? null, ...(input.token ? {} : { collections: input.collections ?? INDEX_COLLECTIONS }) };
           const result = await store.snapshot(params);
+          if (!active || !isCurrent()) {
+            if (!input.token) {
+              tokens.set(result.token, { expiresAt: result.expiresAt, cursors: new Map() });
+              await store.releaseSnapshot({ token: result.token, epoch: binding.epoch });
+              tokens.delete(result.token);
+            }
+            current();
+          }
           current();
           const state = owned ?? { expiresAt: result.expiresAt, cursors: new Map() };
           let cursor = null;
@@ -44,6 +55,10 @@ export function createRuntimeSnapshots({ store }) {
           const frame = { kind: 'snapshot', version: 1, ...binding, ...result, cursor, items: result.items.map((item) => ({ collection, ...item })) };
           encodeFrame(frame);
           return frame;
+          })();
+          pending.add(operation);
+          operation.then(() => pending.delete(operation), () => pending.delete(operation));
+          return operation;
         },
         async readChunk(input) {
           current(); token(input);
@@ -58,7 +73,15 @@ export function createRuntimeSnapshots({ store }) {
           current();
           return result;
         },
-        close() { active = false; tokens.clear(); },
+        close() {
+          active = false;
+          closing ??= (async () => {
+            await Promise.allSettled(pending);
+            await Promise.all([...tokens.keys()].map(token => store.releaseSnapshot({ token, epoch: binding.epoch })));
+            tokens.clear();
+          })();
+          return closing;
+        },
       };
     },
   };
