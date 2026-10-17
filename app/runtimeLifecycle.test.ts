@@ -286,6 +286,29 @@ describe('runtime lifecycle', () => {
     expect(order).toEqual(['native', 'native']);
   });
 
+  it.each([
+    ['synchronously', (calls: { count: number }) => () => { calls.count += 1; if (calls.count === 1) throw new Error('transient sync stop failure'); }],
+    ['asynchronously', (calls: { count: number }) => async () => { calls.count += 1; if (calls.count === 1) throw new Error('transient async stop failure'); }],
+  ])('failure retries a release that threw %s on the next stop', async (_label, makeStop) => {
+    // Given one remaining owned resource whose first stop fails.
+    const calls = { count: 0 };
+    const host = createRuntimeHost({
+      environmentId,
+      role: 'local',
+      sources: [{ id: 'native', start: async () => {}, stop: makeStop(calls) }],
+    });
+    host.start();
+    await host.sourcesReady;
+    // When stop is called repeatedly while that resource is the only one left.
+    const first = host.stop();
+    const second = host.stop();
+    await expect(first).rejects.toBeInstanceOf(AggregateError);
+    await expect(second).rejects.toBeInstanceOf(AggregateError);
+    // Then a later stop must retry the release instead of replaying the cached rejection.
+    await expect(host.stop()).resolves.toBeUndefined();
+    expect(calls.count).toBe(2);
+  });
+
   it('failure restarts the bridge after a recoverable stop failure', async () => {
     // Given an initialized runtime host whose native supervisor fails the first stop.
     const root = await mkdtemp(path.join(tmpdir(), 'vis-runtime-restart-'));
