@@ -26,7 +26,7 @@ export async function run(context) {
       check('production protocol roundtrip of actual fixture row', decodeFrame(encodeFrame(frame)), frame);
       const browser = await browserScenario(context, frame);
       scenarios.push(...browser.scenarios); artifacts.push(...browser.artifacts);
-      const fixtureReceipt = path.join(context.outDir, 'happy-fixture-check.json');
+      const fixtureReceipt = `${context.out}.happy-fixture-check.json`;
       writeJson(fixtureReceipt, checked); artifacts.push(artifact(fixtureReceipt, 'fixture-check'));
       return { scenarios, artifacts, versions: browser.versions };
     }
@@ -53,7 +53,7 @@ export async function run(context) {
       ['mutually exclusive selectors', ['--task', '6', '--verify', 'F1']], ['malformed argument', ['--task', '6; echo PASS', '--case', 'happy']],
       ['long command injection', ['--task', `$(touch ${temporary}/injected)${'x'.repeat(16000)}`, '--case', 'happy']],
     ]) {
-      const log = path.join(context.outDir, `failure-${name.replaceAll(' ', '-')}.log`);
+      const log = `${context.out}.failure-${name.replaceAll(' ', '-')}.log`;
       const child = await captureProcess([process.execPath, 'scripts/qa/runtime-v090.mjs', ...args, '--out', path.join(temporary, 'rejected.json')], { root: context.root, log, env: { ...process.env, VIS_RUNTIME_QA_WORKER: '0' } });
       check(`subprocess rejects ${name}`, child.exitCode, 1);
       writeJson(`${log}.receipt.json`, { ...child, sourceHashes: receipt.sourceHashes, scenarioCount: 1 });
@@ -61,15 +61,15 @@ export async function run(context) {
     }
     const sentinel = path.join(temporary, 'dirty-file.txt');
     await writeFile(sentinel, 'caller-owned data');
-    const interrupted = await captureProcess([process.execPath, '-e', 'console.log("PASS is not a result"); setInterval(() => {}, 1000)'], { root: context.root, log: path.join(context.outDir, 'failure-interrupted.log'), timeoutMs: 100 });
+    const interrupted = await captureProcess([process.execPath, '-e', 'console.log("PASS is not a result"); setInterval(() => {}, 1000)'], { root: context.root, log: `${context.out}.failure-interrupted.log`, timeoutMs: 100 });
     check('interrupted process cannot pass', [interrupted.exitCode, interrupted.signal, interrupted.interrupted], [null, 'SIGTERM', true]);
     check('dirty caller data preserved', await readFile(sentinel, 'utf8'), 'caller-owned data');
-    const interruption = path.join(context.outDir, 'failure-interrupted.receipt.json');
+    const interruption = `${context.out}.failure-interrupted.receipt.json`;
     writeJson(interruption, { ...interrupted, sourceHashes: receipt.sourceHashes, scenarioCount: 1 }); artifacts.push(artifact(interruption, 'negative-execution-receipt'));
     return { scenarios, artifacts };
   } finally {
     await rm(temporary, { recursive: true, force: true });
-    const cleanup = path.join(context.outDir, `${context.case}-temporary-cleanup.json`);
+    const cleanup = `${context.out}.${context.case}-temporary-cleanup.json`;
     writeJson(cleanup, { temporary, removed: true }); artifacts.push(artifact(cleanup, 'resource-cleanup'));
   }
 }
