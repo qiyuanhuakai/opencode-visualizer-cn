@@ -98,6 +98,8 @@ export type UnifiedSearchState = Readonly<{
   hasMore: boolean;
   cursor: string | null;
   error: ErrorCode | null;
+  /** The read is waiting for the bridge's bounded live-view budget to free a slot for its own fresh view. */
+  waiting: boolean;
 }>;
 
 /**
@@ -119,7 +121,7 @@ export const SEARCH_LIMITS = Object.freeze({ maxRetained: 200 });
 type SearchScan = { retained: UnifiedSessionRow[]; totalMatched: number; scanned: number; pages: number };
 
 function idleSearchState(): UnifiedSearchState {
-  return { status: 'idle', query: '', scanned: 0, pages: 0, matches: [], totalMatched: 0, hasMore: false, cursor: null, error: null };
+  return { status: 'idle', query: '', scanned: 0, pages: 0, matches: [], totalMatched: 0, hasMore: false, cursor: null, error: null, waiting: false };
 }
 
 function asRecord(value: unknown): Readonly<Record<string, unknown>> | null {
@@ -378,6 +380,8 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   const expanded = shallowRef<ReadonlySet<string>>(new Set<string>());
   const filterKinds = shallowRef<ReadonlySet<SessionHarness>>(new Set<SessionHarness>([...HARNESS_KINDS, 'unknown']));
   const search = shallowRef<UnifiedSearchState>(idleSearchState());
+  /** A topology re-read is waiting for the bridge's bounded live-view budget to free a slot. */
+  const indexWaiting = shallowRef(false);
   const retrying = shallowRef<ReadonlySet<string>>(new Set());
   const selection = shallowRef(state.capture());
   const usage = shallowRef(state.usage());
@@ -452,17 +456,24 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     // refresh and make the next search fail with `snapshot_limit`.
     const harnessValues: Readonly<Record<string, unknown>>[] = [];
     const workspaceValues: Readonly<Record<string, unknown>>[] = [];
-    const view = await client.readIndex(target, ['harnesses', 'workspaces'], {
-      fresh,
-      onPage: (collection, page) => {
-        if (collection !== 'harnesses' && collection !== 'workspaces') return;
-        const sink = collection === 'harnesses' ? harnessValues : workspaceValues;
-        for (const item of page.items) {
-          const record = asRecord(item);
-          if (record && typeof record.key === 'string') sink.push(record);
-        }
-      },
-    });
+    indexWaiting.value = false;
+    let view: Awaited<ReturnType<typeof client.readIndex>>;
+    try {
+      view = await client.readIndex(target, ['harnesses', 'workspaces'], {
+        fresh,
+        onWaiting: () => { indexWaiting.value = true; },
+        onPage: (collection, page) => {
+          if (collection !== 'harnesses' && collection !== 'workspaces') return;
+          const sink = collection === 'harnesses' ? harnessValues : workspaceValues;
+          for (const item of page.items) {
+            const record = asRecord(item);
+            if (record && typeof record.key === 'string') sink.push(record);
+          }
+        },
+      });
+    } finally {
+      indexWaiting.value = false;
+    }
     lastIndexRevision = view.revision;
     if (disposed) return;
     const entries: HarnessEntry[] = [];
@@ -508,10 +519,11 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
    * cached view may predate sessions the query should match; paging the SAME
    * search leaves it unset so every page reads one consistent view.
    */
-  async function scanSearch(query: string, skip: number, signal: AbortSignal, accumulator: SearchScan, fresh: boolean): Promise<void> {
+  async function scanSearch(query: string, skip: number, signal: AbortSignal, accumulator: SearchScan, fresh: boolean, onWaiting?: () => void): Promise<void> {
     const view = await client.readIndex(target, 'session_summaries', {
       fresh,
       signal,
+      onWaiting,
       onPage: (_collection, page) => {
         if (signal.aborted) return;
         accumulator.pages += 1;
@@ -535,23 +547,25 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     searchController?.abort();
     const controller = new AbortController();
     searchController = controller;
-    search.value = { status: 'searching', query, scanned: 0, pages: 0, matches: [], totalMatched: 0, hasMore: false, cursor: null, error: null };
+    search.value = { status: 'searching', query, scanned: 0, pages: 0, matches: [], totalMatched: 0, hasMore: false, cursor: null, error: null, waiting: false };
     return serialize(async () => {
       const accumulator: SearchScan = { retained: [], totalMatched: 0, scanned: 0, pages: 0 };
       try {
-        await scanSearch(query, 0, controller.signal, accumulator, true);
+        await scanSearch(query, 0, controller.signal, accumulator, true, () => {
+          if (generation === searchGeneration) search.value = { ...search.value, status: 'searching', waiting: true };
+        });
         if (generation !== searchGeneration) return search.value;
         const hasMore = accumulator.totalMatched > accumulator.retained.length;
         const complete: UnifiedSearchState = { status: 'complete', query, scanned: accumulator.scanned, pages: accumulator.pages,
           matches: Object.freeze(accumulator.retained), totalMatched: accumulator.totalMatched,
-          hasMore, cursor: hasMore ? String(accumulator.retained.length) : null, error: null };
+          hasMore, cursor: hasMore ? String(accumulator.retained.length) : null, error: null, waiting: false };
         search.value = complete;
         return complete;
       } catch (error) {
         if (generation !== searchGeneration) return search.value;
         const code = error instanceof Error && 'code' in error ? String((error as { code: unknown }).code) : 'source_unavailable';
         const failed: UnifiedSearchState = { status: 'error', query, scanned: accumulator.scanned, pages: accumulator.pages,
-          matches: Object.freeze(accumulator.retained), totalMatched: accumulator.totalMatched, hasMore: false, cursor: null, error: code as ErrorCode };
+          matches: Object.freeze(accumulator.retained), totalMatched: accumulator.totalMatched, hasMore: false, cursor: null, error: code as ErrorCode, waiting: false };
         search.value = failed;
         return failed;
       }
@@ -572,7 +586,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     searchController?.abort();
     const controller = new AbortController();
     searchController = controller;
-    search.value = { ...current, status: 'searching' };
+    search.value = { ...current, status: 'searching', waiting: false };
     return serialize(async () => {
       const accumulator: SearchScan = { retained: [], totalMatched: 0, scanned: 0, pages: 0 };
       try {
@@ -582,7 +596,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
         const hasMore = accumulator.totalMatched > nextOffset;
         const complete: UnifiedSearchState = { status: 'complete', query, scanned: accumulator.scanned, pages: accumulator.pages,
           matches: Object.freeze(accumulator.retained), totalMatched: accumulator.totalMatched,
-          hasMore, cursor: hasMore ? String(nextOffset) : null, error: null };
+          hasMore, cursor: hasMore ? String(nextOffset) : null, error: null, waiting: false };
         search.value = complete;
         return complete;
       } catch (error) {
@@ -698,7 +712,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     expanded, toggleExpand, filterKinds, setFilterKinds,
     search: searchAll, searchState: search, searchMore, loadMoreChildren, retrySource, retrying,
     select, selectByKey,
-    state,
+    state, indexWaiting,
   };
 }
 
