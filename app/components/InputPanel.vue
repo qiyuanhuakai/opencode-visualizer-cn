@@ -611,6 +611,7 @@ import { parseLeadingSlashCommand } from '../utils/codexSlashCommands';
 import {
   RUNTIME_SESSION_ACTIONS_KEY,
   bindRuntimeAction,
+  type RuntimeActionBinding,
   type RuntimeSendInput,
   type RuntimeSessionRuntime,
 } from '../composables/useRuntimeSessionActions';
@@ -753,10 +754,26 @@ function runtimeSendInput(): RuntimeSendInput {
   };
 }
 
+/**
+ * The binding the prompt is actually sent through. When the thread target row names exactly one
+ * participant, the prompt goes to THAT participant's own native session — the same session the
+ * chips display — instead of whatever session the runtime binding happens to hold.
+ */
+function sendBinding(binding: RuntimeActionBinding): RuntimeActionBinding {
+  const state = threadState;
+  if (state === null) return binding;
+  const selected = state.targets.value;
+  if (selected.length !== 1) return binding;
+  const participant = state.summary.value?.participants.find((entry) => entry.participantId === selected[0]);
+  const session = participant?.session;
+  if (session === undefined) return binding;
+  return Object.freeze({ ...binding, session });
+}
+
 function requestSend() {
   const binding = runtimeBinding();
   if (binding && runtimeSessionActions) {
-    void runtimeSessionActions.router.sendMessage(binding, runtimeSendInput());
+    void runtimeSessionActions.router.sendMessage(sendBinding(binding), runtimeSendInput());
     return;
   }
   emit('send');

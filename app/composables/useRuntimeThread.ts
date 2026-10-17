@@ -165,6 +165,8 @@ export interface RuntimeThreadState {
 }
 
 const TIMELINE_PAGE_LIMIT = 100;
+/** Resolved handoff states are HISTORY: they never block a new handoff and are never restored. */
+const TERMINAL_HANDOFF_STATES: ReadonlySet<string> = new Set(['cancelled', 'failed', 'active', 'reconcile']);
 
 /** Read a rejection as a readable sentence; a bare protocol code is never shown to the user. */
 function readableError(error: unknown, fallback: string): string {
@@ -190,8 +192,14 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
   const error = ref('');
   const timelinePage = ref<TimelinePage | null>(null);
   let repo: RepoRef | null = null;
+  /** Bumped by close and open; a late landing is dropped when its captured value is stale. */
+  let generation = 0;
   /** bindingKey → {threadId, participantId}: one stable key per native SessionRef. */
   const sessionIndex = new Map<string, ThreadSessionResolution>();
+
+  function isCurrent(entered: number): boolean {
+    return entered === generation;
+  }
 
   const selectedSessionResolution = computed<ThreadSessionResolution | null>(() => {
     const session = selectedSession.value;
@@ -221,25 +229,48 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
   }
 
   async function openThread(input: { session: SessionRef; repo: RepoRef }): Promise<void> {
+    generation += 1;
+    const entered = generation;
     busy.value = true;
     error.value = '';
     try {
       const thread = await ports.thread.bind({ session: input.session, repo: input.repo });
+      if (!isCurrent(entered)) return;
       repo = input.repo;
       syncThread(thread.threadId);
-      const owner = summary.value?.participants[0];
-      if (owner !== undefined) indexSession({ threadId: thread.threadId, participantId: owner.participantId }, input.session);
+      // Every participant is indexed by its OWN native session: a thread reached from a joined
+      // session must resolve that participant, never the owner the wrapper happened to start with.
+      const summaryNow = summary.value;
+      if (summaryNow !== null) {
+        const openedBinding = threadBindingKey(input.session);
+        for (const participant of summaryNow.participants) {
+          indexSession({ threadId: thread.threadId, participantId: participant.participantId }, participant.session);
+        }
+        const opened = summaryNow.participants.find(
+          (participant) => threadBindingKey(participant.session) === openedBinding,
+        );
+        if (opened !== undefined) {
+          indexSession({ threadId: thread.threadId, participantId: opened.participantId }, input.session);
+        }
+      }
       targets.value = [];
-      handoff.value = null;
-      handoffOps.value = [];
+      handoff.value = restoreHandoff(thread.threadId);
+      handoffOps.value = handoff.value === null ? [] : (ports.handoff?.ops(handoff.value.handoffId) ?? []);
       syncTimeline();
     } catch (openError) {
+      if (!isCurrent(entered)) return;
       threadId.value = null;
       summary.value = null;
       fail(readableError(openError, 'The thread could not be opened for this session'));
     } finally {
-      busy.value = false;
+      if (isCurrent(entered)) busy.value = false;
     }
+  }
+
+  /** The thread's live handoff, or null: a resolved record is history and is never restored. */
+  function restoreHandoff(id: string): RuntimeHandoffView | null {
+    const live = ports.handoff?.handoffs().find((entry) => entry.threadId === id && !TERMINAL_HANDOFF_STATES.has(entry.state));
+    return live ?? null;
   }
 
   async function joinThread(session: SessionRef): Promise<void> {
@@ -262,15 +293,18 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
     }
     busy.value = true;
     error.value = '';
+    const entered = generation;
     try {
       const participant = await ports.thread.join({ threadId: id, session, repo: currentRepo });
+      if (!isCurrent(entered)) return;
       indexSession({ threadId: id, participantId: participant.participantId }, session);
       syncThread(id);
       syncTimeline();
     } catch (joinError) {
+      if (!isCurrent(entered)) return;
       fail(readableError(joinError, `Session "${session.nativeSessionId}" could not be joined`));
     } finally {
-      busy.value = false;
+      if (isCurrent(entered)) busy.value = false;
     }
   }
 
@@ -279,14 +313,16 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
     if (id === null) return;
     busy.value = true;
     error.value = '';
+    const entered = generation;
     try {
       ports.thread.leave({ threadId: id, participantId });
+      if (!isCurrent(entered)) return;
       syncThread(id);
       syncTimeline();
     } catch (leaveError) {
-      fail(readableError(leaveError, 'The participant could not be removed'));
+      if (isCurrent(entered)) fail(readableError(leaveError, 'The participant could not be removed'));
     } finally {
-      busy.value = false;
+      if (isCurrent(entered)) busy.value = false;
     }
   }
 
@@ -295,14 +331,16 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
     if (id === null) return;
     busy.value = true;
     error.value = '';
+    const entered = generation;
     try {
       await ports.thread.resume({ threadId: id, participantId });
+      if (!isCurrent(entered)) return;
       syncThread(id);
       syncTimeline();
     } catch (resumeError) {
-      fail(readableError(resumeError, 'The participant could not be resumed'));
+      if (isCurrent(entered)) fail(readableError(resumeError, 'The participant could not be resumed'));
     } finally {
-      busy.value = false;
+      if (isCurrent(entered)) busy.value = false;
     }
   }
 
@@ -311,12 +349,14 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
     if (id === null) return;
     busy.value = true;
     error.value = '';
+    const entered = generation;
     try {
       ports.thread.activate({ threadId: id, participantId });
+      if (!isCurrent(entered)) return;
       syncThread(id);
       syncTimeline();
     } catch (activateError) {
-      fail(readableError(activateError, 'The participant could not be activated'));
+      if (isCurrent(entered)) fail(readableError(activateError, 'The participant could not be activated'));
     } finally {
       busy.value = false;
     }
@@ -373,12 +413,15 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
       return;
     }
     const existing = handoff.value;
-    if (existing !== null && existing.state !== 'checkpoint' && existing.state !== 'attached') {
+    // A resolved record is history: it is kept on the service and may be inspected, but it never
+    // blocks a new handoff. Only unfinished work does.
+    if (existing !== null && !TERMINAL_HANDOFF_STATES.has(existing.state)) {
       fail(`This thread already has a handoff at "${existing.state}". Resolve or cancel it before starting another.`);
       return;
     }
     busy.value = true;
     error.value = '';
+    const entered = generation;
     try {
       // begin mints or carries the bounded context checkpoint; attach binds the target's OWN
       // native session. Both go through the real service, so the ladder order is enforced there.
@@ -388,16 +431,18 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
         targetParticipantId: input.targetParticipantId,
         ...(input.entries === undefined ? {} : { entries: input.entries }),
       });
+      if (!isCurrent(entered)) return;
       handoff.value = begun;
       const attached = await port.attach({ handoffId: begun.handoffId });
+      if (!isCurrent(entered)) return;
       handoff.value = attached;
       handoffOps.value = port.ops(attached.handoffId);
       syncThread(id);
       syncTimeline();
     } catch (beginError) {
-      fail(readableError(beginError, 'The handoff could not be started'));
+      if (isCurrent(entered)) fail(readableError(beginError, 'The handoff could not be started'));
     } finally {
-      busy.value = false;
+      if (isCurrent(entered)) busy.value = false;
     }
   }
 
@@ -411,15 +456,17 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
     }
     busy.value = true;
     error.value = '';
+    const entered = generation;
     try {
       const prepared = await port.prepare({ handoffId: current.handoffId, prompt });
+      if (!isCurrent(entered)) return;
       handoff.value = prepared;
       handoffOps.value = port.ops(prepared.handoffId);
       syncTimeline();
     } catch (prepareError) {
-      fail(readableError(prepareError, 'The handoff prompt could not be prepared'));
+      if (isCurrent(entered)) fail(readableError(prepareError, 'The handoff prompt could not be prepared'));
     } finally {
-      busy.value = false;
+      if (isCurrent(entered)) busy.value = false;
     }
   }
 
@@ -433,20 +480,23 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
     }
     busy.value = true;
     error.value = '';
+    const entered = generation;
     try {
       const delivered = await port.deliver({ handoffId: current.handoffId });
+      if (!isCurrent(entered)) return;
       handoff.value = delivered;
       handoffOps.value = port.ops(delivered.handoffId);
       syncTimeline();
     } catch (deliverError) {
       // An ambiguous send stops at reconcile: never retried, never marked successful.
+      if (!isCurrent(entered)) return;
       fail(readableError(deliverError, 'The handoff could not be delivered'));
       if (current.handoffId !== '') {
         handoff.value = port.handoff(current.handoffId);
         handoffOps.value = port.ops(current.handoffId);
       }
     } finally {
-      busy.value = false;
+      if (isCurrent(entered)) busy.value = false;
     }
   }
 
@@ -464,16 +514,18 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
     }
     busy.value = true;
     error.value = '';
+    const entered = generation;
     try {
       const observed = await port.observe({ handoffId: current.handoffId, nativeEventId });
+      if (!isCurrent(entered)) return;
       handoff.value = observed;
       handoffOps.value = port.ops(observed.handoffId);
       syncThread(observed.threadId);
       syncTimeline();
     } catch (observeError) {
-      fail(readableError(observeError, 'The native observation could not be recorded'));
+      if (isCurrent(entered)) fail(readableError(observeError, 'The native observation could not be recorded'));
     } finally {
-      busy.value = false;
+      if (isCurrent(entered)) busy.value = false;
     }
   }
 
@@ -487,19 +539,21 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
     }
     busy.value = true;
     error.value = '';
+    const entered = generation;
     try {
       const cancelled = await port.cancel({
         handoffId: current.handoffId,
         ...(reason === undefined ? {} : { reason }),
       });
+      if (!isCurrent(entered)) return;
       handoff.value = cancelled;
       handoffOps.value = port.ops(cancelled.handoffId);
       syncThread(cancelled.threadId);
       syncTimeline();
     } catch (cancelError) {
-      fail(readableError(cancelError, 'The handoff could not be cancelled'));
+      if (isCurrent(entered)) fail(readableError(cancelError, 'The handoff could not be cancelled'));
     } finally {
-      busy.value = false;
+      if (isCurrent(entered)) busy.value = false;
     }
   }
 
@@ -513,6 +567,7 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
   }
 
   function closeThread(): void {
+    generation += 1;
     threadId.value = null;
     summary.value = null;
     targets.value = Object.freeze([]);

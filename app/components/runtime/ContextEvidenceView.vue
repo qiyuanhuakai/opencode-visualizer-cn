@@ -127,7 +127,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { readEvidencePage, type ContextCheckpointView, type EvidencePageView, type EvidenceReader, type EvidenceRef, type EvidenceTarget } from '../../../shared/runtime/context.js';
 
 /**
@@ -158,6 +158,23 @@ const page = ref<Extract<EvidencePageView, { available: true }> | null>(null);
 const lastPage = ref<EvidencePageView | null>(null);
 const pageError = ref('');
 let lastRef: EvidenceRef | null = null;
+
+/**
+ * The cached page is scoped to the exact boundary it was read through. Any change of checkpoint,
+ * current target or reader makes the held bytes stale, so the cache is dropped rather than shown
+ * under a different scope.
+ */
+function resetPage(): void {
+  page.value = null;
+  lastPage.value = null;
+  pageError.value = '';
+  lastRef = null;
+}
+
+watch(
+  () => [props.checkpoint?.checkpointId ?? null, props.currentTarget, props.readEvidence] as const,
+  () => { resetPage(); },
+);
 
 const canRead = computed(() => props.readEvidence !== null && props.currentTarget !== null);
 const decoder = new TextDecoder();

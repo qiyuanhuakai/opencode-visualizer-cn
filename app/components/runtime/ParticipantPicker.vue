@@ -104,7 +104,7 @@
       <div class="available-list" role="group" aria-label="Available native sessions">
         <button
           v-for="entry in availableSessions"
-          :key="entry.session.nativeSessionId"
+          :key="threadBindingKey(entry.session)"
           type="button"
           class="action-button"
           :disabled="busy || joined(entry.session)"
@@ -130,6 +130,7 @@ import { computed } from 'vue';
 import { Icon } from '@iconify/vue';
 import type { ParticipantView } from '../../../bridge/runtime/threads/participantService.js';
 import type { SessionRef } from '../../../shared/runtime/identity.js';
+import { threadBindingKey } from '../../../shared/runtime/thread.js';
 import type { AvailableSession } from '../../composables/useRuntimeThread';
 
 const props = withDefaults(
@@ -156,7 +157,7 @@ const emit = defineEmits<{
   (event: 'locate-session', session: SessionRef): void;
 }>();
 
-const joinedKeys = computed(() => new Set(props.participants.map((participant) => participant.session.nativeSessionId)));
+const joinedKeys = computed(() => new Set(props.participants.map((participant) => threadBindingKey(participant.session))));
 
 function isTarget(participantId: string): boolean {
   if (props.targets.length > 0) return props.targets.includes(participantId);
@@ -164,7 +165,7 @@ function isTarget(participantId: string): boolean {
 }
 
 function joined(session: SessionRef): boolean {
-  return joinedKeys.value.has(session.nativeSessionId);
+  return joinedKeys.value.has(threadBindingKey(session));
 }
 
 /**

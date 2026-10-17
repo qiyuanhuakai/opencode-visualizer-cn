@@ -84,7 +84,14 @@
           :handoff="threadState.handoff.value"
           :handoff-ops="threadState.handoffOps.value"
           :timeline="threadState.timelinePage.value"
-          :draft-text="''"
+          :draft-text="threadDraftText"
+          :handoff-entries="threadHandoffEntries"
+          :latest-native-event-id="threadLatestNativeEventId"
+          :available-sessions="threadAvailableSessions"
+          :native-history="threadNativeHistory"
+          :checkpoint="threadCheckpoint"
+          :current-target="threadCurrentTarget"
+          :read-evidence="threadReadEvidence"
           :busy="threadState.busy.value"
           :error="threadState.error.value"
           @select-target="onThreadSelectTarget"
@@ -98,7 +105,7 @@
           @observe-handoff="onThreadObserveHandoff"
           @cancel-handoff="onThreadCancelHandoff"
           @locate-session="onThreadLocateSession"
-          @browse-native-history="() => undefined"
+          @browse-native-history="onThreadBrowseNativeHistory"
           @close="onThreadClose"
         />
 
@@ -147,6 +154,7 @@ import {
   type RuntimeSessionRuntime,
 } from '../composables/useRuntimeSessionActions';
 import { useRuntimeThreadState } from '../composables/useRuntimeThread';
+import type { ContextCheckpointView, EvidenceReader } from '../../shared/runtime/context.js';
 
 // Task 35: the full thread surface, lazily loaded so the output panel's entry chunk keeps its size.
 const ThreadPanel = defineAsyncComponent(() => import('./runtime/ThreadView.vue'));
@@ -201,7 +209,29 @@ const props = defineProps<{
   loadMessageDiffs?: (sessionId: string, messageId: string) => Promise<MessageDiffEntry[]>;
   hasMessageDiffs?: (sessionId: string, messageId: string) => Promise<boolean>;
   kimiSessionContext?: { used: number; limit: number } | null;
+  /**
+   * The composer's current draft, so a handoff carries the prompt the user actually wrote.
+   * Empty by default: this panel has no composer of its own, and the dialog reports that
+   * explicitly instead of rejecting a Begin it can never satisfy.
+   */
+  threadDraftText?: string;
+  /** The bounded context entries a handoff carries. Empty until the container supplies them. */
+  threadHandoffEntries?: readonly unknown[];
+  /** The latest native event id, so a delivered handoff can be observed. Empty until wired. */
+  threadLatestNativeEventId?: string;
+  threadAvailableSessions?: readonly { session: SessionRef; label: string; harness: string }[];
+  threadNativeHistory?: readonly {
+    participantId: string;
+    label: string;
+    harness: string;
+    session: SessionRef;
+    entries: readonly { id: string; kind: string; text: string; at: number }[];
+  }[];
+  threadCheckpoint?: ContextCheckpointView | null;
+  threadCurrentTarget?: { repoKey: string; revision: string } | null;
+  threadReadEvidence?: EvidenceReader | null;
 }>();
+
 
 const emit = defineEmits<{
   (event: 'scroll'): void;
@@ -243,6 +273,14 @@ function onThreadJoin(session: SessionRef): void {
 
 function onThreadLocateSession(session: SessionRef): void {
   if (threadState === null) return;
+  threadState.setSelectedSession(session);
+}
+
+/** Native history is browsed per participant; the panel forwards it instead of dropping it. */
+function onThreadBrowseNativeHistory(participantId: string): void {
+  if (threadState === null) return;
+  const session = threadState.sessionOfParticipant(participantId);
+  if (session === null) return;
   threadState.setSelectedSession(session);
 }
 
