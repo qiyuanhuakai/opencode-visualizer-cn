@@ -711,4 +711,38 @@ describe('late send results never overwrite a decision made while the send was i
     const plan = recoveryModule.planFanoutRetry(after);
     expect(plan.retryable.map((spec) => spec.recipientId)).not.toContain(ids[0]);
   });
+
+  it('a late result never regresses the fan-out top-level clock below a decision made in flight', async () => {
+    const gate: { reject?: () => void } = {};
+    const deliver = (input: FanoutDeliverInput): Promise<{ ackId: string }> => {
+      if (input.participantId === P1) {
+        return new Promise<{ ackId: string }>((_resolve, reject) => {
+          gate.reject = () => reject(new CollaborationError('source_unavailable', 'fanout_send'));
+        });
+      }
+      return Promise.resolve({ ackId: `ack-${input.recipientId}` });
+    };
+    const service = makeService(deliver);
+    const fanout = service.createFanout({
+      prompt: PROMPT,
+      targets: [target(P1, SESSION_A), target(P2, SESSION_B)],
+      at: T0,
+    });
+    const ids = fanout.targets.map((entry) => entry.recipientId);
+
+    await service.dispatch({ fanoutId: fanout.fanoutId, recipientIds: [ids[1] as string], at: T0 });
+    const inFlight = service.dispatch({ fanoutId: fanout.fanoutId, recipientIds: [ids[0] as string], at: T0 + 2 });
+    // A manager kill reconciles the in-flight recipient at T0+3: the top-level clock advances.
+    const killed = service.reconcile({ fanoutId: fanout.fanoutId, at: T0 + 3 });
+    expect(killed.updatedAt).toBe(T0 + 3);
+
+    // The hung send now rejects. The late result must leave BOTH the recipient decision and the
+    // fan-out's top-level clock at the reconcile time: the dispatch that carried the send started
+    // at T0+2 and must not write its own start time back over the later decision.
+    gate.reject?.();
+    await inFlight;
+    const after = service.fanout(fanout.fanoutId);
+    expect(after.updatedAt).toBe(T0 + 3);
+    expect(after.state).toBe('ambiguous');
+  });
 });
