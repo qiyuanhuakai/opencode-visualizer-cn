@@ -591,3 +591,124 @@ describe('overall state is derived from per-recipient outcomes', () => {
     expect(view.targets.map((entry) => entry.outcome)).toEqual(['sent', 'cancelled', 'sent']);
   });
 });
+
+/* ------------------------------------------------------------------ late results vs decisions made in flight */
+
+describe('late send results never overwrite a decision made while the send was in flight', () => {
+  it('a late reject after a reconcile keeps the recipient ambiguous, its resolution and its timestamp', async () => {
+    const gate: { reject?: () => void } = {};
+    const deliver = (input: FanoutDeliverInput): Promise<{ ackId: string }> => {
+      if (input.participantId === P1) {
+        return new Promise<{ ackId: string }>((_resolve, reject) => {
+          gate.reject = () => reject(new CollaborationError('source_unavailable', 'fanout_send'));
+        });
+      }
+      return Promise.resolve({ ackId: `ack-${input.recipientId}` });
+    };
+    const service = makeService(deliver);
+    const fanout = service.createFanout({
+      prompt: PROMPT,
+      targets: [target(P1, SESSION_A), target(P2, SESSION_B)],
+      at: T0,
+    });
+    const ids = fanout.targets.map((entry) => entry.recipientId);
+
+    // P2 settles first; P1's send hangs in flight.
+    await service.dispatch({ fanoutId: fanout.fanoutId, recipientIds: [ids[1] as string], at: T0 });
+    const inFlight = service.dispatch({ fanoutId: fanout.fanoutId, recipientIds: [ids[0] as string], at: T0 + 2 });
+    // A manager kill reconciles the in-flight recipient at T0+3.
+    const killed = service.reconcile({ fanoutId: fanout.fanoutId, at: T0 + 3 });
+    expect(recipientFor(killed, P1).outcome).toBe('ambiguous');
+    expect(recipientFor(killed, P1).updatedAt).toBe(T0 + 3);
+
+    // The hung send now REJECTS: the late failure must not overwrite the reconcile decision.
+    gate.reject?.();
+    await inFlight;
+    const after = service.fanout(fanout.fanoutId);
+    expect(recipientFor(after, P1).outcome).toBe('ambiguous');
+    expect(recipientFor(after, P1).resolution).toEqual({ code: 'reconcile_required', field: 'fanout_ambiguous' });
+    expect(recipientFor(after, P1).updatedAt).toBe(T0 + 3);
+    expect(after.state).toBe('ambiguous');
+    expect(service.state().failures).toBe(0);
+  });
+
+  it('a late reject after an in-flight cancel keeps the recipient at its retained outcome', async () => {
+    const gate: { reject?: () => void } = {};
+    const deliver = (input: FanoutDeliverInput): Promise<{ ackId: string }> => {
+      if (input.participantId === P1) {
+        return new Promise<{ ackId: string }>((_resolve, reject) => {
+          gate.reject = () => reject(new CollaborationError('source_unavailable', 'fanout_send'));
+        });
+      }
+      return Promise.resolve({ ackId: `ack-${input.recipientId}` });
+    };
+    const service = makeService(deliver);
+    const fanout = service.createFanout({
+      prompt: PROMPT,
+      targets: [target(P1, SESSION_A), target(P2, SESSION_B)],
+      at: T0,
+    });
+    const ids = fanout.targets.map((entry) => entry.recipientId);
+
+    await service.dispatch({ fanoutId: fanout.fanoutId, recipientIds: [ids[1] as string], at: T0 });
+    const inFlight = service.dispatch({ fanoutId: fanout.fanoutId, recipientIds: [ids[0] as string], at: T0 + 2 });
+    // Cancelling an in-flight recipient retains it as ambiguous (see the cancel test below).
+    const cancelled = service.cancelRecipient({ fanoutId: fanout.fanoutId, recipientId: ids[0] as string, at: T0 + 3 });
+    expect(recipientFor(cancelled, P1).outcome).toBe('ambiguous');
+
+    gate.reject?.();
+    await inFlight;
+    const after = service.fanout(fanout.fanoutId);
+    expect(recipientFor(after, P1).outcome).toBe('ambiguous');
+    expect(recipientFor(after, P1).resolution).toEqual({ code: 'reconcile_required', field: 'fanout_ambiguous' });
+    expect(recipientFor(after, P1).updatedAt).toBe(T0 + 3);
+    expect(service.state().failures).toBe(0);
+  });
+
+  it('cancelling an in-flight recipient retains ambiguous and never claims cancelled', async () => {
+    const gate: { release?: () => void } = {};
+    let sinkWrites = 0;
+    const deliver = (input: FanoutDeliverInput): Promise<{ ackId: string }> => {
+      if (input.participantId === P1) {
+        return new Promise<{ ackId: string }>((resolve) => {
+          gate.release = () => {
+            sinkWrites += 1;
+            resolve({ ackId: 'ack-1' });
+          };
+        });
+      }
+      return Promise.resolve({ ackId: `ack-${input.recipientId}` });
+    };
+    const service = makeService(deliver);
+    const fanout = service.createFanout({
+      prompt: PROMPT,
+      targets: [target(P1, SESSION_A), target(P2, SESSION_B)],
+      at: T0,
+    });
+    const ids = fanout.targets.map((entry) => entry.recipientId);
+
+    await service.dispatch({ fanoutId: fanout.fanoutId, recipientIds: [ids[1] as string], at: T0 });
+    const inFlight = service.dispatch({ fanoutId: fanout.fanoutId, recipientIds: [ids[0] as string], at: T0 + 1 });
+    // The cancel arrives while the send is still in flight: there is no cancel port and no
+    // AbortSignal, so the outcome is unknowable — the recipient is retained ambiguous.
+    const cancelled = service.cancelRecipient({ fanoutId: fanout.fanoutId, recipientId: ids[0] as string, at: T0 + 2 });
+    expect(recipientFor(cancelled, P1).outcome).toBe('ambiguous');
+    expect(recipientFor(cancelled, P1).resolution).toEqual({ code: 'reconcile_required', field: 'fanout_ambiguous' });
+    expect(recipientFor(cancelled, P1).dispatched).toBe(true);
+    expect(cancelled.state).toBe('ambiguous');
+
+    // The send still reaches the sink — no abort mechanism exists — but the read model keeps
+    // the honest unknowable outcome instead of claiming the send was stopped.
+    gate.release?.();
+    await inFlight;
+    const after = service.fanout(fanout.fanoutId);
+    expect(sinkWrites).toBe(1);
+    expect(recipientFor(after, P1).outcome).toBe('ambiguous');
+    expect(recipientFor(after, P1).ackId).toBeNull();
+    expect(recipientFor(after, P1).updatedAt).toBe(T0 + 2);
+
+    // A recovery plan never re-sends the retained recipient.
+    const plan = recoveryModule.planFanoutRetry(after);
+    expect(plan.retryable.map((spec) => spec.recipientId)).not.toContain(ids[0]);
+  });
+});
