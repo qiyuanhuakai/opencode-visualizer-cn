@@ -1,5 +1,6 @@
 import { parseEnvironmentId, parseInstanceId } from './identity.js';
 import { ERROR_CODES, METHODS, ProtocolError, requireValue, objectFields, textValue, integerValue, jsonValue, parseCapabilities } from './capabilities.js';
+import { scanRawFrame } from './rawFrame.js';
 export { ProtocolError, ERROR_CODES } from './capabilities.js';
 export { createProtocolState } from './protocolState.js';
 export const PROTOCOL_VERSION = 1;
@@ -97,8 +98,13 @@ export function validateFrame(input) {
   return value;
 }
 export function encodeFrame(value) { return JSON.stringify(validateFrame(value)); }
-export function decodeFrame(text) {
+export function decodeFrame(text, preflight) {
   requireValue(typeof text === 'string' && encoder.encode(text).byteLength <= LIMITS.jsonBytes, 'json.size');
+  if (preflight !== undefined) {
+    const summary = scanRawFrame(text);
+    if (summary.duplicateKeys) throw new ProtocolError('invalid_request', 'frame');
+    if (preflight(summary) === 'drop') return undefined;
+  }
   let value;
   try { value = JSON.parse(text); }
   catch (error) { if (error instanceof SyntaxError) throw new ProtocolError('invalid_request', 'json'); throw error; }

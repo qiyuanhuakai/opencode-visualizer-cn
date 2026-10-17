@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Task 24 evidence</title>
+    <link rel="stylesheet" href="/app/dev/task24-evidence.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      window.__task24Errors = [];
+      window.addEventListener('error', (event) => window.__task24Errors.push({ kind: 'error', message: String(event.message) }));
+      window.addEventListener('unhandledrejection', (event) => window.__task24Errors.push({ kind: 'unhandledrejection', message: String(event.reason?.message || event.reason) }));
+    </script>
+    <script type="module" src="/app/dev/task24-evidence.ts"></script>
+  </body>
+</html>

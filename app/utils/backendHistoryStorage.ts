@@ -1,5 +1,7 @@
 import { registerLegacyWriter, retainFrozenLegacyWrite } from '../runtime/migration/writerFreeze';
+import { createHistoryPageCache, type HistoryPageCache } from '../runtime/historyPages';
 import type { MessageInfo, MessagePart } from '../types/sse';
+import type { SessionDatabaseApi } from '../types/sessionDatabase';
 import { storageKey, storageRead, storageSet } from './storageKeys';
 
 export type BackendHistoryEntry = {
@@ -223,4 +225,16 @@ export function createBackendHistoryStorage({ backend, scope }: { readonly backe
   };
   registerLegacyWriter(api.flush);
   return api;
+}
+
+export const BACKEND_HISTORY_PAGED_NAMESPACE = 'backend-history-paged-v2';
+
+export function openBackendHistoryPaging(database: SessionDatabaseApi | undefined, sessionID: string, backend: string, scope: string): HistoryPageCache | undefined {
+  if (!database) return undefined;
+  const namespace = `${BACKEND_HISTORY_PAGED_NAMESPACE}:${scopeHash(JSON.stringify([backend, scope]))}`;
+  return createHistoryPageCache({
+    namespace,
+    read: (cursor) => database.readHistory({ threadId: sessionID, namespace, ...(cursor === null ? {} : { cursor }), limit: 200 }),
+    persist: (entries) => database.upsertHistory({ threadId: sessionID, namespace, entries }),
+  });
 }

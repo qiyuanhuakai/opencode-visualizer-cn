@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { createRuntimeStore } from '../../bridge/runtime/storage/runtimeStore.js';
 import { createSessionIndex } from '../../bridge/runtime/sessionIndex.js';
 import { createHarnessRegistry, CORE_OPERATIONS, unsupported } from '../../shared/runtime/harnessContract.js';
-import type { HarnessKind, HarnessManifest, CoreOperation, HarnessContext } from '../../shared/runtime/harnessContract.js';
+import type { HarnessKind, HarnessManifest, CoreOperation, HarnessContext, Support } from '../../shared/runtime/harnessContract.js';
 import { encodeWorkspaceKey, parseEnvironmentId, parseHarnessInstanceId, parseSessionRef, encodeSessionKey } from '../../shared/runtime/identity.js';
 import { nativePage, sourceIdentity } from '../../bridge/runtime/sessionSummaries.js';
 import { createNativeEventIntake } from '../../bridge/runtime/nativeEventIntake.js';
@@ -19,7 +19,7 @@ const session = (nativeSessionId: string) => parseSessionRef({ environmentId, ha
 const row = (id: string, directory = '/repo') => ({ session: session(id), title: id, cwd: directory });
 function manifest(kind: HarnessKind): HarnessManifest {
   const core = Object.fromEntries(Object.keys(CORE_OPERATIONS).map((name) => [name, name === 'listSessionPage' ? { state: 'supported' } : unsupported('fixture')]));
-  return { environmentId, harnessInstanceId, kind, protocolVersion: 1, core: core as Record<CoreOperation, HarnessManifest['core'][CoreOperation]>, extensions: [], capabilities: {} };
+  return { environmentId, harnessInstanceId, kind, protocolVersion: 1, core: core as Record<CoreOperation, Support>, extensions: [], capabilities: {} };
 }
 async function fixture(list: (context: HarnessContext) => Promise<unknown>, run: (value: {
   index: ReturnType<typeof createSessionIndex>; store: ReturnType<typeof createRuntimeStore>; directories: string[]; generation: { value: number };
