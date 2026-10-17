@@ -403,6 +403,68 @@ describe('DSH driver reclaim and paging interleaving', () => {
     }));
   });
 
+  it('keeps a subscription acquired after the final idle check from losing its registration', { timeout: 30000 }, async () => {
+    const browsed = Array.from({ length: 5 }, (_, index) => `race-${index + 1}`);
+    const held = Promise.withResolvers<void>();
+    let entered = 0;
+    const leaseKey = `lease:${fingerprint(encodeSessionKey(sessionRef('race-1')))}`;
+    let subscription: DshSubscription | undefined;
+    let driverRef: DshDriverInstance | undefined;
+    await withDshDriver(browsed.map(summaryOf), async ({ driver, controlled }) => {
+      driverRef = driver;
+      for (const nativeSessionId of browsed) controlled.snapshots.set(nativeSessionId, { cursor: 2, records: snapshotRecords(2) });
+      for (const nativeSessionId of browsed.slice(0, SELECTED_SLOTS)) await getSession(driver, sessionRef(nativeSessionId));
+      expect(controlled.liveFollows()).toBe(SELECTED_SLOTS);
+      // The fifth selection fills the last slot, so the reclaim query for race-1 is issued and held in flight.
+      const fifth = getSession(driver, sessionRef('race-5'));
+      const deadline = Date.now() + 10000;
+      while (entered === 0 && Date.now() < deadline) await sleep(5);
+      expect(entered).toBe(1);
+      held.resolve();
+      await fifth;
+      // The re-subscription is acquired after the reclaim's final idle check has already
+      // answered but before its eviction runs: two continuation links past the driver's
+      // own reaction on the held store response land the re-acquisition in that gap.
+      const settle = Date.now() + 10000;
+      while (!subscription && Date.now() < settle) await sleep(5);
+      expect(subscription).toBeDefined();
+      await subscription!.ready;
+      await subscription!.next();
+      // A later selection of the same session must reuse the registered entry: one native
+      // follow per selected session, never a second one beside the live subscription.
+      await getSession(driver, sessionRef('race-1'));
+      expect(controlled.liveFollows()).toBe(2);
+      controlled.follow({ type: 'event', event: { seq: 3, time: 3, type: 'assistant/message', data: { text: 'after-reacquire' } } }, 'race-1');
+      // getSession refreshes the follow, so its snapshot may still be queued ahead of the event.
+      let item = await subscription!.next();
+      while (isRecord(item.value) && item.value.type === 'session-snapshot') item = await subscription!.next();
+      expect(item.value).toMatchObject({ type: 'session-event', value: { type: 'event', event: { seq: 3 } } });
+      await subscription!.return();
+    }, (created) => ({
+      ...created,
+      getControl(params: { collection: string; key: string }) {
+        if (params.collection !== 'operations' || params.key !== leaseKey) return created.getControl(params);
+        entered += 1;
+        const response = created.getControl(params);
+        const deferred = Promise.withResolvers<Awaited<ReturnType<typeof created.getControl>>>();
+        void held.promise.then(() => {
+          response.then(
+            (value) => deferred.resolve(value),
+            (error) => deferred.reject(error),
+          );
+          queueMicrotask(() => {
+            let chain: Promise<unknown> = response;
+            for (let index = 0; index < 3; index++) chain = chain.then(() => undefined);
+            void chain.then(async () => {
+              if (driverRef) subscription = await subscribeSession(driverRef, sessionRef('race-1'));
+            });
+          });
+        });
+        return deferred.promise;
+      },
+    }));
+  });
+
   it('holds the read token across in-flight history paging while another session takes the slot', { timeout: 30000 }, async () => {
     const browsed = Array.from({ length: 5 }, (_, index) => `page-${index + 1}`);
     await withDshDriver(browsed.map(summaryOf), async ({ driver, controlled, events }) => {

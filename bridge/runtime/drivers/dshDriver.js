@@ -59,7 +59,12 @@ export function createDshDriver(options) {
   }
   async function evictIdleFollows() {
     for (const [key, entry] of selected) {
-      if (!await reclaimable(entry)) continue;
+      if (!(await reclaimable(entry))) continue;
+      // The await above yields, so the identity check that authorises the eviction must
+      // share one synchronous section with the cancellation and the removal themselves:
+      // a subscription, read or interaction that acquires this session in between has to
+      // win over an answer computed before it existed.
+      if (!stillIdle(entry)) continue;
       entry.handle?.cancel(); entry.handle = undefined; entry.state.disconnect();
       selected.delete(key);
     }
