@@ -120,7 +120,10 @@ export async function createKimiWebDriver(options) {
   }
   async function verify(sessionId) {
     let live = null;
-    try { live = await operations.liveTask({ ...scope, nativeSessionId: sessionId }); }
+    // liveTask looks the lease up through the session key, so the re-read has to carry the full
+    // OperationScope of the session being verified: a flat identifier has no scope.session and
+    // fails identity parsing before any durable read, which would strand the session forever.
+    try { live = await operations.liveTask(capture({ ...scope, session: { ...scope, nativeSessionId: sessionId } })); }
     catch { return; }
     uncertain.delete(sessionId);
     if (live) { registerTask(sessionId, live); return; }

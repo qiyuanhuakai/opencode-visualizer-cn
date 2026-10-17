@@ -9,7 +9,7 @@ import type { KimiWebDriver } from '../../../bridge/runtime/drivers/kimiWebDrive
 import { createRuntimeStore } from '../../../bridge/runtime/storage/runtimeStore.js';
 import type { Json, RuntimeStore } from '../../../bridge/runtime/storage/runtimeStore.js';
 import { parseEnvironmentId, parseHarnessInstanceId, parseSessionRef } from '../../../shared/runtime/identity.js';
-import { StoreError } from '../../../bridge/runtime/storage/storeProtocol.js';
+import { ProtocolError } from '../../../shared/runtime/capabilities.js';
 
 type ObserverStream = AsyncIterable<Json> & { return(): Promise<IteratorResult<Json>> };
 type FixtureFrame = { readonly direction: string; readonly frame: { readonly type: string; readonly session_id?: string } };
@@ -17,7 +17,7 @@ type KimiFixture = {
   readonly endpoint: string;
   readonly wire: readonly FixtureFrame[];
   readonly calls: readonly { readonly method: string; readonly path: string; readonly authorized: boolean }[];
-  readonly mode: { holdHistory: boolean; loseSendAck: boolean };
+  readonly mode: { holdHistory: boolean; holdSend: boolean; loseSendAck: boolean };
   readonly held: number;
   authorization(): string;
   stream(nativeSessionId: string): { readonly turnId: number; readonly active: string | null };
@@ -340,7 +340,7 @@ describe('Kimi Web driver session reclamation', () => {
     const originalGet = operations.journal.get.bind(operations.journal);
     let injected = true;
     operations.journal.get = async (id: string) => {
-      if (injected) { injected = false; throw new StoreError('source_unavailable', 'queue_full'); }
+      if (injected) { injected = false; throw new ProtocolError('source_unavailable', 'runtime.store.queue_full'); }
       return originalGet(id);
     };
     await expect(call('send', sessionId(0), { content: [{ type: 'text', text: 'unknown read' }], idempotencyKey: 'unknown-read-1' }))
@@ -397,5 +397,42 @@ describe('Kimi Web driver session reclamation', () => {
     expect(await sendOperations()).toMatchObject([{ phase: 'terminal', outcome: 'completed' }]);
     const reclaimed = driver.diagnostics();
     expect({ selected: reclaimed.selected, historySessions: reclaimed.historySessions, reclaimed: reclaimed.reclaimed }).toEqual({ selected: 0, historySessions: 0, reclaimed: 1 });
+  }, 60000);
+
+  it('reclaims an uncertain session once its live-task re-read names the session scope', async () => {
+    // Given a subscribed idle session and one transient durable-read failure on each of the two
+    // reads that decide its fate: the send path's own read, and the reconciliation lease read.
+    const stream = await call<ObserverStream>('subscribe', sessionId(0));
+    const originalGet = store.get.bind(store);
+    const originalGetControl = store.getControl.bind(store);
+    let sendReadFailed = false, leaseReadFailed = false;
+    store.get = async (params) => {
+      if (!sendReadFailed) { sendReadFailed = true; throw new ProtocolError('source_unavailable', 'runtime.store.queue_full'); }
+      return originalGet(params);
+    };
+    store.getControl = async (params) => {
+      if (!leaseReadFailed && params.key.startsWith('lease:')) { leaseReadFailed = true; throw new ProtocolError('source_unavailable', 'runtime.store.queue_full'); }
+      return originalGetControl(params);
+    };
+
+    // When the send fails before it reaches the native boundary, and the read that decides
+    // whether a task is still running fails as well.
+    await expect(call('send', sessionId(0), { content: [{ type: 'text', text: 'uncertain re-read' }], idempotencyKey: 'uncertain-reread-1' }))
+      .rejects.toMatchObject({ code: 'source_unavailable' });
+    expect({ sendReadFailed, leaseReadFailed }).toEqual({ sendReadFailed: true, leaseReadFailed: true });
+    store.get = originalGet;
+    store.getControl = originalGetControl;
+
+    // Then closing the last observation window re-reads the durable state and reclaims the
+    // session: nothing reached the durable SENT marker, so there is no task to reconcile, and
+    // the re-read must carry the full session scope rather than a flat session identifier.
+    await stream.return();
+    await until(async () => driver.diagnostics().selected === 0, 'uncertain session reclaimed');
+    expect({ observers: driver.diagnostics().observers, selected: driver.diagnostics().selected, historySessions: driver.diagnostics().historySessions, lifecycleSubscriptions: driver.diagnostics().lifecycleSubscriptions }).toEqual({ observers: 0, selected: 0, historySessions: 0, lifecycleSubscriptions: 0 });
+    expect(nativeFrames('unsubscribe_v2').length).toBe(1);
+    expect(nativeFrames('unsubscribe').length).toBe(1);
+
+    // And the 32-session cap admits new sessions, because the uncertain one no longer occupies it.
+    await expect(call<ObserverStream>('subscribe', sessionId(39))).resolves.toBeDefined();
   }, 60000);
 });
