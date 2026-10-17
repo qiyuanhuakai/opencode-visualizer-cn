@@ -21,6 +21,7 @@
     "vis_bridge.js",
     "vis_bridge.d.ts",
     "bridge",
+    "shared/runtime",
     "scripts/build-vis-bridge.mjs",
     "dist",
     "electron"

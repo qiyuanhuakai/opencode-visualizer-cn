@@ -1,3 +1,4 @@
+import type { RuntimeHost } from './runtime/runtimeHost.js';
 import type { AcpClient, AcpProcessStatus, AcpProcessManager } from './acpProcessManager.js';
 import type { AcpAgentConfig, BridgeConfig, BridgeConfigStore } from './bridgeConfig.js';
 import type { ProcessStatus, ProcessSupervisor } from './processSupervisor.js';
@@ -14,6 +15,7 @@ export type DshAuthProvider = {
 };
 
 export type BridgeRuntime = {
+  getRuntimeHost?(): Promise<RuntimeHost>;
   start(): Promise<BridgeRuntimeStatus>;
   stop(): Promise<void>;
   getStatus(): BridgeRuntimeStatus;
@@ -27,6 +29,9 @@ export type BridgeRuntime = {
 };
 
 export function createBridgeRuntime(options?: {
+  environmentId?: string;
+  stateRoot?: string;
+  role?: 'local' | 'manager' | 'execution';
   configStore?: BridgeConfigStore;
   nativeSupervisor?: ProcessSupervisor;
   acpManager?: AcpProcessManager;

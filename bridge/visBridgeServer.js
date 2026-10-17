@@ -1,3 +1,4 @@
+import { handleRuntimeUpgrade } from './runtime/runtimeWebSocket.js';
 import { createServer } from 'node:http';
 import { homedir } from 'node:os';
 import packageInfo from '../package.json' with { type: 'json' };
@@ -71,7 +72,9 @@ export function createVisBridgeServer(options) {
       const authProvider = bridgeOptions.runtime?.getDshAuthProvider?.();
       if (typeof authProvider?.getCookie !== 'function') {
         return Promise.reject(
-          new Error('Dsh upstream auth cookie is unavailable: no dsh native service is supervised.'),
+          new Error(
+            'Dsh upstream auth cookie is unavailable: no dsh native service is supervised.',
+          ),
         );
       }
       return authProvider.getCookie('127.0.0.1:3080');
@@ -98,6 +101,33 @@ export function createVisBridgeServer(options) {
     if (request.method === 'OPTIONS') {
       writeCorsHeaders(response, 204);
       response.end();
+      return;
+    }
+
+    if (requestUrl.pathname === '/runtime/hello') {
+      if (requiresPtyToken(bridgeOptions)) {
+        rejectUnprotectedBridgeControlHttp(response);
+        return;
+      }
+      if (!authorizeHttpRequest(request, response, options.bridgeToken)) return;
+      if (!bridgeOptions.runtime?.getRuntimeHost) {
+        writeJsonHttpResponse(response, 503, { error: 'Runtime unavailable.' });
+        return;
+      }
+      void bridgeOptions.runtime
+        .getRuntimeHost()
+        .then((host) => {
+          const connection = host.connect(`http-${Math.random()}`);
+          try {
+            writeJsonHttpResponse(response, 200, {
+              hello: connection.hello(),
+              topology: connection.inspect(),
+            });
+          } finally {
+            connection.disconnect();
+          }
+        })
+        .catch(() => writeJsonHttpResponse(response, 503, { error: 'Runtime unavailable.' }));
       return;
     }
 
@@ -197,12 +227,7 @@ export function createVisBridgeServer(options) {
         writeJsonHttpResponse(response, 503, { error: 'Bridge supervisor is unavailable.' });
         return;
       }
-      void handleSupervisorHttpRequest(
-        request,
-        response,
-        requestUrl,
-        bridgeOptions.runtime,
-      )
+      void handleSupervisorHttpRequest(request, response, requestUrl, bridgeOptions.runtime)
         .then((handled) => {
           if (!handled) writeJsonHttpResponse(response, 404, { error: 'Not found' });
         })
@@ -225,6 +250,10 @@ export function createVisBridgeServer(options) {
   });
 
   server.on('upgrade', (request, socket, head) => {
+    if (new URL(request.url ?? '/', 'http://localhost').pathname === '/runtime') {
+      void handleRuntimeUpgrade(request, socket, head, bridgeOptions);
+      return;
+    }
     if (handlePtyUpgrade(request, socket, head, bridgeOptions, ptyManager)) return;
     if (handleAcpUpgrade(request, socket, head, bridgeOptions)) return;
     if (handleKimiWebUpgrade(request, socket, head, kimiWebUpgradeOptions)) return;
@@ -239,7 +268,7 @@ export function createVisBridgeServer(options) {
   server.on('close', () => {
     ptyManager.disposeAll();
     void commandRunner.close();
-    void bridgeOptions.runtime?.stop();
+    void bridgeOptions.runtime?.stop().catch((error) => server.emit('runtimeError', error));
   });
 
   server.stopOwnedProcesses = () => commandRunner.close();
