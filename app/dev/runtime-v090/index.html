@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Runtime protocol QA</title>
+  <style>
+    :root { color-scheme: light dark; font: 1rem/1.6 system-ui; --space: 1rem; }
+    body { margin: auto; padding: var(--space); max-width: 48rem; }
+    button, textarea { font: inherit; padding: .5em; }
+    textarea { box-sizing: border-box; width: 100%; min-height: 13rem; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--space); border: 1px solid; }
+    button:focus-visible, textarea:focus-visible { outline: 3px solid Highlight; outline-offset: 3px; }
+  </style>
+</head>
+<body>
+  <main><h1>Runtime protocol QA</h1><p>Validate a fixture frame with the shared runtime protocol.</p>
+    <label for="frame">Protocol frame</label><textarea id="frame" spellcheck="false"></textarea>
+    <button id="validate" type="button">Validate frame</button>
+    <pre id="result" role="status" aria-live="polite">Ready</pre>
+  </main>
+  <script type="module">
+    import { decodeFrame, encodeFrame } from '/shared/runtime/protocol.js';
+    const input = document.querySelector('#frame');
+    document.querySelector('#validate').addEventListener('click', () => {
+      try {
+        const frame = decodeFrame(encodeFrame(JSON.parse(input.value)));
+        document.querySelector('#result').textContent = JSON.stringify({ status: 'accepted', frame }, null, 2);
+      } catch (error) {
+        document.querySelector('#result').textContent = JSON.stringify({ status: 'rejected', code: error.code ?? 'invalid_json' });
+      }
+    });
+  </script>
+</body>
+</html>
