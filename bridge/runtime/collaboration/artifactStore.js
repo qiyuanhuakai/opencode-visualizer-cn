@@ -200,27 +200,71 @@ export function createArtifactStore(options = {}) {
     }
   }
 
-  async function copySource(source, target) {
+  /**
+   * Copy one source into a temp file, HASHING AND COUNTING as it goes and enforcing the ceiling
+   * mid-stream. The second pass is not trusted: it must produce exactly the bytes the first pass
+   * hashed, or a source that changed between the two opens (a mutable file, a source whose second
+   * open differs) is refused instead of being stored under a stale hash. A short write is a
+   * refusal, never a silently truncated object.
+   */
+  async function copySource(source, target, expected) {
     const reader = await source.open();
-    // 'wx' is O_WRONLY|O_CREAT|O_EXCL: an object is created exactly once and never reopened for
+    // 'wx' is O_WRONLY|O_CREAT|O_EXCL: a temp file is created exactly once and never reopened for
     // writing, so an existing path can never be silently overwritten.
     const handle = await fsLike.open(target, 'wx', 0o444);
+    const hash = createHash('sha256');
+    let bytes = 0;
     try {
       for (;;) {
         const chunk = await reader.read(limits.chunkBytes);
         if (chunk === null || chunk === undefined) break;
-        if (chunk.length > 0) await handle.write(chunk);
+        bytes += chunk.length;
+        if (bytes > limits.maxArtifactBytes) {
+          throw new CollaborationError('conflict', 'artifact_oversize', {
+            limit: limits.maxArtifactBytes,
+            observed: bytes,
+          });
+        }
+        hash.update(chunk);
+        let written = 0;
+        while (written < chunk.length) {
+          const result = await handle.write(chunk, written, chunk.length - written);
+          if (result.bytesWritten <= 0) {
+            throw new CollaborationError('source_unavailable', 'artifact_short_write', { path: target });
+          }
+          written += result.bytesWritten;
+        }
       }
     } finally {
       await handle.close();
       await reader.close();
     }
+    // The bytes that landed must be EXACTLY the bytes the first pass hashed.
+    if (bytes !== expected.bytes || hash.digest('hex') !== expected.artifactHash) {
+      throw new CollaborationError('conflict', 'artifact_changed', {
+        expected: expected.artifactHash,
+        observedBytes: bytes,
+        expectedBytes: expected.bytes,
+      });
+    }
+  }
+
+  /** An existing object must hash to its own name, or the store refuses rather than overwrite. */
+  async function assertImmutable(target, artifactHash) {
+    const existing = await hashImpl(createFileSource(target, fsLike), limits);
+    if (existing.artifactHash !== artifactHash) {
+      stats.immutableRefusals += 1;
+      throw new CollaborationError('conflict', 'artifact_immutable', {
+        artifactHash,
+        observed: existing.artifactHash,
+      });
+    }
   }
 
   /**
    * Store one artifact. Pass one hashes the source and enforces the ceiling; pass two copies it
-   * into the content-addressed object. An object that already exists is re-hashed and compared,
-   * never overwritten.
+   * into the content-addressed object, re-hashing and re-counting what actually lands and
+   * publishing with a hard link so an existing object can never be overwritten.
    */
   async function write(input = {}) {
     assertOpen();
@@ -240,25 +284,25 @@ export function createArtifactStore(options = {}) {
     const target = objectPath(digest.artifactHash);
     let existed = false;
     if (await pathExists(target)) {
-      const existing = await hashImpl(createFileSource(target, fsLike), limits);
-      if (existing.artifactHash !== digest.artifactHash) {
-        stats.immutableRefusals += 1;
-        throw new CollaborationError('conflict', 'artifact_immutable', {
-          artifactHash: digest.artifactHash,
-          observed: existing.artifactHash,
-        });
-      }
+      await assertImmutable(target, digest.artifactHash);
       existed = true;
     } else {
       await fsLike.mkdir(path.dirname(target), { recursive: true });
       await fsLike.mkdir(tmpRoot, { recursive: true });
       const temp = path.join(tmpRoot, newTempName());
       try {
-        await copySource(input.source, temp);
-        await fsLike.rename(temp, target);
-      } catch (error) {
+        await copySource(input.source, temp, digest);
+        try {
+          // Publish WITHOUT overwriting: link() is atomic and REFUSES an existing object, so a
+          // concurrent writer can never replace a stored artifact.
+          await fsLike.link(temp, target);
+        } catch (error) {
+          if (error?.code !== 'EEXIST') throw error;
+          await assertImmutable(target, digest.artifactHash);
+          existed = true;
+        }
+      } finally {
         await fsLike.rm(temp, { force: true }).catch(() => undefined);
-        throw error;
       }
     }
     stats.writes += 1;

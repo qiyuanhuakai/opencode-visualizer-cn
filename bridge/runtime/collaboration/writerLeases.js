@@ -262,7 +262,10 @@ export function createGitRunner(options = {}) {
     const sizes = { stdout: 0, stderr: 0 };
     const buffers = { stdout: [], stderr: [] };
     let failure = null;
-    let stopping = false;
+    // The memoized stop: null until the first stop request, so the child is stopped AT MOST once
+    // no matter how many times a timeout or an output overflow asks for it. It must start null —
+    // a `false` initializer would make `??=` a no-op and the child would never be stopped at all.
+    let stopping = null;
     const stop = () => (stopping ??= Promise.resolve(stopChild(child)).catch(() => undefined));
     const done = new Promise((resolve) => {
       child.once('error', (error) => {
@@ -403,6 +406,13 @@ export function createWriterLeaseService(options = {}) {
   const byRepository = new Map();
   /** taskId → the lease id. One lease per task, forever. */
   const byTask = new Map();
+  /**
+   * The IN-FLIGHT allocations: a task and repository quota reserved before the first await of
+   * `allocate` and released when it settles. Every quota check consults these alongside the live
+   * maps, so a concurrent allocation can never pass a check a synchronous one would have failed.
+   */
+  const reservedByTask = new Map();
+  const reservedByRepository = new Map();
   let closed = false;
 
   function assertOpen() {
@@ -477,7 +487,9 @@ export function createWriterLeaseService(options = {}) {
    * The worktree name is derived from the freshly minted lease id, never from the repository, so
    * two writers on the same repository can never share a cwd. A duplicate task lease, a repository
    * over its writer quota, a service over its lease capacity and a dirty base are each an explicit
-   * refusal BEFORE anything is created.
+   * refusal BEFORE anything is created. The task and repository quotas are RESERVED before the
+   * first await and rolled back if any later step refuses, so two concurrent allocations for one
+   * task cannot both pass the conflict check and mint two live leases.
    */
   async function allocate(input = {}) {
     assertOpen();
@@ -507,62 +519,82 @@ export function createWriterLeaseService(options = {}) {
     const at = parseAt(input.at);
 
     // --- the four explicit conflicts, all before anything is created ---
-    if (byTask.has(taskId)) {
+    if (byTask.has(taskId) || reservedByTask.has(taskId)) {
       throw new CollaborationError('conflict', 'writer_lease_task', { taskId });
     }
-    if (leasesById.size >= WRITER_LIMITS.maxActiveLeases) {
+    if (leasesById.size + reservedByTask.size >= WRITER_LIMITS.maxActiveLeases) {
       throw new CollaborationError('conflict', 'writer_lease_capacity', {
         limit: WRITER_LIMITS.maxActiveLeases,
       });
     }
     const key = repositoryKey(repository);
     const held = byRepository.get(key) ?? [];
-    if (held.length >= WRITER_LIMITS.maxWritersPerRepository) {
+    const reservedForRepository = reservedByRepository.get(key) ?? [];
+    if (held.length + reservedForRepository.length >= WRITER_LIMITS.maxWritersPerRepository) {
       throw new CollaborationError('conflict', 'writer_lease_repository', {
         repository,
         limit: WRITER_LIMITS.maxWritersPerRepository,
       });
     }
-    await assertRepositoryClean({ repository });
 
     // --- the explicit allocation ---
     const leaseId = newLeaseId();
     if (!UUID_PATTERN.test(leaseId)) {
       throw new CollaborationError('invalid_request', 'writer_lease_id');
     }
-    const baseCommit = await resolveBaseCommit({ repository });
-    const worktree = path.join(writersRoot, `writer-${leaseId}`);
-    if (worktree.length > WRITER_LIMITS.maxCwdChars) {
-      throw new CollaborationError('conflict', 'writer_cwd', { limit: WRITER_LIMITS.maxCwdChars });
-    }
-    await fsLike.mkdir(writersRoot, { recursive: true });
-    await createWorktree({ repository, worktree, baseCommit });
+    // Reserve the task and repository quotas BEFORE the first await: the checks above are
+    // synchronous, so without a reservation two concurrent allocations for one task would both
+    // pass them, both create a worktree, and both register — two live leases for one task, with
+    // byTask keeping only the last. The reservation is dropped again if any step below refuses.
+    const reservation = Object.freeze({ leaseId, taskId, key });
+    reservedByTask.set(taskId, reservation);
+    reservedForRepository.push(reservation);
+    reservedByRepository.set(key, reservedForRepository);
+    try {
+      await assertRepositoryClean({ repository });
+      const baseCommit = await resolveBaseCommit({ repository });
+      const worktree = path.join(writersRoot, `writer-${leaseId}`);
+      if (worktree.length > WRITER_LIMITS.maxCwdChars) {
+        throw new CollaborationError('conflict', 'writer_cwd', { limit: WRITER_LIMITS.maxCwdChars });
+      }
+      await fsLike.mkdir(writersRoot, { recursive: true });
+      await createWorktree({ repository, worktree, baseCommit });
 
-    const record = {
-      leaseId,
-      taskId,
-      repository: key,
-      ownerId,
-      allocation: { worktree: null, baseCommit: null, nativeCwd: null },
-      retention: { disposition: 'retained' },
-      removal: { userConfirmed: false, confirmedAt: null, removedAt: null },
-      snapshot: { createdAt: at },
-      policy: {
-        worktreeAccess: readOnly ? 'read-only' : 'read-write',
-        userRepository: 'read-only',
-      },
-      state: 'active',
-      createdAt: at,
-      expiresAt: at + ttlMs,
-      releasedAt: null,
-      removedAt: null,
-    };
-    createAllocationSink(record.allocation).assign({ worktree, baseCommit, nativeCwd: worktree });
-    leasesById.set(leaseId, record);
-    byTask.set(taskId, leaseId);
-    held.push(leaseId);
-    byRepository.set(key, held);
-    return leaseView(record);
+      const record = {
+        leaseId,
+        taskId,
+        repository: key,
+        ownerId,
+        allocation: { worktree: null, baseCommit: null, nativeCwd: null },
+        retention: { disposition: 'retained' },
+        removal: { userConfirmed: false, confirmedAt: null, removedAt: null },
+        snapshot: { createdAt: at },
+        policy: {
+          worktreeAccess: readOnly ? 'read-only' : 'read-write',
+          userRepository: 'read-only',
+        },
+        state: 'active',
+        createdAt: at,
+        expiresAt: at + ttlMs,
+        releasedAt: null,
+        removedAt: null,
+      };
+      createAllocationSink(record.allocation).assign({ worktree, baseCommit, nativeCwd: worktree });
+      leasesById.set(leaseId, record);
+      byTask.set(taskId, leaseId);
+      // Re-read the repository bucket at registration: a concurrent allocation may have published
+      // its own bucket in the meantime, and pushing into a stale array would lose its entry.
+      const registered = byRepository.get(key) ?? [];
+      registered.push(leaseId);
+      byRepository.set(key, registered);
+      return leaseView(record);
+    } finally {
+      reservedByTask.delete(taskId);
+      const pending = reservedByRepository.get(key) ?? [];
+      const at_ = pending.indexOf(reservation);
+      if (at_ >= 0) pending.splice(at_, 1);
+      if (pending.length === 0) reservedByRepository.delete(key);
+    }
   }
 
   function lease(leaseId) {

@@ -38,6 +38,7 @@
 // in the QA worktree: every repository below is a private temporary repository under os.tmpdir().
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import {
   chmod,
   lstat,
@@ -274,6 +275,11 @@ interface WriterLeasesModule {
   readonly WRITER_ISOLATION: PostureView;
   readonly POSTURE_KEYS: readonly string[];
   createWriterLeaseService(options: Record<string, unknown>): WriterLeaseService;
+  createGitRunner(options: Record<string, unknown>): (input: {
+    readonly cwd: string;
+    readonly args: readonly string[];
+    readonly timeoutMs?: number;
+  }) => Promise<{ exitCode: number; signal: string | null; stdout: string; stderr: string }>;
 }
 
 interface ArtifactStoreModule {
@@ -1381,5 +1387,248 @@ describe('task 40 — writer leases and change artifacts', () => {
       expect(observed.field.length, label).toBeGreaterThan(0);
     }
     service.close();
+  });
+});
+
+/* ------------------------------------------------------------------ PR #196 review findings */
+
+describe('task 40 — the six PR #196 review findings', () => {
+  let leasesModule: WriterLeasesModule;
+  let storeModule: ArtifactStoreModule;
+  let serviceModule: ArtifactServiceModule;
+
+  beforeAll(() => {
+    leasesModule = require_('../../bridge/runtime/collaboration/writerLeases.js') as WriterLeasesModule;
+    storeModule = require_('../../bridge/runtime/collaboration/artifactStore.js') as ArtifactStoreModule;
+    serviceModule = require_(
+      '../../bridge/runtime/collaboration/artifactService.js',
+    ) as ArtifactServiceModule;
+  });
+
+  it('P1: apply refuses a symlinked parent directory instead of writing outside the target', async () => {
+    const storeRoot = await scratch('symlink-parent');
+    const store = storeModule.createArtifactStore({ root: storeRoot });
+    const service = serviceModule.createArtifactService({ store, root: storeRoot });
+    const target = path.join(storeRoot, 'apply-target');
+    const outside = path.join(storeRoot, 'outside');
+    await mkdir(target, { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await writeFile(path.join(outside, 'victim'), 'original\n', 'utf8');
+    // Inside the target, `link` names a directory OUTSIDE the target root.
+    await symlink(outside, path.join(target, 'link'));
+
+    const artifact = await collect(service.serialize({
+      baseCommit: 'a'.repeat(40),
+      entries: [{
+        path: 'link/victim',
+        kind: 'file',
+        mode: 0o644,
+        target: null,
+        contentBytes: 12,
+        sha256: createHash('sha256').update('overwritten\n').digest('hex'),
+        tracked: false,
+        content: Buffer.from('overwritten\n', 'utf8'),
+      }],
+    }));
+    const observed = await rejection(Promise.resolve(service.apply({ artifact }, target)));
+    expect(observed.code).toBe('invalid_request');
+    expect(observed.field).toBe('artifact_path');
+    // The file outside the target is byte-identical: nothing was written through the link.
+    expect(await readFile(path.join(outside, 'victim'), 'utf8')).toBe('original\n');
+    service.close();
+    store.close();
+  });
+
+  it('P2: a file replaced by a directory is captured as a deletion and replays onto the base', async () => {
+    const repository = await createRepo('file-to-dir');
+    // The base commit carries a tracked FILE named `item`.
+    await writeFile(path.join(repository, 'item'), 'a file\n', 'utf8');
+    runGit(repository, ['add', '-A']);
+    runGit(repository, ['-c', 'user.name=vis', '-c', 'user.email=vis@example.invalid', 'commit', '-q', '-m', 'add item']);
+
+    const writersRoot = await scratch('file-to-dir');
+    const storeRoot = await scratch('file-to-dir-store');
+    const service = leasesModule.createWriterLeaseService({ writersRoot });
+    const store = storeModule.createArtifactStore({ root: storeRoot });
+    const artifacts = serviceModule.createArtifactService({ store, root: storeRoot });
+    const lease = await service.allocate({
+      repository,
+      taskId: taskIdFor('file-to-dir'),
+      ownerId: 'writer-f2d',
+    });
+    // The writer replaces the tracked FILE with a DIRECTORY of the same name.
+    await rm(path.join(lease.nativeCwd, 'item'));
+    await mkdir(path.join(lease.nativeCwd, 'item'));
+    await writeFile(path.join(lease.nativeCwd, 'item', 'child'), 'nested\n', 'utf8');
+
+    const captured = await artifacts.capture({ lease });
+    expect(captured.paths).toContain('item');
+    expect(captured.paths).toContain('item/child');
+    // The tracked file's DELETION is recorded, not silently dropped.
+    expect(captured.manifest.find((entry) => entry.path === 'item')?.kind).toBe('delete');
+
+    // Replaying onto the pristine base reproduces the transition instead of failing EEXIST.
+    const applyTarget = await scratch('file-to-dir-apply');
+    await writeFile(path.join(applyTarget, 'item'), 'a file\n', 'utf8');
+    const applied = await artifacts.apply({ artifactHash: captured.artifactHash }, applyTarget);
+    expect(applied.applied).toBe(2);
+    expect(await readFile(path.join(applyTarget, 'item', 'child'), 'utf8')).toBe('nested\n');
+    service.close();
+    store.close();
+  });
+
+  it('P2b: a directory replaced by a file is captured and replays onto the base', async () => {
+    const repository = await createRepo('dir-to-file');
+    // The base commit carries a tracked FILE inside a tracked directory.
+    await mkdir(path.join(repository, 'bundle'), { recursive: true });
+    await writeFile(path.join(repository, 'bundle', 'child'), 'nested\n', 'utf8');
+    runGit(repository, ['add', '-A']);
+    runGit(repository, ['-c', 'user.name=vis', '-c', 'user.email=vis@example.invalid', 'commit', '-q', '-m', 'add bundle']);
+
+    const writersRoot = await scratch('dir-to-file');
+    const storeRoot = await scratch('dir-to-file-store');
+    const service = leasesModule.createWriterLeaseService({ writersRoot });
+    const store = storeModule.createArtifactStore({ root: storeRoot });
+    const artifacts = serviceModule.createArtifactService({ store, root: storeRoot });
+    const lease = await service.allocate({
+      repository,
+      taskId: taskIdFor('dir-to-file'),
+      ownerId: 'writer-d2f',
+    });
+    // The writer replaces the tracked DIRECTORY with a FILE of the same name.
+    await rm(path.join(lease.nativeCwd, 'bundle'), { recursive: true });
+    await writeFile(path.join(lease.nativeCwd, 'bundle'), 'a file\n', 'utf8');
+
+    const captured = await artifacts.capture({ lease });
+    expect(captured.paths).toContain('bundle');
+    expect(captured.paths).toContain('bundle/child');
+    expect(captured.manifest.find((entry) => entry.path === 'bundle')?.kind).toBe('file');
+    expect(captured.manifest.find((entry) => entry.path === 'bundle/child')?.kind).toBe('delete');
+
+    // Replaying onto the pristine base replaces the directory with the file.
+    const applyTarget = await scratch('dir-to-file-apply');
+    await mkdir(path.join(applyTarget, 'bundle'), { recursive: true });
+    await writeFile(path.join(applyTarget, 'bundle', 'child'), 'nested\n', 'utf8');
+    const applied = await artifacts.apply({ artifactHash: captured.artifactHash }, applyTarget);
+    expect(applied.applied).toBe(2);
+    const observed = await lstat(path.join(applyTarget, 'bundle'));
+    expect(observed.isFile()).toBe(true);
+    expect(await readFile(path.join(applyTarget, 'bundle'), 'utf8')).toBe('a file\n');
+    service.close();
+    store.close();
+  });
+
+  it('P3: a git timeout STOPS the child process instead of waiting for it to exit on its own', async () => {
+    const stops: unknown[] = [];
+    const spawned: EventEmitter[] = [];
+    const runner = leasesModule.createGitRunner({
+      spawnProcess: () => {
+        const child = new EventEmitter();
+        const stdout = new EventEmitter();
+        const stderr = new EventEmitter();
+        spawned.push(Object.assign(child, { stdout, stderr }));
+        return Object.assign(child, { stdout, stderr });
+      },
+      stopChild: (child: unknown) => {
+        stops.push(child);
+        return Promise.resolve();
+      },
+      timeoutMs: 10,
+    });
+    const pending = runner({ cwd: tmpdir(), args: ['status'] });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The child was actually stopped, exactly once, and it is the child this run spawned.
+    expect(stops).toHaveLength(1);
+    expect(stops[0]).toBe(spawned[0]);
+    // The promise is still pending: only the child's close settles it.
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+    // The close now settles the run, and the timeout failure is what it reports.
+    (spawned[0] as EventEmitter).emit('close', 0, null);
+    const observed = await rejection(pending);
+    expect(observed.code).toBe('source_unavailable');
+    expect(observed.field).toBe('writer_git_timeout');
+  });
+
+  it('P4: two concurrent allocations for ONE task mint exactly one lease', async () => {
+    const repository = await createRepo('concurrent-allocate');
+    const writersRoot = await scratch('concurrent-allocate');
+    const service = leasesModule.createWriterLeaseService({ writersRoot });
+    const taskId = taskIdFor('concurrent-allocate');
+    const outcomes = await Promise.allSettled([
+      service.allocate({ repository, taskId, ownerId: 'writer-a' }),
+      service.allocate({ repository, taskId, ownerId: 'writer-b' }),
+    ]);
+    const fulfilled = outcomes.filter((entry) => entry.status === 'fulfilled');
+    const rejected = outcomes.filter((entry) => entry.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    const reason = (rejected[0] as PromiseRejectedResult).reason as CollaborationError;
+    expect(reason.code).toBe('conflict');
+    expect(reason.field).toBe('writer_lease_task');
+    // Exactly one live lease exists for the task, and the repository quota counts only it.
+    expect(service.leases()).toHaveLength(1);
+    expect(service.leasesByRepository(repository)).toHaveLength(1);
+    service.close();
+  });
+
+  it('P5: a source that changes between the hash pass and the copy pass is refused, never stored', async () => {
+    const storeRoot = await scratch('mutable-source');
+    const store = storeModule.createArtifactStore({ root: storeRoot });
+    let opens = 0;
+    const mutable = {
+      async open() {
+        opens += 1;
+        const payload = opens === 1 ? Buffer.from('first\n', 'utf8') : Buffer.from('other\n', 'utf8');
+        let done = false;
+        return {
+          async read(maxBytes: number) {
+            if (done) return null;
+            done = true;
+            return payload.subarray(0, Math.min(maxBytes, payload.length));
+          },
+          async close() {},
+        };
+      },
+    };
+    const observed = await rejection(store.write({ source: mutable }));
+    expect(observed.code).toBe('conflict');
+    expect(observed.field).toBe('artifact_changed');
+    // Nothing was stored under the first pass's hash, and no write was counted.
+    expect(await store.has(createHash('sha256').update('first\n').digest('hex'))).toBe(false);
+    expect(store.state().writes).toBe(0);
+    store.close();
+  });
+
+  it('P6: a symlink inside a NEW directory replays onto a clean target', async () => {
+    const storeRoot = await scratch('newdir-symlink');
+    const store = storeModule.createArtifactStore({ root: storeRoot });
+    const service = serviceModule.createArtifactService({ store, root: storeRoot });
+    const target = path.join(storeRoot, 'apply-target');
+    await mkdir(target, { recursive: true });
+    await writeFile(path.join(target, 'existing'), 'base\n', 'utf8');
+
+    const artifact = await collect(service.serialize({
+      baseCommit: 'a'.repeat(40),
+      entries: [{
+        path: 'newdir/link',
+        kind: 'symlink',
+        mode: 0o777,
+        target: '../existing',
+        contentBytes: 0,
+        sha256: createHash('sha256').update('../existing').digest('hex'),
+        tracked: false,
+        content: null,
+      }],
+    }));
+    const applied = await service.apply({ artifact }, target);
+    expect(applied.applied).toBe(1);
+    const observed = await lstat(path.join(target, 'newdir', 'link'));
+    expect(observed.isSymbolicLink()).toBe(true);
+    expect(await readlink(path.join(target, 'newdir', 'link'))).toBe('../existing');
+    service.close();
+    store.close();
   });
 });
