@@ -203,24 +203,25 @@ export function createAuxiliaryHistoryService(options) {
     }
     const incoming = [...entries];
     for (const entry of incoming) assertAuxiliaryEntry(entry);
+    // The batch is applied to a private map first and only copied into the dirty set once every
+    // record has been afforded: stage() has no partial-acceptance receipt, so a record that
+    // exceeds the dirty budget must leave the dirty set exactly as the caller left it.
     // An already-dirty record is UPDATED, not dropped: the byte budget is re-charged for the delta.
+    const staged = new Map(dirty);
+    let stagedBytes = dirtyBytes;
     for (const entry of incoming) {
-      const existing = dirty.get(entry.info.id);
-      if (existing === undefined) {
-        requireValue(dirty.size + 1 <= limits.dirtyMaxCount, 'history.dirty_budget');
-        const size = encodedSize(entry);
-        requireValue(dirtyBytes + size <= limits.dirtyMaxBytes, 'history.dirty_budget');
-        dirty.set(entry.info.id, Object.freeze({ info: Object.freeze({ ...entry.info }), parts: Object.freeze(entry.parts.map(part => Object.freeze({ ...part }))) }));
-        dirtyBytes += size;
-        continue;
-      }
       const next = Object.freeze({ info: Object.freeze({ ...entry.info }), parts: Object.freeze(entry.parts.map(part => Object.freeze({ ...part }))) });
-      const before = encodedSize(existing);
+      const existing = staged.get(entry.info.id);
+      const before = existing === undefined ? 0 : encodedSize(existing);
       const after = encodedSize(next);
-      requireValue(dirtyBytes - before + after <= limits.dirtyMaxBytes, 'history.dirty_budget');
-      dirty.set(entry.info.id, next);
-      dirtyBytes += after - before;
+      if (existing === undefined) requireValue(staged.size + 1 <= limits.dirtyMaxCount, 'history.dirty_budget');
+      requireValue(stagedBytes - before + after <= limits.dirtyMaxBytes, 'history.dirty_budget');
+      staged.set(entry.info.id, next);
+      stagedBytes += after - before;
     }
+    for (const key of [...dirty.keys()]) if (!staged.has(key)) dirty.delete(key);
+    for (const [key, value] of staged) dirty.set(key, value);
+    dirtyBytes = stagedBytes;
   }
 
   function removeCommitted(batch) {

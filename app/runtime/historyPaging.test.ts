@@ -277,6 +277,58 @@ describe('AC3 — a failed durable-ack retains bounded dirty recovery without bu
     );
     expect(service.usage().dirtyCount).toBe(4); // unchanged — nothing was buffered
   });
+
+  it('rejects a whole batch whose later record exceeds the dirty budget, leaving nothing staged', () => {
+    const reader = async () => ({ entries: [], nextCursor: null });
+    const persister = async () => {};
+    const countOnly = createAuxiliaryHistoryService({ reader, persister, limits: { dirtyMaxCount: 1, dirtyMaxBytes: 1024 * 1024 } });
+    disposables.push(countOnly);
+    expect(() => countOnly.stage([textEntry('batch-a', 'a'), textEntry('batch-b', 'b')])).toThrow(
+      expect.objectContaining({ code: 'invalid_request', field: 'history.dirty_budget' }),
+    );
+    expect(countOnly.usage()).toMatchObject({ dirtyCount: 0, dirtyBytes: 0 });
+
+    const bytesOnly = createAuxiliaryHistoryService({ reader, persister, limits: { dirtyMaxCount: 8, dirtyMaxBytes: 400 } });
+    disposables.push(bytesOnly);
+    expect(() => bytesOnly.stage([textEntry('bytes-a', 'a'.repeat(300)), textEntry('bytes-b', 'b'.repeat(300))])).toThrow(
+      expect.objectContaining({ code: 'invalid_request', field: 'history.dirty_budget' }),
+    );
+    expect(bytesOnly.usage()).toMatchObject({ dirtyCount: 0, dirtyBytes: 0 });
+
+    const oversized = createAuxiliaryHistoryService({ reader, persister, limits: { dirtyMaxCount: 8, dirtyMaxBytes: 700 } });
+    disposables.push(oversized);
+    oversized.stage([textEntry('bytes-a', 'a'.repeat(300))]);
+    const before = oversized.usage();
+    expect(before).toMatchObject({ dirtyCount: 1, dirtyBytes: 402 });
+    // The first record of the batch is affordable; the second is not, so neither may be staged.
+    expect(() => oversized.stage([textEntry('bytes-c', 'c'.repeat(50)), textEntry('bytes-d', 'd'.repeat(300))])).toThrow(
+      expect.objectContaining({ code: 'invalid_request', field: 'history.dirty_budget' }),
+    );
+    expect(oversized.usage()).toMatchObject({ dirtyCount: before.dirtyCount, dirtyBytes: before.dirtyBytes });
+  });
+
+  it('rejects an update-plus-insert batch whose insert cannot be afforded without applying the update', async () => {
+    const committed: AuxiliaryEntry[] = [];
+    const service = createAuxiliaryHistoryService({
+      reader: async () => ({ entries: [], nextCursor: null }),
+      persister: async (entries) => { committed.push(...entries); },
+      limits: { dirtyMaxCount: 1, dirtyMaxBytes: 1024 * 1024 },
+    });
+    disposables.push(service);
+    service.stage([textEntry('update-target', 'old')]);
+    expect(service.usage().dirtyCount).toBe(1);
+
+    // The batch updates the already-dirty record and then inserts a second one: the insert is
+    // refused, and the update must not have been applied either.
+    expect(() => service.stage([textEntry('update-target', 'new'), textEntry('insert-blocked', 'n')])).toThrow(
+      expect.objectContaining({ code: 'invalid_request', field: 'history.dirty_budget' }),
+    );
+    expect(service.usage().dirtyCount).toBe(1);
+    await service.commit();
+    expect(committed).toHaveLength(1);
+    expect(committed[0]?.parts[0]).toMatchObject({ type: 'text', text: 'old' });
+    expect(service.usage()).toMatchObject({ dirtyCount: 0, dirtyBytes: 0 });
+  });
 });
 
 describe('failure classes — history page gap / corrupt record, old-generation write, oversized chunk', () => {

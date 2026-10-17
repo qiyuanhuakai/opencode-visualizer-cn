@@ -295,7 +295,7 @@ async function chunks(): Promise<AnyRecord> {
   let offset = 0;
   for (let step = 0; step < 200; step += 1) {
     const slice = await cache.chunk(page.pageId, reference.descriptorId, offset);
-    const payload = slice.bytes as unknown as Uint8Array;
+    const payload = slice.bytes;
     walk.push({ offset, bytes: payload.byteLength, nextOffset: slice.nextOffset });
     // The body is reassembled ONLY from what the service hands back, never from the fixture.
     reassembled += decoder.decode(payload, { stream: true });

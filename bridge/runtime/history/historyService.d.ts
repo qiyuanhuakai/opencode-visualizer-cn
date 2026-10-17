@@ -28,12 +28,13 @@ export type AuxiliaryHistoryUsage = Readonly<{
   retainedBytes: number;
   bufferedHistory: boolean;
 }>;
+export type AuxiliaryHistoryChunk = { readonly bytes: Uint8Array; readonly nextOffset: number | null };
 export type AuxiliaryHistoryService = Readonly<{
   page(cursor: string | null): Promise<AuxiliaryHistoryPage>;
   get(pageId: string): AuxiliaryHistoryPage | null;
   evict(pageId: string): { pageId: string; freedBytes: number; evicted: boolean };
   reread(cursor: string | null): Promise<AuxiliaryHistoryPage>;
-  chunk(pageId: string, descriptorId: string, offset: number): Promise<{ bytes: Uint8Array; nextOffset: number | null }>;
+  chunk(pageId: string, descriptorId: string, offset: number): Promise<AuxiliaryHistoryChunk>;
   legacyExport(): Promise<readonly AuxiliaryEntry[]>;
   mergeWithCanonical(canonical: readonly AuxiliaryEntry[], page: AuxiliaryHistoryPage | null): readonly AuxiliaryEntry[];
   stage(entries: readonly AuxiliaryEntry[], generation?: number): void;
