@@ -76,8 +76,13 @@ function waitForPosixProcessGroupExit(pid, timeoutMs) {
 export async function stopProcessTree(child, options = {}) {
   const graceMs = options.graceMs ?? 1_500;
   const forceMs = options.forceMs ?? 3_000;
+  let forceRequired = false;
   if (process.platform === 'win32' && child.pid) {
-    await stopWindowsProcessTree(child.pid, false);
+    try {
+      await stopWindowsProcessTree(child.pid, false);
+    } catch {
+      forceRequired = true;
+    }
   } else {
     signalProcessTree(child, 'SIGTERM');
   }
@@ -93,7 +98,7 @@ export async function stopProcessTree(child, options = {}) {
     }
     throw new Error(`Process tree did not stop (pid ${child.pid}).`);
   }
-  if (await waitForProcessExit(child, graceMs)) return;
+  if (!forceRequired && await waitForProcessExit(child, graceMs)) return;
   if (child.pid) await forceStopProcessTree(child.pid);
   else signalProcessTree(child, 'SIGKILL');
   if (!(await waitForProcessExit(child, forceMs))) {

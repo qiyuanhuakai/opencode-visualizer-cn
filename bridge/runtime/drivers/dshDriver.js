@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createDshTransport } from './dshTransport.js';
 import { createDshOperations } from './dshOperations.js';
-import { readDshHistoryPage } from './dshHistory.js';
+import { readDshHistoryPage, createDshHistory } from './dshHistory.js';
 import { createFollowState } from '../../../shared/runtime/native/dsh/follow.js';
 import { record, text, integer, summaries, selectModel, approvalOutcome, fail, DshError } from '../../../shared/runtime/native/dsh/protocol.js';
 import { parseSessionRef, parseEnvironmentId, parseHarnessInstanceId } from '../../../shared/runtime/identity.js';
@@ -196,6 +196,77 @@ export function createDshDriver(options) {
     await entry.waiting;
     return entry;
   }
+  /** Trusted raw HTTP `session/page` admission for the selected-history producer. No `maxMessages` is sent,
+   * so the substrate's own record/page bounds govern retention instead of a native-side truncation.
+   */
+  async function pullDshPage(session, { before, through, signal }) {
+    integer(before, 0);
+    integer(through, -1);
+    const pulled = await transport.pullRaw('session/page', { request: { address: { kind: 'session', sessionId: session.nativeSessionId }, throughSeq: through, beforeSeq: before } }, { signal });
+    return pulled;
+  }
+  function singleFrameStream(bytes) {
+    return new ReadableStream({ start(controller) { controller.enqueue(bytes); controller.close(); } });
+  }
+  /** Cold-follow snapshot admission: a dedicated raw `session/follow` stream whose first frame bytes are
+   * handed to the substrate unparsed. It is separate from the driver's operation/control monitor, so
+   * cancelling it never disturbs that monitor.
+   */
+  async function pullDshSnapshot(session, { signal }) {
+    const connection = await ensureMux();
+    const connectionGeneration = liveGeneration;
+    const lease = transport.capture();
+    return new Promise((resolve, reject) => {
+      let settled = false, handle, timer;
+      const abort = () => finish(new DshError('cancelled', 'dsh.request'));
+      const finish = (error) => {
+        if (settled) return; settled = true;
+        clearTimeout(timer); signal?.removeEventListener('abort', abort);
+        if (handle) handle.cancel();
+        if (error) reject(error);
+      };
+      signal?.addEventListener('abort', abort, { once: true });
+      try {
+        handle = connection.openRaw('session/follow', { request: { address: { kind: 'session', sessionId: session.nativeSessionId }, assistantStream: true } }, {
+          onFrame(bytes) {
+            if (settled) return;
+            if (connectionGeneration !== liveGeneration) { finish(new DshError('reconcile_required', 'dsh.follow_generation')); return; }
+            settled = true; clearTimeout(timer); signal?.removeEventListener('abort', abort); handle.cancel();
+            try { transport.assertCurrent(lease); } catch (error) { reject(error); return; }
+            resolve({ body: singleFrameStream(bytes), release() {} });
+          },
+          onEnd(error) { finish(error ?? new DshError('source_unavailable', 'dsh.follow_ended')); },
+        });
+      } catch (error) { finish(error); return; }
+      timer = setTimeout(() => finish(new DshError('timeout', 'dsh.follow_snapshot')), 15000);
+    });
+  }
+  /** Invalidation observer for one selected session, fed from the driver's own published follow events.
+   * It holds no endpoint and never cancels the operation/control monitor.
+   */
+  function historyEvents(session) {
+    const queue = [];
+    let wake, ended = false;
+    const observer = {
+      push(value) {
+        if (ended || value.type !== 'session-event' || !value.session || value.session.nativeSessionId !== session.nativeSessionId) return;
+        queue.push(value.revision ?? 0);
+        wake?.(); wake = undefined;
+      },
+      stop() { ended = true; wake?.(); wake = undefined; },
+    };
+    observers.add(observer);
+    return {
+      async next() {
+        for (;;) {
+          if (queue.length) return { value: queue.shift(), done: false };
+          if (ended) return { value: undefined, done: true };
+          await new Promise((resolve) => { wake = resolve; });
+        }
+      },
+      async return() { observer.stop(); observers.delete(observer); queue.length = 0; return { value: undefined, done: true }; },
+    };
+  }
   async function listSessionPage(input) {
     const { params } = context(input); const limit = integer(params.limit ?? 100, 1, 200);
     for (const [id, snapshot] of snapshots) if (snapshot.expiresAt <= now()) snapshots.delete(id);
@@ -283,6 +354,22 @@ export function createDshDriver(options) {
     listSessionPage,
     async getSession(input) { const { session } = context(input, true); const entry = await select(session, true); return { session, snapshot: entry.snapshot, ...entry.state.inspect(), connectionGeneration: liveGeneration }; },
     async readHistoryPage(input) { const { session, params } = context(input, true); const entry = await select(session); return readDshHistoryPage({ transport, session, state: entry.state, beforeSeq: params.beforeSeq, throughSeq: params.throughSeq, limit: params.limit }); },
+    async openHistory(input) {
+      const { session } = context(input, true);
+      const lease = transport.capture();
+      const entry = await select(session);
+      return createDshHistory({
+        session,
+        authority: Object.freeze({ generation: lease.generation }),
+        current: () => { try { const now = transport.capture(); return now.generation === lease.generation && now.origin === lease.origin; } catch { return false; } },
+        assertCurrent: async () => { transport.assertCurrent(lease); },
+        fence: () => entry.state.historyFence(),
+        pullPage: ({ before, through, signal }) => pullDshPage(session, { before, through, signal }),
+        pullSnapshot: ({ signal }) => pullDshSnapshot(session, { signal }),
+        subscribe: () => historyEvents(session),
+        randomUUID,
+      });
+    },
     async createSession(input) {
       const { params } = context(input), idempotencyKey = text(params.idempotencyKey);
       const request = record(params.request);
