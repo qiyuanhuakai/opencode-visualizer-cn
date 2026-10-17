@@ -1096,3 +1096,189 @@ describe('session mutation key', () => {
     expect(invalid.code).toBe('invalid_request');
   });
 });
+
+/* ------------------------------------------------------------------ budget accounting under interleavings */
+
+describe('budget accounting and retry transitions', () => {
+  it('a duplicate cancel of an already-cancelled attempt releases no second session slot', async () => {
+    const world = await makeWorld();
+    // Three tasks on ONE native session: the session budget admits exactly one at a time.
+    const a = world.makeTask({ title: 'a', ownerIndex: 0 });
+    const b = world.makeTask({ title: 'b', ownerIndex: 0 });
+    const c = world.makeTask({ title: 'c', ownerIndex: 0 });
+    const aDispatched = await world.coordinator.dispatch({ taskId: a.taskId, at: T0 + 1 });
+    if (aDispatched.attempt === null) throw new Error('dispatch did not mint an attempt');
+    await world.coordinator.send({ attemptId: aDispatched.attempt.attemptId, at: T0 + 2 });
+    world.coordinator.cancelAttempt({ attemptId: aDispatched.attempt.attemptId, at: T0 + 3 });
+    expect(world.coordinator.state().sessionMutations).toBe(0);
+    // B takes the freed session slot.
+    const bDispatched = await world.coordinator.dispatch({ taskId: b.taskId, at: T0 + 4 });
+    if (bDispatched.attempt === null) throw new Error('dispatch did not mint an attempt');
+    await world.coordinator.send({ attemptId: bDispatched.attempt.attemptId, at: T0 + 5 });
+    expect(world.coordinator.state().sessionMutations).toBe(1);
+    // The duplicate cancel is idempotent at the attempt layer, so it returns the retained view…
+    const duplicate = world.coordinator.cancelAttempt({ attemptId: aDispatched.attempt.attemptId, at: T0 + 6 });
+    expect(duplicate.state).toBe('reconcile');
+    // …and it must NOT release the reservation B still holds.
+    expect(world.coordinator.state().sessionMutations).toBe(1);
+    const cDispatched = await world.coordinator.dispatch({ taskId: c.taskId, at: T0 + 7 });
+    expect(cDispatched.task.state).toBe('paused');
+    expect(cDispatched.task.paused?.reasons).toEqual(['collaboration_session_mutation']);
+    expect(cDispatched.attempt).toBeNull();
+    expect(world.coordinator.state().sessionMutations).toBe(1);
+  });
+
+  it('a duplicate in-flight send is refused without failing the task or freeing its budget', async () => {
+    let releaseGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { releaseGate = resolve; });
+    const world = await makeWorld({
+      deliver: async () => {
+        await gate;
+        return { ackId: 'ack-late' };
+      },
+    });
+    const a = world.makeTask({ title: 'a', ownerIndex: 0 });
+    const b = world.makeTask({ title: 'b', ownerIndex: 0 });
+    const aDispatched = await world.coordinator.dispatch({ taskId: a.taskId, at: T0 + 1 });
+    if (aDispatched.attempt === null) throw new Error('dispatch did not mint an attempt');
+    const attemptId = aDispatched.attempt.attemptId;
+    const inFlight = world.coordinator.send({ attemptId, at: T0 + 2 });
+    // The duplicate arrives while the first send is still awaiting its ack.
+    const duplicate = await rejectionOfAsync(() => world.coordinator.send({ attemptId, at: T0 + 3 }));
+    expect(duplicate.code).toBe('conflict');
+    expect(duplicate.field).toBe('attempt_state');
+    // The original send is untouched: the task keeps its lifecycle and its budget.
+    expect(world.coordinator.task(a.taskId).state).toBe('dispatched');
+    expect(world.coordinator.state().running).toBe(1);
+    expect(world.coordinator.state().sessionMutations).toBe(1);
+    expect(world.coordinator.state().failures).toBe(0);
+    // B cannot spend the session slot the in-flight send still holds.
+    const bPaused = await world.coordinator.dispatch({ taskId: b.taskId, at: T0 + 4 });
+    expect(bPaused.task.state).toBe('paused');
+    expect(bPaused.task.paused?.reasons).toEqual(['collaboration_session_mutation']);
+    // The original send lands normally afterwards.
+    releaseGate();
+    const settled = await inFlight;
+    expect(settled.attempt.state).toBe('sent');
+    expect(settled.task.state).toBe('dispatched');
+    expect(world.coordinator.state().running).toBe(1);
+  });
+
+  it('creating an unrelated task keeps a budget-paused task paused and pumpable', async () => {
+    const world = await makeWorld();
+    const tasks = [0, 1, 2, 3, 4].map((index) => world.makeTask({ title: `slot ${index}`, ownerIndex: index }));
+    const running: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const task = tasks[index];
+      if (task === undefined) throw new Error('missing task');
+      const dispatched = await world.coordinator.dispatch({ taskId: task.taskId, at: T0 + 1 + index });
+      if (dispatched.attempt === null) throw new Error('dispatch did not mint an attempt');
+      running.push(dispatched.attempt.attemptId);
+    }
+    const fifth = tasks[4];
+    if (fifth === undefined) throw new Error('missing fifth task');
+    const paused = await world.coordinator.dispatch({ taskId: fifth.taskId, at: T0 + 20 });
+    expect(paused.task.state).toBe('paused');
+    expect(paused.task.paused?.reasons).toEqual(['collaboration_concurrency']);
+    // An unrelated task — and an unrelated dependency edge — re-derive the graph shape.
+    const unrelated = world.makeTask({ title: 'unrelated', ownerIndex: 0 });
+    world.coordinator.addDependency({ taskId: unrelated.taskId, dependsOn: tasks[0]?.taskId ?? '', at: T0 + 21 });
+    const stillPaused = world.coordinator.task(fifth.taskId);
+    expect(stillPaused.state).toBe('paused');
+    expect(stillPaused.paused?.reasons).toEqual(['collaboration_concurrency']);
+    // End one running attempt: the explicit scheduler must now admit the ORIGINAL queued task.
+    await world.coordinator.send({ attemptId: running[0] ?? '', at: T0 + 22 });
+    world.coordinator.observeNativeEnd({ attemptId: running[0] ?? '', reason: 'completed', at: T0 + 23 });
+    expect(world.coordinator.state().running).toBe(3);
+    const admitted = await world.coordinator.pump({ at: T0 + 24 });
+    expect(admitted.map((entry) => entry.taskId)).toEqual([fifth.taskId]);
+    expect(world.coordinator.task(fifth.taskId).state).toBe('dispatched');
+    expect(world.coordinator.state().running).toBe(4);
+  });
+
+  it('cancelTask and failTask release the reservations their running attempts hold', async () => {
+    const world = await makeWorld();
+    const first = world.makeTask({ title: 'first', ownerIndex: 0 });
+    const second = world.makeTask({ title: 'second', ownerIndex: 0 });
+    const third = world.makeTask({ title: 'third', ownerIndex: 1 });
+    const firstDispatched = await world.coordinator.dispatch({ taskId: first.taskId, at: T0 + 1 });
+    const thirdDispatched = await world.coordinator.dispatch({ taskId: third.taskId, at: T0 + 2 });
+    if (firstDispatched.attempt === null || thirdDispatched.attempt === null) throw new Error('dispatch did not mint an attempt');
+    await world.coordinator.send({ attemptId: firstDispatched.attempt.attemptId, at: T0 + 3 });
+    await world.coordinator.send({ attemptId: thirdDispatched.attempt.attemptId, at: T0 + 4 });
+    expect(world.coordinator.state().running).toBe(2);
+    expect(world.coordinator.state().sessionMutations).toBe(2);
+    world.coordinator.cancelTask({ taskId: first.taskId, at: T0 + 5 });
+    expect(world.coordinator.state().running).toBe(1);
+    expect(world.coordinator.state().sessionMutations).toBe(1);
+    world.coordinator.failTask({ taskId: third.taskId, code: 'source_unavailable', field: 'task_failed', at: T0 + 6 });
+    expect(world.coordinator.state().running).toBe(0);
+    expect(world.coordinator.state().sessionMutations).toBe(0);
+    // The freed slots admit the queued work again — no permanent leak.
+    const secondDispatched = await world.coordinator.dispatch({ taskId: second.taskId, at: T0 + 7 });
+    expect(secondDispatched.task.state).toBe('dispatched');
+    expect(world.coordinator.state().sessionMutations).toBe(1);
+  });
+
+  it('a task under review cannot be re-dispatched onto a stale approval, and acceptance needs the live review lifecycle', async () => {
+    const world = await makeWorld();
+    const task = world.makeTask();
+    const first = await world.coordinator.dispatch({ taskId: task.taskId, at: T0 + 1 });
+    if (first.attempt === null) throw new Error('dispatch did not mint an attempt');
+    await world.coordinator.send({ attemptId: first.attempt.attemptId, at: T0 + 2 });
+    world.coordinator.observeNativeEnd({ attemptId: first.attempt.attemptId, reason: 'completed', at: T0 + 3 });
+    world.coordinator.registerDeliverable({ taskId: task.taskId, deliverable: DELIVERABLE, at: T0 + 4 });
+    world.coordinator.submitForReview({ taskId: task.taskId, reviewer: REVIEWER, at: T0 + 5 });
+    world.coordinator.review({ taskId: task.taskId, decision: 'approved', reviewer: REVIEWER, at: T0 + 6 });
+    // An implicit review → dispatch retry is refused: no second attempt may inherit the
+    // first round's approval and deliverable.
+    const retry = await rejectionOfAsync(() => world.coordinator.dispatch({ taskId: task.taskId, at: T0 + 7 }));
+    expect(retry.code).toBe('conflict');
+    expect(retry.field).toBe('task_state');
+    expect(world.coordinator.attempts(task.taskId)).toHaveLength(1);
+    expect(world.coordinator.state().dispatches).toBe(1);
+    expect(world.coordinator.task(task.taskId).review.state).toBe('approved');
+    // The live review lifecycle is what accepts: the task is accepted exactly once.
+    const accepted = world.coordinator.accept({
+      taskId: task.taskId,
+      deliverableId: DELIVERABLE.deliverableId,
+      criteria: [{ id: 'build', met: true }, { id: 'tests', met: true }],
+      acceptedBy: ACCEPTER,
+      at: T0 + 8,
+    });
+    expect(accepted.state).toBe('accepted');
+    expect(accepted.acceptance.state).toBe('accepted');
+    // The retained acceptance is final: a second acceptance by a different accepter is refused.
+    const secondAccept = rejectionOf(() => world.coordinator.accept({
+      taskId: task.taskId,
+      deliverableId: DELIVERABLE.deliverableId,
+      criteria: [{ id: 'build', met: true }, { id: 'tests', met: true }],
+      acceptedBy: '16161616-1616-4616-8616-161616161616',
+      at: T0 + 9,
+    }));
+    expect(secondAccept.code).toBe('conflict');
+    expect(secondAccept.field).toBe('acceptance_state');
+    expect(world.coordinator.task(task.taskId).acceptance.acceptedBy).toBe(ACCEPTER);
+  });
+
+  it('an acceptance is refused outside the review lifecycle', async () => {
+    const world = await makeWorld();
+    const task = world.makeTask();
+    const dispatched = await world.coordinator.dispatch({ taskId: task.taskId, at: T0 + 1 });
+    if (dispatched.attempt === null) throw new Error('dispatch did not mint an attempt');
+    await world.coordinator.send({ attemptId: dispatched.attempt.attemptId, at: T0 + 2 });
+    // A mid-flight task with a stale-shaped approval can never be accepted.
+    world.coordinator.registerDeliverable({ taskId: task.taskId, deliverable: DELIVERABLE, at: T0 + 3 });
+    const inFlight = rejectionOf(() => world.coordinator.accept({
+      taskId: task.taskId,
+      deliverableId: DELIVERABLE.deliverableId,
+      criteria: [{ id: 'build', met: true }, { id: 'tests', met: true }],
+      acceptedBy: ACCEPTER,
+      at: T0 + 4,
+    }));
+    expect(inFlight.code).toBe('conflict');
+    expect(inFlight.field).toBe('task_state');
+    expect(world.coordinator.task(task.taskId).acceptance.state).toBe('none');
+    expect(world.coordinator.state().running).toBe(1);
+  });
+});
