@@ -52,13 +52,14 @@ import {
   COMPOSER_VALUE, HISTORY_VALUE, IDB_ROW_VALUE,
   alive, assertPortReleased, createFixture, createLegacyFixture, until,
 } from './task-24-fixture.mjs';
+import { cleanupFailure } from './qa-cleanup-gate.mjs';
+import { loadBrowserKernel } from './qa-browser-kernel.mjs';
+import { readWorktreeState, worktreePreserved } from './qa-worktree.mjs';
 
 import { createWorkspaceService } from '../../../bridge/runtime/workspaceService.js';
 import { createTargetGitCommand } from '../../../bridge/runtime/targetGitCommand.js';
 import { createGitService } from '../../../bridge/runtime/gitService.js';
 import { legacyDigest } from '../../../shared/runtime/migration/legacyExport.js';
-
-const browserSkill = '/home/qiyuaner/.codex/plugins/cache/sisyphuslabs/omo/5.1.27/skills/browser/scripts/omowright.mjs';
 
 // Stable runtime identity UUIDs (the contract shape `deriveUuid` produces), never credentials.
 const TARGET = '11111111-1111-4111-8111-111111111111';
@@ -182,8 +183,11 @@ export async function run(context) {
     'app/dev/runtime-v090/task24.ts',
   ];
   const sourceBefore = sourceSnapshot(context.root, ownedFiles);
+  const worktreeBefore = readWorktreeState(context.root);
   const heapStart = process.memoryUsage().heapUsed;
   let browser; let page; let vite;
+  let bodyError;
+  let cleanupLeak = null;
   const protocol = { workspace: {}, git: {}, pty: {}, launchLedger: [], migration: {}, bridgeVersion: {}, appSource: {}, digest: {} };
   const serviceLedger = { fsList: 0, fsRead: 0, fsWrite: 0, gitOps: 0, ptyOps: 0, rawAdapterCalls: 0 };
 
@@ -498,7 +502,7 @@ export async function run(context) {
     const pageUrl = `http://127.0.0.1:${port}/qa24/`;
     record('pageUrl', pageUrl);
 
-    const { omowright } = await (await import(browserSkill)).loadOmowright();
+    const omowright = await loadBrowserKernel();
     const profileRoot = path.join(fixture.root, 'chromium-profile');
     fixture.register({ kind: 'Chromium-planned', executable: chromium.executablePath(), profile: profileRoot, teardown: 'owned browser.close; process exit; private profile root removal' });
     browser = await omowright.connectPipe({ browserPath: chromium.executablePath(), browserArgs: ['--headless', '--no-sandbox', '--disable-gpu', '--no-first-run', `--user-data-dir=${profileRoot}`], storageRoot: runDir, commandTimeoutMs: 180000 });
@@ -1353,28 +1357,34 @@ export async function run(context) {
 
     const sourceAfter = sourceSnapshot(context.root, ownedFiles);
     const differingFiles = ownedFiles.filter((file) => sourceAfter[file] !== sourceBefore[file]).length;
-    check('the registered case leaves its own authored files unchanged and pins a populated source inventory', {
-      status: execFileSync('git', ['status', '--porcelain'], { cwd: context.root, encoding: 'utf8' }).length > 0,
+    check('the registered case leaves its own authored files unchanged, leaves the worktree exactly as it found it and pins a populated source inventory', {
+      worktreePreserved: worktreePreserved(context.root, worktreeBefore),
       authoredFileCount: ownedFiles.length,
       differingFiles,
       pinnedSources: sourceFiles.length,
     }, {
-      status: true, authoredFileCount: 4, differingFiles: 0, pinnedSources: sourceFiles.length,
+      worktreePreserved: true, authoredFileCount: 4, differingFiles: 0, pinnedSources: sourceFiles.length,
     });
   } catch (error) {
+    bodyError = error;
     proof.failure = { message: error.message, stack: error.stack };
     if (page) {
       proof.failureDom = await page.evaluate(() => ({ url: location.href, body: document.body.innerText.slice(0, 2000), errors: window.__task24Errors ?? [], task24: Boolean(window.task24) })).catch((value) => ({ unavailable: String(value) }));
       await page.screenshot({ path: path.join(runDir, 'failure.png') }).catch(() => undefined);
     }
     persist();
-    throw error;
   } finally {
     const closed = await fixture.close().catch((error) => ({ error: String(error) }));
     proof.cleanup = closed;
     persist();
     artifacts.push(artifact(path.join(runDir, 'proof.json'), 'registered-case-proof'), artifact(path.join(runDir, 'resources.json'), 'resource-ledger'));
+    // The receipt above is written first; a cleanup failure then fails the case
+    // (carrying any in-flight failure as its cause), so a leaked resource can
+    // never sit under `status: passed`.
+    cleanupLeak = cleanupFailure(closed, bodyError);
   }
+  if (cleanupLeak) throw cleanupLeak;
+  if (bodyError) throw bodyError;
 
   return {
     scenarios,

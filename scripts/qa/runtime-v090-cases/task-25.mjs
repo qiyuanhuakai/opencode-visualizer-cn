@@ -34,7 +34,6 @@
 // target binding, a simultaneous connect, a stale-generation retired dial, an unsupported transport,
 // a concurrent-write burst, an embedded-secret locator and the unwired-route / stale-dial findings).
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
@@ -43,6 +42,9 @@ import { createServer as createViteServer } from 'vite';
 import { chromium } from 'playwright';
 import { artifact, sourceSnapshot, writeJson } from '../runtime-v090-evidence.mjs';
 import { alive, assertPortReleased, closeServer, createFixture, listen, until } from './task-25-fixture.mjs';
+import { cleanupFailure } from './qa-cleanup-gate.mjs';
+import { loadBrowserKernel } from './qa-browser-kernel.mjs';
+import { readWorktreeState, worktreePreserved } from './qa-worktree.mjs';
 
 import { createVisBridgeServer } from '../../../bridge/visBridgeServer.js';
 import { createProfileStore } from '../../../bridge/runtime/transports/profileStore.js';
@@ -58,8 +60,6 @@ import {
   parseTransport,
   resolveProfileEnvironment,
 } from '../../../shared/runtime/connectionProfile.js';
-
-const browserSkill = '/home/qiyuaner/.codex/plugins/cache/sisyphuslabs/omo/5.1.27/skills/browser/scripts/omowright.mjs';
 
 const ENVIRONMENT = '11111111-1111-4111-8111-111111111111';
 const OTHER_ENVIRONMENT = '22222222-2222-4222-8222-222222222222';
@@ -179,6 +179,7 @@ export async function run(context) {
   const fixture = await createFixture({ ...context, runDir, evidenceDir });
   const ownedFiles = [...sourceFiles];
   const sourceBefore = sourceSnapshot(context.root, ownedFiles);
+  const worktreeBefore = readWorktreeState(context.root);
   const heapStart = process.memoryUsage().heapUsed;
 
   // Real native-history / owned-job registries. The manager only ever reads `Object.keys(resources)`;
@@ -233,6 +234,8 @@ export async function run(context) {
   let browser;
   let page;
   let vite;
+  let bodyError;
+  let cleanupLeak = null;
   try {
     // ══════════════════════════════════════════════════════════════════════════════════════════
     // Real profile HTTP API over the real bridge listener
@@ -339,7 +342,7 @@ window.__task25Config=${JSON.stringify({ baseUrl: bridgeBase, token: TOKEN, secr
     const pageUrl = `http://127.0.0.1:${vitePort}/qa25/`;
     record('pageUrl', pageUrl);
 
-    const { omowright } = await (await import(browserSkill)).loadOmowright();
+    const omowright = await loadBrowserKernel();
     const chromiumProfile = path.join(fixture.root, 'chromium-profile');
     fixture.register({ kind: 'Chromium-planned', executable: chromium.executablePath(), profile: chromiumProfile, teardown: 'owned browser.close; process exit; private root removal' });
     browser = await omowright.connectPipe({
@@ -846,27 +849,33 @@ window.__task25Config=${JSON.stringify({ baseUrl: bridgeBase, token: TOKEN, secr
     });
 
     const sourceAfter = sourceSnapshot(context.root, ownedFiles);
-    check('dirty worktree production sources are unchanged by the registered case', {
-      status: execFileSync('git', ['status', '--porcelain'], { cwd: context.root, encoding: 'utf8' }).length > 0,
+    check('the registered case leaves the worktree exactly as it found it and the production sources unchanged', {
+      worktreePreserved: worktreePreserved(context.root, worktreeBefore),
       unchanged: JSON.stringify(sourceAfter) === JSON.stringify(sourceBefore),
     }, {
-      status: true,
+      worktreePreserved: true,
       unchanged: true,
     });
   } catch (error) {
+    bodyError = error;
     proof.failure = { message: error.message, stack: error.stack };
     if (page) {
       proof.failureDom = await page.evaluate(() => ({ url: location.href, body: document.body.innerText.slice(0, 2000), errors: window.__task25PageErrors ?? [], task25: Boolean(window.task25) })).catch((value) => ({ unavailable: String(value) }));
       await page.screenshot({ path: path.join(runDir, 'failure.png') }).catch(() => undefined);
     }
     persist();
-    throw error;
   } finally {
     const closed = await fixture.close().catch((error) => ({ error: String(error) }));
     proof.cleanup = closed;
     persist();
     artifacts.push(artifact(path.join(runDir, 'proof.json'), 'registered-case-proof'), artifact(path.join(evidenceDir, 'ownedresources.json'), 'resource-ledger'), artifact(path.join(runDir, 'resources.json'), 'run-resource-ledger'));
+    // The receipt above is written first; a cleanup failure then fails the case
+    // (carrying any in-flight failure as its cause), so a leaked resource can
+    // never sit under `status: passed`.
+    cleanupLeak = cleanupFailure(closed, bodyError);
   }
+  if (cleanupLeak) throw cleanupLeak;
+  if (bodyError) throw bodyError;
 
   const classMatchers = {
     cross_profile_binding: /foreign|cross-profile|target binding|re-bound/i,

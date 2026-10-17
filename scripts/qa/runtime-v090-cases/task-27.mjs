@@ -33,7 +33,6 @@
 // file is edited by this module.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { createServer as createHttpServer } from 'node:http';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -41,6 +40,9 @@ import { chromium } from 'playwright';
 import { createServer as createViteServer } from 'vite';
 import { artifact, sourceSnapshot, writeJson } from '../runtime-v090-evidence.mjs';
 import { alive, assertPortReleased, closeServer, createFixture, listen, until } from './task-27-fixture.mjs';
+import { cleanupFailure } from './qa-cleanup-gate.mjs';
+import { loadBrowserKernel } from './qa-browser-kernel.mjs';
+import { readWorktreeState, worktreePreserved } from './qa-worktree.mjs';
 
 import {
   BRIDGE_PROTOCOL_GENERATION,
@@ -68,8 +70,6 @@ import { createConnectionManager } from '../../../bridge/runtime/transports/conn
 import { createProfileStore } from '../../../bridge/runtime/transports/profileStore.js';
 import { assertNoShellConcatenation, buildSshArgv } from '../../../bridge/runtime/transports/sshTransport.js';
 import { verifyAsset } from '../../../electron/updateTransport.js';
-
-const browserSkill = '/home/qiyuaner/.codex/plugins/cache/sisyphuslabs/omo/5.1.27/skills/browser/scripts/omowright.mjs';
 
 const LOCAL_ENV = '11111111-1111-4111-8111-111111111111';
 const HOST_ENV = '22222222-2222-4222-8222-222222222222';
@@ -244,6 +244,7 @@ export async function run(context) {
 
   const fixture = await createFixture({ ...context, runDir, evidenceDir });
   const sourceBefore = sourceSnapshot(context.root, sourceFiles);
+  const worktreeBefore = readWorktreeState(context.root);
   const heapStart = process.memoryUsage().heapUsed;
 
   // Real durable install area whose path contains a space; the install transaction writes here.
@@ -263,6 +264,8 @@ export async function run(context) {
   const armRelease = releaseFor(NEW_PACKAGE_BYTES, 'arm64');
 
   let browser; let page; let vite; let assetServer; let healthServer;
+  let bodyError;
+  let cleanupLeak = null;
   try {
     // ── real loopback artifact origin (the network edge is case-owned; the policy is real) ──
     fixture.register({ kind: 'artifact-origin-planned', host: '127.0.0.1', teardown: 'server.close then exclusive port rebind' });
@@ -461,7 +464,7 @@ export async function run(context) {
     const pageUrl = `http://127.0.0.1:${port}/qa27/`;
     record('pageUrl', pageUrl);
 
-    const { omowright } = await (await import(browserSkill)).loadOmowright();
+    const omowright = await loadBrowserKernel();
     const profileRoot = path.join(fixture.root, 'chromium-profile');
     fixture.register({ kind: 'Chromium-planned', executable: chromium.executablePath(), profile: profileRoot, teardown: 'owned browser.close; process exit; private root removal' });
     browser = await omowright.connectPipe({ browserPath: chromium.executablePath(), browserArgs: ['--headless', '--no-sandbox', '--disable-gpu', '--no-first-run', `--user-data-dir=${profileRoot}`], storageRoot: runDir, commandTimeoutMs: 180000 });
@@ -898,21 +901,27 @@ export async function run(context) {
     }
 
     const sourceAfter = sourceSnapshot(context.root, sourceFiles);
-    check('dirty worktree production sources are unchanged by the registered case', { status: execFileSync('git', ['status', '--porcelain'], { cwd: context.root, encoding: 'utf8' }).length > 0, unchanged: JSON.stringify(sourceAfter) === JSON.stringify(sourceBefore) }, { status: true, unchanged: true });
+    check('the registered case leaves the worktree exactly as it found it and the production sources unchanged', { worktreePreserved: worktreePreserved(context.root, worktreeBefore), unchanged: JSON.stringify(sourceAfter) === JSON.stringify(sourceBefore) }, { worktreePreserved: true, unchanged: true });
   } catch (error) {
+    bodyError = error;
     proof.failure = { message: error.message, stack: error.stack };
     if (page) {
       proof.failureDom = await page.evaluate(() => ({ url: location.href, body: document.body.innerText.slice(0, 2000), errors: window.__task27Errors ?? [], task27: Boolean(window.task27) })).catch((value) => ({ unavailable: String(value) }));
       await page.screenshot({ path: path.join(runDir, 'failure.png') }).catch(() => undefined);
     }
     persist();
-    throw error;
   } finally {
     const closed = await fixture.close().catch((error) => ({ error: String(error) }));
     proof.cleanup = closed;
     persist();
     artifacts.push(artifact(path.join(runDir, 'proof.json'), 'registered-case-proof'), artifact(path.join(runDir, 'resources.json'), 'resource-ledger'));
+    // The receipt above is written first; a cleanup failure then fails the case
+    // (carrying any in-flight failure as its cause), so a leaked resource can
+    // never sit under `status: passed`.
+    cleanupLeak = cleanupFailure(closed, bodyError);
   }
+  if (cleanupLeak) throw cleanupLeak;
+  if (bodyError) throw bodyError;
 
   const classMatchers = {
     stale_state: /upgrade path|not connectable|stale|healthz|incompatible/,
