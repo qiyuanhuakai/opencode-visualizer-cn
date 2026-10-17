@@ -401,9 +401,6 @@ export async function runControlStoreCommand(options, dependencies = {}) {
     ownerInstanceId: dependencies.ownerInstanceId ?? `control-store-${process.pid}`,
   });
   const status = await store.open('owner');
-  console.log(
-    `vis_bridge control-store owns environment ${status.environmentId} at ${status.root} (epoch ${status.epoch}).`,
-  );
 
   const liveness = createLivenessToken();
   let released = false;
@@ -439,6 +436,13 @@ export async function runControlStoreCommand(options, dependencies = {}) {
   process.once('SIGTERM', onSignal);
   process.once('uncaughtException', onFatalError);
   process.once('unhandledRejection', onUnhandledRejection);
+
+  // Announce ownership only after the signal handlers are armed: a caller that treats this line
+  // as the ready signal may deliver SIGINT immediately, and before this point Node's default
+  // handler would terminate the process with the signal instead of releasing the fence.
+  console.log(
+    `vis_bridge control-store owns environment ${status.environmentId} at ${status.root} (epoch ${status.epoch}).`,
+  );
 
   return {
     store,
