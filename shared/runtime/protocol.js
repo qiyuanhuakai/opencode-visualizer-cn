@@ -1,4 +1,4 @@
-import { parseEnvironmentId, parseInstanceId } from './identity.js';
+import { IdentityError, decodeRepoKey, decodeSessionKey, decodeWorkspaceKey, parseEnvironmentId, parseInstanceId } from './identity.js';
 import { ERROR_CODES, METHODS, ProtocolError, requireValue, objectFields, textValue, integerValue, jsonValue, parseCapabilities } from './capabilities.js';
 export { ProtocolError, ERROR_CODES } from './capabilities.js';
 export { createProtocolState } from './protocolState.js';
@@ -19,6 +19,14 @@ export function parseBinding(input) {
   textValue(input.epoch, 'epoch');
   integerValue(input.generation, 'generation');
   return Object.freeze({ target: input.target, epoch: input.epoch, generation: input.generation });
+}
+export function entityKeyValue(value, field) {
+  requireValue(typeof value === 'string' && value.length > 0 && !value.includes('\0'), field);
+  for (const decode of [decodeWorkspaceKey, decodeRepoKey, decodeSessionKey]) {
+    try { decode(value); return value; }
+    catch (error) { if (!(error instanceof IdentityError)) throw error; }
+  }
+  throw new ProtocolError('invalid_request', field);
 }
 export function validateFrame(input) {
   const value = jsonValue(input);
@@ -66,7 +74,7 @@ export function validateFrame(input) {
       integerValue(value.seq, 'seq');
       requireValue(value.seq > 0, 'seq');
       integerValue(value.entityRevision, 'entityRevision');
-      textValue(value.scope, 'scope');
+      entityKeyValue(value.scope, 'scope');
       textValue(value.type, 'type');
       break;
     case 'snapshot':

@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { decodeFrame, encodeFrame, encodeBinary, decodeBinary, ProtocolError, createProtocolState } from '../shared/runtime/protocol.js';
+import { decodeFrame, encodeFrame, encodeBinary, decodeBinary, ProtocolError, createProtocolState, entityKeyValue } from '../shared/runtime/protocol.js';
 import { parseCapabilities, authorizeExtension } from '../shared/runtime/capabilities.js';
-import { parseEnvironmentId, parseHarnessInstanceId } from '../shared/runtime/identity.js';
+import { encodeSessionKey, encodeWorkspaceKey, parseEnvironmentId, parseHarnessInstanceId } from '../shared/runtime/identity.js';
 const target = parseEnvironmentId('11111111-1111-4111-8111-111111111111');
 const other = parseHarnessInstanceId('22222222-2222-4222-8222-222222222222');
 const binding = { target, epoch: 'epoch-1', generation: 1 };
 const request = { kind: 'request', version: 1, ...binding, id: 'r1', method: 'session.send', params: { text: 'hello' }, idempotencyKey: 'intent-1' };
 const accepted = { kind: 'result', version: 1, ...binding, id: 'r1', ok: true, phase: 'durable-accepted', result: { operationId: 'op-1' } };
 const executed = { ...accepted, phase: 'native-executed', result: { text: 'done' } };
-const event = { kind: 'event', version: 1, ...binding, seq: 1, entityRevision: 8, scope: 'session', type: 'updated', payload: { text: 'hello 世界' } };
+const sessionKey = encodeSessionKey({ environmentId: target, harnessInstanceId: other, nativeSessionId: 'native-1' });
+const event = { kind: 'event', version: 1, ...binding, seq: 1, entityRevision: 8, scope: sessionKey, type: 'updated', payload: { text: 'hello 世界' } };
 const hello = { kind: 'hello', version: 1, ...binding, instanceId: other, capabilities: { methods: ['session.send'], extensions: [] } };
 function rejects(value: unknown, code = 'invalid_request') {
   expect(() => encodeFrame(value)).toThrow(expect.objectContaining({ code }));
@@ -65,9 +66,27 @@ describe('runtime protocol', () => {
     rejects({ ...request, params: { invalid: undefined } });
     rejects({ ...accepted, ok: false });
     rejects({ ...request, unexpected: true });
+    rejects({ ...event, scope: 'session' });
+    rejects({ ...event, scope: '' });
+    rejects({ ...event, scope: 'row-1' });
     expect(() => decodeFrame(' '.repeat(1048577))).toThrow(ProtocolError);
     expect(() => encodeBinary({ channelId: 1, offset: 0, data: new Uint8Array(65537) })).toThrow(ProtocolError);
     expect(() => decodeBinary(new Uint8Array([1]))).toThrow(ProtocolError);
+  });
+  it('accepts real long WorkspaceKey and SessionKey scopes beyond the generic text limit', () => {
+    const deepPath = `/${Array.from({ length: 8 }, (_, index) => `dir-${index}-${'x'.repeat(93)}`).join('/')}`;
+    const workspaceKey = encodeWorkspaceKey({ environmentId: target, canonicalPath: deepPath, pathPolicy: { platform: 'posix', volumeId: 'volume-1', caseSensitive: true } });
+    expect(workspaceKey.length).toBeGreaterThan(1024);
+    expect(entityKeyValue(workspaceKey, 'scope')).toBe(workspaceKey);
+    expect(entityKeyValue(sessionKey, 'scope')).toBe(sessionKey);
+    for (const scope of [workspaceKey, sessionKey]) {
+      const scoped = { ...event, scope };
+      expect(decodeFrame(encodeFrame(scoped))).toEqual(scoped);
+      const state = createProtocolState(binding);
+      expect(state.receive(scoped)).toEqual(scoped);
+      expect(state.snapshot()).toMatchObject({ seq: 1, fences: [[scope, 8]] });
+      state.close();
+    }
   });
   it('failure rejects cross-target/stale epoch/generation and duplicate response without mutation', () => {
     const state = createProtocolState(binding);
