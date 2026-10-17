@@ -37,9 +37,21 @@ describe('runtime identity', () => {
   it('keeps Slurm bound to the persisted cluster environment', () => {
     expect(resolveEnvironmentId({ kind: 'slurm', clusterEnvironmentId: environmentId })).toBe(environmentId);
   });
-  it.each(['/srv/repo', '/srv/目录\\literal', 'C:\\Repo', '\\\\server\\share\\Repo'])('roundtrips target path %s', (canonicalPath) => {
+  it.each(['/srv/repo', '/srv/目录\\literal', 'C:\\Repo', '\\\\server\\share\\Repo', '\\\\server\\share\\'])('roundtrips target path %s', (canonicalPath) => {
     const ref = { environmentId, canonicalPath, pathPolicy: canonicalPath.startsWith('/') ? posix : windows };
     expect(decodeWorkspaceKey(encodeWorkspaceKey(ref))).toEqual(ref);
+  });
+  it('normalizes the UNC share root to the win32 canonical trailing-separator form', () => {
+    const withSeparator = { ...workspace, canonicalPath: '\\\\server\\share\\', pathPolicy: windows };
+    const withoutSeparator = { ...workspace, canonicalPath: '\\\\server\\share', pathPolicy: windows };
+    expect(parseWorkspaceRef(withSeparator).canonicalPath).toBe('\\\\server\\share\\');
+    expect(encodeWorkspaceKey(withoutSeparator)).toBe(encodeWorkspaceKey(withSeparator));
+    expect(decodeWorkspaceKey(encodeWorkspaceKey(withoutSeparator)).canonicalPath).toBe('\\\\server\\share\\');
+  });
+  it('keeps share-root and share-subdirectory identities distinct', () => {
+    const root = { ...workspace, canonicalPath: '\\\\server\\share\\', pathPolicy: windows };
+    const nested = { ...workspace, canonicalPath: '\\\\server\\share\\Repo', pathPolicy: windows };
+    expect(encodeWorkspaceKey(root)).not.toBe(encodeWorkspaceKey(nested));
   });
   it('groups different worktrees by their target Git common-dir', () => {
     const repo = { environmentId, canonicalCommonDir: '/srv/repo/.git', pathPolicy: posix };
@@ -88,6 +100,9 @@ describe('failure identity boundaries', () => {
   });
   it.each(['relative', '/srv/../repo', '/srv/./repo', '/srv//repo', '/srv/repo/', 'https://user:pass@host/repo', ''])('rejects noncanonical path %j', (canonicalPath) => {
     expect(() => parseWorkspaceRef({ ...workspace, canonicalPath })).toThrow(IdentityError);
+  });
+  it.each(['\\\\server\\share\\\\', '\\\\server\\', '\\\\server\\\\share\\.', '\\\\server\\share\\Repo\\', 'C:\\Repo\\'])('rejects noncanonical windows path %j', (canonicalPath) => {
+    expect(() => parseWorkspaceRef({ ...workspace, canonicalPath, pathPolicy: windows })).toThrow(IdentityError);
   });
   it('isolates volumes, hosts, case policies and distinct resolved symlink destinations', () => {
     const refs = [workspace, { ...workspace, environmentId: secondEnvironment },
