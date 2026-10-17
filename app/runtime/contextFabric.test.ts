@@ -1022,3 +1022,183 @@ describe('serialization round-trip and integrity', () => {
     });
   });
 });
+
+describe('secret redaction over quoted JSON keys and escaped values', () => {
+  it('redacts a token carried in a double-quoted JSON key/value pair', () => {
+    const outcome = redactSecrets('config {"token":"FAKE_EXAMPLE_SECRET_12345"} end');
+
+    expect(outcome.redactions).toBe(1);
+    expect(outcome.text).not.toContain('FAKE_EXAMPLE_SECRET_12345');
+    expect(outcome.text).toContain(REDACTED_PLACEHOLDER);
+  });
+
+  it('redacts the same secret in a single-quoted, an unquoted and a spaced JSON pair', () => {
+    for (const text of [
+      "{'token': 'FAKE_EXAMPLE_SECRET_12345'}",
+      'token=FAKE_EXAMPLE_SECRET_12345',
+      '"token" : "FAKE_EXAMPLE_SECRET_12345"',
+      '{"api_key":"FAKE_EXAMPLE_SECRET_12345"}',
+      '{"bridge_token":"FAKE_EXAMPLE_SECRET_12345"}',
+    ]) {
+      const outcome = redactSecrets(text);
+      expect(outcome.redactions, text).toBe(1);
+      expect(outcome.text, text).not.toContain('FAKE_EXAMPLE_SECRET_12345');
+    }
+  });
+
+  it('redacts an escaped value inside a JSON string', () => {
+    const outcome = redactSecrets('{"token":"FAKE_EXAMPLE\\"SECRET_12345"}');
+
+    expect(outcome.redactions).toBe(1);
+    expect(outcome.text).not.toContain('FAKE_EXAMPLE');
+  });
+
+  it('keeps the placeholder free of the secret and still redacts the plain separator forms', () => {
+    const quoted = redactSecrets('{"password":"hunter2hunter2"}');
+    expect(quoted.redactions).toBe(1);
+    expect(quoted.text).not.toContain('hunter2hunter2');
+    expect(quoted.text).toContain(REDACTED_PLACEHOLDER);
+    expect(quoted.text).toBe('{' + '"' + 'password' + '"' + ':' + REDACTED_PLACEHOLDER + '}');
+  });
+
+  it('does not redact a key word that is not followed by a separator and value', () => {
+    const outcome = redactSecrets('the token bucket is a rate limiter, say token now: hi');
+    expect(outcome.redactions).toBe(0);
+    expect(outcome.text).toContain('token bucket');
+  });
+});
+
+describe('checkpoint byte budget on the real serialized size', () => {
+  it('refuses a single legal entry that only fits once the envelope is added', () => {
+    const entry = textEntry('goal', 'x'.repeat(31700), { kind: 'host', commandId: 'c'.repeat(512) });
+    const wrapped = wrapContextEntry(entry);
+
+    expect(byteLength(JSON.stringify(wrapped))).toBeLessThanOrEqual(CHECKPOINT_MAX_BYTES);
+    expect(wrapped.estimatedTokens).toBeLessThanOrEqual(CHECKPOINT_MAX_ESTIMATED_TOKENS);
+
+    expect(rejectionOf(() => build([entry]))).toEqual({
+      code: 'invalid_request',
+      field: 'checkpoint_entry_too_large',
+    });
+  });
+
+  it('admits a single entry that fits with the envelope', () => {
+    const view = build([textEntry('goal', 'x'.repeat(31000), { kind: 'host', commandId: 'c'.repeat(512) })]);
+
+    expect(view.bytes).toBeLessThanOrEqual(CHECKPOINT_MAX_BYTES);
+    expect(view.entryCount).toBe(1);
+  });
+});
+
+describe('wire checkpoint capacity re-validation', () => {
+  const wireOf = (overrides: Record<string, unknown>): string => {
+    const text = 'y'.repeat(70000);
+    const entry = {
+      entryId: `${CHECKPOINT_A}:1`,
+      class: 'goal',
+      origin: { kind: 'host', commandId: 'cmd-1' },
+      text,
+      untrusted: false,
+      untrustedReason: null,
+      redactions: 0,
+      estimatedTokens: 17500,
+      hash: evidenceHash(text),
+      evidence: null,
+    };
+    const canonical = {
+      checkpointId: CHECKPOINT_A,
+      schemaVersion: CONTEXT_SCHEMA_VERSION,
+      scope: scopeA,
+      createdAt: 1,
+      entries: [entry],
+      evidence: [],
+      estimatedTokens: 17500,
+      entryCount: 1,
+      droppedEntries: 0,
+      droppedBytes: 0,
+      demoted: 0,
+      untrustedEntries: 0,
+      redactions: 0,
+      transcriptBytes: 70000,
+      ...overrides,
+    };
+    return JSON.stringify({ ...canonical, digest: evidenceHash(JSON.stringify(canonical)) });
+  };
+
+  it('refuses an over-budget wire checkpoint on parse, admit, publish and deserialize', () => {
+    const wire = wireOf({});
+    expect(byteLength(wire)).toBeGreaterThan(CHECKPOINT_MAX_BYTES);
+
+    for (const run of [
+      () => parseCheckpoint(JSON.parse(wire) as Record<string, unknown>),
+      () => deserializeCheckpoint(wire),
+    ]) {
+      expect(rejectionOf(run)).toMatchObject({ code: 'invalid_request' });
+      expect((rejectionOf(run) as { field: string }).field).toMatch(/^checkpoint_/);
+    }
+  });
+
+  it('refuses a wire checkpoint whose derived counters exceed the budget', () => {
+    expect(rejectionOf(() => parseCheckpoint(JSON.parse(wireOf({ estimatedTokens: CHECKPOINT_MAX_ESTIMATED_TOKENS + 1 })) as Record<string, unknown>)))
+      .toMatchObject({ code: 'invalid_request', field: 'checkpoint_tokens' });
+    expect(rejectionOf(() => parseCheckpoint(JSON.parse(wireOf({ estimatedTokens: CHECKPOINT_MAX_ESTIMATED_TOKENS, transcriptBytes: CHECKPOINT_MAX_BYTES + 1 })) as Record<string, unknown>)))
+      .toMatchObject({ code: 'invalid_request', field: 'checkpoint_transcript_bytes' });
+
+    const manyEntries = Array.from({ length: MAX_CHECKPOINT_ENTRIES + 1 }, (_unused, index) => ({
+      entryId: `${CHECKPOINT_A}:${index + 1}`,
+      class: 'goal',
+      origin: { kind: 'host', commandId: 'cmd-1' },
+      text: `entry ${index}`,
+      untrusted: false,
+      untrustedReason: null,
+      redactions: 0,
+      estimatedTokens: 1,
+      hash: evidenceHash(`entry ${index}`),
+      evidence: null,
+    }));
+    expect(rejectionOf(() => parseCheckpoint(JSON.parse(wireOf({
+      entries: manyEntries,
+      entryCount: manyEntries.length,
+      estimatedTokens: manyEntries.length,
+      transcriptBytes: manyEntries.length * 12,
+    })) as Record<string, unknown>)))
+      .toMatchObject({ code: 'invalid_request', field: 'checkpoint_entry_count' });
+  });
+
+  it('refuses a wire entry whose text exceeds the per-entry ceiling', () => {
+    const text = 'z'.repeat(MAX_ENTRY_CHARS + 1);
+    const wire = JSON.stringify({
+      checkpointId: CHECKPOINT_A,
+      schemaVersion: CONTEXT_SCHEMA_VERSION,
+      scope: scopeA,
+      createdAt: 1,
+      entries: [{
+        entryId: `${CHECKPOINT_A}:1`,
+        class: 'goal',
+        origin: { kind: 'host', commandId: 'cmd-1' },
+        text,
+        untrusted: false,
+        untrustedReason: null,
+        redactions: 0,
+        estimatedTokens: 1,
+        hash: evidenceHash(text),
+        evidence: null,
+      }],
+      evidence: [],
+      estimatedTokens: 1,
+      entryCount: 1,
+      droppedEntries: 0,
+      droppedBytes: 0,
+      demoted: 0,
+      untrustedEntries: 0,
+      redactions: 0,
+      transcriptBytes: 1,
+      digest: '0'.repeat(64),
+    });
+
+    expect(rejectionOf(() => deserializeCheckpoint(wire))).toMatchObject({
+      code: 'invalid_request',
+      field: 'checkpoint_entry_text',
+    });
+  });
+});

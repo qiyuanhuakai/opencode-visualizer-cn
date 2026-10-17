@@ -37,6 +37,12 @@ export const CHECKPOINT_MAX_ESTIMATED_TOKENS = 8000;
 export const MAX_ENTRY_CHARS = 65536;
 /** Retained entry ceiling: the byte budget stops admitting long before this on text-heavy histories. */
 export const MAX_CHECKPOINT_ENTRIES = 96;
+/**
+ * Wire input ceiling. A serialized checkpoint is bounded by CHECKPOINT_MAX_BYTES; this generous
+ * multiple is a first-line guard so an absurd string is refused before it is parsed at all, and
+ * the parser then re-validates the real budget.
+ */
+export const MAX_CHECKPOINT_WIRE_BYTES = 4 * CHECKPOINT_MAX_BYTES;
 /** Default and maximum byte page served per evidence read. */
 export const EVIDENCE_PAGE_BYTES = 4096;
 export const MAX_EVIDENCE_PAGE_BYTES = 64 * 1024;
@@ -107,14 +113,17 @@ export const UNTRUSTED_PATTERNS = Object.freeze([
  *
  * The first rule's capture layout IS the replace callback's positional contract:
  * String.prototype.replace invokes the callback as (match, group1, group2, ...), so group 1 is
- * the key word and group 2 is the separator, and the value alternation is deliberately
- * NON-capturing because no receiver reads it. The emitted text is <key><separator>[redacted] on
- * every value shape (bare, double-quoted, single-quoted); the value itself is fully replaced.
+ * the key word, group 2 the optional quote that separates it from the separator in a JSON pair,
+ * and group 3 the separator; the value alternation is deliberately NON-capturing because no
+ * receiver reads it. The emitted text is <key><quote><separator>[redacted] on every value shape
+ * (bare, double-quoted, single-quoted, escaped); the value itself is fully replaced. The optional
+ * quote is what makes a JSON pair such as {"token":"..."} match: without it the separator never
+ * sits directly after the key word.
  */
 const SECRET_PATTERNS = Object.freeze([
   Object.freeze({
-    pattern: /\b(token|secret|password|passwd|api[_-]?key|apikey|auth[_-]?token|access[_-]?token|refresh[_-]?token|bridge[_-]?token|github[_-]?token|aws[_-]?access[_-]?key[_-]?id)\s*([:=])\s*(?:"[^"\n]{6,}"|'[^'\n]{6,}'|[^\s"',;)}\]]{6,})/gi,
-    replace: (_match, key, separator) => `${key}${separator}${REDACTED_PLACEHOLDER}`,
+    pattern: /\b(token|secret|password|passwd|api[_-]?key|apikey|auth[_-]?token|access[_-]?token|refresh[_-]?token|bridge[_-]?token|github[_-]?token|aws[_-]?access[_-]?key[_-]?id)\s*(["']?)\s*([:=])\s*(?:"(?:[^"\\\n]|\\.){6,}"|'(?:[^'\\\n]|\\.){6,}'|[^\s"',;)}\]]{6,})/gi,
+    replace: (_match, key, quote, separator) => `${key}${quote}${separator}${REDACTED_PLACEHOLDER}`,
   }),
   Object.freeze({ pattern: /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b/g, replace: () => REDACTED_PLACEHOLDER }),
   Object.freeze({ pattern: /\bBearer\s+[A-Za-z0-9._~+/-]{8,}={0,2}/gi, replace: () => REDACTED_PLACEHOLDER }),
@@ -543,6 +552,10 @@ export function buildContextCheckpoint(input = {}) {
     current = measure(admitted);
   }
   const serialized = JSON.stringify({ ...current.canonical, digest: current.digest });
+  // The loop above can only drop while more than one entry is retained, so the last size is re-checked.
+  if (byteLengthOf(serialized) > CHECKPOINT_MAX_BYTES) {
+    throw new ContextError('invalid_request', 'checkpoint_entry_too_large');
+  }
   return deepFreeze({ ...current.canonical, digest: current.digest, bytes: byteLengthOf(serialized) });
 }
 
@@ -563,6 +576,7 @@ function parseCheckpointEntry(raw) {
     throw new ContextError('invalid_request', 'checkpoint_schema');
   }
   if (typeof raw.entryId !== 'string' || raw.entryId.length === 0) throw new ContextError('invalid_request', 'checkpoint_schema');
+  if (raw.text !== null && raw.text.length > MAX_ENTRY_CHARS) throw new ContextError('invalid_request', 'checkpoint_entry_text');
   const hash = parseEvidenceHash(raw.hash);
   const evidence = raw.evidence === null ? null : parseEvidenceRef(raw.evidence);
   if (TEXT_CLASSES.includes(entryClass) && raw.text === null) throw new ContextError('invalid_request', 'checkpoint_schema');
@@ -611,6 +625,10 @@ export function parseCheckpoint(value) {
   if (!Array.isArray(value.entries) || value.entries.length !== value.entryCount || !Array.isArray(value.evidence)) {
     throw new ContextError('invalid_request', 'checkpoint_schema');
   }
+  // A matching digest proves provenance, not budget: every builder ceiling is re-validated here.
+  if (value.entryCount > MAX_CHECKPOINT_ENTRIES) throw new ContextError('invalid_request', 'checkpoint_entry_count');
+  if (value.estimatedTokens > CHECKPOINT_MAX_ESTIMATED_TOKENS) throw new ContextError('invalid_request', 'checkpoint_tokens');
+  if (value.transcriptBytes > CHECKPOINT_MAX_BYTES) throw new ContextError('invalid_request', 'checkpoint_transcript_bytes');
   const entries = value.entries.map(parseCheckpointEntry);
   const evidence = value.evidence.map((item) => parseEvidenceRef(item));
   const digest = parseEvidenceHash(value.digest);
@@ -633,14 +651,22 @@ export function parseCheckpoint(value) {
   if (evidenceHash(JSON.stringify(canonical)) !== digest) {
     throw new ContextError('conflict', 'checkpoint_digest');
   }
+  const serialized = JSON.stringify({ ...canonical, digest });
+  if (byteLengthOf(serialized) > CHECKPOINT_MAX_BYTES) {
+    throw new ContextError('invalid_request', 'checkpoint_bytes');
+  }
   return deepFreeze({
     ...canonical,
     digest,
-    bytes: byteLengthOf(JSON.stringify({ ...canonical, digest })),
+    bytes: byteLengthOf(serialized),
   });
 }
 
 export function deserializeCheckpoint(text) {
+  if (typeof text !== 'string') throw new ContextError('invalid_request', 'checkpoint_schema');
+  if (byteLengthOf(text) > MAX_CHECKPOINT_WIRE_BYTES) {
+    throw new ContextError('invalid_request', 'checkpoint_wire_too_large');
+  }
   let parsed;
   try {
     parsed = JSON.parse(text);
