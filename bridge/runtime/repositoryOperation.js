@@ -34,24 +34,54 @@ export function createRepositoryOperation({ store, assertCurrent }) {
       'reconcile_required',
     );
   }
+  // The request identity is what the caller chose: the repository, the workspace it
+  // names, the method and its payload. A server-derived base commit is deliberately
+  // excluded - re-resolving the source HEAD on a retry must not change the identity
+  // of a request the caller repeated verbatim.
+  async function identity({ repoKey, workspace: input, idempotencyKey, method, payload }) {
+    const workspace = parseWorkspaceRef(input);
+    const repo = decodeRepoKey(repoKey);
+    requireValue(
+      repo.environmentId === workspace.environmentId,
+      'git.repo_target',
+      'unauthorized',
+    );
+    textValue(idempotencyKey, 'git.idempotency');
+    textValue(method, 'git.method');
+    const body = jsonValue(payload);
+    requireValue(Buffer.byteLength(JSON.stringify(body)) <= 65536, 'git.payload_size');
+    return {
+      workspace,
+      body,
+      digest: fingerprint({ repoKey, workspace, method, payload: body }),
+      operationId: `git-op:${fingerprint([repoKey, idempotencyKey])}`,
+    };
+  }
   return {
     leases,
+    async lookup({ repoKey, workspace, idempotencyKey, method, payload }) {
+      const { digest, operationId } = await identity({
+        repoKey,
+        workspace,
+        idempotencyKey,
+        method,
+        payload,
+      });
+      const prior = await store.getControl({ collection: 'operations', key: operationId });
+      if (!prior?.value) return null;
+      requireValue(prior.value.digest === digest, 'git.idempotency_mismatch', 'conflict');
+      return prior.value;
+    },
     async accept({ repoKey, workspace: input, idempotencyKey, method, payload, baseCommit }) {
-      const workspace = parseWorkspaceRef(input);
-      const repo = decodeRepoKey(repoKey);
-      requireValue(
-        repo.environmentId === workspace.environmentId,
-        'git.repo_target',
-        'unauthorized',
-      );
-      textValue(idempotencyKey, 'git.idempotency');
-      textValue(method, 'git.method');
-      const body = jsonValue(payload);
-      requireValue(Buffer.byteLength(JSON.stringify(body)) <= 65536, 'git.payload_size');
+      const { workspace, body, digest, operationId } = await identity({
+        repoKey,
+        workspace: input,
+        idempotencyKey,
+        method,
+        payload,
+      });
       const state = await store.ready;
       const workspaceKey = encodeWorkspaceKey(workspace);
-      const operationId = `git-op:${fingerprint([repoKey, idempotencyKey])}`;
-      const digest = fingerprint({ repoKey, workspace, method, payload: body, baseCommit });
       const value = {
         kind: 'repository-operation',
         operationId,

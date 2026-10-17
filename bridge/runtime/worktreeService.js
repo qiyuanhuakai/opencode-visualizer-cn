@@ -58,6 +58,20 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
       const info = await git.repository(workspace);
       requireValue(info.kind === 'git', 'git.repository');
       const destination = await command.destinationRef(parent, name);
+      const payload = { source: workspace, destination };
+      // Replay by identity before resolving any server-derived state: re-reading the
+      // source HEAD would derive a different base commit for a request the caller
+      // repeated verbatim, and re-validating the destination would refuse the result
+      // the first attempt already produced.
+      const replayed = await journal.lookup({
+        repoKey: info.repoKey,
+        workspace: destination,
+        idempotencyKey,
+        method: 'worktree.create',
+        payload,
+      });
+      if (replayed && replayed.phase !== 'accepted')
+        return { phase: 'durable-accepted', operationId: replayed.operationId };
       const baseCommit = gitLine(await git.checked(workspace, ['rev-parse', '--verify', 'HEAD']));
       requireValue(/^[0-9a-f]{40,64}$/.test(baseCommit), 'git.base_commit');
       // Authorize the common directory before any durable state exists: a refusal
@@ -69,12 +83,13 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
         workspace: destination,
         idempotencyKey,
         method: 'worktree.create',
-        payload: { source: workspace, destination },
+        payload,
         baseCommit,
       });
-      // An operation that already reached a terminal phase is a durable replay:
-      // return it instead of re-validating the destination its completion produced.
-      if ((await journal.get(accepted.operationId)).phase === 'terminal') return accepted;
+      // An operation past acceptance is a durable replay of a send that already
+      // happened or is still running: return it instead of launching a second
+      // mutation, and keep the accepted phase for a send that never started.
+      if ((await journal.get(accepted.operationId)).phase !== 'accepted') return accepted;
       return launch(
         accepted,
         {
@@ -87,7 +102,21 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
       );
     },
     async remove({ workspace, worktree, idempotencyKey }) {
-      const [info, selected] = await Promise.all([git.repository(workspace), git.probe(worktree)]);
+      const info = await git.repository(workspace);
+      requireValue(info.kind === 'git', 'git.repository');
+      const payload = { source: workspace, worktree };
+      // Replay by identity before probing the worktree: a completed removal deleted
+      // the very path the first attempt targeted, so re-probing it cannot succeed.
+      const replayed = await journal.lookup({
+        repoKey: info.repoKey,
+        workspace: worktree,
+        idempotencyKey,
+        method: 'worktree.remove',
+        payload,
+      });
+      if (replayed && replayed.phase !== 'accepted')
+        return { phase: 'durable-accepted', operationId: replayed.operationId };
+      const selected = await git.probe(worktree);
       requireValue(
         info.kind === 'git' && selected.kind === 'git' && info.repoKey === selected.repoKey,
         'git.repository',
@@ -111,9 +140,10 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
         workspace: worktree,
         idempotencyKey,
         method: 'worktree.remove',
-        payload: { source: workspace, worktree },
+        payload,
         baseCommit: entry.head,
       });
+      if ((await journal.get(accepted.operationId)).phase !== 'accepted') return accepted;
       try {
         requireValue(
           (

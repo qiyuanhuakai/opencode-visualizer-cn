@@ -430,6 +430,129 @@ describe('durable worktree mutations', () => {
       outcome: 'completed',
     });
   });
+  it('returns the original operation when an identical create is retried while the mutation runs', async () => {
+    // Given a durable create whose native mutation is still in flight.
+    const f = await fixture();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const command: TargetGitCommand = {
+      ...f.command,
+      async start(request) {
+        const job = await f.command.start(request);
+        if (request.args[0] !== 'worktree' || request.args[1] !== 'add') return job;
+        const finished = job.wait();
+        return { ...job, async wait() { await gate; return finished; } };
+      },
+    };
+    const service = authorizedService(f.store, command);
+    const accepted = await service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'in flight',
+      idempotencyKey: 'in-flight',
+    });
+    // When the journal observed the running mutation and the caller repeats the request.
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if ((await service.journal.get(accepted.operationId)).phase === 'observed') break;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    expect((await service.journal.get(accepted.operationId)).phase).toBe('observed');
+    const replayed = await service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'in flight',
+      idempotencyKey: 'in-flight',
+    });
+    // Then the original operation is recovered without a second send or phase error.
+    expect(replayed.operationId).toBe(accepted.operationId);
+    release();
+    expect((await service.wait(replayed.operationId)).outcome).toBe('completed');
+  });
+  it('returns the original operation when an identical create is retried after the source head advanced', async () => {
+    // Given a durable create that already completed.
+    const f = await fixture();
+    const accepted = await f.service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'head advance',
+      idempotencyKey: 'head-advance',
+    });
+    const original = await f.service.wait(accepted.operationId);
+    // When the source repository advances and the caller repeats the identical request.
+    f.gitExec([
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.com',
+      'commit',
+      '--allow-empty',
+      '-m',
+      'advance',
+    ]);
+    const replayed = await f.service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'head advance',
+      idempotencyKey: 'head-advance',
+    });
+    // Then the original operation is recovered and keeps its first base commit.
+    expect(replayed.operationId).toBe(accepted.operationId);
+    expect(await f.service.wait(replayed.operationId)).toMatchObject({
+      phase: 'terminal',
+      outcome: 'completed',
+      baseCommit: original.baseCommit,
+    });
+  });
+  it('returns the original operation when an identical remove is retried after completion', async () => {
+    // Given a durable remove that already completed and deleted its worktree.
+    const f = await fixture();
+    const created = await f.service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'removed writer',
+      idempotencyKey: 'create-removed',
+    });
+    const destination = f.ref(path.join(f.root, 'removed writer'));
+    await f.service.wait(created.operationId);
+    await f.service.releaseWriter(destination, created.operationId);
+    const removed = await f.service.remove({
+      workspace: f.workspace,
+      worktree: destination,
+      idempotencyKey: 'remove-removed',
+    });
+    expect((await f.service.wait(removed.operationId)).outcome).toBe('completed');
+    // When the identical removal is retried after its worktree is gone.
+    const replayed = await f.service.remove({
+      workspace: f.workspace,
+      worktree: destination,
+      idempotencyKey: 'remove-removed',
+    });
+    // Then the original operation is recovered instead of a missing-worktree refusal.
+    expect(replayed.operationId).toBe(removed.operationId);
+    expect((await f.service.wait(replayed.operationId)).outcome).toBe('completed');
+  });
+  it('still rejects the same idempotency key with a different explicit request', async () => {
+    // Given a durable create that already completed.
+    const f = await fixture();
+    const first = await f.service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'identity one',
+      idempotencyKey: 'identity',
+    });
+    await f.service.wait(first.operationId);
+    // When a different destination reuses the same key.
+    await expect(
+      f.service.create({
+        workspace: f.workspace,
+        parent: f.ref(f.root),
+        name: 'identity two',
+        idempotencyKey: 'identity',
+      }),
+    ).rejects.toThrow('idempotency_mismatch');
+  });
   it('fails terminally and releases leases when the destination appears after acceptance', async () => {
     // Given a destination that another writer produces between acceptance and the send.
     const f = await fixture();
