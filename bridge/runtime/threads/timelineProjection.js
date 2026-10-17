@@ -19,6 +19,8 @@ export const TIMELINE_TERMINAL_REASONS = Object.freeze(['completed', 'failed', '
 export const TURN_COMMAND_PHASES = Object.freeze(['accepted', 'sent', 'cancelled']);
 /** Serialized payload ceiling per entry; an oversized message is rejected, never silently truncated. */
 export const MAX_TIMELINE_ENTRY_CHARS = 262_144;
+/** gaps() walks one source's [min,max] span synchronously, so an unbounded span is refused, never walked. */
+export const MAX_TIMELINE_SEQ_SPAN = 1_048_576;
 export const DEFAULT_TIMELINE_PAGE_LIMIT = 100;
 export const MAX_TIMELINE_PAGE_LIMIT = 500;
 
@@ -77,7 +79,7 @@ export function parseAt(value) {
 
 export function parseSeq(value) {
   if (value === undefined) return 0;
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new TurnError('invalid_request', 'timeline_seq');
   }
   return value;
@@ -199,6 +201,9 @@ export function turnView(turn) {
 /**
  * The entry machinery both sides share. Recording an entry never changes any of the four
  * states — it only appends to the ordered projection.
+ *
+ * Every native source keeps its OWN seq set: `seq` is a per-source counter, so one source's
+ * missing epoch is never hidden by another source's event that happens to carry the same number.
  */
 function recordEntry(scope, input) {
   const source = parseTimelineSource(input.source);
@@ -215,7 +220,8 @@ function recordEntry(scope, input) {
   }
   const payload = frozenPayload(input.payload);
   const late = scope.native.terminal;
-  const resolvedSeq = seq > 0 ? seq : scope.nextSeq();
+  const sourceKey = timelineSourceKey(source);
+  const resolvedSeq = seq > 0 ? seq : scope.nextSeq(sourceKey);
   const order = scope.nextOrder();
   const entry = Object.freeze({
     entryId: `${scope.turnId}:${order}`,
@@ -231,7 +237,7 @@ function recordEntry(scope, input) {
   });
   scope.entries.push(entry);
   scope.seen.set(dedupKey, entry.entryId);
-  scope.seqs.add(resolvedSeq);
+  scope.noteSeq(sourceKey, resolvedSeq);
   scope.note(entry);
   if (late) scope.markLate();
   scope.publish(entry);
@@ -254,7 +260,8 @@ export function createNativeSink(scope) {
   return Object.freeze({
     observe,
     record(input) {
-      observe(input.source, parseAt(input.at));
+      const source = parseTimelineSource(input.source);
+      if (source.kind === 'native') observe(source, parseAt(input.at));
       return recordEntry(scope, input);
     },
     end(input) {

@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_TIMELINE_ENTRY_CHARS,
+  MAX_TIMELINE_SEQ_SPAN,
   TIMELINE_ENTRY_KINDS,
   TIMELINE_TERMINAL_REASONS,
   TURN_COMMAND_PHASES,
@@ -11,8 +12,10 @@ import {
   timelineDedupKey,
   timelineSourceKey,
 } from './timeline';
+import { createTurnService } from '../../bridge/runtime/threads/turnService.js';
 import type {
   OpenTurnInput,
+  TimelineEntryKind,
   TimelineEntryView,
   TimelinePage,
   TimelineSource,
@@ -25,6 +28,8 @@ import type {
 
 const UUID_PATTERN = /^[\da-f]{8}-[\da-f]{4}-[1-8][\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i;
 const MISSING_TURN = '99999999-9999-4999-8999-999999999999';
+const TURN_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const TURN_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
 const hostSource = (commandId: string): TimelineSource => ({ kind: 'host', commandId });
 const nativeSource = (harness: string, nativeEventId: string): TimelineSource => ({
@@ -47,6 +52,16 @@ function rejectionOf(run: () => unknown): { code: string; field: string } | unde
   if (error === undefined) return undefined;
   if (!(error instanceof TurnError)) return { code: `not-a-TurnError:${String(error)}`, field: String(error) };
   return { code: error.code, field: error.field };
+}
+
+function laneRejectionOf(run: () => unknown): { code: string; field: string } | undefined {
+  const error: unknown = errorOf(run);
+  if (error === undefined) return undefined;
+  if (!(error instanceof Error) || typeof (error as { field?: unknown }).field !== 'string') {
+    return { code: `not-a-TurnError:${String(error)}`, field: String(error) };
+  }
+  const coded = error as unknown as { code: string; field: string };
+  return { code: coded.code, field: coded.field };
 }
 
 function open(timeline: TurnTimeline, overrides: OpenTurnInput = {}): TurnView {
@@ -632,5 +647,165 @@ describe('frozen read models and lifecycle', () => {
 
     expect(outcome.applied).toBe(true);
     expect(timeline.state).toEqual({ turns: 2, entries: 3, duplicates: 1, superseded: 0, late: 0, closed: false });
+  });
+});
+
+describe('sequence integrity across unsafe, distant and cross-source seqs', () => {
+  it('rejects an unsafe integer seq so gaps() can never be asked to enumerate it', () => {
+    const timeline = createTurnTimeline();
+    const turn = open(timeline);
+
+    expect(rejectionOf(() => timeline.event({
+      turnId: turn.turnId,
+      source: nativeSource('codex', 'evt-1'),
+      kind: 'message',
+      at: 1,
+      seq: 2 ** 53,
+      payload: {},
+    }))).toEqual({ code: 'invalid_request', field: 'timeline_seq' });
+    expect(rejectionOf(() => timeline.event({
+      turnId: turn.turnId,
+      source: nativeSource('codex', 'evt-2'),
+      kind: 'message',
+      at: 2,
+      seq: Number.MAX_SAFE_INTEGER + 2,
+      payload: {},
+    }))).toEqual({ code: 'invalid_request', field: 'timeline_seq' });
+    expect(rejectionOf(() => timeline.event({
+      turnId: turn.turnId,
+      source: nativeSource('codex', 'evt-3'),
+      kind: 'message',
+      at: 3,
+      seq: Number.MAX_SAFE_INTEGER,
+      payload: {},
+    }))).toBeUndefined();
+    expect(timeline.turn(turn.turnId).entryCount).toBe(1);
+  });
+
+  it('refuses a span gaps() cannot enumerate instead of walking it', () => {
+    const timeline = createTurnTimeline();
+    const turn = open(timeline);
+
+    timeline.event({ turnId: turn.turnId, source: nativeSource('codex', 'evt-1'), kind: 'message', at: 1, seq: 1, payload: {} });
+    timeline.event({ turnId: turn.turnId, source: nativeSource('codex', 'evt-2'), kind: 'message', at: 2, seq: MAX_TIMELINE_SEQ_SPAN + 2, payload: {} });
+
+    expect(rejectionOf(() => timeline.gaps(turn.turnId))).toEqual({ code: 'invalid_request', field: 'timeline_seq_span' });
+    expect(timeline.turn(turn.turnId).seqMax).toBe(MAX_TIMELINE_SEQ_SPAN + 2);
+    expect(timeline.turn(turn.turnId).entryCount).toBe(2);
+  });
+
+  it('still enumerates a span that sits exactly on the ceiling', () => {
+    const timeline = createTurnTimeline();
+    const turn = open(timeline);
+
+    timeline.event({ turnId: turn.turnId, source: nativeSource('codex', 'evt-1'), kind: 'message', at: 1, seq: 1, payload: {} });
+    timeline.event({ turnId: turn.turnId, source: nativeSource('codex', 'evt-2'), kind: 'message', at: 2, seq: MAX_TIMELINE_SEQ_SPAN + 1, payload: {} });
+
+    expect(timeline.gaps(turn.turnId).length).toBe(MAX_TIMELINE_SEQ_SPAN - 1);
+  });
+
+  it('keeps each native source sequence independent so one source never closes another source gap', () => {
+    const timeline = createTurnTimeline();
+    const turn = open(timeline);
+
+    timeline.event({ turnId: turn.turnId, source: nativeSource('codex', 'c-1'), kind: 'message', at: 1, seq: 1, payload: {} });
+    timeline.event({ turnId: turn.turnId, source: nativeSource('codex', 'c-2'), kind: 'message', at: 2, seq: 3, payload: {} });
+    expect(timeline.gaps(turn.turnId)).toEqual([2]);
+
+    timeline.event({ turnId: turn.turnId, source: nativeSource('dsh', 'd-1'), kind: 'message', at: 3, seq: 2, payload: {} });
+    expect(timeline.gaps(turn.turnId)).toEqual([2]);
+
+    timeline.event({ turnId: turn.turnId, source: nativeSource('dsh', 'd-2'), kind: 'message', at: 4, seq: 1, payload: {} });
+    expect(timeline.gaps(turn.turnId)).toEqual([2]);
+
+    timeline.event({ turnId: turn.turnId, source: nativeSource('codex', 'c-3'), kind: 'message', at: 5, seq: 2, payload: {} });
+    expect(timeline.gaps(turn.turnId)).toEqual([]);
+  });
+
+  it('assigns an auto seq per source instead of continuing the global maximum', () => {
+    const timeline = createTurnTimeline();
+    const turn = open(timeline);
+
+    timeline.event({ turnId: turn.turnId, source: nativeSource('codex', 'c-1'), kind: 'message', at: 1, seq: 1, payload: {} });
+    timeline.event({ turnId: turn.turnId, source: nativeSource('codex', 'c-2'), kind: 'message', at: 2, seq: 5, payload: {} });
+    timeline.event({ turnId: turn.turnId, source: nativeSource('dsh', 'd-1'), kind: 'message', at: 3, payload: {} });
+
+    const seqs = timeline.page({ limit: 10 }).entries.map((entry) => entry.seq);
+    expect(seqs).toEqual([1, 5, 1]);
+    expect(timeline.turn(turn.turnId).seqMax).toBe(5);
+    expect(timeline.gaps(turn.turnId)).toEqual([2, 3, 4]);
+  });
+
+  it('never marks a Host-source event as natively observed', () => {
+    const timeline = createTurnTimeline();
+    const turn = open(timeline);
+
+    const outcome = timeline.event({ turnId: turn.turnId, source: hostSource('cmd-1'), kind: 'message', at: 1, payload: { text: 'host' } });
+    expect(outcome.duplicate).toBe(false);
+    const afterHost = timeline.turn(turn.turnId);
+    expect(afterHost.observed).toBe(false);
+    expect(afterHost.observedAt).toBeNull();
+    expect(afterHost.observedBy).toBeNull();
+
+    timeline.event({ turnId: turn.turnId, source: nativeSource('codex', 'c-1'), kind: 'message', at: 2, payload: {} });
+    const afterNative = timeline.turn(turn.turnId);
+    expect(afterNative.observed).toBe(true);
+    expect(afterNative.observedAt).toBe(2);
+    expect(afterNative.observedBy).toBe('native|codex');
+  });
+
+  it('agrees with the bridge turn service on every one of these rules', () => {
+    const bridge = createTurnService();
+    const app = createTurnTimeline();
+    const bridgeTurn = bridge.open({ turnId: TURN_A, causedBy: 'cmd-1' });
+    const appTurn = open(app, { turnId: TURN_B, causedBy: 'cmd-1' });
+
+    type LaneEvent = {
+      readonly source: TimelineSource;
+      readonly kind: TimelineEntryKind;
+      readonly at?: number;
+      readonly seq?: number;
+      readonly payload: Record<string, unknown>;
+    };
+    const bridgeEvent = (input: LaneEvent) => bridge.event({ turnId: bridgeTurn.turnId, ...input });
+    const appEvent = (input: LaneEvent) => app.event({ turnId: appTurn.turnId, ...input });
+
+    const unsafe = { source: nativeSource('codex', 'u-1'), kind: 'message' as const, at: 1, seq: 2 ** 53, payload: {} };
+    expect(laneRejectionOf(() => bridgeEvent(unsafe))).toEqual({ code: 'invalid_request', field: 'timeline_seq' });
+    expect(laneRejectionOf(() => appEvent(unsafe))).toEqual({ code: 'invalid_request', field: 'timeline_seq' });
+    expect(laneRejectionOf(() => bridgeEvent({ ...unsafe, seq: Number.MAX_SAFE_INTEGER + 2 })))
+      .toEqual({ code: 'invalid_request', field: 'timeline_seq' });
+
+    bridgeEvent({ source: nativeSource('codex', 'c-1'), kind: 'message', at: 1, seq: 1, payload: {} });
+    appEvent({ source: nativeSource('codex', 'c-1'), kind: 'message', at: 1, seq: 1, payload: {} });
+    bridgeEvent({ source: nativeSource('codex', 'c-2'), kind: 'message', at: 2, seq: 3, payload: {} });
+    appEvent({ source: nativeSource('codex', 'c-2'), kind: 'message', at: 2, seq: 3, payload: {} });
+    expect([...bridge.gaps(bridgeTurn.turnId)]).toEqual([2]);
+    expect([...app.gaps(appTurn.turnId)]).toEqual([2]);
+
+    bridgeEvent({ source: nativeSource('dsh', 'd-1'), kind: 'message', at: 3, seq: 2, payload: {} });
+    appEvent({ source: nativeSource('dsh', 'd-1'), kind: 'message', at: 3, seq: 2, payload: {} });
+    expect([...bridge.gaps(bridgeTurn.turnId)]).toEqual([2]);
+    expect([...app.gaps(appTurn.turnId)]).toEqual([2]);
+
+    bridgeEvent({ source: hostSource('cmd-host'), kind: 'message', at: 4, payload: {} });
+    appEvent({ source: hostSource('cmd-host'), kind: 'message', at: 4, payload: {} });
+    const bridgeView = bridge.turn(bridgeTurn.turnId);
+    const appView = app.turn(appTurn.turnId);
+    expect([bridgeView.observed, bridgeView.observedAt, bridgeView.observedBy])
+      .toEqual([appView.observed, appView.observedAt, appView.observedBy]);
+    expect(bridgeView.observedBy).toBe('native|codex');
+    expect(bridgeView.observedAt).toBe(1);
+
+    bridgeEvent({ source: nativeSource('codex', 'c-3'), kind: 'message', at: 5, payload: {} });
+    appEvent({ source: nativeSource('codex', 'c-3'), kind: 'message', at: 5, payload: {} });
+    expect(bridge.turn(bridgeTurn.turnId).observedBy).toBe('native|codex');
+    expect(app.turn(appTurn.turnId).observedBy).toBe('native|codex');
+
+    const distant = { source: nativeSource('codex', 'c-4'), kind: 'message' as const, at: 6, seq: MAX_TIMELINE_SEQ_SPAN + 2, payload: {} } satisfies LaneEvent;
+    bridgeEvent(distant);
+    appEvent(distant);
+    expect(laneRejectionOf(() => bridge.gaps(bridgeTurn.turnId))).toEqual({ code: 'invalid_request', field: 'timeline_seq_span' });
+    expect(laneRejectionOf(() => app.gaps(appTurn.turnId))).toEqual({ code: 'invalid_request', field: 'timeline_seq_span' });
   });
 });
