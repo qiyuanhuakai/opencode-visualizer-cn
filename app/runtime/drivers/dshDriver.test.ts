@@ -442,7 +442,7 @@ describe('DSH driver reclaim and paging interleaving', () => {
       await subscription!.return();
     }, (created) => ({
       ...created,
-      getControl(params: { collection: string; key: string }) {
+      getControl(params: Parameters<RuntimeStore['getControl']>[0]) {
         if (params.collection !== 'operations' || params.key !== leaseKey) return created.getControl(params);
         entered += 1;
         const response = created.getControl(params);
