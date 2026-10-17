@@ -34,6 +34,15 @@ jobs:
       - name: Lint and type-check
         run: pnpm lint
 
+      # app/runtime/pinStore.test.ts runs the offline pin store against a real
+      # IndexedDB by driving Playwright's Chromium. Install exactly the browser
+      # revision pinned by the exact "playwright" version in package.json
+      # (1.62.1 -> chromium + chromium-headless-shell 1234) together with its
+      # system dependencies; otherwise the launch fails because the executable
+      # is absent. "chromium" includes the headless shell this test uses.
+      - name: Install Playwright browser for storage tests
+        run: pnpm exec playwright install --with-deps chromium
+
       - name: Run tests
         run: pnpm test
 

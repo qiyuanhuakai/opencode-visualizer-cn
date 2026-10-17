@@ -302,6 +302,24 @@
           </template>
         </Dropdown>
       </div>
+      <!--
+        Task 35: the target row. The chips name every participant the single prompt goes to, and
+        the reserved fan-out marker stays visible next to them until task 42 enables it. The row
+        only renders when a container wired the thread state.
+      -->
+      <div v-if="threadState && threadState.summary.value" class="input-thread-row" data-testid="input-thread-row">
+        <ThreadTargetRow
+          variant="composer"
+          :open="true"
+          :thread="threadState.summary.value"
+          :targets="threadState.targets.value"
+          :handoff="threadState.handoff.value"
+          :draft-text="messageValue"
+          :busy="threadState.busy.value"
+          :error="threadState.error.value"
+          @select-target="threadState.setTarget"
+        />
+      </div>
       <div class="input-toolbar">
         <div class="input-selects">
           <slot name="before-controls" />
@@ -541,7 +559,7 @@
             class="input-button stop send-button"
             :disabled="props.disabled || !canAbort"
             :title="$t('inputPanel.stop')"
-            @click="$emit('abort')"
+            @click="requestAbort"
           >
             <Icon icon="ph:stop-fill" :width="16" :height="16" />
           </button>
@@ -551,7 +569,7 @@
             class="input-button primary send-button"
             :disabled="props.readOnly || (!canRunCodexCommand && !canRunForgeCommand && (props.disabled || !canSend))"
             :title="sendTooltip"
-            @click="$emit('send')"
+            @click="requestSend"
           >
             <Icon icon="lucide:send" :width="16" :height="16" />
           </button>
@@ -562,7 +580,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch, inject, type Ref } from 'vue';
+import { computed, defineAsyncComponent, nextTick, ref, watch, inject, type Ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import { FileIcon, FolderIcon } from '@vue-symbols/icons';
@@ -590,6 +608,18 @@ import {
 import { truncateTextTransformerString, validateTextTransformerLibrary } from '../utils/snippets';
 import type { CodexSkill } from '../backends/codex/codexAdapter';
 import { parseLeadingSlashCommand } from '../utils/codexSlashCommands';
+import {
+  RUNTIME_SESSION_ACTIONS_KEY,
+  bindRuntimeAction,
+  type RuntimeActionBinding,
+  type RuntimeSendInput,
+  type RuntimeSessionRuntime,
+} from '../composables/useRuntimeSessionActions';
+import { useRuntimeThreadState } from '../composables/useRuntimeThread';
+
+// Task 35: the thread surfaces are lazily loaded so the composer's entry chunk keeps its size;
+// the panel variant lives in OutputPanel.
+const ThreadTargetRow = defineAsyncComponent(() => import('./runtime/ThreadView.vue'));
 type ModelOption = {
   id: string;
   modelID: string;
@@ -694,6 +724,69 @@ const emit = defineEmits<{
   (event: 'open-snippet-settings'): void;
   (event: 'status-error', message: string): void;
 }>();
+
+// Task 22: when a container provides the qualified runtime action port, send
+// and abort go through the new path (routed by full SessionRef). Without a
+// provider the component keeps its legacy emits, so existing parents are
+// unaffected.
+const runtimeSessionActions = inject<RuntimeSessionRuntime | null>(RUNTIME_SESSION_ACTIONS_KEY, null);
+
+// Task 35: when a container provides the thread state, the composer shows exactly which
+// participants the input goes to. Absent → the row is not rendered and the composer is unchanged.
+const threadState = useRuntimeThreadState();
+
+function runtimeBinding() {
+  return runtimeSessionActions ? bindRuntimeAction(runtimeSessionActions) : null;
+}
+
+function runtimeSendInput(): RuntimeSendInput {
+  return {
+    text: props.messageInput,
+    mode: props.selectedMode,
+    model: props.selectedModel,
+    thinking: props.selectedThinking,
+    attachments: props.attachments.map((attachment) => ({
+      filename: attachment.filename,
+      mime: attachment.mime,
+      dataUrl: attachment.dataUrl,
+      lineComment: attachment.lineComment ?? null,
+    })),
+  };
+}
+
+/**
+ * The binding the prompt is actually sent through. When the thread target row names exactly one
+ * participant, the prompt goes to THAT participant's own native session — the same session the
+ * chips display — instead of whatever session the runtime binding happens to hold.
+ */
+function sendBinding(binding: RuntimeActionBinding): RuntimeActionBinding {
+  const state = threadState;
+  if (state === null) return binding;
+  const selected = state.targets.value;
+  if (selected.length !== 1) return binding;
+  const participant = state.summary.value?.participants.find((entry) => entry.participantId === selected[0]);
+  const session = participant?.session;
+  if (session === undefined) return binding;
+  return Object.freeze({ ...binding, session });
+}
+
+function requestSend() {
+  const binding = runtimeBinding();
+  if (binding && runtimeSessionActions) {
+    void runtimeSessionActions.router.sendMessage(sendBinding(binding), runtimeSendInput());
+    return;
+  }
+  emit('send');
+}
+
+function requestAbort() {
+  const binding = runtimeBinding();
+  if (binding && runtimeSessionActions) {
+    void runtimeSessionActions.router.cancel(binding);
+    return;
+  }
+  emit('abort');
+}
 
 const messageValue = computed({
   get: () => props.messageInput,
@@ -1612,7 +1705,7 @@ function handleKeydown(event: KeyboardEvent) {
   // Ctrl+Enter: always send
   if (isAlwaysSend) {
     event.preventDefault();
-    emit('send');
+    requestSend();
     return;
   }
   // Enter (no modifiers): send or newline depending on setting
@@ -1625,7 +1718,7 @@ function handleKeydown(event: KeyboardEvent) {
     enterToSend.value
   ) {
     event.preventDefault();
-    emit('send');
+    requestSend();
   }
 }
 
@@ -1853,6 +1946,15 @@ const inputMessageStyle = computed(() => {
 
 .input-message:has(.input-textarea:disabled) {
   opacity: 0.6;
+}
+
+.input-thread-row {
+  padding: 0 10px 6px;
+}
+
+.input-thread-row :deep(.target-section) {
+  padding: 6px 8px;
+  gap: 4px;
 }
 
 .input-toolbar {
