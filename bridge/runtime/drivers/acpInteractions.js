@@ -15,10 +15,12 @@ export function createAcpInteractions({ store, mutations, rpc, active, emit, ses
   const pending = new Map();
   const controls = new Set();
   const receipts = new Map();
-  // Occupancy keys whose native reply has been written. The RPC layer frees a native ID
-  // as it writes the reply, so a receipt answered on the wire no longer occupies the ID
-  // even though its durable row is only released after the database finalization.
-  const answered = new Set();
+  // Occupancy keys whose native reply has been written, mapped to the interaction that
+  // wrote it. The RPC layer frees a native ID as it writes the reply, so a receipt
+  // answered on the wire no longer occupies the ID even though its durable row is only
+  // released after the database finalization. Binding the mark to its receipt keeps one
+  // receipt's cleanup from clearing a mark a later receipt on the same reused ID owns.
+  const answered = new Map();
   const occupancyKey = (scope, parent, nativeRequestId) =>
     `acp-interaction-native:${fingerprint([scope, parent, nativeRequestId])}`;
   function track(promise) {
@@ -48,7 +50,7 @@ export function createAcpInteractions({ store, mutations, rpc, active, emit, ses
     // Only a request that is still outstanding rejects a same-ID receipt. Once the reply
     // is on the wire the RPC layer has freed the ID, so the peer may re-use it inside the
     // same prompt while the durable row is still being finalized.
-    if (claimed?.value && !answered.has(occupancy))
+    if (claimed?.value && answered.get(occupancy) !== record(claimed.value).interactionId)
       throw new StoreError('conflict', 'duplicate_native_request');
     answered.delete(occupancy);
     try {
@@ -97,15 +99,18 @@ export function createAcpInteractions({ store, mutations, rpc, active, emit, ses
     if (!receipt) return;
     for (let attempt = 0; attempt < 4; attempt++) {
       const current = await readRecord(store, 'interactions', receipt.occupancy);
+      // The occupancy may already belong to a later receipt on the same reused ID: that
+      // receipt's answered mark is not ours to clear, so only delete our own.
+      const own = answered.get(receipt.occupancy) === key;
       if (!current || current.value === null || record(current.value).interactionId !== key) {
         receipts.delete(key);
-        answered.delete(receipt.occupancy);
+        if (own) answered.delete(receipt.occupancy);
         return;
       }
       try {
         await compareRecord(store, 'interactions', receipt.occupancy, current, null);
         receipts.delete(key);
-        answered.delete(receipt.occupancy);
+        if (own) answered.delete(receipt.occupancy);
         return;
       } catch (error) {
         if (!isRevisionConflict(error)) throw error;
@@ -156,12 +161,13 @@ export function createAcpInteractions({ store, mutations, rpc, active, emit, ses
             rpc.reply(item.nativeRequestId, answer);
             // The reply itself frees the native ID, so the occupancy ends here rather
             // than after the database finalization this run still has to perform.
-            answered.add(
+            answered.set(
               occupancyKey(
                 mutations.scopeFor(item.session),
                 item.parent,
                 item.nativeRequestId,
               ),
+              interactionId,
             );
           },
         );
@@ -193,8 +199,9 @@ export function createAcpInteractions({ store, mutations, rpc, active, emit, ses
           },
           () => {
             rpc.reply(item.nativeRequestId, answer);
-            answered.add(
+            answered.set(
               occupancyKey(mutations.scopeFor(item.session), item.parent, item.nativeRequestId),
+              key,
             );
           },
         );

@@ -427,6 +427,70 @@ test('a native ID is reusable the moment its reply is on the wire', () =>
     ]).toEqual([['ok'], [7], true, 'ok', [7, 7]]);
   }));
 
+test('an older receipt finalization does not clear a newer receipt answered mark', () =>
+  withStore(async (store) => {
+    // Both reply finalizations are held so the older receipt's database cleanup runs
+    // while the newer receipt still occupies the reused native ID.
+    const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    let finalizations = 0;
+    const terminalPhase = (value: Json) =>
+      typeof value === 'object' && value !== null && !Array.isArray(value) && value.phase === 'terminal';
+    const wrapped: RuntimeStore = {
+      ...store,
+      async mutateControl(input) {
+        if (input.changes.some((change) => terminalPhase(change.value)) && finalizations < gates.length)
+          await gates[finalizations++].promise;
+        return store.mutateControl(input);
+      },
+    };
+    const harness = await openInteractions(wrapped);
+    const parent = await harness.startParent('prompt', session);
+    await harness.interactions.receive(permissionRequest(7));
+    const first = harness.interactions.respond({
+      interactionId: interactionIds(harness.events)[0],
+      session,
+      answer,
+      idempotencyKey: 'reply-a',
+    });
+    // The peer may re-use native ID 7 from the moment A's reply is on the wire, while
+    // A's database finalization is still held.
+    while (harness.replies.length < 1) await new Promise((resolve) => setImmediate(resolve));
+    await harness.interactions.receive(permissionRequest(7));
+    const second = harness.interactions.respond({
+      interactionId: interactionIds(harness.events)[1],
+      session,
+      answer,
+      idempotencyKey: 'reply-b',
+    });
+    while (harness.replies.length < 2) await new Promise((resolve) => setImmediate(resolve));
+    // A finalizes first and must only clear its own answered mark, not B's.
+    gates[0].resolve();
+    await first;
+    let third = 'ok';
+    try {
+      await harness.interactions.receive(permissionRequest(7));
+    } catch (error) {
+      third = reasonOf(error);
+    }
+    gates[1].resolve();
+    await second;
+    if (third === 'ok') {
+      await harness.interactions.respond({
+        interactionId: interactionIds(harness.events)[2],
+        session,
+        answer,
+        idempotencyKey: 'reply-c',
+      });
+    }
+    parent.release();
+    await parent.prompt;
+    expect([third, harness.replies, interactionIds(harness.events).length]).toEqual([
+      'ok',
+      [7, 7, 7],
+      3,
+    ]);
+  }));
+
 test('genuinely concurrent occupancy of one native request ID is still rejected', () =>
   withStore(async (store) => {
     const harness = await openInteractions(store);
