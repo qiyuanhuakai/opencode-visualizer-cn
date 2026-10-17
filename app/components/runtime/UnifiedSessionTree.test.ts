@@ -76,6 +76,8 @@ class FakeClient {
   readonly snapshots = new Map<string, number>();
   readonly listCalls = new Map<string, number>();
   abortedSnapshots = 0;
+  /** When set, the next index read pauses after its first page until the promise resolves. */
+  readGate: Promise<void> | null = null;
   private tokens = 0;
   private readonly revision = 200000;
   private indexSnapshot?: Readonly<{ token: string; revision: number; watermark: number; expiresAt: number }>;
@@ -164,6 +166,11 @@ class FakeClient {
           throw Object.assign(new Error('snapshot.expired'), { code: 'replay_required' });
         }
         await options.onPage(name, page);
+        if (this.readGate !== null) {
+          const gate = this.readGate;
+          this.readGate = null;
+          await gate;
+        }
         cursor = page.cursor;
       } while (cursor !== null);
     }
@@ -178,6 +185,15 @@ class FakeClient {
     }
     throw new TypeError(`unexpected method ${method}`);
   }
+}
+
+async function waitFor(predicate: () => boolean, timeout = 2000): Promise<void> {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error('waitFor: condition not met before timeout');
 }
 
 function seedTopology(client: FakeClient, options: Readonly<{ failed?: readonly HarnessKind[] }> = {}): void {
@@ -455,6 +471,7 @@ describe('task 21 — unified session tree acceptance', () => {
     const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV });
     await tree.start();
 
+    const readsBefore = client.snapshots.get('session_summaries') ?? 0;
     const first = tree.search('title-1');
     const second = tree.search('title-2');
     await Promise.all([first, second]);
@@ -464,6 +481,41 @@ describe('task 21 — unified session tree acceptance', () => {
     expect(settled.query).toBe('title-2');
     expect(settled.matches.length).toBeGreaterThan(0);
     for (const row of settled.matches) expect(row.title).toContain('title-2');
+    // The superseded search is skipped BEFORE it starts its index read, so exactly
+    // one read landed: the surviving search's. Demanding an aborted read here would
+    // force the superseded search to start a read nobody is waiting for.
+    expect(client.snapshots.get('session_summaries') ?? 0).toBe(readsBefore + 1);
+    await tree.dispose();
+  });
+
+  it('a query cancelled after its read started aborts the in-flight read without landing its results', async () => {
+    const total = 600;
+    const client = new FakeClient();
+    seedTopology(client);
+    for (let index = 0; index < total; index += 1) {
+      const kind = HARNESS_KINDS[index % HARNESS_KINDS.length]!;
+      client.add('session_summaries', canonical('session_summaries', sessionKey(index, kind), index + 1, summaryValue(index, kind)));
+    }
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV });
+    await tree.start();
+
+    const readsBefore = client.snapshots.get('session_summaries') ?? 0;
+    const gate = Promise.withResolvers<void>();
+    client.readGate = gate.promise;
+    const first = tree.search('title-1');
+    // The first search's read is genuinely in flight: it served its first page and
+    // now waits on the gate, so the cancellation below lands mid-read.
+    await waitFor(() => (client.snapshots.get('session_summaries') ?? 0) > readsBefore);
+    const second = tree.search('title-2');
+    gate.resolve();
+    await Promise.all([first, second]);
+
+    const settled = tree.searchState.value;
+    expect(settled.status).toBe('complete');
+    expect(settled.query).toBe('title-2');
+    expect(settled.matches.length).toBeGreaterThan(0);
+    for (const row of settled.matches) expect(row.title).toContain('title-2');
+    // The in-flight read observed the cancellation instead of running to completion.
     expect(client.abortedSnapshots).toBeGreaterThanOrEqual(1);
     await tree.dispose();
   });
