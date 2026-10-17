@@ -1,4 +1,7 @@
 import type { RuntimeHost } from './runtime/runtimeHost.js';
+import type { RuntimeServices, RuntimeRoot } from './runtime/runtimeServices.js';
+import type { RuntimeDriverFactory } from './runtime/runtimeDriverFactories.js';
+import type { TargetGrant } from '../shared/runtime/runtimeWire.js';
 import type { AcpClient, AcpProcessStatus, AcpProcessManager } from './acpProcessManager.js';
 import type { AcpAgentConfig, BridgeConfig, BridgeConfigStore } from './bridgeConfig.js';
 import type { ProcessStatus, ProcessSupervisor } from './processSupervisor.js';
@@ -32,6 +35,10 @@ export function createBridgeRuntime(options?: {
   environmentId?: string;
   stateRoot?: string;
   role?: 'local' | 'manager' | 'execution';
+  localWorkspaceRoots?: readonly RuntimeRoot[];
+  runtimeDriverFactories?: Readonly<Record<string, RuntimeDriverFactory>>;
+  runtimeTargets?: readonly RuntimeServices[];
+  runtimeGrants?: readonly TargetGrant[];
   configStore?: BridgeConfigStore;
   nativeSupervisor?: ProcessSupervisor;
   acpManager?: AcpProcessManager;
