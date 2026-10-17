@@ -5,6 +5,7 @@ import { parseArgs } from 'node:util';
 import { createBridgeConfigStore } from './bridgeConfig.js';
 import { createDaemonPaths, isProcessAlive, readDaemonState } from './daemonState.js';
 import { assertSafeDaemonTarget } from './daemonCredentials.js';
+import { parseEnvironmentId } from '../shared/runtime/identity.js';
 
 const DEFAULT_PORT = 23004;
 const DEFAULT_PATH = '/codex';
@@ -25,6 +26,7 @@ Usage:
   vis_bridge stop
   vis_bridge restart [options]
   vis_bridge config [--config <path>]
+  vis_bridge control-store --state-root <dir> [--environment <uuid>]
   vis_bridge update [--check] [--yes|-y]
   vis_bridge upgrade [--check] [--yes|-y]
   vis_bridge --version
@@ -38,6 +40,8 @@ Options:
   --upstream-token     Bearer token sent to Codex app-server during WebSocket handshake.
   --upstream-token-file Read upstream bearer token from file.
   --config             Bridge supervisor config path.
+  --state-root         Login-local state root owned by the control-store role.
+  --environment        Persistent cluster environment UUID the control store fences.
   --help               Show this help.
 
 Environment:
@@ -50,6 +54,8 @@ Environment:
   VIS_BRIDGE_CODEX_TOKEN_FILE       Same as --upstream-token-file.
   VIS_BRIDGE_CODEX_AUTHORIZATION    Raw Authorization header for upstream.
   VIS_BRIDGE_CONFIG                 Same as --config.
+  VIS_BRIDGE_CONTROL_STORE_ROOT     Same as --state-root for the control-store role.
+  VIS_BRIDGE_ENVIRONMENT            Same as --environment.
   EDITOR                            Editor command used by vis_bridge config.
   VIS_BRIDGE_STATE_DIR              Override the per-user daemon state directory.
 `;
@@ -88,7 +94,7 @@ function createDaemonArgs(options) {
 
 export function parseCliOptions(argv = process.argv.slice(2), env = process.env) {
   const explicitCommand = argv[0]?.startsWith('-') ? undefined : argv[0];
-  if (explicitCommand && !['start', 'stop', 'restart', 'config', '__daemon'].includes(explicitCommand)) {
+  if (explicitCommand && !['start', 'stop', 'restart', 'config', 'control-store', '__daemon'].includes(explicitCommand)) {
     throw new Error(`Unknown vis_bridge command: ${explicitCommand}`);
   }
   const command = explicitCommand ?? 'start';
@@ -104,6 +110,8 @@ export function parseCliOptions(argv = process.argv.slice(2), env = process.env)
       'upstream-token': { type: 'string' },
       'upstream-token-file': { type: 'string' },
       config: { type: 'string' },
+      'state-root': { type: 'string' },
+      environment: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
     allowPositionals: false,
@@ -125,6 +133,35 @@ export function parseCliOptions(argv = process.argv.slice(2), env = process.env)
       command,
       help: Boolean(values.help),
       configPath: values.config ?? (env.VIS_BRIDGE_CONFIG?.trim() || undefined),
+    };
+  }
+
+  if (command === 'control-store') {
+    const unexpectedOption = Object.keys(values).find(
+      (key) => !['help', 'state-root', 'environment'].includes(key),
+    );
+    if (unexpectedOption) throw new Error(`vis_bridge control-store does not accept --${unexpectedOption}.`);
+    const stateRoot =
+      values['state-root'] ?? env.VIS_BRIDGE_CONTROL_STORE_ROOT?.trim() ?? env.VIS_BRIDGE_STATE_DIR?.trim();
+    if (!values.help && !stateRoot) {
+      throw new Error('vis_bridge control-store requires --state-root or VIS_BRIDGE_CONTROL_STORE_ROOT.');
+    }
+    const environmentText = values.environment ?? env.VIS_BRIDGE_ENVIRONMENT;
+    let environmentId;
+    if (environmentText !== undefined) {
+      try {
+        environmentId = parseEnvironmentId(environmentText);
+      } catch {
+        throw new Error(`Invalid vis_bridge control-store environment: ${environmentText}`);
+      }
+    }
+    return {
+      command,
+      role: 'control-store',
+      help: Boolean(values.help),
+      serverArgs: [],
+      ...(stateRoot === undefined ? {} : { stateRoot }),
+      ...(environmentId === undefined ? {} : { environmentId }),
     };
   }
 
@@ -227,4 +264,104 @@ export async function runBridgeConfigCommand(options, env = process.env) {
     });
   });
   console.log(`Config saved at ${store.configPath}. Run vis_bridge restart to apply service changes.`);
+}
+
+/** Node's maximum timer delay; the referenced handle keeps the event loop alive indefinitely. */
+const LIVENESS_HEARTBEAT_MS = 2_147_483_647;
+
+/**
+ * Explicit, closable process-liveness token for the long-lived lifecycle roles. Registering a
+ * SIGINT/SIGTERM listener alone does NOT keep Node's event loop alive, so a command that only
+ * listens for signals exits as soon as `main` returns. One referenced timer is an event-loop
+ * handle that keeps the process resident until the role calls `release()`, after which the loop
+ * can drain and the process exits normally. `release()` is idempotent.
+ */
+function createLivenessToken() {
+  const timer = setInterval(() => {
+    // Intentionally empty: the referenced timer itself is the liveness handle.
+  }, LIVENESS_HEARTBEAT_MS);
+  let released = false;
+  return {
+    release() {
+      if (released) return;
+      released = true;
+      clearInterval(timer);
+    },
+  };
+}
+
+/**
+ * Runs the login-side control-store role: opens the durable Slurm control store on the
+ * login-local disk (verifying local FS + acquiring the single-owner fence) and holds it
+ * until SIGINT/SIGTERM. The compute Runtime never writes here directly; it reaches this
+ * store through the login-owned relay (task 29).
+ *
+ * Liveness is an explicit referenced timer (not an accidental open handle): without it the
+ * process would exit immediately after claiming ownership, since a signal listener does not
+ * keep the event loop alive. Every terminating path (SIGINT, SIGTERM, an unexpected error, or
+ * an explicit `close()`) releases the on-disk fence before the process ends.
+ */
+export async function runControlStoreCommand(options, dependencies = {}) {
+  const stateRoot = options.stateRoot ?? dependencies.stateRoot;
+  if (!stateRoot) throw new Error('vis_bridge control-store requires --state-root or VIS_BRIDGE_CONTROL_STORE_ROOT.');
+  const environmentId = options.environmentId ?? dependencies.environmentId;
+  if (!environmentId) throw new Error('vis_bridge control-store requires an environment id (--environment).');
+  const { createSlurmControlStore } = await import('./runtime/transports/slurmControlStore.js');
+  const store = createSlurmControlStore({
+    root: stateRoot,
+    environmentId,
+    ownerInstanceId: dependencies.ownerInstanceId ?? `control-store-${process.pid}`,
+  });
+  const status = await store.open('owner');
+  console.log(
+    `vis_bridge control-store owns environment ${status.environmentId} at ${status.root} (epoch ${status.epoch}).`,
+  );
+
+  const liveness = createLivenessToken();
+  let released = false;
+  const releaseFence = async () => {
+    if (released) return;
+    released = true;
+    liveness.release();
+    await store.close();
+  };
+  const exitAfterRelease = (code) => {
+    void releaseFence().then(
+      () => process.exit(code),
+      () => process.exit(1),
+    );
+  };
+  const onSignal = () => exitAfterRelease(0);
+  const onFatalError = (error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    exitAfterRelease(1);
+  };
+  const onUnhandledRejection = (reason) => {
+    console.error(reason instanceof Error ? reason.message : String(reason));
+    exitAfterRelease(1);
+  };
+  const removeLivenessListeners = () => {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
+    process.off('uncaughtException', onFatalError);
+    process.off('unhandledRejection', onUnhandledRejection);
+  };
+
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+  process.once('uncaughtException', onFatalError);
+  process.once('unhandledRejection', onUnhandledRejection);
+
+  return {
+    store,
+    /**
+     * Releases ownership (writes the fence with `released: true`) and stops holding the event
+     * loop open. Signal-driven exits call this internally; an in-process caller uses it to
+     * relinquish the role without a signal.
+     */
+    async close() {
+      removeLivenessListeners();
+      await releaseFence();
+    },
+  };
 }

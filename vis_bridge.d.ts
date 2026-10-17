@@ -59,8 +59,17 @@ export type VisBridgeStopCliOptions = {
   readonly serverArgs: readonly [];
 };
 
+export type VisBridgeControlStoreCliOptions = {
+  readonly command: 'control-store';
+  readonly role: 'control-store';
+  readonly help: boolean;
+  readonly serverArgs: readonly [];
+  readonly stateRoot?: string;
+  readonly environmentId?: string;
+};
+
 export function parseCliOptions(
   argv?: readonly string[],
   env?: NodeJS.ProcessEnv,
-): VisBridgeServerCliOptions | VisBridgeStopCliOptions;
+): VisBridgeServerCliOptions | VisBridgeStopCliOptions | VisBridgeControlStoreCliOptions;
 export function main(): Promise<void>;
