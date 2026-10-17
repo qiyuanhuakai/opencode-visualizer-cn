@@ -118,6 +118,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     migrate: (entries) => ipcRenderer.sendSync('persistent-storage-migrate', entries),
   },
   sessionDatabase: {
+    exportOpen: () => ipcRenderer.invoke('session-database-exportOpen'),
+    exportPage: (payload) => ipcRenderer.invoke('session-database-exportPage', payload),
     readHistory: (payload) => ipcRenderer.invoke('session-database-readHistory', payload),
     upsertHistory: (payload) => ipcRenderer.invoke('session-database-upsertHistory', payload),
     clearHistory: (payload) => ipcRenderer.invoke('session-database-clearHistory', payload),
