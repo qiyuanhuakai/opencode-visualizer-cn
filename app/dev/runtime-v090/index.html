@@ -29,6 +29,9 @@
         document.querySelector('#result').textContent = JSON.stringify({ status: 'rejected', code: error.code ?? 'invalid_json' });
       }
     });
+    if (new URLSearchParams(location.search).get('task') === '19') {
+      await import('./task19.ts');
+    }
   </script>
 </body>
 </html>

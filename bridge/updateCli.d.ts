@@ -1,4 +1,6 @@
 import type { ReleaseAsset, StableRelease, UpdateArchitecture, UpdatePlatform } from '../electron/updatePolicy.js';
+import type { BootstrapPlan, HostIdentity } from './runtime/transports/remoteBootstrap.js';
+import type { RemoteInstallAdapter, RemoteInstallReceipt } from './runtime/transports/remoteInstall.js';
 
 export interface BridgeUpdateOptions {
   readonly command: 'update';
@@ -55,3 +57,31 @@ export declare function runBridgeUpdate(
   options: BridgeUpdateOptions,
   dependencies: Partial<BridgeUpdateDependencies> & Pick<BridgeUpdateDependencies, 'currentVersion'>,
 ): Promise<BridgeUpdateResult>;
+
+export type RemoteBridgeUpdateAction = 'check' | 'install' | 'upgrade';
+
+export interface RemoteBridgeUpdateOptions {
+  readonly profile: unknown;
+  readonly host?: HostIdentity;
+  readonly localEnvironmentId: string;
+  readonly localPlatform?: 'darwin' | 'linux' | 'win32';
+  readonly requiredProtocol?: string;
+  readonly sharedRootAvailable?: boolean;
+  readonly action: RemoteBridgeUpdateAction;
+  readonly release?: StableRelease;
+  readonly linuxFormat?: 'deb' | 'rpm';
+}
+
+export type RemoteBridgeUpdateResult =
+  | { readonly kind: 'current'; readonly plan: BootstrapPlan }
+  | { readonly kind: 'upgrade-required'; readonly plan: BootstrapPlan }
+  | { readonly kind: 'installed'; readonly plan: BootstrapPlan; readonly receipt: RemoteInstallReceipt };
+
+export declare function runRemoteBridgeUpdate(
+  options: RemoteBridgeUpdateOptions,
+  injected?: {
+    readonly output?: (message: string) => void;
+    readonly probe?: (profile: unknown) => Promise<unknown>;
+    readonly adapter?: RemoteInstallAdapter;
+  },
+): Promise<RemoteBridgeUpdateResult>;
