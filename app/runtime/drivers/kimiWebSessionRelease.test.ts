@@ -9,6 +9,7 @@ import type { KimiWebDriver } from '../../../bridge/runtime/drivers/kimiWebDrive
 import { createRuntimeStore } from '../../../bridge/runtime/storage/runtimeStore.js';
 import type { Json, RuntimeStore } from '../../../bridge/runtime/storage/runtimeStore.js';
 import { parseEnvironmentId, parseHarnessInstanceId, parseSessionRef } from '../../../shared/runtime/identity.js';
+import { StoreError } from '../../../bridge/runtime/storage/storeProtocol.js';
 
 type ObserverStream = AsyncIterable<Json> & { return(): Promise<IteratorResult<Json>> };
 type FixtureFrame = { readonly direction: string; readonly frame: { readonly type: string; readonly session_id?: string } };
@@ -303,6 +304,69 @@ describe('Kimi Web driver session reclamation', () => {
     expect({ observers: driver.diagnostics().observers, selected: driver.diagnostics().selected, historySessions: driver.diagnostics().historySessions }).toEqual({ observers: 0, selected: 0, historySessions: 0 });
   }, 60000);
 
+  it('does not re-register a task whose native turn ended before its acknowledgement', async () => {
+    // Given a subscribed session whose send acknowledgement is withheld by the fixture.
+    fixture.mode.holdSend = true;
+    const stream = await call<ObserverStream>('subscribe', sessionId(0));
+    const sending = call<{ operationId: string; promptId: string }>('send', sessionId(0), { content: [{ type: 'text', text: 'ends before ack' }], idempotencyKey: 'early-terminal-1' });
+    // The turn binds and requests its approval while the HTTP receipt is still held.
+    await until(async () => (await pendingInteractions()).length > 0, 'native turn binding');
+    expect(fixture.stream(sessionId(0)).active).not.toBeNull();
+
+    // When the native turn ends before the acknowledgement is delivered.
+    fixture.terminal(sessionId(0));
+    await until(async () => (await sendOperations())[0]?.phase === 'terminal', 'terminal native turn');
+    fixture.releaseHistory();
+    await sending;
+
+    // Then closing the observation window reclaims the session: the acknowledgement must not
+    // register a task whose terminal was already observed, because nothing would release it.
+    await stream.return();
+    await until(async () => driver.diagnostics().selected === 0, 'reclaimed after early terminal');
+    expect({ observers: driver.diagnostics().observers, selected: driver.diagnostics().selected, historySessions: driver.diagnostics().historySessions }).toEqual({ observers: 0, selected: 0, historySessions: 0 });
+
+    // And the 32-session cap admits new sessions, because the ended task holds no slot.
+    await expect(call<ObserverStream>('subscribe', sessionId(39))).resolves.toBeDefined();
+  }, 60000);
+
+  it('keeps monitoring a session whose live-task read fails while its acknowledgement is lost', async () => {
+    // Given a subscribed session whose native prompt acknowledgement is lost after the durable SENT marker.
+    fixture.mode.loseSendAck = true;
+    const stream = await call<ObserverStream>('subscribe', sessionId(0));
+    const operations = driver.operations;
+    if (!operations) throw new Error('kimi web driver exposes no operations');
+
+    // When the durable read that decides whether a task is still running fails once.
+    const originalGet = operations.journal.get.bind(operations.journal);
+    let injected = true;
+    operations.journal.get = async (id: string) => {
+      if (injected) { injected = false; throw new StoreError('source_unavailable', 'queue_full'); }
+      return originalGet(id);
+    };
+    await expect(call('send', sessionId(0), { content: [{ type: 'text', text: 'unknown read' }], idempotencyKey: 'unknown-read-1' }))
+      .rejects.toMatchObject({ code: 'source_unavailable' });
+    expect(injected).toBe(false);
+    operations.journal.get = originalGet;
+
+    // Then closing the observation window keeps the session monitored: a failed read is not
+    // evidence that no task is running, so the session must not be reclaimed on it.
+    await stream.return();
+    await until(async () => driver.diagnostics().reclaimed === 0, 'session kept for reconciliation');
+    expect({ observers: driver.diagnostics().observers, selected: driver.diagnostics().selected, historySessions: driver.diagnostics().historySessions, lifecycleSubscriptions: driver.diagnostics().lifecycleSubscriptions }).toEqual({ observers: 0, selected: 1, historySessions: 1, lifecycleSubscriptions: 1 });
+    expect(nativeFrames('unsubscribe_v2').length).toBe(0);
+
+    // And the native turn's genuine terminal ends the task durably and reclaims the session.
+    const operationId = String((await sendOperations())[0]?.operationId ?? '');
+    await until(async () => {
+      const binding = await store.getControl({ collection: 'operations', key: `kimi-native:${operationId}` });
+      return isRecord(binding?.value) && binding.value.turnId !== undefined;
+    }, 'native turn binding');
+    fixture.terminal(sessionId(0));
+    await until(async () => (await sendOperations())[0]?.phase === 'terminal', 'terminal native turn');
+    const reclaimed = driver.diagnostics();
+    expect({ selected: reclaimed.selected, historySessions: reclaimed.historySessions, reclaimed: reclaimed.reclaimed }).toEqual({ selected: 0, historySessions: 0, reclaimed: 1 });
+  }, 60000);
+
   it('retains a session whose send reached the native boundary but lost its acknowledgement', async () => {
     // Given a subscribed session whose native prompt acknowledgement is lost after the durable SENT marker.
     fixture.mode.loseSendAck = true;
@@ -322,6 +386,10 @@ describe('Kimi Web driver session reclamation', () => {
     expect(nativeFrames('unsubscribe_v2').length).toBe(0);
 
     // And the native turn's genuine terminal ends the task durably and reclaims the session.
+    // The fixture emits turn.started on its own timer, so the turn must be bound before its
+    // terminal frame: an ended frame that precedes the binding is correctly ignored, and the
+    // test would otherwise wait for a terminal that can never be observed.
+    await until(async () => (await pendingInteractions()).length > 0, 'native turn binding');
     fixture.mode.loseSendAck = false;
     fixture.terminal(sessionId(0));
     await driver.flush();

@@ -57,6 +57,8 @@ export async function createKimiWebDriver(options) {
   const selected = new Map();
   const retained = new Map();
   const runningTasks = new Map();
+  const endedTasks = new Map();
+  const uncertain = new Set();
   const invalidated = new Set();
   let eventWork = Promise.resolve(), eventCount = 0, eventBytes = 0;
   let lastEventError;
@@ -85,17 +87,44 @@ export async function createKimiWebDriver(options) {
     tasks.delete(operationId);
     if (!tasks.size) runningTasks.delete(sessionId);
   }
+  // A terminal observed on the native lane is remembered per session, so a late
+  // acknowledgement cannot re-register a task whose terminal already released it.
+  function noteEndedTask(sessionId, operationId) {
+    let ended = endedTasks.get(sessionId);
+    if (!ended) endedTasks.set(sessionId, (ended = new Set()));
+    ended.add(operationId);
+  }
+  function consumeEndedTask(sessionId, operationId) {
+    const ended = endedTasks.get(sessionId);
+    if (!ended?.has(operationId)) return false;
+    ended.delete(operationId);
+    if (!ended.size) endedTasks.delete(sessionId);
+    return true;
+  }
   function reclaim(sessionId) {
     if (closed || retained.get(sessionId) || runningTasks.has(sessionId)) return;
+    // A session whose durable state could not be read is not evidence of an idle session:
+    // re-read it and keep monitoring until the answer is reliable.
+    if (uncertain.has(sessionId)) { void verify(sessionId); return; }
     const pending = selected.get(sessionId);
     if (!pending) return;
     const agents = [...new Set([...pending.keys()].map((key) => key.slice(key.indexOf(':') + 1)))];
     selected.delete(sessionId);
     lifecycleCursors.delete(sessionId);
+    endedTasks.delete(sessionId);
+    uncertain.delete(sessionId);
     for (const key of lifecycleSubscriptions.keys()) if (key.endsWith(`:${sessionId}`)) lifecycleSubscriptions.delete(key);
     history.release(sessionId);
     stats.reclaimed++;
     detachNative(sessionId, agents);
+  }
+  async function verify(sessionId) {
+    let live = null;
+    try { live = await operations.liveTask({ ...scope, nativeSessionId: sessionId }); }
+    catch { return; }
+    uncertain.delete(sessionId);
+    if (live) { registerTask(sessionId, live); return; }
+    reclaim(sessionId);
   }
   function detachNative(sessionId, agents) {
     const transcript = Object.fromEntries(agents.map((agentId) => [agentId, 'off']));
@@ -192,7 +221,9 @@ export async function createKimiWebDriver(options) {
     if (frame.type === 'turn.started') scheduled(() => operations.started(captured, payload));
     else if (frame.type === 'turn.ended') scheduled(async () => {
       const ended = await operations.terminal(captured, payload);
-      if (ended) releaseTask(sessionId, ended.operationId);
+      // A genuine terminal of the session's own main task is reliable evidence about its
+      // durable state, so it also resolves a session kept only by an unreadable read.
+      if (ended) { noteEndedTask(sessionId, ended.operationId); releaseTask(sessionId, ended.operationId); uncertain.delete(sessionId); }
       reclaim(sessionId);
       emit({ type: 'turn.ended', session, reason: payload.reason }, sessionId);
     });
@@ -327,13 +358,22 @@ export async function createKimiWebDriver(options) {
         await subscribeSession(captured.session.nativeSessionId, params.agentId ?? 'main');
         fence(captured);
         const executed = await operations.send(captured, payload, params.idempotencyKey);
-        // The submitted turn outlives this call, so the session stays monitored until its terminal frame.
-        registerTask(captured.session.nativeSessionId, executed.operationId);
+        // The native turn can complete on the WebSocket before this acknowledgement
+        // resolves: an operation whose terminal was already observed must not be
+        // registered again, because no later frame would ever release that reference.
+        if (!consumeEndedTask(captured.session.nativeSessionId, executed.operationId))
+          registerTask(captured.session.nativeSessionId, executed.operationId);
         return executed;
       } catch (error) {
         // A task that provably reached the send boundary, or whose acknowledgement cannot be accounted for, stays monitored for reconciliation; one that never entered it is reclaimed by the release below.
-        const live = await operations.liveTask(captured);
-        if (live) registerTask(captured.session.nativeSessionId, live);
+        try {
+          const live = await operations.liveTask(captured);
+          if (live) registerTask(captured.session.nativeSessionId, live);
+        } catch {
+          // The durable state could not be read, which is not evidence that no task is
+          // running: keep the session monitored until a reliable read or terminal decides.
+          uncertain.add(captured.session.nativeSessionId);
+        }
         throw error;
       } finally { release(); }
     },
@@ -393,7 +433,7 @@ export async function createKimiWebDriver(options) {
       await transport?.close(); await lifecycleTransport?.close(); await eventWork;
       await operations?.close();
       for (const entry of observers) await entry.stream.return();
-      history?.clear(); selected.clear(); retained.clear(); runningTasks.clear();
+      history?.clear(); selected.clear(); retained.clear(); runningTasks.clear(); endedTasks.clear(); uncertain.clear();
       if (options.ownership === 'owned') await options.stopOwned();
       return { closed: true };
     })();

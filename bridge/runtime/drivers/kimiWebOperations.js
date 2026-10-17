@@ -178,15 +178,13 @@ export function createKimiWebOperations({ store, transport, isCurrent, admission
     await journal.terminal(lease.value.operationId, scope, payload.reason);
     return { operationId: lease.value.operationId, turnId: payload.turnId };
   }
-  // The live main-task operation of a session, or null when none has to be reconciled: only a task that reached the durable SENT marker (or whose acknowledgement cannot be accounted for) still owns the session.
+  // The live main-task operation of a session, or null when none has to be reconciled: only a task that reached the durable SENT marker (or whose acknowledgement cannot be accounted for) still owns the session. A failed read throws: the caller must not read an unreadable state as an idle session.
   async function liveTask(scope) {
     scope = clean(scope);
-    try {
-      const lease = await readRecord(store, 'operations', leaseKey(scope));
-      if (!lease?.value?.operationId) return null;
-      const operation = await journal.get(lease.value.operationId);
-      return ['sent', 'observed', 'reconciling'].includes(operation.phase) ? lease.value.operationId : null;
-    } catch { return null; }
+    const lease = await readRecord(store, 'operations', leaseKey(scope));
+    if (!lease?.value?.operationId) return null;
+    const operation = await journal.get(lease.value.operationId);
+    return ['sent', 'observed', 'reconciling'].includes(operation.phase) ? lease.value.operationId : null;
   }
   async function close() {
     for (const { scope, promise } of bound.values()) {
