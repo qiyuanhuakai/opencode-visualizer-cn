@@ -59,5 +59,20 @@ describe('runtime durable store', () => {
       expect(await store.readIntent({ intentId: 'atomic' })).toBeNull();
     } finally { await store.close(); await rm(stateDirectory, { recursive: true, force: true }); }
   });
+  it('failure ends the lifecycle when the store worker cannot spawn', async () => {
+    // Given an install root whose packaged runtime binary is missing.
+    const stateDirectory = await mkdtemp(path.join(tmpdir(), 'runtime-store-test-'));
+    const installRoot = await mkdtemp(path.join(tmpdir(), 'runtime-store-root-'));
+    const store = createRuntimeStore({ stateDirectory, environmentId, ownerId, epoch, installRoot });
+    try {
+      // When initialization cannot fork the worker.
+      await expect(store.ready).rejects.toMatchObject({ code: 'source_unavailable', reason: 'worker_exit' });
+      // Then close and terminate settle instead of waiting for an exit that never comes.
+      await expect(store.close()).resolves.toMatchObject({ code: null, signal: null });
+      await expect(store.terminate()).resolves.toMatchObject({ code: null, signal: null });
+      // And a repeated close after the failed spawn still settles.
+      await expect(store.close()).resolves.toMatchObject({ code: null, signal: null });
+    } finally { await rm(stateDirectory, { recursive: true, force: true }); await rm(installRoot, { recursive: true, force: true }); }
+  });
 
 });
