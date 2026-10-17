@@ -10,6 +10,7 @@ export function createAcpProcessManager(options = {}) {
   const entries = new Map();
   const statuses = new Map();
   const releases = new Map();
+  const generations = new Map();
   const forwardStdout = createAcpStdoutForwarder({ entries, handleClientRequest });
   let configuredAgents = [];
 
@@ -70,6 +71,8 @@ export function createAcpProcessManager(options = {}) {
     }
 
     const entry = createAcpProcessEntry(agent, child, status);
+    entry.processGeneration = (generations.get(agent.id) ?? 0) + 1;
+    generations.set(agent.id, entry.processGeneration);
     entries.set(agent.id, entry);
     child.stdout.on('data', (chunk) => forwardStdout(entry, chunk));
     child.stderr.on('data', (chunk) => {
@@ -166,11 +169,13 @@ export function createAcpProcessManager(options = {}) {
     return getStatus();
   }
 
-  function attach(id, client) {
+  function attach(id, client, { runtime = false } = {}) {
     const entry = entries.get(id);
     if (!entry || entry.status.state !== 'running')
       throw new Error(`ACP agent is not running: ${id}.`);
     if (entry.client) throw new Error(`ACP agent ${id} already has a connected client.`);
+    if (entry.runtimeOwned) throw new Error(`ACP agent ${id} is Runtime owned.`);
+    entry.runtimeOwned = runtime;
     const onMessage = (message) => {
       const text = String(message);
       let parsed;
@@ -178,6 +183,14 @@ export function createAcpProcessManager(options = {}) {
         parsed = JSON.parse(text);
       } catch {
         client.close(1003, 'Invalid JSON-RPC payload.');
+        return;
+      }
+      if (runtime) {
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          client.close(1003, 'Invalid JSON-RPC payload.');
+          return;
+        }
+        entry.child.stdin.write(`${text}\n`);
         return;
       }
       if (typeof parsed.method === 'string' && parsed.id !== undefined && parsed.id !== null) {
@@ -195,11 +208,11 @@ export function createAcpProcessManager(options = {}) {
           method: parsed.method,
         });
         const outbound = { ...parsed, id: internalId };
-        handleClientRequest?.observeClientMessage?.(outbound, { agentId: entry.agent.id });
+        if (!runtime) handleClientRequest?.observeClientMessage?.(outbound, { agentId: entry.agent.id });
         entry.child.stdin.write(`${JSON.stringify(outbound)}\n`);
         return;
       }
-      handleClientRequest?.observeClientMessage?.(parsed, { agentId: entry.agent.id });
+      if (!runtime) handleClientRequest?.observeClientMessage?.(parsed, { agentId: entry.agent.id });
       entry.child.stdin.write(`${text}\n`);
     };
     const onClose = () => detach(entry);
@@ -210,6 +223,11 @@ export function createAcpProcessManager(options = {}) {
     entry.status.connected = true;
     client.on('message', onMessage);
     client.on('close', onClose);
+    if (runtime) return {
+      processGeneration: entry.processGeneration,
+      pid: entry.child.pid,
+      close: () => entries.get(id) === entry ? stopEntry(entry) : Promise.resolve(),
+    };
   }
 
   async function stopAll() {
