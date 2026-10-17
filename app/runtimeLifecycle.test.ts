@@ -256,6 +256,75 @@ describe('runtime lifecycle', () => {
     await expect(duplicate).rejects.toBeInstanceOf(AggregateError);
     expect(order).toEqual(['mutation', 'native', 'reverse']);
   });
+
+  it('failure retries a recoverable release on the next stop instead of caching the rejection', async () => {
+    // Given a source whose first stop fails but whose retry succeeds.
+    const order: string[] = [];
+    let nativeStops = 0;
+    const host = createRuntimeHost({
+      environmentId,
+      role: 'local',
+      sources: [
+        {
+          id: 'native',
+          start: async () => {},
+          stop: async () => {
+            nativeStops++;
+            order.push('native');
+            if (nativeStops === 1) throw new Error('transient stop failure');
+          },
+        },
+      ],
+    });
+    host.start();
+    await host.sourcesReady;
+    // When the first stop fails and a second stop follows.
+    await expect(host.stop()).rejects.toBeInstanceOf(AggregateError);
+    await expect(host.stop()).resolves.toBeUndefined();
+    // Then the failed resource is retried exactly once more and fully released.
+    expect(nativeStops).toBe(2);
+    expect(order).toEqual(['native', 'native']);
+  });
+
+  it('failure restarts the bridge after a recoverable stop failure', async () => {
+    // Given an initialized runtime host whose native supervisor fails the first stop.
+    const root = await mkdtemp(path.join(tmpdir(), 'vis-runtime-restart-'));
+    let nativeStops = 0;
+    const runtime = createBridgeRuntime({
+      stateRoot: root,
+      configStore: createBridgeConfigStore({ configPath: path.join(root, 'bridge.json') }),
+      nativeSupervisor: {
+        start: async () => [],
+        stop: async () => {
+          nativeStops++;
+          if (nativeStops === 1) throw new Error('transient stop failure');
+        },
+        getStatus: () => [],
+      },
+      acpManager: {
+        reconcile: async () => [],
+        stopAll: async () => {},
+        getStatus: () => [],
+        attach: () => {},
+      },
+    });
+    try {
+      await runtime.start();
+      if (!runtime.getRuntimeHost) throw new Error('Missing host API');
+      await runtime.getRuntimeHost();
+      // When the first stop fails and shutdown is retried.
+      await expect(runtime.stop()).rejects.toBeInstanceOf(AggregateError);
+      await expect(runtime.stop()).resolves.toBeUndefined();
+      expect(nativeStops).toBe(2);
+      // Then the bridge runtime starts again and serves a fresh host.
+      await runtime.start();
+      expect(await runtime.getRuntimeHost()).toBeDefined();
+      expect(runtime.getStatus()).toEqual({ services: [], acpAgents: [] });
+    } finally {
+      await runtime.stop().catch(() => {});
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('runtime persistent identity', () => {

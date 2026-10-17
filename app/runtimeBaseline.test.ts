@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -15,6 +16,10 @@ const yamlModule: unknown = requireFromRepo('./node_modules/.pnpm/node_modules/j
 interface WorkflowStep {
   readonly uses?: string;
   readonly with?: Readonly<Record<string, unknown>>;
+}
+
+interface PackManifest {
+  readonly files: readonly { readonly path: string }[];
 }
 
 interface WorkflowJob {
@@ -75,5 +80,47 @@ describe('runtime-baseline', () => {
     expect(workspaceYaml).not.toContain('onlyBuiltDependencies');
     expect(workspaceYaml).not.toContain('ignoredBuiltDependencies');
     expect(workspaceYaml).toContain('allowBuilds');
+  });
+
+  it('ships every shared/runtime module the packaged bridge and electron code imports', () => {
+    const files = packageJson.files as string[];
+    const covered = (candidate: string) =>
+      files.some((entry) => candidate === entry || candidate.startsWith(`${entry}/`));
+    const packagedRoots = ['bridge', 'electron'];
+    const packagedSources = ['vis_bridge.js', 'server.js'];
+    for (const dir of packagedRoots) {
+      for (const entry of readdirSync(path.join(root, dir), { recursive: true, withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        if (!/\.(cjs|mjs|js)$/.test(entry.name)) continue;
+        packagedSources.push(path.relative(root, path.join(entry.parentPath ?? path.join(root, dir), entry.name)));
+      }
+    }
+    const relativeImport = /from\s+'(\.[^']+)'/g;
+    const unresolved: string[] = [];
+    for (const source of packagedSources) {
+      const text = readFileSync(path.join(root, source), 'utf8');
+      for (const [, specifier] of text.matchAll(relativeImport)) {
+        const resolved = path.relative(root, path.normalize(path.join(path.dirname(path.join(root, source)), specifier)));
+        // npm always ships package.json regardless of the files whitelist.
+        if (resolved === 'package.json') continue;
+        if (!covered(resolved)) unresolved.push(`${source} -> ${specifier}`);
+      }
+    }
+    expect(unresolved, 'published files whitelist must cover every relative import').toEqual([]);
+    expect(files).toContain('shared/runtime');
+  });
+
+  it('packs the bridge entrypoints together with their shared/runtime dependencies', () => {
+    const packed = spawnSync('npm', ['pack', '--dry-run', '--ignore-scripts', '--json'], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+    expect(packed.status, packed.stderr).toBe(0);
+    const [manifest] = JSON.parse(packed.stdout) as PackManifest[];
+    const paths = manifest.files.map((file) => file.path);
+    expect(paths).toContain('vis_bridge.js');
+    expect(paths).toContain('bridge/bridgeRuntime.js');
+    expect(paths).toContain('shared/runtime/protocol.js');
+    expect(paths).toContain('shared/runtime/identity.js');
   });
 });
