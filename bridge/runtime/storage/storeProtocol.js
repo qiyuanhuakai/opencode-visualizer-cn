@@ -30,6 +30,10 @@ export function parseRequest(method, input = {}) {
       requireStore(Array.isArray(params.changes) && params.changes.every((change) => change !== null && typeof change === 'object' && ['interactions', 'operations'].includes(change.collection)), 'control_collection');
       // Only control-plane entities may consume reserved admission.
       return parseRequest('mutate', params);
+    case 'getControl':
+      requireStore(Buffer.byteLength(JSON.stringify(params)) <= STORE_LIMITS.controlBytes, 'control_size');
+      requireStore(['interactions', 'operations'].includes(params.collection), 'control_collection');
+      return parseRequest('get', params);
     case 'readIntent': text(params.intentId); break;
     case 'mutate':
       text(params.intentId);
