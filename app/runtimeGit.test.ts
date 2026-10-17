@@ -700,6 +700,109 @@ describe('accepted-stage resume across a moved source HEAD', () => {
   }, 60000);
 });
 
+describe('concurrent identical worktree creates', () => {
+  it('sends a racing duplicate against the base commit the first acceptance recorded', async () => {
+    // Given two identical create requests whose lookups both miss before either accepts.
+    const f = await fixture();
+    const tracked = path.join(f.repo, 'tracked.txt');
+    await writeFile(tracked, 'version A', 'utf8');
+    f.gitExec(['add', 'tracked.txt']);
+    f.gitExec(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'A']);
+    const commitA = f.gitExec(['rev-parse', 'HEAD']).trim();
+    // Each caller parks at its pre-acceptance authorization until the test releases it.
+    const releases: Array<() => void> = [];
+    const arrivals: Array<() => void> = [];
+    const arrived = () => new Promise<void>((resolve) => arrivals.push(resolve));
+    // The first acceptance commits durably but holds its acknowledgement.
+    let firstAcceptance = true;
+    let releaseAcknowledgement: () => void = () => undefined;
+    const acknowledged = new Promise<void>((resolve) => {
+      releaseAcknowledgement = resolve;
+    });
+    const argvSeen: string[] = [];
+    const command: TargetGitCommand = {
+      ...f.command,
+      async authorizeCommonDirectory(workspace) {
+        arrivals.shift()?.();
+        await new Promise<void>((resolve) => releases.push(resolve));
+        return f.command.authorizeCommonDirectory(workspace);
+      },
+      async start(request) {
+        if (request.args[0] === 'worktree' && request.args[1] === 'add')
+          argvSeen.push(...request.args);
+        return f.command.start(request);
+      },
+    };
+    const service = authorizedService(f.store, command);
+    const originalMutate = f.store.mutateControl.bind(f.store);
+    f.store.mutateControl = async (mutation) => {
+      const ack = await originalMutate(mutation);
+      if (firstAcceptance) {
+        firstAcceptance = false;
+        await acknowledged;
+      }
+      return ack;
+    };
+    const request = {
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'racing base',
+      idempotencyKey: 'racing-base',
+    };
+    // When the first request parks before accepting and the source HEAD advances.
+    const first = service.create(request);
+    await arrived();
+    await writeFile(tracked, 'version B', 'utf8');
+    f.gitExec(['add', 'tracked.txt']);
+    f.gitExec(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'B']);
+    const commitB = f.gitExec(['rev-parse', 'HEAD']).trim();
+    expect(commitB).not.toBe(commitA);
+    // And the second identical request also parks before its own acceptance.
+    const second = service.create(request);
+    await arrived();
+    // And the first request accepts durably at base A while its acknowledgement is held.
+    releases[0]();
+    let operationId = '';
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const operations = (await durableState(f.store)).operations;
+      if (operations.length > 0) {
+        operationId = operations[0].key;
+        break;
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    expect((await durableState(f.store)).operations).toMatchObject([
+      { value: { phase: 'accepted', baseCommit: commitA } },
+    ]);
+    // Then the second request adopts that record and performs the only send.
+    releases[1]();
+    for (let attempt = 0; attempt < 500; attempt++) {
+      if ((await service.journal.get(operationId)).phase !== 'accepted') break;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    releaseAcknowledgement();
+    const [a, b] = await Promise.all([first, second]);
+    // Both callers observe one operation and exactly one native mutation.
+    expect(a.operationId).toBe(b.operationId);
+    expect(argvSeen).toHaveLength(6);
+    const completed = await service.wait(a.operationId);
+    // And the single send, the completion record, the writer lease, the native HEAD and
+    // the checked-out bytes all describe the base commit the acceptance recorded.
+    expect(argvSeen[argvSeen.length - 1]).toBe(commitA);
+    expect(completed).toMatchObject({
+      phase: 'terminal',
+      outcome: 'completed',
+      baseCommit: commitA,
+    });
+    const worktree = path.join(f.root, 'racing base');
+    expect(f.gitExec(['-C', worktree, 'rev-parse', 'HEAD']).trim()).toBe(commitA);
+    expect(await readFile(path.join(worktree, 'tracked.txt'), 'utf8')).toBe('version A');
+    expect(await service.leases.read(encodeWorkspaceKey(f.ref(worktree)))).toMatchObject({
+      value: { owner: a.operationId, baseCommit: commitA, purpose: 'writer' },
+    });
+  }, 60000);
+});
+
 describe('Git topology refresh and retention', () => {
   it('refreshes external worktree changes after the bounded topology cache expires', async () => {
     // Given an observed repository followed by an external native mutation.

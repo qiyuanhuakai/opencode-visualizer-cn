@@ -94,13 +94,25 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
       // An operation past acceptance is a durable replay of a send that already
       // happened or is still running: return it instead of launching a second
       // mutation, and keep the accepted phase for a send that never started.
-      if ((await journal.get(accepted.operationId)).phase !== 'accepted') return accepted;
+      const operation = await journal.get(accepted.operationId);
+      if (operation.phase !== 'accepted') return accepted;
+      // The mutation runs against the base commit this acceptance recorded rather than
+      // the snapshot this caller resolved beforehand: a concurrent request carrying the
+      // same identity can persist a different pre-acceptance HEAD, and the send, its
+      // completion record and its writer lease must describe one commit.
       return launch(
         accepted,
         {
           workspace,
           mutation: true,
-          args: ['worktree', 'add', '--detach', '--', destination.canonicalPath, baseCommit],
+          args: [
+            'worktree',
+            'add',
+            '--detach',
+            '--',
+            destination.canonicalPath,
+            operation.baseCommit,
+          ],
         },
         true,
         () => command.destination(parent, name),
