@@ -77,6 +77,8 @@ class ReactiveClient {
   readonly minted: ReadonlySet<string>[] = [];
   /** When set, the next fresh read finds the bridge's live-view budget spent and must wait for a slot. */
   indexBudgetSpent = false;
+  /** Every readIndex entry with the state of its abort signal at entry, so a test can prove a superseded search never started its read. */
+  readonly readIndexEntries: Array<{ readonly fresh: boolean; readonly signalAborted: boolean }> = [];
   private revision = 1000;
   private seq = 0;
   constructor(readonly environment: string = ENV) {}
@@ -121,7 +123,8 @@ class ReactiveClient {
       },
     };
   }
-  async readIndex(target: EnvironmentId, collections: string | readonly string[], options: { onPage: (collection: string, page: SnapshotPage) => Promise<void> | void; fresh?: boolean; onWaiting?: () => void }): Promise<{ token: string; revision: number; watermark: number }> {
+  async readIndex(target: EnvironmentId, collections: string | readonly string[], options: { onPage: (collection: string, page: SnapshotPage) => Promise<void> | void; fresh?: boolean; onWaiting?: () => void; signal?: AbortSignal }): Promise<{ token: string; revision: number; watermark: number }> {
+    this.readIndexEntries.push({ fresh: options.fresh === true, signalAborted: options.signal?.aborted === true });
     const names = typeof collections === 'string' ? [collections] : collections;
     // Model the bridge's bounded live-view reuse: a view is minted when none is cached, when the
     // caller explicitly asks for a fresh one, or when the cached view does not cover the requested
@@ -425,6 +428,35 @@ describe('useRuntimeSessionTree — index view freshness (review round 613858028
       expect(tree.indexWaiting.value).toBe(false);
       // The refresh still spent exactly ONE view, shared by both topology collections.
       expect([...(client.minted.at(-1) ?? [])].sort()).toEqual(['harnesses', 'workspaces']);
+    } finally {
+      await tree.dispose();
+    }
+  });
+});
+
+describe('useRuntimeSessionTree — a superseded search never holds the shared read queue', () => {
+  it('skips a queued search cancelled before it started, so a cache-backed child expand is not held behind its slot wait', async () => {
+    // A new search aborts the previous one while it is still queued behind the shared serial read
+    // chain. Starting that superseded search's fresh index read anyway would make it wait out the
+    // live-view slot TTL for a read nobody wants, holding the queue behind a child expand the
+    // valid cache could answer immediately.
+    const client = new ReactiveClient();
+    seedTopology(client);
+    const parentKey = sessionKey(0);
+    client.add('session_summaries', canonical(parentKey, 2, summaryValue(0)));
+    client.add('session_summaries', canonical(sessionKey(1), 2, { ...summaryValue(1), parentSession: sessionRef(0) }));
+    const { history } = historySpy();
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV, history: history as never });
+    try {
+      await tree.start();
+      client.indexBudgetSpent = true;
+      const obsolete = tree.search('obsolete');
+      const expanding = tree.loadMoreChildren(parentKey);
+      const latest = tree.search('latest');
+      await Promise.all([obsolete, expanding, latest]);
+
+      expect(client.readIndexEntries.filter((entry) => entry.fresh && entry.signalAborted)).toEqual([]);
+      expect(await expanding).toMatchObject({ parentKey: parentKey, added: 1 });
     } finally {
       await tree.dispose();
     }

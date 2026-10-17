@@ -674,6 +674,33 @@ describe('RuntimeClient index views under the real store quota (review P2-3)', (
     }
   }, 60000);
 
+  it('rejects a fresh read whose signal is already aborted instead of waiting out the slot TTL', async () => {
+    // A superseded search is cancelled BEFORE its queued turn starts, so acquireIndexSlot runs
+    // with an already-aborted signal. AbortSignal never replays a past abort to a listener
+    // registered afterwards, so the wait loop has to check the flag itself: waiting the full
+    // remaining TTL would hold the caller's shared serial queue behind a read nobody wants,
+    // blocking operations the valid cache could answer immediately.
+    const fixture = await storeFixture({ viewTtlMs: 3000 });
+    try {
+      await fixture.store.snapshot({ collection: 'workspaces' });
+      await fixture.client.readIndex(fixture.target, 'session_summaries', { fresh: true, onPage: () => {} });
+      await fixture.client.readIndex(fixture.target, 'session_summaries', { fresh: true, onPage: () => {} });
+      const controller = new AbortController();
+      controller.abort();
+      const started = Date.now();
+      await expect(fixture.client.readIndex(fixture.target, 'session_summaries', {
+        fresh: true,
+        signal: controller.signal,
+        onPage: () => {},
+      })).rejects.toMatchObject({ code: 'cancelled', field: 'readIndex.slot' });
+      // The slot wait was never entered: the rejection is immediate, not bounded by the TTL.
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(fixture.socket.storeErrors).toEqual([]);
+    } finally {
+      await fixture.close();
+    }
+  }, 60000);
+
   it('pages several collections from ONE fresh index view', async () => {
     const fixture = await storeFixture();
     try {

@@ -47,6 +47,11 @@ function reserved(method: RuntimeMethod) {
  */
 async function acquireIndexSlot(attached: Target, signal: AbortSignal | undefined, onWaiting: ((waitMs: number) => void) | undefined): Promise<void> {
   for (;;) {
+    // AbortSignal never replays a past abort to a listener registered afterwards, so a caller
+    // whose signal was already aborted when it queued behind another read would otherwise wait
+    // out the full remaining TTL before the listener-free timer resolves. Checking the flag at
+    // the top of every iteration settles both that case and an abort that lands mid-wait.
+    if (signal?.aborted) throw new ProtocolError('cancelled', 'readIndex.slot');
     const now = Date.now();
     attached.indexViews = (attached.indexViews ?? []).filter((view) => view.expiresAt > now);
     const held = attached.indexViews ?? [];
@@ -57,7 +62,6 @@ async function acquireIndexSlot(attached: Target, signal: AbortSignal | undefine
       const timer = setTimeout(resolve, waitMs);
       signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
     });
-    if (signal?.aborted) throw new ProtocolError('cancelled', 'readIndex.slot');
   }
 }
 

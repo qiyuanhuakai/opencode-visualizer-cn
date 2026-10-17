@@ -549,6 +549,11 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     searchController = controller;
     search.value = { status: 'searching', query, scanned: 0, pages: 0, matches: [], totalMatched: 0, hasMore: false, cursor: null, error: null, waiting: false };
     return serialize(async () => {
+      // A newer search may have superseded this one while it waited in the shared read queue.
+      // Its signal is already aborted, and starting the fresh index read anyway would make it
+      // wait out a live-view slot TTL that nobody is waiting for, holding the queue behind
+      // reads the valid cache could answer immediately.
+      if (generation !== searchGeneration) return search.value;
       const accumulator: SearchScan = { retained: [], totalMatched: 0, scanned: 0, pages: 0 };
       try {
         await scanSearch(query, 0, controller.signal, accumulator, true, () => {
