@@ -73,6 +73,12 @@ class ReactiveClient {
   private readonly tombstones = new Set<string>();
   private readonly queue: ObserverDelivery[] = [];
   private indexView: { readonly collections: ReadonlySet<string>; readonly rows: Readonly<Record<string, AnyRecord[]>>; readonly revision: number } | null = null;
+  /** Every index view this client minted, in order, so a test can prove how many a read spent. */
+  readonly minted: ReadonlySet<string>[] = [];
+  /** When set, the next fresh read finds the bridge's live-view budget spent and must wait for a slot. */
+  indexBudgetSpent = false;
+  /** Every readIndex entry with the state of its abort signal at entry, so a test can prove a superseded search never started its read. */
+  readonly readIndexEntries: Array<{ readonly fresh: boolean; readonly signalAborted: boolean }> = [];
   private revision = 1000;
   private seq = 0;
   constructor(readonly environment: string = ENV) {}
@@ -117,7 +123,8 @@ class ReactiveClient {
       },
     };
   }
-  async readIndex(target: EnvironmentId, collections: string | readonly string[], options: { onPage: (collection: string, page: SnapshotPage) => Promise<void> | void; fresh?: boolean }): Promise<{ token: string; revision: number; watermark: number }> {
+  async readIndex(target: EnvironmentId, collections: string | readonly string[], options: { onPage: (collection: string, page: SnapshotPage) => Promise<void> | void; fresh?: boolean; onWaiting?: () => void; signal?: AbortSignal }): Promise<{ token: string; revision: number; watermark: number }> {
+    this.readIndexEntries.push({ fresh: options.fresh === true, signalAborted: options.signal?.aborted === true });
     const names = typeof collections === 'string' ? [collections] : collections;
     // Model the bridge's bounded live-view reuse: a view is minted when none is cached, when the
     // caller explicitly asks for a fresh one, or when the cached view does not cover the requested
@@ -125,9 +132,15 @@ class ReactiveClient {
     // Every page of one read then comes from that single view, exactly like the real store.
     const cached = this.indexView;
     if (cached === null || options.fresh === true || !names.every((name) => cached.collections.has(name))) {
+      if (options.fresh === true && this.indexBudgetSpent) {
+        options.onWaiting?.();
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+        this.indexBudgetSpent = false;
+      }
       const rows: Record<string, AnyRecord[]> = {};
       for (const name of names) rows[name] = [...(this.rows.get(name) ?? [])];
       this.indexView = { collections: new Set(names), rows, revision: this.revision };
+      this.minted.push(new Set(names));
     }
     const view = this.indexView;
     if (view === null) throw new TypeError('no index view was minted');
@@ -311,6 +324,26 @@ describe('useRuntimeSessionTree — index view freshness (review round 613858028
     }
   });
 
+  it('spends ONE index view on an explicit refresh, shared by both topology collections', async () => {
+    // The bridge bounds live views per environment and cannot release one early, so a refresh that
+    // read harnesses and workspaces separately spent the target's whole budget on one refresh.
+    const client = new ReactiveClient();
+    seedTopology(client);
+    const { history } = historySpy();
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV, history: history as never });
+    try {
+      await tree.start();
+      client.minted.length = 0;
+
+      await tree.refresh();
+
+      expect(client.minted).toHaveLength(1);
+      expect([...(client.minted[0] ?? [])].sort()).toEqual(['harnesses', 'workspaces']);
+    } finally {
+      await tree.dispose();
+    }
+  });
+
   it('re-scans a parent whose children appeared after the first expand', async () => {
     const client = new ReactiveClient();
     seedTopology(client);
@@ -350,6 +383,80 @@ describe('useRuntimeSessionTree — index view freshness (review round 613858028
       expect(await tree.loadMoreChildren(parentKey)).toMatchObject({ alreadyScanned: false });
       // Nothing changed the index, so the second expand must not re-scan it.
       expect(await tree.loadMoreChildren(parentKey)).toMatchObject({ alreadyScanned: true, scanned: 0 });
+    } finally {
+      await tree.dispose();
+    }
+  });
+
+  it('surfaces a waiting state while a fresh read waits for a live-view slot, then completes from that fresh view', async () => {
+    // The bridge cannot release a view early, so a fresh read whose budget is spent waits for a slot
+    // instead of silently answering from the stale view. That wait must be visible to the user, and
+    // the read that eventually lands must observe rows inserted while it waited.
+    const client = new ReactiveClient();
+    seedTopology(client);
+    const { history } = historySpy();
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV, history: history as never });
+    try {
+      await tree.start();
+      client.indexBudgetSpent = true;
+      client.add('session_summaries', canonical(sessionKey(11), 2, { ...summaryValue(11), title: 'arrived-while-waiting' }));
+
+      const searching = tree.search('arrived-while-waiting');
+      await waitFor(() => tree.searchState.value.waiting === true);
+      expect(tree.searchState.value).toMatchObject({ status: 'searching', waiting: true });
+
+      const found = await searching;
+      expect(found).toMatchObject({ status: 'complete', totalMatched: 1, waiting: false });
+      expect(found.matches.map((row) => row.key)).toEqual([sessionKey(11)]);
+      expect(tree.indexWaiting.value).toBe(false);
+    } finally {
+      await tree.dispose();
+    }
+  });
+
+  it('reports the refresh wait through indexWaiting and clears it once the topology re-read lands', async () => {
+    const client = new ReactiveClient();
+    seedTopology(client);
+    const { history } = historySpy();
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV, history: history as never });
+    try {
+      await tree.start();
+      client.indexBudgetSpent = true;
+      const refreshing = tree.refresh();
+      await waitFor(() => tree.indexWaiting.value === true);
+      await refreshing;
+      expect(tree.indexWaiting.value).toBe(false);
+      // The refresh still spent exactly ONE view, shared by both topology collections.
+      expect([...(client.minted.at(-1) ?? [])].sort()).toEqual(['harnesses', 'workspaces']);
+    } finally {
+      await tree.dispose();
+    }
+  });
+});
+
+describe('useRuntimeSessionTree — a superseded search never holds the shared read queue', () => {
+  it('skips a queued search cancelled before it started, so a cache-backed child expand is not held behind its slot wait', async () => {
+    // A new search aborts the previous one while it is still queued behind the shared serial read
+    // chain. Starting that superseded search's fresh index read anyway would make it wait out the
+    // live-view slot TTL for a read nobody wants, holding the queue behind a child expand the
+    // valid cache could answer immediately.
+    const client = new ReactiveClient();
+    seedTopology(client);
+    const parentKey = sessionKey(0);
+    client.add('session_summaries', canonical(parentKey, 2, summaryValue(0)));
+    client.add('session_summaries', canonical(sessionKey(1), 2, { ...summaryValue(1), parentSession: sessionRef(0) }));
+    const { history } = historySpy();
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV, history: history as never });
+    try {
+      await tree.start();
+      client.indexBudgetSpent = true;
+      const obsolete = tree.search('obsolete');
+      const expanding = tree.loadMoreChildren(parentKey);
+      const latest = tree.search('latest');
+      await Promise.all([obsolete, expanding, latest]);
+
+      expect(client.readIndexEntries.filter((entry) => entry.fresh && entry.signalAborted)).toEqual([]);
+      expect(await expanding).toMatchObject({ parentKey: parentKey, added: 1 });
     } finally {
       await tree.dispose();
     }

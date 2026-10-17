@@ -299,6 +299,7 @@ function createHostApp() {
           viewError: tree.viewError.value,
           filterKinds: tree.filterKinds.value,
           searchState: tree.searchState.value,
+          indexWaiting: tree.indexWaiting.value,
           'onToggle-key': (key: string) => { tree.toggleExpand(key); },
           'onSelect-key': (key: string) => { void tree.selectByKey(key); },
           'onRetry-source': (harnessInstanceId: string) => { void tree.retrySource(harnessInstanceId); },
