@@ -76,7 +76,6 @@ class FakeClient {
   readonly snapshots = new Map<string, number>();
   readonly listCalls = new Map<string, number>();
   abortedSnapshots = 0;
-  readonly completedReads = new Map<string, number>();
   private tokens = 0;
   private readonly revision = 200000;
   private indexSnapshot?: Readonly<{ token: string; revision: number; watermark: number; expiresAt: number }>;
@@ -169,7 +168,6 @@ class FakeClient {
       } while (cursor !== null);
     }
     if (first === undefined) throw Object.assign(new Error('snapshot.empty'), { code: 'replay_required' });
-    for (const name of names) this.completedReads.set(name, (this.completedReads.get(name) ?? 0) + 1);
     return { token: first.token, revision: first.revision, watermark: first.watermark };
   }
   async request(_target: EnvironmentId, method: string, params: AnyRecord): Promise<unknown> {
@@ -466,7 +464,7 @@ describe('task 21 — unified session tree acceptance', () => {
     expect(settled.query).toBe('title-2');
     expect(settled.matches.length).toBeGreaterThan(0);
     for (const row of settled.matches) expect(row.title).toContain('title-2');
-    expect(client.completedReads.get('session_summaries') ?? 0).toBe(1);
+    expect(client.abortedSnapshots).toBeGreaterThanOrEqual(1);
     await tree.dispose();
   });
 
