@@ -618,7 +618,7 @@ export async function run(context) {
       });
 
       // ── H2: the three phases, rung by rung (criterion 1) ───────────────────────────────────
-      check('Agent finished / Task review pending / accepted are three DISTINCT phases observed at their own rungs through the real UI: pending → dispatched, the native-end action is DISABLED until a real native event id is typed, a native end on an unsent attempt is REFUSED with the readable conflict, only the send-then-end sequence reaches agent-finished with the attempt terminal and the coordinator review/acceptance slices still `none`, the UI button registers its placeholder deliverable and the container registers the real artifact beside it, submit-for-review reaches review-pending, the explicit approve records the approved verdict (the phase returns to agent-finished because the review is no longer pending), and the container accept reaches accepted with its criteria', {
+      check('Agent finished / Task review pending / accepted are three DISTINCT phases observed at their own rungs through the real UI: pending → dispatched, the native-end action is DISABLED until a real native event id is typed, a native end on an unsent attempt is REFUSED with the readable conflict, only the send-then-end sequence reaches agent-finished with the attempt terminal and the coordinator review/acceptance slices still `none`, the UI\'s own Register deliverable button registers NOTHING because no artifact capture is wired into this surface while the container registers the real artifact, submit-for-review reaches review-pending with the Accept affordance DISABLED, the explicit approve records the approved verdict and moves the phase to review-approved with Accept now ENABLED, and the container accept reaches accepted with its criteria', {
         taskIdShape: UUID.test(rich.taskId),
         rungs: {
           afterCreate: { phase: rich.afterCreate.probe.tasks[0]?.phase ?? null, chip: rich.afterCreate.probe.tasks[0]?.chip ?? null, dispatchDisabled: rich.afterCreate.probe.tasks[0]?.dispatchDisabled ?? null },
@@ -632,7 +632,7 @@ export async function run(context) {
           afterRegisterUi: { deliverableRows: rich.afterRegisterUi.probe.deliverables.map((row) => ({ deliverableId: row.deliverableId, hash: row.hash, bytes: row.bytes, paths: row.paths })) },
           afterRegisterReal: { deliverableRows: rich.afterRegisterReal.probe.deliverables.map((row) => ({ deliverableId: row.deliverableId, hash: row.hash, bytes: row.bytes, paths: row.paths })) },
           afterSubmit: { phase: rich.afterSubmit.probe.tasks[0]?.phase ?? null, chip: rich.afterSubmit.probe.tasks[0]?.chip ?? null, approveDisabled: rich.afterSubmit.probe.approve.disabled ?? null, acceptDisabled: rich.afterSubmit.probe.tasks[0]?.acceptDisabled ?? null },
-          afterApprove: { phase: rich.afterApprove.probe.tasks[0]?.phase ?? null, chip: rich.afterApprove.probe.tasks[0]?.chip ?? null, reviewState: rich.productAfterApprove.review.state, reviewer: rich.productAfterApprove.review.reviewer, acceptanceState: rich.productAfterApprove.acceptance.state },
+           afterApprove: { phase: rich.afterApprove.probe.tasks[0]?.phase ?? null, chip: rich.afterApprove.probe.tasks[0]?.chip ?? null, reviewState: rich.productAfterApprove.review.state, reviewer: rich.productAfterApprove.review.reviewer, acceptanceState: rich.productAfterApprove.acceptance.state, acceptDisabled: rich.afterApprove.probe.tasks[0]?.acceptDisabled ?? null },
           afterAccept: { phase: rich.afterAccept.probe.tasks[0]?.phase ?? null, chip: rich.afterAccept.probe.tasks[0]?.chip ?? null, acceptanceState: rich.afterAccept.snapshot.tasks[0]?.acceptance.state ?? null, acceptedBy: rich.afterAccept.snapshot.tasks[0]?.acceptance.acceptedBy ?? null, acceptanceCriteria: rich.afterAccept.snapshot.tasks[0]?.acceptance.criteria ?? null, cancelDisabled: rich.afterAccept.probe.tasks[0]?.cancelDisabled ?? null },
         },
       }, {
@@ -644,15 +644,14 @@ export async function run(context) {
           afterTyping: { finishDisabledAfterTyping: false },
           afterFinishRefused: { phase: 'dispatched', attemptState: 'accepted', attemptReason: null, errorRole: 'alert', errorText: `The native end could not be recorded: conflict: collaboration.attempt_state (conflict/attempt_state)` },
           afterSend: { attemptState: 'sent', attemptFlags: 'sent:1 observed:0 terminal:0', sends: 'sends:1' },
-          afterFinish: { phase: 'agent-finished', chip: 'Agent finished', attemptPhase: 'agent-finished', attemptNote: 'The agent run finished; not yet reviewed.', attemptState: 'terminal', attemptFlags: 'sent:1 observed:0 terminal:1', attemptReason: 'completed', acceptDisabled: true, submitReviewDisabled: false, registerDisabled: false },
+          afterFinish: { phase: 'agent-finished', chip: 'Agent finished', attemptPhase: 'agent-finished', attemptNote: 'The agent run finished; not yet reviewed.', attemptState: 'terminal', attemptFlags: 'sent:1 observed:0 terminal:1', attemptReason: 'completed', acceptDisabled: true, submitReviewDisabled: false, registerDisabled: true },
           productAfterNativeEnd: { state: 'review', reviewState: 'none', acceptanceState: 'none', deliverables: 0 },
-          afterRegisterUi: { deliverableRows: [{ deliverableId: `deliverable-${rich.taskId.slice(0, 8)}`, hash: '0'.repeat(64), bytes: '0B', paths: '(registered by the review surface)' }] },
+          afterRegisterUi: { deliverableRows: [] },
           afterRegisterReal: { deliverableRows: [
-            { deliverableId: `deliverable-${rich.taskId.slice(0, 8)}`, hash: '0'.repeat(64), bytes: '0B', paths: '(registered by the review surface)' },
             { deliverableId: 'deliverable-alpha', hash: ALPHA_DELIVERABLE.artifactHash, bytes: `${ALPHA_DELIVERABLE.bytes}B`, paths: 'src/App.vue' },
           ] },
-          afterSubmit: { phase: 'review-pending', chip: 'Review pending', approveDisabled: false, acceptDisabled: false },
-          afterApprove: { phase: 'agent-finished', chip: 'Agent finished', reviewState: 'approved', reviewer: 'reviewer', acceptanceState: 'none' },
+          afterSubmit: { phase: 'review-pending', chip: 'Review pending', approveDisabled: false, acceptDisabled: true },
+          afterApprove: { phase: 'review-approved', chip: 'Review approved', reviewState: 'approved', reviewer: 'reviewer', acceptanceState: 'none', acceptDisabled: false },
           afterAccept: { phase: 'accepted', chip: 'Accepted', acceptanceState: 'accepted', acceptedBy: 'reviewer', acceptanceCriteria: ['c1'], cancelDisabled: true },
         },
       });
@@ -987,7 +986,7 @@ export async function run(context) {
         await typeFanoutPrompt('review this');
         const afterFanout = await fanOutViaUi();
         record('f1-partial-fanout', { booted, afterFanout });
-        check('a partial dispatch renders the OBSERVED per-recipient outcomes and never a synthetic success: the fan-out is driven through the real UI to all three members, the codex worker delivery fails with source_unavailable, the derived state is `partial`, the stats line names sent 2 and failed 1, each recipient row carries its OWN observed outcome, and the failed row renders the service\'s OWN resolution code source_unavailable because the case-owned fan-out port bridges the service\'s resolution object to the resolutionCode name the composable\'s CollaborationRecipientView declares', {
+        check('a partial dispatch renders the OBSERVED per-recipient outcomes and never a synthetic success: the fan-out is driven through the real UI to all three members, the codex worker delivery fails with source_unavailable, the derived state is `partial`, the stats line names sent 2 and failed 1, each recipient row carries its OWN observed outcome, and the failed row renders the service\'s OWN resolution code source_unavailable because the composable\'s product port maps the service\'s resolution object to the resolutionCode name its view declares', {
           state: afterFanout.probe.fanout.state,
           stateText: afterFanout.probe.fanout.stateText,
           stats: afterFanout.probe.fanout.stats,
@@ -1148,7 +1147,7 @@ export async function run(context) {
         });
       }
 
-      // ── F5: the session-mutation quota parks a dispatch, visibly, and releases it ──────────
+      // ── F5: the session-mutation quota parks a dispatch, visibly, and the PAUSED task resumes ─
       {
         started.boots += 1;
         await boot({ threadId: constants.THREAD_1, teamName: 'Team quota', members: MEMBERS });
@@ -1161,10 +1160,10 @@ export async function run(context) {
         await sendViaUi();
         const afterFirst = await observe();
         const budgetsWhileRunning = await productBudgets();
-        // The task that gets PARKED is a THIRD one, not task two. TaskGraph renders Dispatch only at
-        // phase `pending` (TaskGraph.vue:34) and a parked task's phase is `paused`, so a task that
-        // has already been parked can never be re-dispatched through the rendered button — task two
-        // therefore stays pending and is the task the freed budget admits after the release.
+        // The task that gets PARKED is a THIRD one: TaskGraph renders Dispatch at phase `pending`
+        // AND at phase `paused`, so a parked task is RESUMABLE through its own button — which is
+        // what the release below exercises, on the very task that was parked rather than on a
+        // never-parked stand-in.
         const createdThree = await createTask({ title: 'quota three' });
         const taskThree = createdThree.snapshot.tasks.find((entry) => entry.title === 'quota three').taskId;
         const afterSecond = await dispatchViaUi(taskThree);
@@ -1174,10 +1173,13 @@ export async function run(context) {
         await finishViaUi();
         const afterRelease = await observe();
         const budgetsAfterRelease = await productBudgets();
-        const afterRetry = await dispatchViaUi(taskTwo);
-        const productTwoDispatched = await productTask(taskTwo);
-        record('f5-quota-pause', { taskOne, taskTwo, taskThree, afterFirst, budgetsWhileRunning, afterSecond, budgetsWhileParked, productThreeParked, afterRelease, budgetsAfterRelease, afterRetry, productTwoDispatched });
-        check('an exhausted budget is the OBSERVED, visible pause the plan demands: the first task is dispatched and sent on the owner session, the coordinator\'s own budget read model reports the real use, a further task on the SAME session is PARKED rather than failed with the collaboration_session_mutation reason rendered on its row and in the coordinator\'s own paused view, the pause survives the release unchanged, and once the first attempt reaches its native end the freed budget admits the second task through the real UI — the pause is budget-driven, never permanent, and nothing was silently dropped', {
+        // The paused task's own Dispatch button is enabled while paused — the resume path — and
+        // clicking it is what admits the parked task; nothing auto-admits it.
+        const afterResume = await dispatchViaUi(taskThree);
+        const productThreeResumed = await productTask(taskThree);
+        const budgetsAfterResume = await productBudgets();
+        record('f5-quota-pause', { taskOne, taskTwo, taskThree, afterFirst, budgetsWhileRunning, afterSecond, budgetsWhileParked, productThreeParked, afterRelease, budgetsAfterRelease, afterResume, productThreeResumed, budgetsAfterResume });
+        check('an exhausted budget is the OBSERVED, visible pause the plan demands: the first task is dispatched and sent on the owner session, the coordinator\'s own budget read model reports the real use, a further task on the SAME session is PARKED rather than failed with the collaboration_session_mutation reason rendered on its row and in the coordinator\'s own paused view, the pause survives the release unchanged with the paused row\'s Dispatch button ENABLED as the resume path, and the freed budget then admits the VERY task that was parked through that button — the coordinator\'s read model reports the re-consumed mutation and the never-parked task stays pending until it is dispatched in turn — the pause is budget-driven, never permanent, and nothing was silently dropped', {
           rowOneWhileRunning: { phase: afterFirst.probe.tasks.find((row) => row.taskId === taskOne)?.phase ?? null, attemptState: afterFirst.probe.attempt?.rows[0]?.state ?? null },
           budgetsWhileRunning,
           rowThreeParked: { phase: afterSecond.probe.tasks.find((row) => row.taskId === taskThree)?.phase ?? null, chip: afterSecond.probe.tasks.find((row) => row.taskId === taskThree)?.chip ?? null, paused: afterSecond.probe.tasks.find((row) => row.taskId === taskThree)?.paused ?? null },
@@ -1185,10 +1187,12 @@ export async function run(context) {
           productThreeParked: { state: productThreeParked.state, paused: productThreeParked.paused },
           rowOneAfterRelease: { phase: afterRelease.probe.tasks.find((row) => row.taskId === taskOne)?.phase ?? null },
           budgetsAfterRelease,
-          rowThreeAfterRelease: { phase: afterRelease.probe.tasks.find((row) => row.taskId === taskThree)?.phase ?? null, paused: afterRelease.probe.tasks.find((row) => row.taskId === taskThree)?.paused ?? null },
-          rowTwoAfterRetry: { phase: afterRetry.probe.tasks.find((row) => row.taskId === taskTwo)?.phase ?? null },
-          productTwoDispatched: { state: productTwoDispatched.state, attempts: productTwoDispatched.attempts.length },
-          errorAfterRetry: afterRetry.snapshot.error,
+          rowThreeAfterRelease: { phase: afterRelease.probe.tasks.find((row) => row.taskId === taskThree)?.phase ?? null, paused: afterRelease.probe.tasks.find((row) => row.taskId === taskThree)?.paused ?? null, dispatchDisabledWhilePaused: afterRelease.probe.tasks.find((row) => row.taskId === taskThree)?.dispatchDisabled ?? null },
+          rowTwoWhilePaused: { phase: afterRelease.probe.tasks.find((row) => row.taskId === taskTwo)?.phase ?? null },
+          rowThreeAfterResume: { phase: afterResume.probe.tasks.find((row) => row.taskId === taskThree)?.phase ?? null },
+          productThreeResumed: { state: productThreeResumed.state, attempts: productThreeResumed.attempts.length },
+          budgetsAfterResume,
+          errorAfterResume: afterResume.snapshot.error,
         }, {
           rowOneWhileRunning: { phase: 'dispatched', attemptState: 'sent' },
           budgetsWhileRunning: { limits: { maxConcurrency: 4, maxSessionMutations: 1, maxDepth: 4, maxChildren: 32, maxMailbox: 1000 }, used: { concurrency: 1, sessionMutations: 1, depth: 1, children: 0, mailbox: 0 } },
@@ -1197,10 +1201,12 @@ export async function run(context) {
           productThreeParked: { state: 'paused', paused: { reasons: ['collaboration_session_mutation'] } },
           rowOneAfterRelease: { phase: 'agent-finished' },
           budgetsAfterRelease: { limits: { maxConcurrency: 4, maxSessionMutations: 1, maxDepth: 4, maxChildren: 32, maxMailbox: 1000 }, used: { concurrency: 0, sessionMutations: 0, depth: 1, children: 0, mailbox: 0 } },
-          rowThreeAfterRelease: { phase: 'paused', paused: 'paused: collaboration_session_mutation' },
-          rowTwoAfterRetry: { phase: 'dispatched' },
-          productTwoDispatched: { state: 'dispatched', attempts: 1 },
-          errorAfterRetry: '',
+          rowThreeAfterRelease: { phase: 'paused', paused: 'paused: collaboration_session_mutation', dispatchDisabledWhilePaused: false },
+          rowTwoWhilePaused: { phase: 'pending' },
+          rowThreeAfterResume: { phase: 'dispatched' },
+          productThreeResumed: { state: 'dispatched', attempts: 1 },
+          budgetsAfterResume: { limits: { maxConcurrency: 4, maxSessionMutations: 1, maxDepth: 4, maxChildren: 32, maxMailbox: 1000 }, used: { concurrency: 1, sessionMutations: 1, depth: 1, children: 0, mailbox: 0 } },
+          errorAfterResume: '',
         });
       }
 
@@ -1241,7 +1247,7 @@ export async function run(context) {
         });
       }
 
-      // ── F7: the enabled-but-refused accept, and the accepted task that cannot be cancelled ─
+      // ── F7: the accept affordance only where the coordinator accepts, and the settled review ─
       {
         started.boots += 1;
         await boot({ threadId: constants.THREAD_1, teamName: 'Team accept', members: MEMBERS });
@@ -1252,23 +1258,28 @@ export async function run(context) {
         await sendViaUi();
         await typeNativeEventId('native-evt-accept');
         await finishViaUi();
+        // The UI's own Register deliverable button registers NOTHING: no artifact capture is wired
+        // into this surface, so it cannot fabricate an all-zero-hash placeholder any more.
         const afterRegisterUi = await registerDeliverableViaUi();
         await registerDeliverable({ taskId, deliverable: ALPHA_DELIVERABLE });
         const afterSubmit = await submitReviewViaUi(taskId);
         const acceptDisabledAtReviewPending = afterSubmit.probe.tasks.find((row) => row.taskId === taskId)?.acceptDisabled ?? null;
+        // Clicking the DISABLED button does nothing at all: no refusal is needed because the
+        // affordance is not offered where the coordinator would refuse conflict/acceptance_review.
         const acceptClicked = await acceptViaUi(taskId);
         const productAfterRefusal = await productTask(taskId);
         const afterApprove = await approveViaUi();
-        const afterAccept = await acceptTask({ taskId, deliverableId: ALPHA_DELIVERABLE.deliverableId, acceptedBy: 'reviewer', criteria: [{ id: 'c1', met: true }] });
+        // The verdict moves the task to review-approved, and the Accept button now reaches accepted
+        // through the REAL button — no container bypass.
+        const afterAccept = await acceptViaUi(taskId);
         const productAfterAccept = await productTask(taskId);
         const afterCancel = await cancelTask({ taskId, reason: 'too late to cancel' });
         const productAfterCancel = await productTask(taskId);
         record('f7-accept-refusal', { afterRegisterUi, afterSubmit, acceptClicked, productAfterRefusal, afterApprove, afterAccept, productAfterAccept, afterCancel, productAfterCancel });
-        check('the review surface fails closed with readable refusals at both ends of the accept path: at review-pending the Accept button is ENABLED but the coordinator refuses because the review is not yet approved — the refusal names acceptance_review, nothing is accepted, and the deliverable registered through the UI button\'s own placeholder is observed beside the real one; the explicit approve then records the verdict, the container accept reaches accepted, and cancelling the ACCEPTED task is refused conflict/task_state with the task still accepted — no action silently rewrites a settled review', {
+        check('the review surface offers the accept affordance only where the coordinator will actually accept: at review-pending the Accept button is DISABLED — the review is not yet approved, so an accept would be refused conflict/acceptance_review — and clicking it changes nothing (no error, nothing accepted); the UI\'s Register deliverable button registers no placeholder because no artifact capture is wired, so the real deliverable registered through the container is the only one rendered; the explicit approve records the verdict and moves the task to review-approved, the Accept button becomes enabled and the click reaches accepted through the REAL button, and cancelling the ACCEPTED task is refused conflict/task_state with the task still accepted — no action silently rewrites a settled review', {
           acceptDisabledAtReviewPending,
           acceptClicked: acceptClicked.clicked,
-          refusalError: acceptClicked.snapshot.error,
-          refusalMentionsReview: /acceptance_review/.test(acceptClicked.snapshot.error),
+          errorAfterDisabledClick: acceptClicked.snapshot.error,
           errorRendered: acceptClicked.probe.error?.role ?? null,
           productAfterRefusal: { acceptanceState: productAfterRefusal.acceptance.state, reviewState: productAfterRefusal.review.state },
           placeholderDeliverable: afterRegisterUi.probe.deliverables.map((row) => ({ deliverableId: row.deliverableId, hash: row.hash, bytes: row.bytes, paths: row.paths })),
@@ -1279,14 +1290,13 @@ export async function run(context) {
           cancelMentionsState: /task_state/.test(afterCancel.snapshot.error),
           productAfterCancel: { state: productAfterCancel.state, acceptanceState: productAfterCancel.acceptance.state },
         }, {
-          acceptDisabledAtReviewPending: false,
+          acceptDisabledAtReviewPending: true,
           acceptClicked: true,
-          refusalError: 'The task could not be accepted: conflict: collaboration.acceptance_review (conflict/acceptance_review)',
-          refusalMentionsReview: true,
-          errorRendered: 'alert',
+          errorAfterDisabledClick: '',
+          errorRendered: null,
           productAfterRefusal: { acceptanceState: 'none', reviewState: 'pending' },
-          placeholderDeliverable: [{ deliverableId: `deliverable-${taskId.slice(0, 8)}`, hash: '0'.repeat(64), bytes: '0B', paths: '(registered by the review surface)' }],
-          phaseAfterApprove: 'agent-finished',
+          placeholderDeliverable: [],
+          phaseAfterApprove: 'review-approved',
           phaseAfterAccept: 'accepted',
           productAfterAccept: { state: 'accepted', acceptanceState: 'accepted', acceptedBy: 'reviewer' },
           cancelError: 'The task could not be cancelled: conflict: collaboration.task_state (conflict/task_state)',
@@ -1550,35 +1560,11 @@ export async function run(context) {
         contradictsPlanCriterion: 'none — the criteria concern the rendered read models, which the case asserts',
         coveredInstead: 'the container actions are driven and the rendered member rows, budget rows and task rows are asserted',
       },
-      taskAcceptEnabledWhereCoordinatorRefuses: {
-        severity: 'observation',
-        observed: 'TaskGraph\'s Accept button is enabled at review-pending, where the coordinator\'s accept refuses conflict/acceptance_review because the review is not yet approved; the refusal is readable and nothing is accepted',
-        contradictsPlanCriterion: 'none — the plan\'s approve-integration path is the explicit approve, which the case drives, followed by the container accept',
-        coveredInstead: 'the failure lane observes the enabled button\'s readable refusal verbatim, and the happy lane reaches accepted through approve-then-accept with every rung observed',
-      },
-      budgetUsedKeysRenderZero: {
-        severity: 'observation',
-        observed: 'the coordinator\'s budgets().used is keyed concurrency/sessionMutations/depth/children/mailbox while budgets().limits is keyed maxConcurrency/maxSessionMutations/maxDepth/maxChildren/maxMailbox, so TeamEditor\'s used column (used[key] with key from limits) always renders 0; the real use is visible through the coordinator\'s own budgets() read model and the rendered pause reasons',
-        contradictsPlanCriterion: 'none — the budget limits render with their real frozen values and the pause reasons render the real use',
-        coveredInstead: 'the case asserts the rendered limit values verbatim AND the coordinator\'s own used counters with real numbers',
-      },
-      recipientResolutionCodeBridgedAtPort: {
-        severity: 'controlled-boundary',
-        observed: 'the composable\'s CollaborationRecipientView declares `resolutionCode: string | null` while task 38\'s own recipientView carries the resolution as an OBJECT under `resolution` ({ code, field }), and the composable spreads that view verbatim; the case-owned fan-out port is the seam that owns the contract, so it bridges the service\'s `resolution.code` to the `resolutionCode` name the receiver declares and drops nothing — the service\'s own `resolution` object still crosses into the snapshot untouched',
-        contradictsPlanCriterion: 'none — the code that renders is the SERVICE\'s own real code (source_unavailable), read from the rendered row; a settled recipient still renders none',
-        coveredInstead: 'the failure lane asserts the failed row renders resolutionCode source_unavailable while the two sent rows render none, and observes both the service resolution object and the bridged code in the composable snapshot',
-      },
       noMessageListSurface: {
         severity: 'observation',
         observed: 'no component renders the coordinator\'s mailbox message list and the composable exposes no message read model, so the plan\'s 查看消息 is observable through the mailbox budget accounting (the pause reason and the coordinator\'s own depth) rather than a rendered list',
         contradictsPlanCriterion: 'partial — the plan\'s happy-QA phrase names 消息; the message channel itself has no UI surface in this task',
         coveredInstead: 'the failure lane drives the coordinator\'s own postMessage to the real frozen limit and observes the collaboration_mailbox pause it causes',
-      },
-      uiRegisterDeliverableUsesPlaceholder: {
-        severity: 'observation',
-        observed: 'AttemptDetails\' own Register deliverable button emits a placeholder deliverable (deliverable-<taskId prefix>, artifactHash 0*64, bytes 0, a synthetic path); the real artifact fields are supplied by the container, as the component\'s own comment states',
-        contradictsPlanCriterion: 'none — the real artifact hash is registered through the container and rendered',
-        coveredInstead: 'the case clicks the real button and observes the placeholder verbatim, then registers the real artifact beside it and asserts the rendered hash is the real one',
       },
       nodeCryptoBrowserSeam: {
         severity: 'controlled-boundary',

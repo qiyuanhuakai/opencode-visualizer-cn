@@ -31,7 +31,7 @@
             type="button"
             class="action-button"
             data-testid="task-dispatch"
-            :disabled="task.phase !== 'pending'"
+            :disabled="task.phase !== 'pending' && task.phase !== 'paused'"
             @click="emit('dispatch', task.taskId)"
           >
             Dispatch
@@ -49,7 +49,7 @@
             type="button"
             class="action-button"
             data-testid="task-accept"
-            :disabled="task.phase !== 'review-pending'"
+            :disabled="task.phase !== 'review-approved'"
             @click="emit('accept', { taskId: task.taskId, deliverableId: firstDeliverableId(task), acceptedBy: 'reviewer', criteria: task.criteria.map((c) => ({ id: c.id, met: true })) })"
           >
             Accept
@@ -102,6 +102,7 @@ const PHASE_LABELS: Readonly<Record<TaskPhase, string>> = Object.freeze({
   dispatched: 'Dispatched',
   'agent-finished': 'Agent finished',
   'review-pending': 'Review pending',
+  'review-approved': 'Review approved',
   accepted: 'Accepted',
   failed: 'Failed',
   cancelled: 'Cancelled',
@@ -188,7 +189,8 @@ function firstDeliverableId(task: CollaborationTaskView): string {
   background: color-mix(in srgb, var(--theme-status-info, #7dd3fc) 10%, transparent);
 }
 
-.phase-chip.phase-review-pending {
+.phase-chip.phase-review-pending,
+.phase-chip.phase-review-approved {
   color: var(--theme-status-warning, #fcd34d);
   border-color: color-mix(in srgb, var(--theme-status-warning, #fcd34d) 45%, transparent);
   background: color-mix(in srgb, var(--theme-status-warning, #fcd34d) 10%, transparent);

@@ -327,29 +327,12 @@ async function boot(options: {
       return { ackId: `ack-${target.participantId}` };
     },
   }) as unknown as FanoutPort;
-  /**
-   * The port is the seam THIS case owns, and the RECEIVER is the composable, whose
-   * CollaborationRecipientView declares `resolutionCode: string | null` — while task 38's own
-   * recipientView carries the resolution as an OBJECT under `resolution` ({ code, field }).
-   * Forwarding the service's view unchanged hands the receiver a field it never declares, so
-   * TeamEditor's resolution-code span renders nothing for a failed recipient. The port therefore
-   * bridges the service's name to the name the receiver declares and drops nothing: the service's
-   * own `resolution` object still crosses verbatim, so the snapshot keeps observing the real one
-   * and the code that renders is the service's own real code.
-   */
-  fanout = {
-    createFanout: (input: Parameters<FanoutPort['createFanout']>[0]) => fanoutService.createFanout(input),
-    dispatch: async (input: Parameters<FanoutPort['dispatch']>[0]) => {
-      const view = await fanoutService.dispatch(input);
-      const targets = (view.targets as readonly AnyRecord[]).map((target) => ({
-        ...target,
-        resolutionCode: ((target.resolution as { code?: string } | null | undefined)?.code) ?? null,
-      }));
-      return { ...view, targets };
-    },
-    // CollaborationFanoutPort declares close(): void as well, so the port implements all three.
-    close: () => { fanoutService.close(); },
-  } as unknown as RuntimeCollaborationPorts['fanout'] & object;
+  // The contract conversion — task 38's `resolution` OBJECT ({ code, field }) to the flat
+  // `resolutionCode` the composable's CollaborationRecipientView declares — lives in the PRODUCT
+  // port (the composable's own fanOut adapter), not in this case-owned seam. The service therefore
+  // crosses verbatim: the rendered failure code is produced by product code reading the service's
+  // own real resolution, and no case-specific patch stands between them.
+  fanout = fanoutService;
   state = createRuntimeCollaborationState({ coordinator, delegation, fanout, writer: writerPort });
   await state.openTeam({
     threadId: options.threadId,

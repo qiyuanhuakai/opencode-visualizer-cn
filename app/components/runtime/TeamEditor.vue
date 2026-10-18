@@ -35,7 +35,7 @@
           :data-budget-key="key"
         >
           <span class="budget-key">{{ key }}</span>
-          <span class="budget-used">{{ budgets.used[key] ?? 0 }} / {{ limit }}</span>
+          <span class="budget-used">{{ budgets.used[usedKeyFor(key)] ?? 0 }} / {{ limit }}</span>
         </li>
       </ul>
     </div>
@@ -111,6 +111,26 @@ const emit = defineEmits<{
 
 const prompt = ref('');
 const hasMembers = computed(() => (props.team?.members.length ?? 0) > 0);
+
+/**
+ * The explicit limit-key → used-key map. The coordinator's budgets() reports the LIMITS as
+ * `maxConcurrency` / `maxSessionMutations` / `maxDepth` / `maxChildren` / `maxMailbox` and the
+ * observed USE as `concurrency` / `sessionMutations` / `depth` / `children` / `mailbox` — the two
+ * read models deliberately do not share key names, so indexing `used` with a limit key silently
+ * rendered 0 for every row. The mapping is spelled out here rather than derived by string
+ * surgery, so a renamed budget is a compile-visible decision.
+ */
+const USED_KEY_FOR_LIMIT: Readonly<Record<string, string>> = Object.freeze({
+  maxConcurrency: 'concurrency',
+  maxSessionMutations: 'sessionMutations',
+  maxDepth: 'depth',
+  maxChildren: 'children',
+  maxMailbox: 'mailbox',
+});
+
+function usedKeyFor(limitKey: string): string {
+  return USED_KEY_FOR_LIMIT[limitKey] ?? limitKey;
+}
 
 function handleFanOut(): void {
   const members = props.team?.members ?? [];

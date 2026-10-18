@@ -31,7 +31,7 @@
     <p v-else class="empty-note" data-testid="attempt-empty">No attempts yet. Dispatch the task first.</p>
 
     <div class="attempt-actions">
-      <button type="button" class="action-button" data-testid="attempt-dispatch" :disabled="busy || task.phase !== 'pending'" @click="emit('dispatch', task.taskId)">
+      <button type="button" class="action-button" data-testid="attempt-dispatch" :disabled="busy || (task.phase !== 'pending' && task.phase !== 'paused')" @click="emit('dispatch', task.taskId)">
         Dispatch
       </button>
       <button type="button" class="action-button" data-testid="attempt-send" :disabled="busy || task.phase !== 'dispatched'" @click="emit('send', task.taskId)">
@@ -56,17 +56,18 @@
         type="button"
         class="action-button"
         data-testid="register-deliverable"
-        :disabled="busy || task.phase !== 'agent-finished'"
-        @click="handleRegisterDeliverable"
+        :disabled="true"
+        :title="registerDeliverableNote"
       >
         Register deliverable
       </button>
+      <p class="deliverable-note" data-testid="register-deliverable-note">{{ registerDeliverableNote }}</p>
       <button
         type="button"
         class="action-button"
         data-testid="submit-review"
         :disabled="busy || task.phase !== 'agent-finished'"
-        @click="emit('submit-review', { taskId: task.taskId, reviewer: 'reviewer' })"
+        @click="emit('submit-review', { taskId: props.task.taskId, reviewer: 'reviewer' })"
       >
         Submit for review
       </button>
@@ -110,6 +111,7 @@ const PHASE_LABELS: Readonly<Record<TaskPhase, string>> = Object.freeze({
   dispatched: 'Dispatched',
   'agent-finished': 'Agent finished',
   'review-pending': 'Review pending',
+  'review-approved': 'Review approved',
   accepted: 'Accepted',
   failed: 'Failed',
   cancelled: 'Cancelled',
@@ -126,6 +128,8 @@ function phaseNote(phase: TaskPhase): string {
       return 'The agent run finished; not yet reviewed.';
     case 'review-pending':
       return 'Submitted for review; awaiting a verdict.';
+    case 'review-approved':
+      return 'The review is approved; the task can be accepted.';
     case 'accepted':
       return 'A reviewer accepted this task.';
     default:
@@ -139,19 +143,14 @@ function handleFinish(): void {
   nativeEventId.value = '';
 }
 
-function handleRegisterDeliverable(): void {
-  // The deliverable id and hash are supplied by the container through the real service; the UI only
-  // names the deliverable it is registering against this task.
-  emit('register-deliverable', {
-    taskId: props.task.taskId,
-    deliverable: {
-      deliverableId: `deliverable-${props.task.taskId.slice(0, 8)}`,
-      artifactHash: '0'.repeat(64),
-      bytes: 0,
-      paths: ['(registered by the review surface)'],
-    },
-  });
-}
+/**
+ * A deliverable is an ARTIFACT: its id, hash, byte count and paths come from a captured artifact,
+ * never from this button. No artifact capture is wired into this surface yet, so the button
+ * registers NOTHING rather than writing a fabricated record (an all-zero hash, zero bytes and a
+ * synthetic path) that would then occupy the first deliverable slot the accept path reads. The
+ * container registers the real artifact through the composable.
+ */
+const registerDeliverableNote = 'Registering a deliverable needs a captured artifact; none is wired into this surface yet, so nothing is registered here. The container registers the real artifact.';
 
 function shortId(value: string): string {
   return value.length > 12 ? `${value.slice(0, 12)}…` : value;
@@ -274,6 +273,13 @@ function flagsOf(attempt: CollaborationAttemptView): string {
 
 .deliverable-id {
   color: var(--theme-text-primary, #e2e8f0);
+}
+
+.deliverable-note {
+  margin: 0;
+  flex-basis: 100%;
+  font-size: var(--type-caption, 10px);
+  color: var(--theme-text-muted, #94a3b8);
 }
 
 .attempt-actions,

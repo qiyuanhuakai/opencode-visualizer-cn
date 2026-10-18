@@ -8,7 +8,6 @@
   <dialog
     ref="dialogRef"
     class="collab-root modal-backdrop"
-    :open="open"
     data-testid="collaboration-panel"
     :data-thread-id="threadId ?? ''"
     :data-team-id="team?.teamId ?? ''"
@@ -95,7 +94,7 @@ import TaskGraph from './TaskGraph.vue';
 import AttemptDetails from './AttemptDetails.vue';
 import ArtifactReview from './ArtifactReview.vue';
 
-defineProps<{
+const props = defineProps<{
   open?: boolean;
   /** The captured Thread target every operation is scoped to. */
   threadId: string | null;
@@ -132,12 +131,20 @@ const emit = defineEmits<{
 
 const dialogRef = ref<HTMLDialogElement | null>(null);
 
+/**
+ * The native modal's lifecycle is driven by the EXPECTED open state, through showModal()/close(),
+ * never by setting the `open` attribute and reading it back to decide whether to call showModal:
+ * a caller that mounts with open=true would otherwise skip showModal and get a non-modal dialog
+ * (no ::backdrop, no focus isolation, no page inert), while a caller that mounts with open=false
+ * would be opened by a watcher that only checked the element's own attribute. Both the prop and
+ * the element are watched, so the call also happens once the element itself mounts.
+ */
 watch(
-  () => dialogRef.value,
-  () => {
-    const element = dialogRef.value;
+  () => [props.open, dialogRef.value] as const,
+  ([expectedOpen, element]) => {
     if (element === null) return;
-    if (!element.open) element.showModal();
+    if (expectedOpen && !element.open) element.showModal();
+    else if (!expectedOpen && element.open) element.close();
   },
 );
 

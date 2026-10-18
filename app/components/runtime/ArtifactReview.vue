@@ -1,9 +1,11 @@
 <template>
   <!--
     The change review: the writer's OBSERVED path and resources, the writer's OWN frozen posture
-    (task 40's WRITER_ISOLATION, `sandbox: false`), and the EXPLICIT apply-approve. There is no
+    (task 40's WRITER_ISOLATION, `sandbox: false`), and the EXPLICIT review approve. There is no
     auto-push default and no fabricated read-only capability: the posture is the port's object
-    surfaced verbatim, and the only forward action is the user-invoked approve below.
+    surfaced verbatim, and the only forward action is the user-invoked approve below. The approve
+    records the task's REVIEW verdict — applying the reviewed change to the repository is not
+    wired into this surface yet, and the note says so rather than implying an apply happened.
   -->
   <section class="artifact-review" data-testid="artifact-review" :data-task-id="task.taskId" aria-label="Change review">
     <div class="section-title">Change review</div>
@@ -49,10 +51,10 @@
         :disabled="busy || task.phase !== 'review-pending'"
         @click="emit('approve', { taskId: task.taskId, reviewerId: 'reviewer' })"
       >
-        Approve integration
+        Approve review
       </button>
       <p class="approve-note" data-testid="approve-note">
-        Approval applies the reviewed change under the repository lock. Nothing is pushed automatically.
+        Approval records the review verdict on this task only. Applying the reviewed change to the repository is not wired into this surface yet. Nothing is pushed automatically.
       </p>
     </div>
   </section>

@@ -23,6 +23,11 @@
  *      `approveIntegration` action a user invokes. There is no auto-push default anywhere.
  *   4. Every operation captures the Thread target it was opened under. A task whose captured
  *      thread differs from the current one is REFUSED, never silently applied to the selection.
+ *      Every ASYNC operation additionally captures the session generation and re-checks it after
+ *      its await: a result that lands after the team was closed, or after the selection moved, is
+ *      discarded instead of being written back, so a stale completion can never repopulate a
+ *      closed surface or overwrite a newer selection. The writer lease is kept PER TASK for the
+ *      same reason.
  *
  * The ports are injected (RUNTIME_COLLABORATION_STATE_KEY) so presentational components stay pure
  * and the wiring point for the container is a single provide — the same optional-seam posture task
@@ -41,6 +46,7 @@ export type TaskPhase =
   | 'dispatched'
   | 'agent-finished'
   | 'review-pending'
+  | 'review-approved'
   | 'accepted'
   | 'failed'
   | 'cancelled'
@@ -119,6 +125,9 @@ export interface CollaborationRecipientView {
   readonly participantId: string;
   readonly outcome: string;
   readonly attachmentPath: string | null;
+  /** The service's OWN resolution object, crossing verbatim. */
+  readonly resolution: { readonly code: string; readonly field: string } | null;
+  /** The resolution's code under the name this view declares — see `toRecipientView`. */
   readonly resolutionCode: string | null;
 }
 
@@ -231,6 +240,20 @@ export interface CollaborationDelegationPort {
   close(): void;
 }
 
+/**
+ * The landed task-38 recipient AS THE SERVICE RETURNS IT: the failure reason is an OBJECT under
+ * `resolution` ({ code, field }), not the flat `resolutionCode` the view declares. The port types
+ * below name this raw shape on purpose — declaring the view's shape here is what let the failure
+ * reason silently fail to cross before.
+ */
+export interface FanoutRecipientSnapshot {
+  readonly recipientId: string;
+  readonly participantId: string;
+  readonly outcome: string;
+  readonly attachmentPath: string | null;
+  readonly resolution: { readonly code: string; readonly field: string } | null;
+}
+
 /** The landed task-38 fan-out service, narrowed to create + dispatch. */
 export interface CollaborationFanoutPort {
   createFanout(input: {
@@ -240,13 +263,13 @@ export interface CollaborationFanoutPort {
     fanoutId: string;
     state: string;
     stats: Readonly<Record<string, number>>;
-    targets: readonly CollaborationRecipientView[];
+    targets: readonly FanoutRecipientSnapshot[];
   };
   dispatch(input: { fanoutId: string }): Promise<{
     fanoutId: string;
     state: string;
     stats: Readonly<Record<string, number>>;
-    targets: readonly CollaborationRecipientView[];
+    targets: readonly FanoutRecipientSnapshot[];
   }>;
   close(): void;
 }
@@ -285,13 +308,19 @@ export interface RuntimeCollaborationPorts {
  * THE three-state rule, in one place. Each phase is read from exactly one frozen product slice:
  *
  *   - `accepted`        ← `acceptance.state === 'accepted'`  (only the acceptance sink writes it)
- *   - `review-pending`  ← `review.state === 'pending'`        (only the acceptance sink writes it)
+ *   - `review-approved` ← `review.state === 'approved'`      (the reviewer's verdict is recorded;
+ *                          this is the ONLY state the acceptance sink will accept from)
+ *   - `review-pending`  ← `review.state === 'pending'`        (submitted, awaiting the verdict)
  *   - `agent-finished`  ← `state === 'review'`                (a native end moves the host here)
  *
  * A native terminal event writes the attempt's observation slice and moves the host to `review` at
  * most — it never touches `review.state` or `acceptance.state`, so it can reach `agent-finished`
- * but never `review-pending` or `accepted`. The function is a pure projection of frozen fields; it
- * recomputes nothing and accepts no input that could reach those slices.
+ * but never `review-pending`, `review-approved` or `accepted`. The function is a pure projection
+ * of frozen fields; it recomputes nothing and accepts no input that could reach those slices.
+ *
+ * `review-approved` is a DISTINCT phase because the acceptance sink refuses an accept whose review
+ * is merely pending (conflict/acceptance_review): without it the verdict would fold back into
+ * `agent-finished` and the accept affordance would be disabled exactly where the service accepts.
  */
 export function deriveTaskPhase(snapshot: {
   readonly state: string;
@@ -301,6 +330,7 @@ export function deriveTaskPhase(snapshot: {
   if (snapshot.acceptance.state === 'accepted') return 'accepted';
   if (snapshot.acceptance.state === 'rejected') return 'failed';
   if (snapshot.review.state === 'pending') return 'review-pending';
+  if (snapshot.review.state === 'approved') return 'review-approved';
   if (snapshot.state === 'review') return 'agent-finished';
   if (snapshot.state === 'accepted') return 'accepted';
   return snapshot.state as TaskPhase;
@@ -315,6 +345,24 @@ function readableError(error: unknown, fallback: string): string {
     return `${fallback}: ${error.message}${detail}`;
   }
   return fallback;
+}
+
+/**
+ * The port adapter for one fan-out recipient. The landed task-38 service reports a failed
+ * recipient's reason as an OBJECT under `resolution` ({ code, field }); the view declares the flat
+ * `resolutionCode` the template renders. The conversion lives HERE, in the product-side port, so a
+ * surface wired to the real service shows the service's own reason without any case-specific
+ * patching: the service's `resolution` object crosses verbatim and the code is derived from it.
+ */
+function toRecipientView(raw: FanoutRecipientSnapshot): CollaborationRecipientView {
+  return Object.freeze({
+    recipientId: raw.recipientId,
+    participantId: raw.participantId,
+    outcome: raw.outcome,
+    attachmentPath: raw.attachmentPath,
+    resolution: raw.resolution,
+    resolutionCode: raw.resolution === null ? null : raw.resolution.code,
+  });
 }
 
 export interface RuntimeCollaborationState {
@@ -412,6 +460,26 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
   let lease: { ownerId: string; expiresAt: number } | null = null;
   /** taskId → the Thread target it was created under; the capture that criterion 4 enforces. */
   const taskThreads = new Map<string, string>();
+  /** taskId → the writer lease observed for THAT task. Selecting a task shows its own lease. */
+  const writers = new Map<string, CollaborationWriterView>();
+  /**
+   * The session generation. It advances on every openTeam / closeTeam, and every async operation
+   * captures it before its await and re-checks it after: a completion that lands in a later
+   * session is discarded rather than written back.
+   */
+  let session = 0;
+  /** How many async operations are in flight; the surface is busy while ANY of them is. */
+  let busyCount = 0;
+
+  function beginBusy(): void {
+    busyCount += 1;
+    busy.value = true;
+  }
+
+  function endBusy(): void {
+    if (busyCount > 0) busyCount -= 1;
+    busy.value = busyCount > 0;
+  }
 
   const selectedTask = computed<CollaborationTaskView | null>(
     () => tasks.value.find((entry) => entry.taskId === selectedTaskId.value) ?? null,
@@ -422,8 +490,13 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
   }
 
   function syncTasks(): void {
-    const snapshots = teamId === null ? coordinator.tasks() : coordinator.tasks(teamId);
-    tasks.value = Object.freeze(snapshots.map(toTaskView));
+    // With no team open there is NOTHING to sync: reading every team the coordinator knows here
+    // would repopulate a closed surface from an operation that belonged to a dead session.
+    if (teamId === null) {
+      tasks.value = FROZEN_EMPTY;
+      return;
+    }
+    tasks.value = Object.freeze(coordinator.tasks(teamId).map(toTaskView));
   }
 
   function syncBudgets(): void {
@@ -494,6 +567,9 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
     lease: { ownerId: string; expiresAt: number };
     repository?: string;
   }): Promise<void> {
+    // A new session: every operation still in flight from the previous one is discarded from here.
+    session += 1;
+    busyCount = 0;
     busy.value = true;
     error.value = '';
     try {
@@ -510,6 +586,7 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
       }
       team.value = Object.freeze({ teamId: created.teamId, name: created.name, members: Object.freeze(members) });
       selectedTaskId.value = null;
+      writers.clear();
       syncTasks();
       syncBudgets();
       writer.value = null;
@@ -522,6 +599,7 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
       fail(readableError(openError, 'The collaboration team could not be opened'));
     } finally {
       busy.value = false;
+      busyCount = 0;
     }
   }
 
@@ -585,22 +663,28 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
     selectedTaskId.value = taskId;
     const task = tasks.value.find((entry) => entry.taskId === taskId) ?? null;
     syncAttempts(task);
+    // The writer is kept PER TASK: selecting another task surfaces that task's own lease (or
+    // nothing), never the last allocation's.
+    writer.value = taskId === null ? null : writers.get(taskId) ?? null;
   }
 
   async function dispatchTask(taskId: string): Promise<void> {
     const task = requireTaskInThread(taskId);
     if (task === null) return;
-    busy.value = true;
+    const operationSession = session;
+    beginBusy();
     error.value = '';
     try {
       await coordinator.dispatch({ taskId });
+      if (operationSession !== session) return;
       syncTasks();
       syncBudgets();
       syncAttempts(tasks.value.find((entry) => entry.taskId === taskId) ?? null);
     } catch (dispatchError) {
+      if (operationSession !== session) return;
       fail(readableError(dispatchError, 'The task could not be dispatched'));
     } finally {
-      busy.value = false;
+      endBusy();
     }
   }
 
@@ -613,17 +697,20 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
       fail('The task has no attempt to send yet. Dispatch it first.');
       return;
     }
-    busy.value = true;
+    const operationSession = session;
+    beginBusy();
     error.value = '';
     try {
       await coordinator.send({ attemptId });
+      if (operationSession !== session) return;
       syncTasks();
       syncBudgets();
       syncAttempts(tasks.value.find((entry) => entry.taskId === taskId) ?? null);
     } catch (sendError) {
+      if (operationSession !== session) return;
       fail(readableError(sendError, 'The attempt could not be sent'));
     } finally {
-      busy.value = false;
+      endBusy();
     }
   }
 
@@ -641,6 +728,9 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
       // A native end writes ONLY the attempt's observation slice and moves the host to `review`.
       coordinator.observeNativeEnd({ attemptId, reason: 'completed', nativeEventId });
       syncTasks();
+      // The native end RELEASES the attempt's concurrency and session-mutation shares, so the
+      // budget snapshot must be re-read here or the rendered use stays stale at the old value.
+      syncBudgets();
       syncAttempts(tasks.value.find((entry) => entry.taskId === taskId) ?? null);
     } catch (endError) {
       fail(readableError(endError, 'The native end could not be recorded'));
@@ -724,22 +814,28 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
       fail('Fan-out is not wired to this surface yet.');
       return;
     }
-    busy.value = true;
+    const operationSession = session;
+    beginBusy();
     error.value = '';
     try {
       const created = fanoutPort.createFanout({ prompt, targets });
       const view = await fanoutPort.dispatch({ fanoutId: created.fanoutId });
+      if (operationSession !== session) return;
       fanout.value = Object.freeze({
         fanoutId: view.fanoutId,
         state: view.state,
         stats: view.stats,
-        targets: Object.freeze(view.targets.map((target) => Object.freeze({ ...target }))),
+        // The contract conversion happens HERE, in the product-side port: the service's own
+        // `resolution` object crosses verbatim and the flat `resolutionCode` the template renders
+        // is derived from it, so a failed recipient's reason is never lost between service and UI.
+        targets: Object.freeze(view.targets.map(toRecipientView)),
         retryable: FROZEN_EMPTY,
       });
     } catch (fanoutError) {
+      if (operationSession !== session) return;
       fail(readableError(fanoutError, 'The fan-out could not be dispatched'));
     } finally {
-      busy.value = false;
+      endBusy();
     }
   }
 
@@ -750,12 +846,14 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
       if (writerPort === null) fail('The writer-lease service is not wired to this surface yet.');
       return;
     }
-    busy.value = true;
+    const operationSession = session;
+    beginBusy();
     error.value = '';
     try {
       const lease = await writerPort.allocate({ repository, taskId, ownerId: task.owner.participantId });
+      if (operationSession !== session) return;
       // The posture is the port's OWN frozen object, surfaced verbatim by identity.
-      writer.value = Object.freeze({
+      const view = Object.freeze({
         leaseId: lease.leaseId,
         worktree: lease.worktree,
         nativeCwd: lease.nativeCwd,
@@ -763,10 +861,18 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
         policy: lease.policy,
         posture: writerPort.posture(lease.leaseId),
       });
+      writers.set(taskId, view);
+      // Only the CURRENTLY selected task's lease is surfaced: an allocation that completes after
+      // the user moved on must not overwrite the new selection's writer state.
+      const currentSelection = selectedTaskId.value;
+      writer.value = currentSelection === taskId
+        ? view
+        : currentSelection === null ? null : writers.get(currentSelection) ?? null;
     } catch (allocateError) {
+      if (operationSession !== session) return;
       fail(readableError(allocateError, 'The writer lease could not be allocated'));
     } finally {
-      busy.value = false;
+      endBusy();
     }
   }
 
@@ -789,6 +895,10 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
   }
 
   function closeTeam(): void {
+    // A new session: every operation still in flight from the closed one is discarded from here,
+    // and nothing it completes afterwards may write back to this surface.
+    session += 1;
+    busyCount = 0;
     threadId.value = null;
     team.value = null;
     teamId = null;
@@ -801,7 +911,9 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
     budgets.value = null;
     fanout.value = null;
     writer.value = null;
+    writers.clear();
     taskThreads.clear();
+    busy.value = false;
   }
 
   return {

@@ -21,7 +21,7 @@
  *      target from a different thread is refused (test: "an operation on a task from a different
  *      Thread target is refused, not silently applied").
  */
-import { createApp, defineComponent, h, nextTick } from 'vue';
+import { createApp, defineComponent, h, nextTick, ref, type Ref } from 'vue';
 import { createI18n } from 'vue-i18n';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
@@ -494,5 +494,409 @@ describe('task 42 — writer path, real posture and explicit apply-approve', () 
     await settle();
     // Approval records the reviewer's verdict; it never claims a push happened.
     expect(services.coordinator.task(taskId).review.state).toBe('approved');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The eight PR #198 review findings — each reproduced RED-first against the reviewed head
+// (b62b3c49e6) and then closed in the product code.
+// ---------------------------------------------------------------------------
+
+describe('task 42 — the eight PR #198 review findings', () => {
+  async function waitFor(predicate: () => boolean, message: string): Promise<void> {
+    const deadline = Date.now() + 5000;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error(message);
+      await settle();
+    }
+  }
+
+  function buttonOf(view: Mounted, testId: string): HTMLButtonElement {
+    const button = view.root.querySelector<HTMLButtonElement>(`[data-testid="${testId}"]`);
+    if (button === null) throw new Error(`no [data-testid="${testId}"] in the mounted panel`);
+    return button;
+  }
+
+  function rowButtonOf(view: Mounted, taskId: string, testId: string): HTMLButtonElement {
+    const row = view.root.querySelector(`[data-testid="task-row"][data-task-id="${taskId}"]`);
+    const button = row?.querySelector<HTMLButtonElement>(`[data-testid="${testId}"]`) ?? null;
+    if (button === null) throw new Error(`no [data-testid="${testId}"] in the row of ${taskId}`);
+    return button;
+  }
+
+  async function typeNativeEventId(view: Mounted, value: string): Promise<void> {
+    const input = view.root.querySelector<HTMLInputElement>('[data-testid="native-event-input"]');
+    if (input === null) throw new Error('no native event input in the mounted panel');
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    // Let the v-model land and the dependent disabled binding re-render before the next click.
+    await settle();
+  }
+
+  /** Create one task through the container action (TeamEditor renders no create button). */
+  async function createOneTask(view: Mounted, title: string): Promise<string> {
+    view.state.createTask({ title, criteria: [{ id: 'c1', text: 'x', required: true }] });
+    const taskId = view.state.tasks.value.find((entry) => entry.title === title)?.taskId ?? '';
+    if (taskId === '') throw new Error(`the task "${title}" was not created`);
+    await settle();
+    return taskId;
+  }
+
+  /** A promise plus its resolver, typed so the resolver is callable after the closure runs. */
+  function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((settleResolve) => { resolve = settleResolve; });
+    return { promise, resolve };
+  }
+
+  it('W1: the review chain is walkable through the REAL buttons: submit → approve → Accept reaches accepted', async () => {
+    const services = buildServices();
+    const view = await mountPanel(services.ports);
+    const taskId = await createOneTask(view, 'Walk to accepted');
+    buttonOf(view, 'task-select').click();
+    await settle();
+    buttonOf(view, 'task-dispatch').click();
+    await settle();
+    buttonOf(view, 'attempt-send').click();
+    await settle();
+    await typeNativeEventId(view, 'native-evt-w1');
+    buttonOf(view, 'attempt-finish').click();
+    await settle();
+    expect(phaseOf(view, taskId)).toBe('agent-finished');
+    // A REAL deliverable is registered through the composable (the container's job — W2 proves the
+    // UI button itself no longer fabricates one).
+    view.state.registerDeliverable(taskId, { deliverableId: 'deliv-w1', artifactHash: HASH, bytes: 2048, paths: ['src/App.vue'] });
+    buttonOf(view, 'submit-review').click();
+    await settle();
+    expect(phaseOf(view, taskId)).toBe('review-pending');
+
+    // At review-pending the Accept button is DISABLED: the real acceptanceService refuses an
+    // accept whose review is not yet approved (conflict/acceptance_review), so the affordance is
+    // not offered where the service would refuse it.
+    expect(buttonOf(view, 'task-accept').disabled).toBe(true);
+
+    // The explicit approve records the verdict — and the task moves to the phase where the
+    // service will actually accept, instead of falling back to agent-finished with the buttons
+    // disabled.
+    buttonOf(view, 'approve-integration').click();
+    await settle();
+    expect(services.coordinator.task(taskId).review.state).toBe('approved');
+    expect(phaseOf(view, taskId)).toBe('review-approved');
+
+    // Accept is ENABLED at the real review state, and clicking it reaches accepted.
+    const accept = buttonOf(view, 'task-accept');
+    expect(accept.disabled).toBe(false);
+    accept.click();
+    await settle();
+    expect(phaseOf(view, taskId)).toBe('accepted');
+    expect(services.coordinator.task(taskId).acceptance.state).toBe('accepted');
+    expect(view.root.querySelector(`[data-testid="task-row"][data-task-id="${taskId}"] [data-testid="phase-chip"]`)?.textContent).toContain('Accepted');
+  });
+
+  it('W2: the Register deliverable button no longer fabricates artifact metadata', async () => {
+    const services = buildServices();
+    const view = await mountPanel(services.ports);
+    const taskId = await createOneTask(view, 'No fabricated deliverable');
+    buttonOf(view, 'task-select').click();
+    await settle();
+    buttonOf(view, 'task-dispatch').click();
+    await settle();
+    buttonOf(view, 'attempt-send').click();
+    await settle();
+    await typeNativeEventId(view, 'native-evt-w2');
+    buttonOf(view, 'attempt-finish').click();
+    await settle();
+    expect(phaseOf(view, taskId)).toBe('agent-finished');
+
+    // With no captured artifact there is nothing real to register, so the button is disabled and
+    // says why instead of writing an all-zero hash, zero bytes and a synthetic path.
+    const register = buttonOf(view, 'register-deliverable');
+    expect(register.disabled).toBe(true);
+    expect(view.root.querySelector('[data-testid="register-deliverable-note"]')?.textContent ?? '')
+      .toMatch(/artifact/i);
+    register.click();
+    await settle();
+    // Nothing was fabricated into the real coordinator.
+    expect(services.coordinator.task(taskId).deliverables).toEqual([]);
+    expect(view.root.querySelector('[data-testid="deliverable-list"]')).toBeNull();
+
+    // A REAL deliverable still registers through the composable and renders as the FIRST row.
+    view.state.registerDeliverable(taskId, { deliverableId: 'deliv-w2', artifactHash: HASH, bytes: 512, paths: ['src/real.txt'] });
+    await settle();
+    const rows = [...view.root.querySelectorAll('[data-testid="deliverable-row"]')];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.getAttribute('data-deliverable-id')).toBe('deliv-w2');
+    expect(rows[0]?.textContent).toContain(HASH.slice(0, 12));
+  });
+
+  it('W3: the approve affordance says what it does — it records the review verdict, it does not apply files', async () => {
+    const services = buildServices();
+    const view = await mountPanel(services.ports);
+    const taskId = await createOneTask(view, 'Honest approve');
+    buttonOf(view, 'task-select').click();
+    await settle();
+    await view.state.dispatchTask(taskId);
+    await settle();
+    await view.state.sendTask(taskId);
+    await settle();
+    view.state.finishTask(taskId, 'native-evt-w3');
+    await settle();
+    view.state.registerDeliverable(taskId, { deliverableId: 'deliv-w3', artifactHash: HASH, bytes: 8, paths: ['a.txt'] });
+    view.state.submitForReview(taskId, 'reviewer-1');
+    await settle();
+
+    const approve = buttonOf(view, 'approve-integration');
+    // The label no longer promises an apply this surface cannot perform.
+    expect(approve.textContent?.trim()).toBe('Approve review');
+    const note = view.root.querySelector('[data-testid="approve-note"]')?.textContent ?? '';
+    expect(note).toContain('records the review verdict');
+    expect(note).toContain('not wired');
+    expect(note).toContain('Nothing is pushed automatically');
+    approve.click();
+    await settle();
+    // What actually happened: the verdict is recorded, and nothing claims a file was integrated.
+    expect(services.coordinator.task(taskId).review.state).toBe('approved');
+    expect(phaseOf(view, taskId)).toBe('review-approved');
+  });
+
+  it('W4a: a send that completes after the team closed is discarded, never re-applied to the surface', async () => {
+    let deliverEntered = false;
+    const sendGate = deferred<{ ackId: string }>();
+    const gated = createCollaborationCoordinator({
+      deliver: async () => {
+        deliverEntered = true;
+        return sendGate.promise;
+      },
+    });
+    const mailbox = createMailbox();
+    const delegation = createDelegationService({ mailbox, deliver: async () => ({ ackId: 'ack' }) });
+    const view = await mountPanel({ coordinator: gated, delegation });
+    const taskId = await createOneTask(view, 'Close during send');
+    buttonOf(view, 'task-select').click();
+    await settle();
+    buttonOf(view, 'task-dispatch').click();
+    await settle();
+    const sending = view.state.sendTask(taskId);
+    await waitFor(() => deliverEntered, 'the gated deliver was never entered');
+
+    // The team is closed while the send is still in flight.
+    view.state.closeTeam();
+    expect(view.state.threadId.value).toBeNull();
+    expect(view.state.tasks.value).toHaveLength(0);
+
+    // The send now completes. Its result belongs to a closed session and must be discarded: the
+    // surface stays empty instead of being repopulated from every team the coordinator knows.
+    sendGate.resolve({ ackId: 'ack-w4a' });
+    await sending;
+    await settle();
+    expect(view.state.tasks.value).toHaveLength(0);
+    expect(view.state.selectedTaskId.value).toBeNull();
+    expect(view.state.attempts.value).toHaveLength(0);
+    expect(view.state.threadId.value).toBeNull();
+    expect(view.state.error.value).toBe('');
+  });
+
+  it('W4b: a writer lease that lands after the selection moved does not overwrite the new selection', async () => {
+    const allocateGate = deferred<{
+      leaseId: string;
+      worktree: string;
+      nativeCwd: string;
+      baseCommit: string;
+      policy: { worktreeAccess: string; userRepository: string };
+    }>();
+    const writerPort = {
+      allocate: async () => allocateGate.promise,
+      lease: () => null,
+      posture: () => writerLeases.WRITER_ISOLATION,
+      close: () => {},
+    };
+    const services = buildServices();
+    const view = await mountPanel({ ...services.ports, writer: writerPort });
+    const taskA = await createOneTask(view, 'Writer task A');
+    const taskB = await createOneTask(view, 'Writer task B');
+    view.state.selectTask(taskA);
+    await settle();
+    const allocating = view.state.allocateWriter(taskA, '/tmp/vis-w4b-repo');
+    await waitFor(() => view.state.busy.value, 'the writer allocation never started');
+
+    // The user selects ANOTHER task while the allocation is still in flight.
+    view.state.selectTask(taskB);
+    await settle();
+    expect(view.state.writer.value).toBeNull();
+
+    // The allocation lands now. It belongs to task A, so it must not surface for task B.
+    allocateGate.resolve({
+      leaseId: 'lease-w4b',
+      worktree: '/tmp/vis-w4b-repo/.vis-writers/lease-w4b',
+      nativeCwd: '/tmp/vis-w4b-repo/.vis-writers/lease-w4b',
+      baseCommit: 'b'.repeat(40),
+      policy: { worktreeAccess: 'read-write', userRepository: 'read-only' },
+    });
+    await allocating;
+    await settle();
+    expect(view.state.writer.value).toBeNull();
+    // Selecting A again surfaces A's OWN lease: the writer is kept per task.
+    view.state.selectTask(taskA);
+    await settle();
+    expect(view.state.writer.value?.leaseId).toBe('lease-w4b');
+  });
+
+  it('W5: a budget-paused task is RESUMED through its own Dispatch button once the budget frees', async () => {
+    const services = buildServices();
+    const view = await mountPanel(services.ports);
+    const taskA = await createOneTask(view, 'Occupies the session');
+    const taskB = await createOneTask(view, 'Parked by the budget');
+    view.state.selectTask(taskA);
+    await settle();
+    rowButtonOf(view, taskA, 'task-dispatch').click();
+    await settle();
+    expect(phaseOf(view, taskA)).toBe('dispatched');
+    // The attempt must be SENT before a native end is accepted (the coordinator refuses a native
+    // end on an unsent attempt), so the budget really is released below.
+    await view.state.sendTask(taskA);
+    await settle();
+
+    // The second task on the SAME session cannot be admitted: the coordinator parks it, visibly.
+    rowButtonOf(view, taskB, 'task-dispatch').click();
+    await settle();
+    expect(phaseOf(view, taskB)).toBe('paused');
+    expect(view.state.tasks.value.find((entry) => entry.taskId === taskB)?.pausedReasons)
+      .toContain('collaboration_session_mutation');
+    expect(services.coordinator.task(taskB).state).toBe('paused');
+    // The paused task's own Dispatch button is the resume path, enabled at the real state.
+    expect(rowButtonOf(view, taskB, 'task-dispatch').disabled).toBe(false);
+
+    // Release the session budget: the first attempt reaches its native end. The pause survives
+    // unchanged (nothing auto-admits), and the button stays available.
+    view.state.selectTask(taskA);
+    await settle();
+    view.state.finishTask(taskA, 'native-evt-w5');
+    await settle();
+    expect(phaseOf(view, taskB)).toBe('paused');
+    expect(rowButtonOf(view, taskB, 'task-dispatch').disabled).toBe(false);
+
+    // Resume the ORIGINAL parked task through its own button.
+    rowButtonOf(view, taskB, 'task-dispatch').click();
+    await settle();
+    expect(phaseOf(view, taskB)).toBe('dispatched');
+    expect(services.coordinator.task(taskB).state).toBe('dispatched');
+    expect(services.coordinator.budgets().used.sessionMutations).toBe(1);
+  });
+
+  it('W6: the budget rows render the OBSERVED use under the matching key, and finish refreshes them', async () => {
+    const services = buildServices();
+    const view = await mountPanel(services.ports);
+    const taskId = await createOneTask(view, 'Budget rendering');
+    view.state.selectTask(taskId);
+    await settle();
+    await view.state.dispatchTask(taskId);
+    await settle();
+    // The attempt is SENT so the native end below is accepted and really releases the budgets.
+    await view.state.sendTask(taskId);
+    await settle();
+    // The coordinator's own read model: one running attempt on the owner's session.
+    expect(services.coordinator.budgets().used.concurrency).toBe(1);
+    expect(services.coordinator.budgets().used.sessionMutations).toBe(1);
+    // The rendered rows pair each limit with the used value under the MATCHING key: 1 / 4, not 0 / 4.
+    expect(view.root.querySelector('[data-testid="budget-row"][data-budget-key="maxConcurrency"]')?.textContent)
+      .toContain('1 / 4');
+    expect(view.root.querySelector('[data-testid="budget-row"][data-budget-key="maxSessionMutations"]')?.textContent)
+      .toContain('1 / 1');
+    // The native end releases both budgets, and the rendered snapshot refreshes with them.
+    view.state.finishTask(taskId, 'native-evt-w6');
+    await settle();
+    expect(view.root.querySelector('[data-testid="budget-row"][data-budget-key="maxConcurrency"]')?.textContent)
+      .toContain('0 / 4');
+    expect(view.root.querySelector('[data-testid="budget-row"][data-budget-key="maxSessionMutations"]')?.textContent)
+      .toContain('0 / 1');
+  });
+
+  it('W7: a failed fan-out recipient renders the service OWN resolution code through the product port', async () => {
+    const services = buildServices();
+    services.failFor.add(WORKER_P);
+    const view = await mountPanel(services.ports);
+    await view.state.fanOut('review this', [
+      { participantId: LEAD_P, session: LEAD_SESSION },
+      { participantId: WORKER_P, session: WORKER_SESSION },
+    ]);
+    await settle();
+    const failed = view.root.querySelector(`[data-testid="fanout-recipient"][data-participant-id="${WORKER_P}"]`);
+    expect(failed?.getAttribute('data-outcome')).toBe('failed');
+    expect(failed?.querySelector('.recipient-resolution')?.textContent).toBe('source_unavailable');
+    const sent = view.root.querySelector(`[data-testid="fanout-recipient"][data-participant-id="${LEAD_P}"]`);
+    expect(sent?.getAttribute('data-outcome')).toBe('sent');
+    expect(sent?.querySelector('.recipient-resolution')).toBeNull();
+  });
+
+  it('W8: the panel is a REAL modal dialog: open shows it modally, close hides it, a closed panel never opens itself', async () => {
+    const showModalCalls: HTMLDialogElement[] = [];
+    const closeCalls: HTMLDialogElement[] = [];
+    const originalShowModal = HTMLDialogElement.prototype.showModal;
+    const originalClose = HTMLDialogElement.prototype.close;
+    HTMLDialogElement.prototype.showModal = function patchedShowModal(this: HTMLDialogElement) {
+      showModalCalls.push(this);
+      return originalShowModal.call(this);
+    };
+    HTMLDialogElement.prototype.close = function patchedClose(this: HTMLDialogElement, returnValue?: string) {
+      closeCalls.push(this);
+      return originalClose.call(this, returnValue);
+    };
+    const mountWith = async (open: Ref<boolean>): Promise<{ host: HTMLElement; unmount: () => void }> => {
+      const services = buildServices();
+      const state = createRuntimeCollaborationState(services.ports);
+      await state.openTeam({ threadId: THREAD_1, teamName: 'Team Alpha', environmentId: ENV, owner: OWNER, lease: LEASE });
+      const emitted = new Map<string, unknown[]>();
+      const Container = defineComponent({
+        setup() {
+          return { state, open };
+        },
+        render() {
+          return h(CollaborationPanel, {
+            ...containerProps(this.state, emitted),
+            open: this.open,
+            onClose: () => { this.open = false; emitted.set('close', []); },
+          });
+        },
+      });
+      const host = document.createElement('div');
+      document.body.appendChild(host);
+      const app = createApp(Container);
+      app.use(createI18n({ legacy: false, locale: 'en', messages: { en: {} }, missingWarn: false, fallbackWarn: false }));
+      app.mount(host);
+      await settle();
+      return { host, unmount: () => app.unmount() };
+    };
+    try {
+      // (a) mounted OPEN: the native modal is shown through showModal(), not by setting the open
+      // attribute and reading it back to decide whether to call showModal.
+      const open = ref(true);
+      const shown = await mountWith(open);
+      const dialog = shown.host.querySelector<HTMLDialogElement>('[data-testid="collaboration-panel"]');
+      expect(dialog).not.toBeNull();
+      expect(showModalCalls).toHaveLength(1);
+      expect(dialog?.open).toBe(true);
+
+      // (b) closing goes through close(), and the dialog is actually closed afterwards.
+      open.value = false;
+      await settle();
+      expect(closeCalls.length).toBeGreaterThanOrEqual(1);
+      expect(dialog?.open).toBe(false);
+      expect(showModalCalls).toHaveLength(1);
+      shown.unmount();
+
+      // (c) mounted CLOSED: nothing opens it — the old watcher called showModal() on an element
+      // whose own open attribute was false, opening a dialog nobody asked for.
+      showModalCalls.length = 0;
+      closeCalls.length = 0;
+      const closed = ref(false);
+      const hidden = await mountWith(closed);
+      expect(showModalCalls).toHaveLength(0);
+      expect(closeCalls).toHaveLength(0);
+      expect(hidden.host.querySelector<HTMLDialogElement>('[data-testid="collaboration-panel"]')?.open).toBe(false);
+      hidden.unmount();
+    } finally {
+      HTMLDialogElement.prototype.showModal = originalShowModal;
+      HTMLDialogElement.prototype.close = originalClose;
+    }
   });
 });
