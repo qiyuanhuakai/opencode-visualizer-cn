@@ -222,6 +222,9 @@ function recordEntry(scope, input) {
   const late = scope.native.terminal;
   const sourceKey = timelineSourceKey(source);
   const resolvedSeq = seq > 0 ? seq : scope.nextSeq(sourceKey);
+  // 2**53 + 1 === 2**53, so an auto-assigned successor past the safe range could never be
+  // enumerated by gaps(): refuse it here, before order, entries, seen and the seq bucket change.
+  if (!Number.isSafeInteger(resolvedSeq)) throw new TurnError('invalid_request', 'timeline_seq');
   const order = scope.nextOrder();
   const entry = Object.freeze({
     entryId: `${scope.turnId}:${order}`,

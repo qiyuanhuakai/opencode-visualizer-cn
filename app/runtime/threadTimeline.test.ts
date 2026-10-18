@@ -682,6 +682,42 @@ describe('sequence integrity across unsafe, distant and cross-source seqs', () =
     expect(timeline.turn(turn.turnId).entryCount).toBe(1);
   });
 
+  it('refuses an auto-assigned seq that would leave the safe integer range so gaps() still returns', () => {
+    const timeline = createTurnTimeline();
+    const turn = open(timeline);
+
+    timeline.event({
+      turnId: turn.turnId,
+      source: nativeSource('codex', 'evt-1'),
+      kind: 'message',
+      at: 1,
+      seq: Number.MAX_SAFE_INTEGER,
+      payload: {},
+    });
+
+    // The auto-assigned successor of MAX_SAFE_INTEGER is 2**53: gaps() could never enumerate it,
+    // so the write is refused BEFORE order, entries, seen and the seq bucket are touched.
+    expect(rejectionOf(() => timeline.event({
+      turnId: turn.turnId,
+      source: nativeSource('codex', 'evt-2'),
+      kind: 'message',
+      at: 2,
+      payload: {},
+    }))).toEqual({ code: 'invalid_request', field: 'timeline_seq' });
+    expect(rejectionOf(() => timeline.event({
+      turnId: turn.turnId,
+      source: nativeSource('codex', 'evt-3'),
+      kind: 'message',
+      at: 3,
+      seq: 0,
+      payload: {},
+    }))).toEqual({ code: 'invalid_request', field: 'timeline_seq' });
+
+    // The refused writes never landed, so the timeline stays readable.
+    expect(timeline.turn(turn.turnId).entryCount).toBe(1);
+    expect([...timeline.gaps(turn.turnId)]).toEqual([]);
+  });
+
   it('refuses a span gaps() cannot enumerate instead of walking it', () => {
     const timeline = createTurnTimeline();
     const turn = open(timeline);
@@ -807,5 +843,27 @@ describe('sequence integrity across unsafe, distant and cross-source seqs', () =
     appEvent(distant);
     expect(laneRejectionOf(() => bridge.gaps(bridgeTurn.turnId))).toEqual({ code: 'invalid_request', field: 'timeline_seq_span' });
     expect(laneRejectionOf(() => app.gaps(appTurn.turnId))).toEqual({ code: 'invalid_request', field: 'timeline_seq_span' });
+  });
+
+  it('agrees with the bridge turn service when an auto-assigned seq would leave the safe range', () => {
+    const bridge = createTurnService();
+    const app = createTurnTimeline();
+    const bridgeTurn = bridge.open({ turnId: TURN_A, causedBy: 'cmd-1' });
+    const appTurn = open(app, { turnId: TURN_B, causedBy: 'cmd-1' });
+    const bridgeEvent = (input: { source: TimelineSource; kind: TimelineEntryKind; at: number; seq?: number; payload: Record<string, unknown> }) =>
+      bridge.event({ turnId: bridgeTurn.turnId, ...input });
+    const appEvent = (input: { source: TimelineSource; kind: TimelineEntryKind; at: number; seq?: number; payload: Record<string, unknown> }) =>
+      app.event({ turnId: appTurn.turnId, ...input });
+
+    bridgeEvent({ source: nativeSource('codex', 'm-1'), kind: 'message', at: 1, seq: Number.MAX_SAFE_INTEGER, payload: {} });
+    appEvent({ source: nativeSource('codex', 'm-1'), kind: 'message', at: 1, seq: Number.MAX_SAFE_INTEGER, payload: {} });
+
+    const auto = { source: nativeSource('codex', 'm-2'), kind: 'message' as const, at: 2, payload: {} };
+    expect(laneRejectionOf(() => bridgeEvent(auto))).toEqual({ code: 'invalid_request', field: 'timeline_seq' });
+    expect(laneRejectionOf(() => appEvent(auto))).toEqual({ code: 'invalid_request', field: 'timeline_seq' });
+    expect(bridge.turn(bridgeTurn.turnId).entryCount).toBe(1);
+    expect(app.turn(appTurn.turnId).entryCount).toBe(1);
+    expect([...bridge.gaps(bridgeTurn.turnId)]).toEqual([]);
+    expect([...app.gaps(appTurn.turnId)]).toEqual([]);
   });
 });
