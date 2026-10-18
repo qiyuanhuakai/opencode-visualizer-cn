@@ -8,6 +8,7 @@ import {
   createMacPreinstallScript,
 } from './vis-bridge-installer-lifecycle.mjs';
 import { stageNodePtyRuntime } from './vis-bridge-node-pty.mjs';
+import { stageRuntimeWorkerSidecar } from './vis-bridge-runtime-staging.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -22,6 +23,11 @@ export async function stageLinuxRuntimePayload({ payloadPath, binaryPath, rootDi
     path.join(payloadPath, 'usr', 'lib', 'vis_bridge', 'node_modules', 'node-pty'),
     target.platform,
     target.arch,
+  );
+  await stageRuntimeWorkerSidecar(
+    rootDirectory,
+    path.join(payloadPath, 'usr', 'lib', 'vis_bridge'),
+    { platform: target.platform },
   );
 }
 
@@ -71,6 +77,11 @@ export async function packageMacInstaller(paths, target, rootDirectory, normaliz
     path.join(paths.workspacePath, 'usr', 'local', 'lib', 'vis_bridge', 'node_modules', 'node-pty'),
     target.platform,
     target.arch,
+  );
+  await stageRuntimeWorkerSidecar(
+    rootDirectory,
+    path.join(paths.workspacePath, 'usr', 'local', 'lib', 'vis_bridge'),
+    { platform: target.platform },
   );
   const scriptsDirectory = `${paths.workspacePath}-scripts`;
   await rm(scriptsDirectory, { recursive: true, force: true });

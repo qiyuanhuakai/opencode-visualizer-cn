@@ -1,9 +1,8 @@
 import type { LegacyExportChunk, LegacyExportPage, LegacyExportToken, LegacyPageRequest } from './legacyExport';
 import { openLegacyExport, readLegacyExportPage, resolveLegacyLocalBinding } from './legacyExport';
 import type { LegacySource } from './legacyExport';
-import { legacyDigest } from './legacyExport';
 import type { LegacySourcePort } from './sourceArchive';
-import type { LocalBindingHint } from './legacyBinding';
+import { describeLocalBinding, type LocalBindingHint } from './legacyBinding';
 
 /**
  * Task 24 — adapt a browser `LegacySource` (an async iterable of pieces) onto
@@ -57,16 +56,11 @@ export function createBrowserLegacySourcePort(source: LegacySource): LegacySourc
     },
     async binding(sourceKey: string): Promise<LocalBindingHint> {
       const resolved = await resolveLegacyLocalBinding(source, sourceKey);
-      return describeBinding(resolved, sourceKey);
+      // The ONE describer. A port-local re-derivation of the hint dropped the
+      // composer/question kind and the history `nativeSessionId`, so the archive
+      // metadata could not drive the composer-draft import or match a proven
+      // mapping, and a bound legacy record was never routed to its target.
+      return describeLocalBinding(resolved, sourceKey);
     },
-  };
-}
-
-async function describeBinding(local: Readonly<{ key: string; source: string; namespace: string }>, sourceKey: string): Promise<LocalBindingHint> {
-  return {
-    sourceKey,
-    ...(local.namespace.startsWith('backend-history-v1:')
-      ? { kind: 'history' as const, scopeFingerprint: await legacyDigest(local.namespace) }
-      : { kind: 'local' as const }),
   };
 }

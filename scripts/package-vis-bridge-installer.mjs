@@ -10,6 +10,7 @@ import {
 import { packageLinuxInstaller, packageMacInstaller } from './vis-bridge-installer-posix.mjs';
 import { createLinuxRpmSpec, packageLinuxRpmInstaller } from './vis-bridge-installer-rpm.mjs';
 import { stageNodePtyRuntime } from './vis-bridge-node-pty.mjs';
+import { stageRuntimeWorkerSidecar } from './vis-bridge-runtime-staging.mjs';
 
 export {
   createLinuxMaintainerScript,
@@ -147,6 +148,9 @@ export function createWindowsInstallerScript(paths) {
     `  File /oname=remove-path.ps1 "${createNsiPath(removePathScript)}"`,
     '  SetOutPath "$INSTDIR\\node_modules\\node-pty"',
     `  File /r "${createNsiPath(path.join(paths.workspacePath, 'node_modules', 'node-pty', '*'))}"`,
+    '  SetOutPath "$INSTDIR"',
+    `  File /r "${createNsiPath(path.join(paths.workspacePath, 'bridge', '*'))}"`,
+    `  File /r "${createNsiPath(path.join(paths.workspacePath, 'shared', '*'))}"`,
     '  WriteUninstaller "$INSTDIR\\Uninstall.exe"',
     '  InitPluginsDir',
     '  SetOutPath "$PLUGINSDIR"',
@@ -163,6 +167,8 @@ export function createWindowsInstallerScript(paths) {
     '  Delete "$INSTDIR\\vis_bridge.exe"',
     '  Delete "$INSTDIR\\remove-path.ps1"',
     '  RMDir /r "$INSTDIR\\node_modules"',
+    '  RMDir /r "$INSTDIR\\bridge"',
+    '  RMDir /r "$INSTDIR\\shared"',
     '  Delete "$INSTDIR\\Uninstall.exe"',
     '  RMDir "$INSTDIR"',
     '  System::Call \'USER32::SendMessageTimeout(p 0xffff, i ${WM_SETTINGCHANGE}, p 0, t "Environment", i 0x2, i 5000, *p .r0)\'',
@@ -182,6 +188,9 @@ async function packageWindowsInstaller(paths, target, rootDirectory) {
     target.platform,
     target.arch,
   );
+  await stageRuntimeWorkerSidecar(rootDirectory, paths.workspacePath, {
+    platform: target.platform,
+  });
   await writeFile(addPathScript, windowsPathScript('add'), 'utf8');
   await writeFile(removePathScript, windowsPathScript('remove'), 'utf8');
   await writeFile(path.join(paths.workspacePath, 'stop-daemon.ps1'), createWindowsStopScript(), 'utf8');
