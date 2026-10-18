@@ -47,18 +47,26 @@ export function createBridgeRuntime(options = {}) {
       const environmentId =
         options.environmentId ??
         (await loadEnvironmentIdentity(options.stateRoot ?? path.dirname(configStore.configPath)));
+      const { createRuntimeServices } = await import('./runtime/runtimeServices.js');
       if (closing) throw new Error('Bridge runtime is shutting down.');
+      const services = await createRuntimeServices({ environmentId, stateRoot: options.stateRoot ?? path.dirname(configStore.configPath), role: options.role ?? 'local', roots: options.localWorkspaceRoots ?? [{ root: process.cwd(), permissions: ['read', 'write', 'command', 'pty', 'reverse'] }], config: await startSources(), nativeSupervisor, acpManager, runtime: { mutate: operation => host.mutate(operation) }, factories: options.runtimeDriverFactories });
+      if (closing) { await services.close(); throw new Error('Bridge runtime is shutting down.'); }
       host = createRuntimeHost({
         environmentId,
         role: options.role ?? 'local',
+        services,
+        targets: options.runtimeTargets,
+        grants: options.runtimeGrants,
         sources:
           options.role === 'manager'
             ? []
             : [
                 { id: 'native', start: startNative, stop: () => nativeSupervisor.stop() },
                 { id: 'acp', start: startAcp, stop: () => acpManager.stopAll() },
+                { id: 'runtime', start: async () => { await Promise.allSettled([startNative(), startAcp()]); await services.start(); }, stop: () => services.close() },
               ],
       });
+      if (options.role === 'manager') host.resources.register('runtime', 'owned', () => services.close());
       host.resources.register('reverse', 'owned', () => clientMethodHandler.stopAll());
       host.start();
       return host;

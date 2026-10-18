@@ -28,6 +28,8 @@ export type AcpRuntimeAttachment = {
   readonly processGeneration: number;
   readonly pid: number;
   close(): Promise<void>;
+  /** Installs or clears the selected history raw stdout tap on the owned process entry. */
+  setRawTap(tap: ((chunk: Uint8Array) => void) | undefined): void;
 };
 
 export type AcpProcessManager = {
