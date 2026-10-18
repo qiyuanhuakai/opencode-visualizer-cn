@@ -1439,6 +1439,53 @@ describe('task 40 — the six PR #196 review findings', () => {
     store.close();
   });
 
+  it('P1b: an artifact that creates the symlink ITSELF cannot write a subpath through it', async () => {
+    const storeRoot = await scratch('symlink-own');
+    const store = storeModule.createArtifactStore({ root: storeRoot });
+    const service = serviceModule.createArtifactService({ store, root: storeRoot });
+    const target = path.join(storeRoot, 'apply-target');
+    const outside = path.join(storeRoot, 'outside');
+    await mkdir(target, { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await writeFile(path.join(outside, 'victim'), 'original\n', 'utf8');
+
+    const artifact = await collect(service.serialize({
+      baseCommit: 'a'.repeat(40),
+      entries: [
+        {
+          path: 'link',
+          kind: 'symlink',
+          mode: 0o777,
+          target: outside,
+          contentBytes: 0,
+          sha256: createHash('sha256').update(outside).digest('hex'),
+          tracked: false,
+          content: null,
+        },
+        {
+          path: 'link/victim',
+          kind: 'file',
+          mode: 0o644,
+          target: null,
+          contentBytes: 12,
+          sha256: createHash('sha256').update('overwritten\n').digest('hex'),
+          tracked: false,
+          content: Buffer.from('overwritten\n', 'utf8'),
+        },
+      ],
+    }));
+    // The ancestor check sees the disk, and a symlink the artifact is ABOUT to create is not on
+    // it yet: refusing it is what keeps the write from landing outside the target.
+    const observed = await rejection(Promise.resolve(service.apply({ artifact }, target)));
+    expect(observed.code).toBe('invalid_request');
+    expect(observed.field).toBe('artifact_path');
+    expect(await readFile(path.join(outside, 'victim'), 'utf8')).toBe('original\n');
+    // The refusal is up-front, so the target was never touched at all.
+    expect(await readdir(target)).toEqual([]);
+    service.close();
+    store.close();
+  });
+
   it('P2: a file replaced by a directory is captured as a deletion and replays onto the base', async () => {
     const repository = await createRepo('file-to-dir');
     // The base commit carries a tracked FILE named `item`.
@@ -1514,6 +1561,71 @@ describe('task 40 — the six PR #196 review findings', () => {
     const observed = await lstat(path.join(applyTarget, 'bundle'));
     expect(observed.isFile()).toBe(true);
     expect(await readFile(path.join(applyTarget, 'bundle'), 'utf8')).toBe('a file\n');
+    service.close();
+    store.close();
+  });
+
+  it('P2c: a file replaced by a MULTI-LEVEL directory replays onto the base', async () => {
+    const repository = await createRepo('file-to-dirs');
+    await writeFile(path.join(repository, 'item'), 'a file\n', 'utf8');
+    runGit(repository, ['add', '-A']);
+    runGit(repository, ['-c', 'user.name=vis', '-c', 'user.email=vis@example.invalid', 'commit', '-q', '-m', 'add item']);
+
+    const writersRoot = await scratch('file-to-dirs');
+    const storeRoot = await scratch('file-to-dirs-store');
+    const service = leasesModule.createWriterLeaseService({ writersRoot });
+    const store = storeModule.createArtifactStore({ root: storeRoot });
+    const artifacts = serviceModule.createArtifactService({ store, root: storeRoot });
+    const lease = await service.allocate({
+      repository,
+      taskId: taskIdFor('file-to-dirs'),
+      ownerId: 'writer-f2ds',
+    });
+    // The tracked FILE becomes a directory TWO levels deep.
+    await rm(path.join(lease.nativeCwd, 'item'));
+    await mkdir(path.join(lease.nativeCwd, 'item', 'sub', 'deep'), { recursive: true });
+    await writeFile(path.join(lease.nativeCwd, 'item', 'sub', 'deep', 'child'), 'nested\n', 'utf8');
+
+    const captured = await artifacts.capture({ lease });
+    expect(captured.manifest.find((entry) => entry.path === 'item')?.kind).toBe('delete');
+    expect(captured.manifest.find((entry) => entry.path === 'item/sub/deep/child')?.kind).toBe('file');
+
+    const applyTarget = await scratch('file-to-dirs-apply');
+    await writeFile(path.join(applyTarget, 'item'), 'a file\n', 'utf8');
+    const applied = await artifacts.apply({ artifactHash: captured.artifactHash }, applyTarget);
+    expect(applied.applied).toBe(2);
+    expect(await readFile(path.join(applyTarget, 'item', 'sub', 'deep', 'child'), 'utf8')).toBe('nested\n');
+    service.close();
+    store.close();
+  });
+
+  it('P2d: an UNDECLARED file in the way is refused instead of clobbered', async () => {
+    const storeRoot = await scratch('undeclared-file');
+    const store = storeModule.createArtifactStore({ root: storeRoot });
+    const service = serviceModule.createArtifactService({ store, root: storeRoot });
+    const target = path.join(storeRoot, 'apply-target');
+    await mkdir(target, { recursive: true });
+    await writeFile(path.join(target, 'loose'), 'untracked file\n', 'utf8');
+
+    const artifact = await collect(service.serialize({
+      baseCommit: 'a'.repeat(40),
+      entries: [{
+        path: 'loose/sub/child',
+        kind: 'file',
+        mode: 0o644,
+        target: null,
+        contentBytes: 7,
+        sha256: createHash('sha256').update('nested\n').digest('hex'),
+        tracked: false,
+        content: Buffer.from('nested\n', 'utf8'),
+      }],
+    }));
+    // The artifact never recorded the file it would have to remove, so the replay is refused
+    // with the same explicit code — the target's file is left exactly as it was.
+    const observed = await rejection(Promise.resolve(service.apply({ artifact }, target)));
+    expect(observed.code).toBe('invalid_request');
+    expect(observed.field).toBe('artifact_path');
+    expect(await readFile(path.join(target, 'loose'), 'utf8')).toBe('untracked file\n');
     service.close();
     store.close();
   });

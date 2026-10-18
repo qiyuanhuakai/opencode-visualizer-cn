@@ -88,30 +88,64 @@ function sha256Of(payload) {
  * may legitimately be a symlink (a worktree under a symlinked path); only the segments strictly
  * INSIDE it are checked, and the final segment is the entry itself — removed and rewritten,
  * never followed.
+ *
+ * `context` carries the two facts the disk cannot show yet: `createdSymlinks`, the paths this
+ * artifact itself turns into symlinks (a write under one of them would be written THROUGH a link
+ * the artifact created, which is the same escape by another route), and `retiring`, the deletions
+ * the first phase retires because their target is not a directory. A retired path is gone before
+ * any create runs, so it neither blocks a file -> directory transition nor counts as a symlinked
+ * ancestor; an UNDECLARED file in the way is refused rather than silently clobbered.
  */
-async function assertNoSymlinkAncestor(fsLike, resolved, applyRoot) {
+async function assertNoSymlinkAncestor(fsLike, resolved, applyRoot, context = EMPTY_CONTEXT) {
   const relative = path.relative(applyRoot, resolved);
   let current = applyRoot;
+  let blocker = null;
   for (const segment of relative.split(path.sep).slice(0, -1)) {
     if (segment.length === 0) continue;
     current = path.join(current, segment);
-    let info;
+    if (context.createdSymlinks.has(current)) {
+      throw new CollaborationError('invalid_request', 'artifact_path', {
+        path: relative,
+        reason: 'artifact_creates_symlink',
+      });
+    }
+    let info = null;
+    let code = null;
     try {
       info = await fsLike.lstat(current);
     } catch (error) {
-      // Not created yet: nothing to follow, and the create phase makes a real directory.
-      if (error?.code === 'ENOENT') return;
-      throw new CollaborationError('invalid_request', 'artifact_path', { path: relative });
+      code = error?.code ?? null;
+      // ENOENT: not created yet, nothing to follow. ENOTDIR: an ANCESTOR is a plain file — the
+      // file -> directory transition; it is not a symlink, so it is never an escape.
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        throw new CollaborationError('invalid_request', 'artifact_path', { path: relative });
+      }
     }
+    if (info === null) {
+      if (code === 'ENOTDIR') {
+        // The blocker is the deepest ancestor that DOES exist, not the path that failed to
+        // resolve; the artifact retires exactly that one when it records it as deleted.
+        if (blocker === null || !context.retiring.has(blocker)) {
+          throw new CollaborationError('invalid_request', 'artifact_path', {
+            path: relative,
+            reason: 'ancestor_is_file',
+          });
+        }
+      }
+      return;
+    }
+    blocker = current;
     if (info.isSymbolicLink()) {
+      if (context.retiring.has(current)) return;
       throw new CollaborationError('invalid_request', 'artifact_path', { path: relative });
     }
   }
 }
 
+const EMPTY_CONTEXT = Object.freeze({ createdSymlinks: new Set(), retiring: new Set() });
+
 /** The lstat of a path, or null when it does not exist. */
-async function lstatOrNull(fsLike, target) {
-  try {
+async function lstatOrNull(fsLike, target) {  try {
     return await fsLike.lstat(target);
   } catch (error) {
     if (error?.code === 'ENOENT') return null;
@@ -705,9 +739,22 @@ export function createArtifactService(options = {}) {
     // Validate EVERY path before touching the disk, so a refusal leaves the target untouched.
     const plan = parsed.entries.map((entry) =>
       Object.freeze({ entry, resolved: validateArtifactPath(entry.path, applyRoot) }));
-    // ...and no path may reach its target THROUGH a symlinked ancestor.
+    // ...and no path may reach its target THROUGH a symlinked ancestor — including one this
+    // artifact creates itself, which the disk cannot show yet. The retiring deletions are the
+    // ones the first phase removes, so a file or symlink the artifact records as deleted neither
+    // blocks a create nor counts as an ancestor to follow.
+    const retiring = new Set();
     for (const step of plan) {
-      await assertNoSymlinkAncestor(fsLike, step.resolved, applyRoot);
+      if (step.entry.kind !== 'delete') continue;
+      const held = await lstatOrNull(fsLike, step.resolved);
+      if (held !== null && !held.isDirectory()) retiring.add(step.resolved);
+    }
+    const context = Object.freeze({
+      createdSymlinks: new Set(plan.filter((step) => step.entry.kind === 'symlink').map((step) => step.resolved)),
+      retiring,
+    });
+    for (const step of plan) {
+      await assertNoSymlinkAncestor(fsLike, step.resolved, applyRoot, context);
     }
     if (dryRun) {
       stats.applies += 1;
@@ -733,15 +780,15 @@ export function createArtifactService(options = {}) {
     const retired = new Set();
     for (const step of plan) {
       if (step.entry.kind !== 'delete') continue;
-      const held = await lstatOrNull(fsLike, step.resolved);
-      if (held !== null && !held.isDirectory()) {
-        await fsLike.rm(step.resolved, { force: true, recursive: true });
-        retired.add(step.resolved);
-      }
+      if (!retiring.has(step.resolved)) continue;
+      await assertNoSymlinkAncestor(fsLike, step.resolved, applyRoot);
+      await fsLike.rm(step.resolved, { force: true, recursive: true });
+      retired.add(step.resolved);
     }
     // Phase 2 — the creates and overwrites.
     for (const step of plan) {
       if (step.entry.kind === 'delete') continue;
+      await assertNoSymlinkAncestor(fsLike, step.resolved, applyRoot);
       if (step.entry.kind === 'symlink') {
         await fsLike.mkdir(path.dirname(step.resolved), { recursive: true });
         await fsLike.rm(step.resolved, { force: true, recursive: true });
@@ -757,6 +804,7 @@ export function createArtifactService(options = {}) {
     for (const step of plan) {
       if (step.entry.kind !== 'delete') continue;
       if (retired.has(step.resolved)) continue;
+      await assertNoSymlinkAncestor(fsLike, step.resolved, applyRoot);
       await fsLike.rm(step.resolved, { force: true, recursive: true });
     }
     stats.applies += 1;
