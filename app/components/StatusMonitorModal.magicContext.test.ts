@@ -6,7 +6,7 @@ vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 vi.mock('../backends/registry', () => ({
   getPersistedCodexBridgeUrl: () => 'ws://localhost:23004/codex',
   getPersistedCodexBridgeToken: () => '',
-  getActiveBackendAdapter: () => ({
+  getBackendAdapter: () => ({
     getGlobalHealth: async () => ({ healthy: true, version: 'test' }),
     getMcpStatus: async () => ({}),
     getLspStatus: async () => [],

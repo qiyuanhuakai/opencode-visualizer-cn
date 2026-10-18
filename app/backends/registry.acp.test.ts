@@ -4,11 +4,12 @@ import {
   DEFAULT_ACP_BRIDGE_URL,
   configureAcpBackend,
   disconnectAcpBackend,
-  getActiveBackendKind,
   getBackendAdapter,
   getPersistedAcpBridgeUrl,
-  setActiveBackendKind,
 } from './registry';
+// The retired global routing is kept as the legacy export; these lineage tests
+// exercise exactly what production stopped using in task 48.
+import { getActiveBackendKind, setActiveBackendKind } from './legacyGlobalRouting';
 import { StorageKeys, storageGet, storageRemove, storageSet } from '../utils/storageKeys';
 
 describe('ACP backend registry', () => {

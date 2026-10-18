@@ -1,8 +1,10 @@
 import type { Ref } from 'vue';
-import { getActiveBackendAdapter } from '../backends/registry';
+import { getBackendAdapter } from '../backends/registry';
+import type { BackendKind } from '../backends/types';
 
 type UsePtyOneshotOptions = {
   activeDirectory: Ref<string>;
+  activeBackendKind: Ref<BackendKind>;
   translate?: (key: string, params?: Record<string, unknown>) => string;
 };
 
@@ -128,7 +130,7 @@ export function usePtyOneshot(options?: UsePtyOneshotOptions) {
   async function runOneShotPtyCommand(command: string, args: string[]): Promise<string> {
     const { activeDirectory } = getOptions();
     const directory = activeDirectory.value || undefined;
-    const backend = getActiveBackendAdapter();
+    const backend = getBackendAdapter(getOptions().activeBackendKind.value);
     if (backend.runOneShotCommand) {
       return await backend.runOneShotCommand({ directory, command, args });
     }

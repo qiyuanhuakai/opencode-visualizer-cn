@@ -30,7 +30,7 @@ import {
   setProviderBackend,
 } from './components/providerManagerModal.test-helpers';
 import { useTodos } from './composables/useTodos';
-import { getActiveBackendAdapter } from './backends/registry';
+import { getBackendAdapter } from './backends/registry';
 import { DshAdapter, DSH_CAPABILITIES } from './backends/dsh/dshAdapter';
 import {
   DSH_EXCLUDED_UI_FEATURES,
@@ -93,6 +93,7 @@ describe('dsh surface absence — todos 对接', () => {
       selectedSessionId: ref('session-a'),
       allowedSessionIds: computed(() => new Set(['session-a'])),
       activeDirectory: ref('/repo'),
+      activeBackendKind: ref('dsh'),
     });
 
     await todos.reloadTodosForAllowedSessions();
@@ -112,7 +113,7 @@ describe('dsh surface absence — todos 对接', () => {
 describe('dsh surface absence — questions', () => {
   it('exposes no question surface, so the shared question dialog can never open', () => {
     setProviderBackend(dshBackendAdapterShim());
-    const adapter = getActiveBackendAdapter() as Record<string, unknown>;
+    const adapter = getBackendAdapter('dsh') as Record<string, unknown>;
 
     expect(adapter.replyQuestion).toBeUndefined();
     expect(adapter.rejectQuestion).toBeUndefined();

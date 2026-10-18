@@ -21,8 +21,9 @@
  * Staged seams: the snapshot/history normalizer (Todo 18) and the message
  * bridge (Todo 19) are explicitly INJECTED collaborators, so this pipeline is
  * testable before they exist. The registry is deliberately not imported — the
- * adapter arrives as a parameter, and `getActiveBackendAdapter` refusing before
- * the registry placeholder lands is the correct behavior.
+ * adapter arrives as a parameter, so an unregistered kind fails at the
+ * caller's explicit `getBackendAdapter(kind)` resolution instead of hiding
+ * behind a module-global lookup.
  *
  * Generation discipline: every await is followed by an `isCurrent()` fence, so
  * a bootstrap orphaned by a backend switch drops its commits silently and tears
