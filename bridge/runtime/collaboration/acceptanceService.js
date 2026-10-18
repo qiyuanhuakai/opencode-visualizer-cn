@@ -99,9 +99,10 @@ export function createAcceptanceService({ tasks } = {}) {
   }
 
   /**
-   * Mark the task accepted. Four independent preconditions, each an explicit refusal:
-   * an approved review, a live owner lease, a registered deliverable, and every required
-   * criterion met. A native terminal event satisfies none of them.
+   * Mark the task accepted. Five independent preconditions, each an explicit refusal:
+   * the live review lifecycle, an approved review, a live owner lease, a registered
+   * deliverable, and every required criterion met. A native terminal event satisfies none
+   * of them.
    */
   function accept(input = {}) {
     const record = requireRecord(input.taskId);
@@ -111,6 +112,13 @@ export function createAcceptanceService({ tasks } = {}) {
         && record.acceptance.acceptedBy === input.acceptedBy;
       if (!same) throw new CollaborationError('conflict', 'acceptance_state');
       return tasks.task(record.taskId);
+    }
+    // The acceptance lifecycle: only a task sitting in review — its run ended and its review
+    // live — may be accepted. A task in flight, failed or cancelled is outside the acceptable
+    // lifecycle however approved a retained review reads, so a stale approval can never
+    // accept a task that is running or already terminated.
+    if (record.host.state !== 'review') {
+      throw new CollaborationError('conflict', 'task_state', { taskId: record.taskId, state: record.host.state });
     }
     assertLeaseLive(record, at);
     const deliverable = record.deliverables.find((entry) => entry.deliverableId === input.deliverableId);
