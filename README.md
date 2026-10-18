@@ -62,6 +62,7 @@
 | **Kimi Web 集成 (Beta)** | 第四个独立后端；通过 vis_bridge 连接 Kimi Code 的 Web 服务，复用会话、文件、审批、思考与子代理界面；详情见下文 | 🅱️ Beta |
 | **Forge 集成 (Beta)** | 基于 zsh PTY 的 Forge 悬浮终端；命令菜单、结构化会话侧栏、状态读取与刷新恢复 | 🅱️ Beta |
 | **DSH 集成 (Beta)** | 第五个后端：经 vis_bridge 连接 DeepSeek Harness 的 `dsh web` 服务，复用会话、模型目录、文件树、审批与状态监控界面；只支持协议代 `0.2.0-rc.2`，bridge 侧默认不托管（opt-in）。适配范围与未实测项见 [DSH 说明](docs/dsh.md) | 🅱️ Beta |
+| **统一运行环境 (Alpha)** | v0.9.0-alpha 新增 `/runtime` v1 协议：一个 Bridge 入口按 target 路由，一次连接按 repository/worktree 浏览全部五类来源；Host Thread 跨 Harness 接力、任务/团队协作、隔离改动与审查、SSH 与 Slurm 远程执行。协议破坏性变更、废弃登录路径、数据保留与升级路径见 [迁移说明](docs/migration-v090.md)；能力与版本实测矩阵见 [运行时说明](docs/runtime.md) | 🅰️ Alpha |
 
 > 📋 **详细变更日志**：请参阅 [CHANGELOG.md](./CHANGELOG.md)  
 > 🗺️ **路线图与计划**：请参阅 [RoadMap.md](./RoadMap.md)
@@ -79,6 +80,21 @@
 ### Kimi Web 后端
 
 Kimi Web 是独立于 ACP 中 Kimi Code Agent 的第四个后端，连接的是 **`@moonshot-ai/kimi-code` 提供的 `kimi web` 服务**，不适用于旧版 Python `kimi-cli` 的同名命令。它复用主界面的项目、会话、文件树与 Git 操作，并支持流式回答与思考、历史记录、权限请求、提问、附件、子代理、Token 状态和工具/思考/子代理悬浮窗。分支、压缩、撤销等入口按当前服务的实际能力探测显示。传输经 `vis_bridge` 转发，浏览器无需保存 Kimi Web 的 bearer token。协议与已验证范围见 [Kimi Web 说明](docs/kimi.md)。
+
+---
+
+### 统一运行环境（v0.9.0-alpha）
+
+v0.9.0-alpha 引入统一运行环境：连接一个 Bridge 入口后，在同一 Git/worktree 树浏览全部五类来源（OpenCode、Codex、ACP、Kimi Web、DSH）并显示 Harness 标识；多个会话同时运行，权限、模型、文件和任务状态各有明确归属；Host Thread 可跨 Harness 接力；任务、团队与隔离改动有审查与验收语义；SSH 与 Slurm 目标经同一入口执行。
+
+- 协议：`/runtime` v1，握手 `hello/version/capabilities`，请求带 `idempotencyKey`，`durable-accepted` 与 `native-executed` 分离，独立 binary channel，固定错误码。
+- 升级：旧历史、草稿、收藏、辅助元数据完整迁移（迁移对旧来源只读，卸载保留数据）；旧 Bridge 协议代 `v070-legacy` 在连接前被拒绝并给出升级路径。完整升级路径 backup → bind → import → verify → cutover 见 [迁移说明](docs/migration-v090.md)。
+- 远程：SSH/Slurm 连接、两种通道（TCP 与 step relay）、持久化条件与不支持拓扑见 [远程说明](docs/remote.md)。
+- 协作：Host Thread、handoff、任务/尝试/团队与隔离改动见 [协作说明](docs/collaboration.md)。
+- 性能：1 万会话/200 worktree/5 来源与 10 万 pins 压力档的实测数字（真实 Chromium、真实 IndexedDB、无 store mock、10 次运行）见迁移说明第 11 节；计划规定的 200 worktree 与五类树形构成已播种并已评分（seed 090：五类均分、1001+ Global roots、51+ Codex threads、archive/orphan/child、等时间戳，树形维度在 harness 自有 IndexedDB 上逐维评分）；五个 UI-TREE 渲染指标在 store-substrate 层级评分，因为主界面尚未接入新运行时，不声称运行中应用渲染表现。
+- 平台限制：没有构建也没有声称任何 Windows 或 macOS 安装包产物；未走真实 GitHub-release 更新路径；Electron 运行时只在 Linux 实测；无物理 GPU。详见迁移说明第 9 节。
+
+> ⚠️ 迁移进行中：登录页按后端选择与每后端直连地址已标记废弃但在本 alpha 仍可使用；旧全局后端路由（全局单例与 `getActiveBackendAdapter` 等函数）已移除，生产动作按连接作用域显式解析适配器，被移除函数仅保留在 legacy 导出模块供测试沿袭；主界面尚未接入新运行时 wire。
 
 ---
 
@@ -461,6 +477,7 @@ All upstream [Vis](https://github.com/xenodrive/vis) core features are fully pre
 | **Kimi Web Integration (Beta)** | Fourth independent backend; connects to Kimi Code's Web service through vis_bridge and reuses the session, file, approval, thinking, and subagent UI; details below | 🅱️ Beta |
 | **Forge Integration (Beta)** | zsh PTY-based Forge floating terminal with command menus, structured conversation sidebar, status reads, and refresh restoration | 🅱️ Beta |
 | **DSH Integration (Beta)** | Fifth backend: connects to DeepSeek Harness's `dsh web` service through vis_bridge and reuses the session, model catalog, file tree, approval, and status monitoring UI; only protocol generation `0.2.0-rc.2` is supported and bridge-side supervision is opt-in (off by default). Coverage and untested items: [DSH notes](docs/dsh.md) | 🅱️ Beta |
+| **Unified Runtime (Alpha)** | v0.9.0-alpha adds the `/runtime` v1 protocol: one Bridge entry routes by target, and one connection browses all five sources by repository/worktree. Host Thread handoff across harnesses, task/team collaboration, isolated changes with review, and SSH/Slurm remote execution. Breaking protocol changes, deprecated login paths, data preservation, and the upgrade path: [migration notes](docs/migration-v090.md); the measured capability/version matrix: [runtime notes](docs/runtime.md) | 🅰️ Alpha |
 
 > 📋 **Detailed changelog**: [CHANGELOG.md](./CHANGELOG.md)  
 > 🗺️ **Roadmap & Plans**: [RoadMap.md](./RoadMap.md)
@@ -478,6 +495,21 @@ The optional **Codex Panel** floating panel remains Alpha. Enable it separately 
 ### Kimi Web Backend
 
 Kimi Web is the fourth backend, separate from the Kimi Code agent available through ACP. It connects to **`kimi web` from `@moonshot-ai/kimi-code`**, not the identically named command in the older Python `kimi-cli`. It uses Vis's main project, session, file tree, and Git UI, with streaming responses and thinking, history, permissions, questions, attachments, subagents, token status, and tool/thinking/subagent popups. Branching, compaction, undo, and other actions appear only when the connected service supports them. REST and WebSocket traffic pass through `vis_bridge`; the browser does not store Kimi Web's bearer token. See the [Kimi Web protocol and verified coverage](docs/kimi.md).
+
+---
+
+### Unified Runtime (v0.9.0-alpha)
+
+v0.9.0-alpha adds the unified runtime: connect one Bridge entry, then browse all five sources (OpenCode, Codex, ACP, Kimi Web, DSH) in the same Git/worktree tree with harness badges. Multiple sessions run concurrently with permissions, models, files, and task state clearly owned. A Host Thread can hand off across harnesses; tasks, teams, and isolated changes carry review and acceptance semantics; SSH and Slurm targets execute through the same entry.
+
+- Protocol: `/runtime` v1 with a `hello/version/capabilities` handshake, idempotency keys on requests, `durable-accepted` separated from `native-executed`, an independent binary channel, and fixed error codes.
+- Upgrade: legacy history, drafts, favorites, and auxiliary metadata migrate intact (the migration reads the legacy source read-only and uninstall preserves data); a legacy `v070-legacy` bridge is refused before connecting with an upgrade path. The full path backup → bind → import → verify → cutover is in [migration notes](docs/migration-v090.md).
+- Remote: SSH/Slurm connections, the two channels (TCP and step relay), persistence conditions, and unsupported topologies are in [remote notes](docs/remote.md).
+- Collaboration: Host Thread, handoff, tasks/attempts/teams, and isolated changes are in [collaboration notes](docs/collaboration.md).
+- Performance: measured numbers for 10k sessions / 200 worktrees / 5 sources and the 100k-pin stress profile (real Chromium, real IndexedDB, no store mock, 10 runs) are in section 11 of the migration notes; the prescribed 200 worktrees and the five-category tree composition are seeded and graded (seed 090: five categories split evenly, 1001+ Global roots, 51+ Codex threads, archive/orphan/child members, equal timestamps, each tree dimension graded over the harness-owned IndexedDB); the five UI-TREE render metrics are graded at the store-substrate level because the main app is not yet wired to the runtime, and no running-app rendering is claimed.
+- Platform limits: no Windows or macOS installer artifact was built or claimed; the real GitHub-release update path was not exercised; Electron runtime was exercised on Linux only; no physical GPU. See section 9 of the migration notes.
+
+> ⚠️ Migration in progress: the per-backend login selection and per-backend direct URLs are marked deprecated but remain usable in this alpha; the legacy global backend routing (the module-global singleton and the `getActiveBackendAdapter` family) is retired — production actions resolve adapters explicitly from the connection scope, and the removed functions survive only in the legacy export module for test lineage; the main app is not yet wired to the new runtime.
 
 ---
 
