@@ -20,9 +20,10 @@ describe('runtime QA runner', () => {
   it('accepts every reserved task and independent final verifier selectors', () => {
     for (let task = 1; task <= 48; task++) expect(parseSelector(['--task', String(task), '--case', 'happy', '--out', 'result.json']).task).toBe(task);
     for (const verify of ['F1', 'F2', 'F3', 'F4']) expect(parseSelector(['--verify', verify, '--out', 'result.json']).verify).toBe(verify);
+    for (const [verify, testCase] of [['F1', 'happy'], ['F2', 'failure'], ['F3', 'happy'], ['F4', 'failure']]) expect(parseSelector(['--verify', verify, '--case', testCase, '--out', 'result.json'])).toMatchObject({ verify, case: testCase });
   });
   it('failure rejects unknown, mixed, duplicate, malformed and missing selectors', () => {
-    for (const args of [[], ['--task', '49'], ['--task', '1x'], ['--verify', 'F5'], ['--task', '6', '--case', 'skip', '--out', 'x'], ['--task', '6', '--verify', 'F1', '--out', 'x'], ['--verify', 'F1', '--case', 'happy', '--out', 'x'], ['--verify', 'F1', '--verify', 'F2', '--out', 'x'], ['--verify', 'F1', '--out', 'x', '--shell', 'echo pass']]) expect(() => parseSelector(args)).toThrow();
+    for (const args of [[], ['--task', '49'], ['--task', '1x'], ['--verify', 'F5'], ['--task', '6', '--case', 'skip', '--out', 'x'], ['--verify', 'F1', '--case', 'skip', '--out', 'x'], ['--task', '6', '--verify', 'F1', '--out', 'x'], ['--verify', 'F1', '--verify', 'F2', '--out', 'x'], ['--verify', 'F1', '--out', 'x', '--shell', 'echo pass']]) expect(() => parseSelector(args)).toThrow();
   });
   it('failure exits nonzero for unknown task and verifier', () => {
     for (const args of [['--task', '49', '--case', 'happy'], ['--verify', 'F5']]) {

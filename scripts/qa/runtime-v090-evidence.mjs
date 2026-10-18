@@ -140,7 +140,7 @@ export function validateEvidence(value, root) {
   assert.equal(receipt.interrupted, false, 'interrupted execution cannot pass');
   const options = value.invocation.slice(2);
   assert(Boolean(value.selector.verify) !== Boolean(value.selector.task), 'exclusive manifest selector required');
-  if (value.selector.verify) assert(['F1', 'F2', 'F3', 'F4'].includes(value.selector.verify) && value.selector.case === undefined, 'unknown manifest verifier');
+  if (value.selector.verify) assert(['F1', 'F2', 'F3', 'F4'].includes(value.selector.verify) && (value.selector.case === undefined || ['happy', 'failure'].includes(value.selector.case)), 'unknown manifest verifier');
   else assert(Number.isInteger(value.selector.task) && value.selector.task >= 1 && value.selector.task <= 48 && ['happy', 'failure'].includes(value.selector.case), 'unknown manifest task or case');
   const parsed = {};
   assert(options.length % 2 === 0, 'invalid runner invocation');
@@ -148,7 +148,7 @@ export function validateEvidence(value, root) {
     assert(['--task', '--case', '--verify', '--out', '--evidence-root'].includes(options[index]) && !Object.hasOwn(parsed, options[index]), 'invalid runner selector');
     parsed[options[index]] = options[index + 1];
   }
-  const expectedOptions = { ...(value.selector.verify ? { '--verify': value.selector.verify } : { '--task': String(value.selector.task), '--case': value.selector.case }), '--out': value.selector.out, ...(value.selector.evidenceRoot ? { '--evidence-root': value.selector.evidenceRoot } : {}) };
+  const expectedOptions = { ...(value.selector.verify ? { '--verify': value.selector.verify, ...(value.selector.case ? { '--case': value.selector.case } : {}) } : { '--task': String(value.selector.task), '--case': value.selector.case }), '--out': value.selector.out, ...(value.selector.evidenceRoot ? { '--evidence-root': value.selector.evidenceRoot } : {}) };
   if (parsed['--out']) parsed['--out'] = path.resolve(receipt.invocationCwd ?? root, parsed['--out']);
   if (parsed['--evidence-root']) parsed['--evidence-root'] = path.resolve(receipt.invocationCwd ?? root, parsed['--evidence-root']);
   assert.deepEqual(parsed, expectedOptions, 'executed selector differs from manifest');
