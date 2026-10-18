@@ -230,6 +230,7 @@ export async function run(context) {
   const observations = {};
   const protocol = { case: context.case, runDir, checks, observations, worker: {}, browser: {} };
   const proof = { case: context.case, runDir, checks, observations, protocol };
+  let cleanupFailure = null;
   const persist = () => writeJson(path.join(runDir, 'proof.json'), proof);
   const scrub = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
   const check = (name, observed, expected) => {
@@ -855,7 +856,7 @@ export async function run(context) {
         }, {
           pushLikeButtons: 0,
           pushLikeTestIds: 0,
-          approveNote: 'Approval applies the reviewed change under the repository lock. Nothing is pushed automatically.',
+          approveNote: 'Approval records the review verdict on this task only. Applying the reviewed change to the repository is not wired into this surface yet. Nothing is pushed automatically.',
           caseGitCommands: started.gitCommands,
           productGitCommands: started.productGitCommands,
           totalGitCommands: started.gitCommands + started.productGitCommands,
@@ -1506,11 +1507,23 @@ export async function run(context) {
     persist();
     throw error;
   } finally {
-    const closed = await fixture.close().catch((error) => ({ error: String(error) }));
-    proof.cleanup = closed;
+    // A cleanup failure is EVIDENCE, not a footnote: the receipts are persisted here and the
+    // failure is re-thrown after this block, so the run fails instead of reporting green evidence
+    // over a teardown that did not happen (an owned directory left behind, an owned PID alive).
+    try {
+      proof.cleanup = await fixture.close();
+    } catch (error) {
+      proof.cleanup = {
+        failed: true,
+        message: error?.message ?? String(error),
+        errors: Array.isArray(error?.errors) ? error.errors.map((entry) => String(entry)) : [],
+      };
+      cleanupFailure = error;
+    }
     persist();
     artifacts.push(artifact(path.join(runDir, 'proof.json'), 'registered-case-proof'), artifact(path.join(runDir, 'resources.json'), 'resource-ledger'));
   }
+  if (cleanupFailure !== null) throw cleanupFailure;
 
   const classMatchers = {
     partial_dispatch: /partial|per-recipient|observed outcome/,

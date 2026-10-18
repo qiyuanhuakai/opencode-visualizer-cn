@@ -900,3 +900,123 @@ describe('task 42 — the eight PR #198 review findings', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Residual round-4 findings — a cancelled task's accept path, the shared busy
+// counter across sessions, and the attempts slot's ownership.
+// ---------------------------------------------------------------------------
+
+describe('a cancelled task never renders or accepts its review verdict', () => {
+  it('renders cancelled, disables Accept and refuses the accept even when called directly', async () => {
+    const services = buildServices();
+    const view = await mountPanel(services.ports);
+    view.state.createTask({ title: 'Cancel after approve', criteria: [{ id: 'c1', text: 'x', required: true }] });
+    await settle();
+    const taskId = view.state.tasks.value[0]?.taskId ?? '';
+    view.state.selectTask(taskId);
+    await view.state.dispatchTask(taskId);
+    await settle();
+    await view.state.sendTask(taskId);
+    await settle();
+    view.state.finishTask(taskId, 'native-evt-1');
+    await settle();
+    view.state.registerDeliverable(taskId, { deliverableId: 'deliv-1', artifactHash: HASH, bytes: 2048, paths: ['src/App.vue'] });
+    view.state.submitForReview(taskId, 'reviewer-1');
+    await settle();
+    view.state.reviewTask(taskId, 'approved', 'reviewer-1');
+    await settle();
+    expect(phaseOf(view, taskId)).toBe('review-approved');
+
+    view.state.cancelTask(taskId, 'cancelled by reviewer');
+    await settle();
+    // The host state is terminal, so the verdict it still carries must not be displayed as the
+    // task's phase, and the accept affordance must not be offered for work that is over.
+    expect(phaseOf(view, taskId)).toBe('cancelled');
+    const accept = view.root.querySelector<HTMLButtonElement>(`[data-testid="task-row"][data-task-id="${taskId}"] [data-testid="task-accept"]`);
+    expect(accept?.disabled).toBe(true);
+
+    // The composable refuses it too: the acceptance service does not check the host's terminal
+    // state, so a cancelled task would otherwise become accepted through this surface.
+    view.state.error.value = '';
+    view.state.acceptTask(taskId, { deliverableId: 'deliv-1', acceptedBy: 'reviewer-1', criteria: [{ id: 'c1', met: true }] });
+    await settle();
+    expect(view.state.error.value).toContain('cancelled');
+    expect(services.coordinator.task(taskId).state).toBe('cancelled');
+    expect(services.coordinator.task(taskId).acceptance.state).not.toBe('accepted');
+  });
+});
+
+describe('the busy counter belongs to the session that started the operation', () => {
+  it('a late finally from a previous session does not clear the new session busy', async () => {
+    const gates: Array<() => void> = [];
+    const coordinator = createCollaborationCoordinator();
+    const fanout = createFanoutService({
+      deliver: async () => {
+        await new Promise<void>((resolve) => { gates.push(resolve); });
+        return { ackId: 'ack' };
+      },
+    });
+    const view = await mountPanel({ coordinator, fanout });
+    const oldFanout = view.state.fanOut('prompt one', [{ participantId: WORKER_P, session: WORKER_SESSION }]);
+    await settle();
+    expect(view.state.busy.value).toBe(true);
+
+    view.state.closeTeam();
+    await view.state.openTeam({ threadId: THREAD_1, teamName: 'Team Beta', environmentId: ENV, owner: OWNER, lease: LEASE });
+    const newFanout = view.state.fanOut('prompt two', [{ participantId: WORKER_P, session: WORKER_SESSION }]);
+    await settle();
+    expect(view.state.busy.value).toBe(true);
+
+    // Release ONLY the old request: its finally used to decrement the shared counter and report
+    // the surface idle while the new request was still in flight.
+    gates[0]?.();
+    await oldFanout;
+    await settle();
+    expect(view.state.busy.value).toBe(true);
+
+    gates[1]?.();
+    await newFanout;
+    await settle();
+    expect(view.state.busy.value).toBe(false);
+  });
+});
+
+describe('the attempts slot belongs to the selected task', () => {
+  it('an operation on another task does not backfill its attempts under the selected task', async () => {
+    const gates: Array<() => void> = [];
+    const coordinator = createCollaborationCoordinator({
+      deliver: async () => {
+        await new Promise<void>((resolve) => { gates.push(resolve); });
+        return { ackId: 'ack' };
+      },
+    });
+    const view = await mountPanel({ coordinator });
+    view.state.createTask({ title: 'Task A', criteria: [{ id: 'c1', text: 'x', required: true }] });
+    view.state.createTask({ title: 'Task B', criteria: [{ id: 'c1', text: 'x', required: true }] });
+    await settle();
+    const [taskA, taskB] = view.state.tasks.value.map((entry) => entry.taskId);
+    await view.state.dispatchTask(taskA);
+    await settle();
+    view.state.selectTask(taskB);
+    await settle();
+
+    const sending = view.state.sendTask(taskA);
+    await settle();
+    gates[0]?.();
+    await sending;
+    await settle();
+
+    // The details panel names task B, so every attempt row it renders must be task B's own.
+    const details = view.root.querySelector('[data-testid="attempt-details"]');
+    expect(details?.getAttribute('data-task-id')).toBe(taskB);
+    const rendered = [...view.root.querySelectorAll('[data-testid="attempt-row"]')].map((row) => row.getAttribute('data-attempt-id'));
+    expect(rendered).toEqual(coordinator.task(taskB).attempts);
+    expect(rendered).not.toEqual(coordinator.task(taskA).attempts);
+
+    // Selecting task A still shows its own attempts, read fresh from the coordinator.
+    view.state.selectTask(taskA);
+    await settle();
+    const afterSelect = [...view.root.querySelectorAll('[data-testid="attempt-row"]')].map((row) => row.getAttribute('data-attempt-id'));
+    expect(afterSelect).toEqual(coordinator.task(taskA).attempts);
+  });
+});

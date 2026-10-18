@@ -123,6 +123,8 @@ export interface CollaborationBudgetView {
 export interface CollaborationRecipientView {
   readonly recipientId: string;
   readonly participantId: string;
+  /** The recipient's OWN native session, as the service recorded it at creation. */
+  readonly session: SessionRef;
   readonly outcome: string;
   readonly attachmentPath: string | null;
   /** The service's OWN resolution object, crossing verbatim. */
@@ -249,6 +251,7 @@ export interface CollaborationDelegationPort {
 export interface FanoutRecipientSnapshot {
   readonly recipientId: string;
   readonly participantId: string;
+  readonly session: SessionRef;
   readonly outcome: string;
   readonly attachmentPath: string | null;
   readonly resolution: { readonly code: string; readonly field: string } | null;
@@ -321,12 +324,18 @@ export interface RuntimeCollaborationPorts {
  * `review-approved` is a DISTINCT phase because the acceptance sink refuses an accept whose review
  * is merely pending (conflict/acceptance_review): without it the verdict would fold back into
  * `agent-finished` and the accept affordance would be disabled exactly where the service accepts.
+ *
+ * A terminal HOST state outranks every review and acceptance display: a task that was cancelled or
+ * failed is over, so it renders `cancelled` / `failed` and offers no accept affordance — not the
+ * review verdict it happened to carry when it was cancelled.
  */
 export function deriveTaskPhase(snapshot: {
   readonly state: string;
   readonly review: { readonly state: string };
   readonly acceptance: { readonly state: string };
 }): TaskPhase {
+  if (snapshot.state === 'cancelled') return 'cancelled';
+  if (snapshot.state === 'failed') return 'failed';
   if (snapshot.acceptance.state === 'accepted') return 'accepted';
   if (snapshot.acceptance.state === 'rejected') return 'failed';
   if (snapshot.review.state === 'pending') return 'review-pending';
@@ -358,6 +367,7 @@ function toRecipientView(raw: FanoutRecipientSnapshot): CollaborationRecipientVi
   return Object.freeze({
     recipientId: raw.recipientId,
     participantId: raw.participantId,
+    session: raw.session,
     outcome: raw.outcome,
     attachmentPath: raw.attachmentPath,
     resolution: raw.resolution,
@@ -476,7 +486,11 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
     busy.value = true;
   }
 
-  function endBusy(): void {
+  function endBusy(operationSession: number): void {
+    // A stale operation's end is DISCARDED: openTeam / closeTeam already reset the count for the
+    // session they opened, so letting a late finally decrement it would clear the busy state of
+    // work that is still in flight in the NEW session.
+    if (operationSession !== session) return;
     if (busyCount > 0) busyCount -= 1;
     busy.value = busyCount > 0;
   }
@@ -505,6 +519,10 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
   }
 
   function syncAttempts(task: CollaborationTaskView | null): void {
+    // The slot is the SELECTED task's view. An operation that lands for another task must not
+    // backfill its attempts under the selected task's details, so a write for anything else is
+    // dropped: selecting that task later re-reads its own attempts from the coordinator.
+    if ((task?.taskId ?? null) !== selectedTaskId.value) return;
     if (task === null) {
       attempts.value = FROZEN_EMPTY;
       return;
@@ -684,7 +702,7 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
       if (operationSession !== session) return;
       fail(readableError(dispatchError, 'The task could not be dispatched'));
     } finally {
-      endBusy();
+      endBusy(operationSession);
     }
   }
 
@@ -710,7 +728,7 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
       if (operationSession !== session) return;
       fail(readableError(sendError, 'The attempt could not be sent'));
     } finally {
-      endBusy();
+      endBusy(operationSession);
     }
   }
 
@@ -771,7 +789,14 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
   }
 
   function acceptTask(taskId: string, input: { deliverableId: string; acceptedBy: string; criteria: readonly { id: string; met: boolean }[] }): void {
-    if (requireTaskInThread(taskId) === null) return;
+    const task = requireTaskInThread(taskId);
+    if (task === null) return;
+    // A task that is already over is never accepted, whatever review verdict it still carries:
+    // the acceptance service does not check the host's terminal state, so this surface does.
+    if (task.phase === 'cancelled' || task.phase === 'failed') {
+      fail(`This task is already "${task.phase}"; it cannot be accepted.`);
+      return;
+    }
     error.value = '';
     try {
       coordinator.accept({ taskId, deliverableId: input.deliverableId, acceptedBy: input.acceptedBy, criteria: input.criteria });
@@ -835,7 +860,7 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
       if (operationSession !== session) return;
       fail(readableError(fanoutError, 'The fan-out could not be dispatched'));
     } finally {
-      endBusy();
+      endBusy(operationSession);
     }
   }
 
@@ -872,7 +897,7 @@ export function createRuntimeCollaborationState(ports: RuntimeCollaborationPorts
       if (operationSession !== session) return;
       fail(readableError(allocateError, 'The writer lease could not be allocated'));
     } finally {
-      endBusy();
+      endBusy(operationSession);
     }
   }
 
