@@ -1062,15 +1062,16 @@ describe('handoff rejections carry explicit codes', () => {
         entries: [],
       }),
     ).rejects.toMatchObject({ code: 'invalid_request', field: 'handoff_entries' });
-    // Rung order is enforced: prepare before attach is refused. An early OBSERVATION is not a
-    // rung violation, so it is held and applied once the delivery is known.
+    // Rung order is enforced: prepare before attach is refused. An observation is only held once
+    // THIS handoff's send intent is committed (deliver in flight); one that predates the send
+    // proves nothing about the prompt and is refused.
     await expect(world.service.prepare({ handoffId: begun.handoffId, prompt: PROMPT })).rejects.toMatchObject({
       code: 'conflict',
       field: 'handoff_state',
     });
-    await expect(world.service.observe({ handoffId: begun.handoffId, nativeEventId: 'evt-early' })).resolves.toMatchObject({
-      observed: false,
-      state: 'checkpoint',
+    await expect(world.service.observe({ handoffId: begun.handoffId, nativeEventId: 'evt-early' })).rejects.toMatchObject({
+      code: 'conflict',
+      field: 'handoff_state',
     });
     await expect(world.service.attach({ handoffId: begun.handoffId })).resolves.toMatchObject({ state: 'attached' });
     await expect(world.service.prepare({ handoffId: begun.handoffId, prompt: '' })).rejects.toMatchObject({
@@ -1185,6 +1186,48 @@ describe('a native observation that arrives before the ack', () => {
     await expect(
       world.service.observe({ handoffId: begun.handoffId, nativeEventId: 'ev-1' }),
     ).rejects.toMatchObject({ code: 'conflict', field: 'handoff_state' });
+  });
+});
+
+describe('a terminal resolution that lands while the send is in flight', () => {
+  it('is not undone by the late ack flushing the buffered observation', async () => {
+    const ack = gate();
+    const world = await makeWorld({
+      sendPrompt: async () => { await ack.promise; return { ackId: 'ack-late' }; },
+    });
+    const begun = await beginOne(world);
+    await driveToPrepared(world, begun.handoffId);
+    const delivering = world.service.deliver({ handoffId: begun.handoffId });
+    await world.service.observe({ handoffId: begun.handoffId, nativeEventId: 'ev-early' });
+
+    const cancelled = await world.service.cancel({ handoffId: begun.handoffId });
+    expect(cancelled.state).toBe('cancelled');
+    expect(world.threads.active(world.thread.threadId)?.participantId).toBe(world.participantA);
+
+    ack.release();
+    await delivering;
+    const after = world.service.handoff(begun.handoffId);
+    expect(after.state).toBe('cancelled');
+    expect(after.observed).toBe(false);
+    expect(after.observedAt).toBeNull();
+    expect(world.threads.active(world.thread.threadId)?.participantId).toBe(world.participantA);
+    expect(world.calls.sendPrompt()).toBe(1);
+  });
+
+  it('refuses an observation that predates the committed send', async () => {
+    const world = await makeWorld();
+    const begun = await beginOne(world);
+    await expect(world.service.observe({ handoffId: begun.handoffId, nativeEventId: 'old-event', at: 2 }))
+      .rejects.toMatchObject({ code: 'conflict', field: 'handoff_state' });
+
+    await driveToPrepared(world, begun.handoffId);
+    const delivered = await world.service.deliver({ handoffId: begun.handoffId });
+    // The prompt was delivered, but a pre-send event cannot prove the sent prompt was handled.
+    expect(delivered.state).toBe('delivered');
+    expect(delivered.delivered).toBe(true);
+    expect(delivered.observed).toBe(false);
+    expect(delivered.observedAt).toBeNull();
+    expect(world.threads.active(world.thread.threadId)?.participantId).toBe(world.participantA);
   });
 });
 

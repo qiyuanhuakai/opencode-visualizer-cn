@@ -551,7 +551,7 @@ export async function run(context) {
         unknownThread: await capture(() => world.service.begin({ threadId: MISSING, sourceParticipantId: owner, targetParticipantId: target, entries: ENTRIES })),
         emptyEntries: await capture(() => world.service.begin({ threadId: thread.threadId, sourceParticipantId: owner, targetParticipantId: target, entries: [] })),
         prepareBeforeAttach: await capture(() => world.service.prepare({ handoffId: begun.handoffId, prompt: PROMPT })),
-        observeBeforeDeliver: await capture(() => world.service.observe({ handoffId: begun.handoffId, nativeEventId: 'evt-early' })),
+        observeBeforeSend: await capture(() => world.service.observe({ handoffId: begun.handoffId, nativeEventId: 'evt-early' })),
         emptyPrompt: await capture(() => world.service.prepare({ handoffId: begun.handoffId, prompt: '' })),
         badAtZero: await capture(() => world.service.begin({ threadId: thread.threadId, sourceParticipantId: owner, targetParticipantId: target, entries: ENTRIES, at: 0 })),
         badAtFraction: await capture(() => world.service.begin({ threadId: thread.threadId, sourceParticipantId: owner, targetParticipantId: target, entries: ENTRIES, at: 1.5 })),
@@ -586,7 +586,7 @@ export async function run(context) {
         unknownThread: { code: 'invalid_request', field: 'thread_unknown' },
         emptyEntries: { code: 'invalid_request', field: 'handoff_entries' },
         prepareBeforeAttach: { code: 'conflict', field: 'handoff_state' },
-        observeBeforeDeliver: { code: null, field: null },
+        observeBeforeSend: { code: 'conflict', field: 'handoff_state' },
         emptyPrompt: { code: 'invalid_request', field: 'handoff_prompt' },
         badAtZero: { code: 'invalid_request', field: 'handoff_time' },
         badAtFraction: { code: 'invalid_request', field: 'handoff_time' },
@@ -606,17 +606,31 @@ export async function run(context) {
 
     // ── C4b: an early native observation is HELD, then applied when the ack reports the delivery ──
     {
-      const world = makeWorld();
+      let releaseAck = () => {};
+      const world = makeWorld({
+        sendPrompt: async () => {
+          await new Promise((resolve) => { releaseAck = resolve; });
+          return { ackId: 'ack-held' };
+        },
+      });
       const { thread, owner } = await bindThread(world, SESSION_CODEX, [SESSION_ACP]);
       const target = world.threads.get(thread.threadId).participants[1].participantId;
       const begun = await world.service.begin({ threadId: thread.threadId, sourceParticipantId: owner, targetParticipantId: target, entries: ENTRIES, at: 1 });
       await world.service.attach({ handoffId: begun.handoffId, at: 2 });
       await world.service.prepare({ handoffId: begun.handoffId, prompt: PROMPT, at: 3 });
+      // The observation may only be held once THIS handoff's send intent is committed, so it is
+      // driven with the send in flight; one that predates the committed send is refused.
+      const delivering = world.service.deliver({ handoffId: begun.handoffId, at: 5 });
       const held = await world.service.observe({ handoffId: begun.handoffId, nativeEventId: 'ev-early', at: 4 });
-      const delivered = await world.service.deliver({ handoffId: begun.handoffId, at: 5 });
+      const beforeSend = makeWorld();
+      const beforeSendThread = await bindThread(beforeSend, SESSION_CODEX, [SESSION_ACP]);
+      const beforeSendBegun = await beforeSend.service.begin({ threadId: beforeSendThread.thread.threadId, sourceParticipantId: beforeSendThread.owner, targetParticipantId: beforeSendThread.joined[0].participantId, entries: ENTRIES, at: 1 });
+      const preSendObservation = await capture(() => beforeSend.service.observe({ handoffId: beforeSendBegun.handoffId, nativeEventId: 'evt-old', at: 2 }));
+      releaseAck();
+      const delivered = await delivering;
       const after = world.service.handoff(begun.handoffId);
       const ops = world.service.ops(begun.handoffId).map((op) => [op.kind, op.outcome]);
-      check('a native event that arrives BEFORE the delivery ack is HELD and then applied: the early observe is accepted without observing yet, the delivery ack still lands, and the handoff reaches active on the HELD event id with the thread selection moved to the target — the early observation is never discarded', {
+      check('a native event that arrives AFTER the committed send but BEFORE the delivery ack is HELD and then applied: the in-flight observe is accepted without observing yet, the delivery ack still lands, and the handoff reaches active on the HELD event id with the thread selection moved to the target — the early observation is never discarded — while an observation that predates the committed send is refused with conflict/handoff_state instead of completing the handoff', {
         heldState: held.state,
         heldObserved: held.observed,
         deliveredState: delivered.state,
@@ -627,17 +641,19 @@ export async function run(context) {
         activeSelection: world.threads.active(thread.threadId)?.participantId === target,
         ops,
         sends: after.sends,
+        preSendObservation,
       }, {
         heldState: 'prepared',
         heldObserved: false,
         deliveredState: 'active',
-        deliveredBy: 'ack-1',
+        deliveredBy: 'ack-held',
         finalState: 'active',
         observedBy: 'ev-early',
         observedAt: 4,
         activeSelection: true,
         ops: [['checkpoint', 'applied'], ['attach', 'applied'], ['prepare', 'applied'], ['deliver', 'applied'], ['observe', 'applied']],
         sends: 1,
+        preSendObservation: { code: 'conflict', field: 'handoff_state' },
       });
     }
 

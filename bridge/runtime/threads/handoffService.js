@@ -646,8 +646,16 @@ export function createHandoffService({
    * Apply every observation that arrived before the ack reported the delivery. The native event
    * stream and the RPC receipt have no ordering guarantee, so an early observation is real and
    * must be applied the moment the delivery is known — never discarded.
+   *
+   * A terminal resolution written while the send was in flight INVALIDATES the buffer: the
+   * cancellation, failure or reconciliation already restored the original selection, so a late
+   * ack must not replay held observations back onto a resolved handoff.
    */
   function flushPendingObservations(record) {
+    if (record.resolution.value !== null) {
+      record.pendingObservations.length = 0;
+      return;
+    }
     const held = record.pendingObservations.splice(0);
     for (const entry of held) {
       const op = journalOp({
@@ -673,9 +681,15 @@ export function createHandoffService({
       return handoffView(record);
     }
     if (projectHandoffState(record) !== RUNG_PREDECESSOR.observe) {
-      // Only a handoff that already has a resolution refuses an observation; one still waiting for
-      // its ack holds the observation and applies it as soon as the delivery is known.
-      if (record.resolution.value !== null) throw new HandoffError('conflict', 'handoff_state');
+      // Only a handoff that already has a resolution refuses an observation; one whose send is
+      // committed (deliver in flight, `sends` already incremented) but whose ack has not landed
+      // yet holds the observation and applies it as soon as the delivery is known. An event that
+      // predates the committed send proves nothing about the prompt and is refused: the public
+      // observe input carries only handoffId/nativeEventId/at, so the send intent is the one
+      // causal boundary available here.
+      if (record.resolution.value !== null || record.sends === 0) {
+        throw new HandoffError('conflict', 'handoff_state');
+      }
       record.pendingObservations.push({ nativeEventId, at });
       record.updatedAt = at;
       return handoffView(record);
