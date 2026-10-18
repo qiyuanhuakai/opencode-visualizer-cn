@@ -165,8 +165,17 @@ export interface RuntimeThreadState {
 }
 
 const TIMELINE_PAGE_LIMIT = 100;
-/** Resolved handoff states are HISTORY: they never block a new handoff and are never restored. */
-const TERMINAL_HANDOFF_STATES: ReadonlySet<string> = new Set(['cancelled', 'failed', 'active', 'reconcile']);
+/**
+ * The DECIDED handoff states — the ones whose outcome the user already knows: completed,
+ * cancelled or definitely failed. A decided record is HISTORY: it never blocks a new handoff and
+ * it is never restored on reopen.
+ *
+ * `reconcile` is deliberately NOT one of them. Its send outcome is UNKNOWN, so the delivery is
+ * still live work: it must stay visible after a reopen and keep blocking a second handoff, exactly
+ * like the forward rungs. Treating it as history is what hid an unresolved delivery and let a
+ * duplicate handoff start beside it.
+ */
+const RESOLVED_HANDOFF_STATES: ReadonlySet<string> = new Set(['cancelled', 'failed', 'active']);
 
 /** Read a rejection as a readable sentence; a bare protocol code is never shown to the user. */
 function readableError(error: unknown, fallback: string): string {
@@ -178,6 +187,15 @@ function readableError(error: unknown, fallback: string): string {
     return `${fallback}: ${error.message}${detail}`;
   }
   return fallback;
+}
+
+/**
+ * A decided handoff record never blocks a new handoff; live work — every forward rung and
+ * `reconcile` — does. Presentational surfaces (the handoff dialog's Begin button) read the SAME
+ * rule the composable enforces, so the button and the action can never disagree.
+ */
+export function handoffStateAllowsBegin(state: string): boolean {
+  return RESOLVED_HANDOFF_STATES.has(state);
 }
 
 export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThreadState {
@@ -267,9 +285,9 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
     }
   }
 
-  /** The thread's live handoff, or null: a resolved record is history and is never restored. */
+  /** The thread's live handoff, or null: a DECIDED record is history and is never restored. */
   function restoreHandoff(id: string): RuntimeHandoffView | null {
-    const live = ports.handoff?.handoffs().find((entry) => entry.threadId === id && !TERMINAL_HANDOFF_STATES.has(entry.state));
+    const live = ports.handoff?.handoffs().find((entry) => entry.threadId === id && !RESOLVED_HANDOFF_STATES.has(entry.state));
     return live ?? null;
   }
 
@@ -413,9 +431,9 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
       return;
     }
     const existing = handoff.value;
-    // A resolved record is history: it is kept on the service and may be inspected, but it never
-    // blocks a new handoff. Only unfinished work does.
-    if (existing !== null && !TERMINAL_HANDOFF_STATES.has(existing.state)) {
+    // A DECIDED record is history: it is kept on the service and may be inspected, but it never
+    // blocks a new handoff. Only live work — including an unresolved `reconcile` — does.
+    if (existing !== null && !RESOLVED_HANDOFF_STATES.has(existing.state)) {
       fail(`This thread already has a handoff at "${existing.state}". Resolve or cancel it before starting another.`);
       return;
     }

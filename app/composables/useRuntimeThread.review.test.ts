@@ -163,6 +163,56 @@ describe('reopening a thread restores its unfinished handoff', () => {
     expect(after?.state).toBe('prepared');
     expect(world.handoffs.handoffs()).toHaveLength(1);
   });
+
+  it('a handoff stopped at reconcile survives close and reopen', async () => {
+    // An ambiguous send is an UNRESOLVED delivery, not a decision: dropping it on reopen would
+    // hide a prompt whose outcome is unknown and let a second handoff start beside it.
+    const sessions = new Map<string, SessionRef>([[S_A.nativeSessionId, S_A], [S_B.nativeSessionId, S_B]]);
+    const resolveSession: ThreadSessionSource = async (ref) =>
+      sessions.has(ref.nativeSessionId) ? { session: ref, archived: false, parentSession: null } : null;
+    const threads = createThreadService({ resolveSession });
+    const handoffs = createHandoffService({
+      threads,
+      checkpoints: createCheckpointService(),
+      openTarget: async ({ target }: { target: { session: SessionRef } }) => ({ nativeSessionId: target.session.nativeSessionId }),
+      sendPrompt: async () => ({}),
+    });
+    const thread = await threads.bind({ session: S_A, repo: REPO });
+    const joined = await threads.join({ threadId: thread.threadId, session: S_B, repo: REPO });
+    const state = createRuntimeThreadState({ thread: threads, handoff: handoffs });
+    await state.openThread({ session: S_A, repo: REPO });
+    await state.beginHandoff({
+      sourceParticipantId: threads.get(thread.threadId).participants[0]!.participantId,
+      targetParticipantId: joined.participantId,
+      prompt: 'go',
+      entries: ENTRIES,
+    });
+    await state.prepareHandoff('go');
+    await state.deliverHandoff();
+    const reconcileId = state.handoff.value?.handoffId;
+    expect(state.handoff.value?.state).toBe('reconcile');
+    expect(state.error.value).toContain('reconcile');
+
+    state.closeThread();
+    expect(state.handoff.value).toBeNull();
+
+    await state.openThread({ session: S_A, repo: REPO });
+    expect(state.handoff.value?.state).toBe('reconcile');
+    expect(state.handoff.value?.handoffId).toBe(reconcileId);
+    expect(handoffs.handoffs()).toHaveLength(1);
+
+    // The unresolved delivery is live work, so it keeps blocking a second handoff instead of
+    // letting a duplicate prompt start beside it.
+    state.error.value = '';
+    await state.beginHandoff({
+      sourceParticipantId: threads.get(thread.threadId).participants[0]!.participantId,
+      targetParticipantId: joined.participantId,
+      prompt: 'go again',
+      entries: ENTRIES,
+    });
+    expect(state.error.value).toContain('reconcile');
+    expect(handoffs.handoffs()).toHaveLength(1);
+  });
 });
 
 /* -------------------------------------------------- finding 5: a cancelled handoff blocks the next begin */
@@ -432,6 +482,64 @@ describe('evidence cache invalidation', () => {
     await nextTick();
     await tick();
 
+    expect(host.querySelector('[data-testid="evidence-page-text"]')).toBeNull();
+
+    app.unmount();
+    host.remove();
+  });
+
+  it('clears the previously read page when only the current target or the reader changes', async () => {
+    const module = await import('../components/runtime/ContextEvidenceView.vue');
+    const View = module.default;
+    const payload = 'AAAA payload for the same checkpoint';
+    const readEvidence = (): { bytes: Uint8Array; totalBytes: number } => {
+      const bytes = new TextEncoder().encode(payload);
+      return { bytes, totalBytes: bytes.byteLength };
+    };
+    const checkpoint = Object.freeze({
+      checkpointId: '77777777-7777-4777-8777-777777777777',
+      evidence: [Object.freeze({ hash: evidenceHash(payload), bytes: payload.length, target: Object.freeze({ repoKey: 'repo:/repo', revision: '1' }) })],
+    }) as unknown as ContextCheckpointView;
+    const currentTarget = ref<EvidenceTarget>(Object.freeze({ repoKey: 'repo:/repo', revision: '1' }));
+    const reader = ref<(() => { bytes: Uint8Array; totalBytes: number }) | null>(readEvidence);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const app = createApp(defineComponent({
+      setup() {
+        return () => h(View as never, {
+          checkpoint,
+          currentTarget: currentTarget.value,
+          readEvidence: reader.value,
+          pageLength: 4096,
+        } as never);
+      },
+    }));
+    app.mount(host);
+    await nextTick();
+    await tick();
+
+    host.querySelector<HTMLButtonElement>('[data-testid="read-evidence-page"]')?.click();
+    await nextTick();
+    await tick();
+    expect(host.querySelector('[data-testid="evidence-page-text"]')?.textContent).toContain('AAAA');
+
+    // The checkpoint id is unchanged, so only the target boundary can make the held bytes stale.
+    currentTarget.value = Object.freeze({ repoKey: 'repo:/repo', revision: '2' });
+    await nextTick();
+    await tick();
+    expect(host.querySelector('[data-testid="evidence-page-text"]')).toBeNull();
+
+    // A new reader identity is a new boundary too.
+    currentTarget.value = Object.freeze({ repoKey: 'repo:/repo', revision: '1' });
+    await nextTick();
+    await tick();
+    host.querySelector<HTMLButtonElement>('[data-testid="read-evidence-page"]')?.click();
+    await nextTick();
+    await tick();
+    expect(host.querySelector('[data-testid="evidence-page-text"]')?.textContent).toContain('AAAA');
+    reader.value = () => ({ bytes: new TextEncoder().encode(payload), totalBytes: payload.length });
+    await nextTick();
+    await tick();
     expect(host.querySelector('[data-testid="evidence-page-text"]')).toBeNull();
 
     app.unmount();
