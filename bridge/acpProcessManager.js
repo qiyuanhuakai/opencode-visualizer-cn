@@ -26,6 +26,7 @@ export function createAcpProcessManager(options = {}) {
     entry.client = undefined;
     entry.onMessage = undefined;
     entry.onClose = undefined;
+    entry.rawTap = undefined;
     entry.status.connected = false;
   }
 
@@ -227,6 +228,7 @@ export function createAcpProcessManager(options = {}) {
       processGeneration: entry.processGeneration,
       pid: entry.child.pid,
       close: () => entries.get(id) === entry ? stopEntry(entry) : Promise.resolve(),
+      setRawTap: (tap) => { if (entries.get(id) === entry) entry.rawTap = tap ?? undefined; },
     };
   }
 

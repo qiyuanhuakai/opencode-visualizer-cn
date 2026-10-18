@@ -49,6 +49,48 @@ const messages: LocaleMessages = {
       retry: 'Retry',
       abort: 'Abort',
       error: 'Connection failed',
+      remoteWorkspaceAction: 'This workspace action is unavailable on a remote bridge target ({reason}).',
+      remoteLocalShell: 'the local shell runs on this machine only',
+      remoteLocalEditor: 'the local editor opens paths on this machine only',
+      remoteLocalApplication: 'the local application opens files on this machine only',
+    },
+    runtimeConnection: {
+      title: 'Connect to a Bridge target',
+      description:
+        'One Bridge entry point binds a connection profile to its target. Pick a profile; every workspace action is authorized for that target.',
+      profilesLabel: 'Connection profiles',
+      unsupported: 'not supported by',
+      connect: 'Connect',
+      retry: 'Retry',
+      status: {
+        idle: 'Idle',
+        connecting: 'Connecting',
+        ready: 'Ready',
+        error: 'Failed',
+      },
+    },
+    runtimeMigration: {
+      title: 'Migrate legacy workspace data',
+      description:
+        'Browse the legacy sources this browser or desktop profile holds, bind each one to its target, then migrate. The original is retained until the cutover is verified.',
+      inventory: 'Legacy sources',
+      sourcesLabel: 'Legacy sources',
+      kind: {
+        composer: 'Composer draft',
+        question: 'Question',
+        history: 'History',
+        metadata: 'Metadata',
+        local: 'Local only',
+      },
+      boundCount: '{count} source(s) bound to a target',
+      backup: 'Backup progress',
+      backupProgress: '{records} record(s), {chunks} chunk(s) archived',
+      result: 'Migration result',
+      resultSummary:
+        '{records} record(s), {chunks} chunk(s), {drafts} draft(s) migrated (import {importId})',
+      retained: 'The legacy original is retained. Retry the migration without losing it.',
+      start: 'Migrate',
+      retry: 'Retry',
     },
     connection: {
       connecting: 'Connecting to server...',

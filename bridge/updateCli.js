@@ -4,6 +4,8 @@ import { isNewerVersion, selectBridgeAsset, sha256FromDigest } from '../electron
 import { createUpdateTransport } from '../electron/updateTransport.js';
 import { createInstallerHandoff } from './updateHandoff.js';
 import { assertBridgeInstallAllowed, detectLinuxPackageFormat } from './updatePlatform.js';
+import { createBootstrapPlan, probeHostIdentity } from './runtime/transports/remoteBootstrap.js';
+import { createRemoteInstallTransaction, planRemoteInstall } from './runtime/transports/remoteInstall.js';
 
 export function parseBridgeUpdateArgs(argv = process.argv.slice(2)) {
   if (argv[0] !== 'update' && argv[0] !== 'upgrade') return null;
@@ -106,6 +108,45 @@ export async function runBridgeUpdate(options, injected = {}) {
   } finally {
     dependencies.transport.dispose();
   }
+}
+
+export async function runRemoteBridgeUpdate(options, injected = {}) {
+  const output = injected.output ?? ((message) => console.log(message));
+  const profile = options.profile;
+  const host = options.host ?? await probeHostIdentity({ profile, probe: injected.probe });
+  const plan = createBootstrapPlan({
+    profile,
+    host,
+    localEnvironmentId: options.localEnvironmentId,
+    localPlatform: options.localPlatform,
+    requiredProtocol: options.requiredProtocol,
+    sharedRootAvailable: options.sharedRootAvailable,
+  });
+  const wantsInstall = options.action === 'install' || options.action === 'upgrade';
+  if (!plan.connectable) {
+    output(`Remote vis_bridge is not compatible; ${plan.upgradePath.action} required before connecting.`);
+    if (!wantsInstall) return { kind: 'upgrade-required', plan };
+  } else if (!wantsInstall) {
+    return { kind: 'current', plan };
+  }
+  const release = options.release;
+  if (release === undefined) {
+    throw new Error('A release is required to install or upgrade a remote vis_bridge.');
+  }
+  const installPlan = planRemoteInstall({
+    release,
+    host,
+    location: plan.location,
+    channel: plan.channel,
+    linuxFormat: options.linuxFormat,
+  });
+  if (injected.adapter === undefined) {
+    throw new Error('An install adapter is required to perform a remote vis_bridge install.');
+  }
+  const transaction = createRemoteInstallTransaction({ host, plan: installPlan, adapter: injected.adapter });
+  const receipt = options.action === 'upgrade' ? await transaction.upgrade() : await transaction.install();
+  output(`Remote vis_bridge ${options.action} ${receipt.switched ? 'applied' : 'rolled back'}.`);
+  return { kind: 'installed', plan, receipt };
 }
 
 function createDependencies(injected) {
