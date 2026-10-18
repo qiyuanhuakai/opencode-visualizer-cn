@@ -1,4 +1,6 @@
 import { registerLegacyWriter, retainFrozenLegacyWrite } from '../../runtime/migration/writerFreeze';
+import { createHistoryPageCache, type HistoryPageCache } from '../../runtime/historyPages';
+import type { SessionDatabaseApi } from '../../types/sessionDatabase';
 type Entry = {
   readonly info: Record<string, unknown> & { readonly id: string };
   readonly parts: readonly (Record<string, unknown> & { readonly id: string })[];
@@ -167,5 +169,16 @@ export async function flushNativeAuxiliaryStorage() {
 }
 
 registerLegacyWriter(flushNativeAuxiliaryStorage);
+
+export const NATIVE_AUXILIARY_PAGED_NAMESPACE = 'codex-auxiliary-history-paged-v1';
+
+export function openNativeAuxiliaryPaging(database: SessionDatabaseApi | undefined, threadId: string): HistoryPageCache | undefined {
+  if (!database) return undefined;
+  return createHistoryPageCache({
+    namespace: NATIVE_AUXILIARY_PAGED_NAMESPACE,
+    read: (cursor) => database.readHistory({ threadId, namespace: NATIVE_AUXILIARY_PAGED_NAMESPACE, ...(cursor === null ? {} : { cursor }), limit: 200 }),
+    persist: (entries) => database.upsertHistory({ threadId, namespace: NATIVE_AUXILIARY_PAGED_NAMESPACE, entries }),
+  });
+}
 
 if (import.meta.hot) import.meta.hot.dispose(() => { unsubscribe?.(); listeners.clear(); });
