@@ -816,7 +816,7 @@ export async function run(context) {
         const failTaskResult = hostWorld.coordinator.failTask({ taskId: hostTask.taskId, code: 'source_unavailable', field: 'attempt_send', reason: 'worker died', at: T0 + 3 });
         const hostAttempt = hostWorld.coordinator.attempt(hostDispatched.attempt.attemptId);
         const redispatchAfterFail = await capture(() => hostWorld.coordinator.dispatch({ taskId: hostTask.taskId, at: T0 + 4 }));
-        check('a failure that arrives AFTER the send ack is never read as success: the ack leaves the attempt at sent with sends 1, the native end with reason failed drives the attempt to terminal with terminalReason failed and the TASK to failed with acceptance none, and the Host failTask path does the same while retaining the failed attempt with its typed resolution — a failed task refuses re-dispatch with conflict/task_state', {
+        check('a failure that arrives AFTER the send ack is never read as success: the ack leaves the attempt at sent with sends 1, the native end with reason failed drives the attempt to terminal with terminalReason failed and the TASK to failed with acceptance none, and the Host failTask path does the same while retaining the failed attempt with its typed resolution AND releasing the concurrency and Session-mutation slots the running attempt held (running and sessionMutations back to 0) — a failed task refuses re-dispatch with conflict/task_state', {
           afterAck: { state: afterAck.state, sent: afterAck.sent, sends: afterAck.sends },
           ended: { state: ended.state, terminalReason: ended.terminalReason },
           afterNativeFail: { state: afterNativeFail.state, acceptance: afterNativeFail.acceptance.state },
@@ -831,7 +831,7 @@ export async function run(context) {
           failTaskResult: { state: 'failed', acceptance: 'none' },
           hostAttempt: { state: 'reconcile', resolution: { kind: 'failed', code: 'source_unavailable', field: 'attempt_send', reason: 'worker died', at: T0 + 3 } },
           redispatchAfterFail: { code: 'conflict', field: 'task_state' },
-          hostState: { teams: 1, tasks: 1, attempts: 1, dispatches: 1, running: 1, sessionMutations: 1, mailbox: 0, reconciles: 0, failures: 1, closed: false },
+          hostState: { teams: 1, tasks: 1, attempts: 1, dispatches: 1, running: 0, sessionMutations: 0, mailbox: 0, reconciles: 0, failures: 1, closed: false },
         });
       }
 
@@ -994,7 +994,7 @@ export async function run(context) {
         });
       }
 
-      // ── F8: the two Host stops do NOT release the concurrency budget (observed, recorded) ──
+      // ── F8: the two Host stops DO release the concurrency and Session-mutation slots ──
       {
         const world = makeWorld();
         const tasks = [0, 1, 2, 3, 4].map((index) => world.makeTask({ title: `slot ${index}`, ownerIndex: index }));
@@ -1011,13 +1011,23 @@ export async function run(context) {
           task0: world.coordinator.task(tasks[0].taskId).state,
           attempt0: world.coordinator.attempt(running[0]).state,
         };
-        const pumpAfterCancel = (await world.coordinator.pump({ at: T0 + 21 })).map((view) => view.title);
-        const fifth = await world.coordinator.dispatch({ taskId: tasks[4].taskId, at: T0 + 22 });
-        const afterFifth = { running: world.coordinator.state().running, fifth: { state: fifth.task.state, reasons: fifth.task.paused?.reasons ?? null } };
+        // The freed slot admits the queued fifth task IMMEDIATELY — no pause, no restart needed.
+        const fifth = await world.coordinator.dispatch({ taskId: tasks[4].taskId, at: T0 + 21 });
+        const afterFifth = { running: world.coordinator.state().running, fifth: { state: fifth.task.state, attempt: fifth.attempt?.state ?? null } };
+        // failTask releases the same way, keyed off the reservation actually held.
+        world.coordinator.failTask({ taskId: tasks[1].taskId, code: 'source_unavailable', field: 'attempt_send', at: T0 + 22 });
+        const afterFail = {
+          running: world.coordinator.state().running,
+          used: world.coordinator.budgets().used,
+          task1: world.coordinator.task(tasks[1].taskId).state,
+          attempt1: world.coordinator.attempt(running[1]).state,
+        };
+        // restart() still re-derives every counter from the attempt records themselves and
+        // retains every non-terminal attempt — the recovery pass is unchanged by the fix.
         const restart = world.coordinator.restart({ at: T0 + 23 });
         const afterRestart = { running: world.coordinator.state().running, used: world.coordinator.budgets().used, retained: restart.retained.length };
         const pumpAfterRestart = (await world.coordinator.pump({ at: T0 + 24 })).map((view) => view.title);
-        // The contrast, in its own world: cancelAttempt DOES release the slot.
+        // The contrast, in its own world: cancelAttempt releases the slot, unchanged.
         const contrast = makeWorld();
         const contrastTasks = [0, 1, 2, 3, 4].map((index) => contrast.makeTask({ title: `c${index}`, ownerIndex: index }));
         const contrastRunning = [];
@@ -1027,11 +1037,11 @@ export async function run(context) {
         }
         contrast.coordinator.cancelAttempt({ attemptId: contrastRunning[0], reason: 'stop', at: T0 + 20 });
         const contrastFifth = await contrast.coordinator.dispatch({ taskId: contrastTasks[4].taskId, at: T0 + 21 });
-        check('OBSERVED AND RECORDED, NOT FORCED: cancelTask and failTask do NOT release the concurrency or Session-mutation slot they consumed — releaseTaskAttempts re-reads the attempt state AFTER the stop already wrote the resolution, so RUNNING_ATTEMPT_STATES no longer matches and markRunning is skipped — so with four attempts in flight a cancelTask leaves running at 4, pump admits nothing, and the next task is VISIBLY paused with collaboration_concurrency; the only recovery is restart(), which re-derives every counter from the attempt records themselves (running back to 0, four retained) and after which pump admits the paused task in creation order. The contrast proves the asymmetry is specific to the two Host stops: cancelAttempt DOES release, so the next task dispatches immediately', {
+        check('RELEASED, NOT FORCED: cancelTask and failTask release the concurrency and Session-mutation slots their running attempts hold — the release keys off the reservation actually held BEFORE the stop rewrites the projected state, never off the post-stop projection — so with four attempts in flight a cancelTask drops running to 3 and the queued fifth task dispatches immediately at accepted, and a failTask drops it to 3 again over the three remaining sessions; restart() still re-derives every counter from the attempt records themselves (running back to 0, all five non-terminal attempts retained) and afterwards pump admits nothing because nothing is paused. The three stops now agree: the contrast world shows cancelAttempt releasing the same way, its fifth task dispatched immediately too', {
           before,
           afterCancel,
-          pumpAfterCancel,
           afterFifth,
+          afterFail,
           afterRestart,
           pumpAfterRestart,
           dispatches: world.coordinator.state().dispatches,
@@ -1042,11 +1052,11 @@ export async function run(context) {
           },
         }, {
           before: { running: 4, used: { concurrency: 4, sessionMutations: 4, depth: 1, children: 0, mailbox: 0 } },
-          afterCancel: { running: 4, used: { concurrency: 4, sessionMutations: 4, depth: 1, children: 0, mailbox: 0 }, task0: 'cancelled', attempt0: 'reconcile' },
-          pumpAfterCancel: [],
-          afterFifth: { running: 4, fifth: { state: 'paused', reasons: ['collaboration_concurrency'] } },
-          afterRestart: { running: 0, used: { concurrency: 0, sessionMutations: 0, depth: 1, children: 0, mailbox: 0 }, retained: 4 },
-          pumpAfterRestart: ['slot 4'],
+          afterCancel: { running: 3, used: { concurrency: 3, sessionMutations: 3, depth: 1, children: 0, mailbox: 0 }, task0: 'cancelled', attempt0: 'reconcile' },
+          afterFifth: { running: 4, fifth: { state: 'dispatched', attempt: 'accepted' } },
+          afterFail: { running: 3, used: { concurrency: 3, sessionMutations: 3, depth: 1, children: 0, mailbox: 0 }, task1: 'failed', attempt1: 'reconcile' },
+          afterRestart: { running: 0, used: { concurrency: 0, sessionMutations: 0, depth: 1, children: 0, mailbox: 0 }, retained: 5 },
+          pumpAfterRestart: [],
           dispatches: 5,
           contrast: { fifth: { state: 'dispatched', attempt: 'accepted' }, running: 4, task0: 'cancelled' },
         });
@@ -1654,19 +1664,19 @@ export async function run(context) {
     cleanup: proof.cleanup,
     defects: {
       hostStopsDoNotReleaseTheConcurrencySlot: {
-        severity: 'observed-defect-candidate',
-        observed: 'cancelTask and failTask do NOT release the concurrency or Session-mutation slot the attempt they stop consumed: coordinator.js releaseTaskAttempts (lines 174-179) re-reads attempts.attempt(attemptId).state AFTER the stop already wrote record.resolution.value, so projectAttemptState now reports the reconcile stop, RUNNING_ATTEMPT_STATES no longer matches and markRunning is skipped — with four attempts in flight a cancelTask leaves running at 4, pump admits nothing, and the next task is VISIBLY paused with collaboration_concurrency',
-        whyItMatters: 'it bears directly on the plan happy criterion of fair scheduling under the budgets: after a cancelTask or failTask the concurrency budget is not actually free, so a task that SHOULD be admissible stays paused until restart() re-derives the counters',
-        contrastProvenByThisCase: 'the asymmetry is specific to the two Host stops — cancelAttempt (coordinator.js:384-403) and the send error path (coordinator.js:316) call markRunning explicitly, so they DO release, and the case asserts the next task dispatches immediately after a cancelAttempt',
-        recoveryProvenByThisCase: 'restart() (coordinator.js:502-536) calls rederiveRunning(), which recomputes every counter from the attempt records themselves, so running returns to 0 and pump then admits the paused task in creation order',
-        assertedAs: 'the OBSERVED behaviour is asserted verbatim in F8 (running 4, pump admits nothing, the next task paused with collaboration_concurrency, restart recovering to running 0 with four retained and pump then admitting slot 4), alongside the cancelAttempt contrast. Nothing is forced: if the product is changed to release the slot, F8 goes red on the assertion and the fix is visible',
-        notCoveredByProductTests: 'app/runtime/collaborationCoordinator.test.ts never cancels or fails a task while a concurrency budget is exhausted, so no product test would catch this',
+        severity: 'fixed',
+        wasObservedAs: 'cancelTask and failTask did NOT release the concurrency or Session-mutation slot the attempt they stopped consumed: releaseTaskAttempts re-read the attempt state AFTER the stop had already written the resolution, so RUNNING_ATTEMPT_STATES no longer matched and markRunning was skipped — with four attempts in flight a cancelTask left running at 4, pump admitted nothing, and the next task stayed VISIBLY paused with collaboration_concurrency until restart() re-derived the counters',
+        whyItMattered: 'it bore directly on the plan happy criterion of fair scheduling under the budgets: after a cancelTask or failTask the concurrency budget was not actually free, so a task that SHOULD have been admissible stayed paused, and repeated cancels or failures could exhaust every slot with no normal recovery',
+        fixedBy: 'the release now keys off the reservation actually held: markRunning releases only an attemptId present in the running set (so a duplicate cancel, fail or end is a no-op and can never spend another attempt’s session share), and failTask/cancelTask release BEFORE the stop rewrites the projected state instead of re-reading it afterwards',
+        assertedAs: 'F8 now asserts the release directly — running 3 after cancelTask with the queued fifth task dispatched immediately at accepted, running 3 after failTask over the three remaining sessions, and restart() still re-deriving to running 0 with all five non-terminal attempts retained; F3 asserts hostState running 0 / sessionMutations 0 after failTask on a sent attempt; the app regression suite adds the duplicate-cancel, duplicate in-flight send, cancelTask/failTask release and pump-after-unrelated-create cases',
+        contrastStillProvenByThisCase: 'cancelAttempt and the send error path always released explicitly; with the fix all three stops agree, and the contrast world in F8 still asserts its fifth task dispatches immediately after a cancelAttempt',
       },
       dispatchAfterReviewIsNotRefused: {
-        severity: 'observation',
-        observed: 'dispatch() refuses only the dispatched, accepted, failed and cancelled host states (coordinator.js:258-263); a task sitting at review is NOT in that set, so a second dispatch mints a SECOND attempt on the same task (attempts 2, dispatches 2)',
-        assertedAs: 'not asserted in either lane, because the plan lists no criterion for it; recorded here so the independent gate sees the boundary rather than discovering it as a surprise. The three states that ARE refused (accepted, failed, cancelled) are asserted in F1 and F3',
-        relevance: 'a task in review has already produced a native end, so a second dispatch re-runs work the acceptance path is about to judge — worth a product decision, but not one this case can settle',
+        severity: 'fixed',
+        wasObservedAs: 'dispatch() refused only the dispatched, accepted, failed and cancelled host states; a task sitting at review was NOT in that set, so a second dispatch minted a SECOND attempt on the same task while the first round’s review approval and deliverable stayed live',
+        whyItMattered: 'a task in review has already produced a native end, so a second dispatch re-ran work the acceptance path was about to judge — and the retained approval let a running retry be accepted, after which a late native end overwrote the accepted task with failed',
+        fixedBy: 'dispatch now also refuses the review host state with conflict/task_state, so no implicit review → dispatch retry can inherit a stale approval; acceptance additionally requires the live review lifecycle (host state review), so a task in flight, failed or cancelled can never be accepted however approved a retained review reads',
+        assertedAs: 'the app regression suite asserts the refused retry (conflict/task_state, still exactly one attempt, the retained approval intact), the successful single acceptance, and the refusal of an acceptance outside the review lifecycle (conflict/task_state); the three states that were already refused (accepted, failed, cancelled) remain asserted in F1 and F3',
       },
       durableStoreNotWired: {
         severity: 'acceptance-criterion-gap',
