@@ -23,18 +23,26 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
-import { computed, createApp, h, nextTick, ref } from 'vue';
+import { computed, createApp, h, nextTick, ref, shallowRef, watch } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   parseEnvironmentId,
   parseHarnessInstanceId,
+  parseInstanceId,
   parseSessionRef,
 } from '../shared/runtime/identity.js';
 import type { SessionRef } from '../shared/runtime/identity.js';
 import type { EnvironmentId } from '../shared/runtime/identity.js';
 import type { HarnessManifest } from '../shared/runtime/harnessContract.js';
 import type { ControlScope } from './composables/useRuntimeCapabilities';
-import { useRuntimeSessionActions } from './composables/useRuntimeSessionActions';
+import { useRuntimeSessionActions, bindRuntimeAction } from './composables/useRuntimeSessionActions';
+import { managementCandidate, parseConnectionReference } from './runtime/connectionProfile';
+import { createRuntimeClient } from './runtime/client';
+import { createRuntimeConnection } from './runtime/connection';
+import { encodeFrame } from '../shared/runtime/protocol.js';
+import type { Hello } from '../shared/runtime/protocol.js';
+import { parseCapabilities } from '../shared/runtime/capabilities.js';
+import { RUNTIME_WIRE_METHODS } from '../shared/runtime/runtimeWire.js';
 
 vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 
@@ -43,7 +51,7 @@ const registryMock = vi.hoisted(() => ({
 }));
 
 vi.mock('./backends/registry', () => ({
-  getActiveBackendAdapter: () => registryMock.getAdapter(),
+  getBackendAdapter: () => registryMock.getAdapter(),
 }));
 
 const APP_SOURCE = readFileSync(join(process.cwd(), 'app', 'App.vue'), 'utf8');
@@ -413,7 +421,7 @@ describe('App.vue qualified router client wiring (PR #182 finding C)', () => {
 
 describe('App.vue runtimeSessionRuntime binding (PR #182 finding C)', () => {
   const PROGRAM = transpile(
-    `${appVariableDeclaration('runtimeSessionRuntime')};runtimeSessionRuntime.binding();`,
+    `${appFunctionDeclaration('runtimeTargetAttached')};${appVariableDeclaration('runtimeSessionRuntime')};runtimeSessionRuntime.binding();`,
   );
 
   function bindingWith(input: { session?: SessionRef | null; client?: unknown }) {
@@ -439,5 +447,268 @@ describe('App.vue runtimeSessionRuntime binding (PR #182 finding C)', () => {
   it('binds the qualified session once a runtime client is attached', () => {
     const binding = bindingWith({ session: SESSION, client: fakeRuntimeClient() });
     expect(binding).toEqual({ profileId: PROFILE, session: SESSION });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F3-P2-1 — the unified five-source tree never self-loads in the running app.
+//
+// The real mechanism, proven here by executing App.vue's own wiring: the
+// connection emits `hello` to its listeners in SUBSCRIPTION order
+// (`connection.ts` `emit` walks a Set). `buildRuntimeActionClient` used to
+// subscribe App's environment-id handler BEFORE `createRuntimeClient`
+// subscribed its own `receive`, so the handler published
+// `runtimeEnvironmentId`, the synchronous watcher rebuilt the tree and called
+// `tree.start()` while the client's `targets` map was still empty — and
+// `state.start` → `client.scope()` → `getTarget()` rejects with
+// `reconcile_required (target.attachment)`. The rejection was swallowed by an
+// empty `catch` with no retry, so the sidebar stayed on "Loading sessions...
+// 0/0" until a manual refresh. The fix is the ORDER (client first, exactly as
+// the canonical `useRuntimeConnection.ts` composes the same pair), not a retry.
+// ---------------------------------------------------------------------------
+
+describe('App.vue runtime client wiring order (F3-P2-1)', () => {
+  /** The real hello the bridge sends, shaped as `client.test.ts` shapes it. */
+  const HELLO: Hello = {
+    kind: 'hello',
+    version: 1,
+    target: ENV,
+    epoch: 'epoch-1',
+    generation: 1,
+    instanceId: parseInstanceId('66666666-6666-4666-8666-666666666666'),
+    capabilities: parseCapabilities({ methods: Object.keys(RUNTIME_WIRE_METHODS), extensions: [] }),
+  };
+
+  /** Only the transport is doubled; the connection, client and wiring are real. */
+  class WireSocket extends EventTarget {
+    binaryType: BinaryType = 'arraybuffer';
+    readyState: 0 | 1 | 2 | 3 = 1;
+    bufferedAmount = 0;
+    close() { this.readyState = 3; }
+    send() {}
+    frame(value: unknown) { this.dispatchEvent(new MessageEvent('message', { data: encodeFrame(value) })); }
+  }
+
+  const WIRING = [
+    appFunctionDeclaration('buildRuntimeActionClient'),
+    appFunctionDeclaration('disposeUnifiedSessionTree'),
+    appFunctionDeclaration('buildUnifiedSessionTree'),
+    'watch([runtimeActionClient, runtimeEnvironmentId], buildUnifiedSessionTree, { immediate: true, flush: "sync" });',
+    'buildRuntimeActionClient();',
+  ].join('\n');
+
+  function driveWiring() {
+    const socket = new WireSocket();
+    const started: Array<{ target: EnvironmentId; scopeError: string | null }> = [];
+    const runtimeActionClient = shallowRef<unknown>(null);
+    const runtimeEnvironmentId = shallowRef<EnvironmentId | null>(null);
+    const unifiedSessionTree = shallowRef<unknown>(null);
+    const PROGRAM = transpile(WIRING);
+    runInNewContext(PROGRAM, {
+      runtimeConnectionOwner: undefined,
+      runtimeHelloUnsubscribe: undefined,
+      runtimeActionClient,
+      runtimeEnvironmentId,
+      unifiedSessionTree,
+      activeBridgeUrl: box('ws://127.0.0.1:43210/runtime'),
+      activeProfileId: box(PROFILE),
+      managementCandidate,
+      activeBridgeToken: () => '',
+      parseConnectionReference,
+      createRuntimeConnection: (options: Parameters<typeof createRuntimeConnection>[0]) =>
+        createRuntimeConnection({ ...options, createWebSocket: () => socket }),
+      createRuntimeClient,
+      watch,
+      onScopeDispose: () => {},
+      parseEnvironmentId,
+      useRuntimeSessionTree: ({ client, target }: { client: { scope: (t: EnvironmentId) => unknown }; target: EnvironmentId }) => ({
+        // The tree's first act is `state.start(target)`, whose own first act is
+        // `client.scope(target)`. Recording whether THAT resolved is exactly the
+        // self-load contract: an unresolvable scope is the reconcile_required
+        // rejection that left the tree stuck on "Loading sessions... 0/0".
+        start: async () => {
+          let scopeError: string | null = null;
+          try { client.scope(target); } catch (error) { scopeError = error instanceof Error ? error.message : String(error); }
+          started.push({ target, scopeError });
+        },
+        dispose: async () => {},
+      }),
+    });
+    return { socket, started, runtimeActionClient, runtimeEnvironmentId };
+  }
+
+  it('registers the client\'s target before the environment id is published, so the tree self-loads on hello', async () => {
+    // Given: the REAL App.vue wiring over the REAL connection and REAL client.
+    const wiring = driveWiring();
+    // And: the socket exists (the connection creates it after authentication).
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // When: the bridge's real hello arrives over the real connection.
+    wiring.socket.frame(HELLO);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Then: the environment id really was published from the hello's target...
+    expect(wiring.runtimeEnvironmentId.value).toBe(ENV);
+    // And: the tree's start really ran against the hello's target...
+    expect(wiring.started).toHaveLength(1);
+    expect(wiring.started[0]!.target).toBe(ENV);
+    // And: the scope RESOLVED — the client had already registered the target
+    // when the environment id was published, so no reconcile_required and no
+    // manual refresh is needed. This is the assertion the defect failed.
+    expect(wiring.started[0]!.scopeError).toBeNull();
+  });
+
+  it('fails the same wiring when the environment-id handler is subscribed first (the defect, locked red)', async () => {
+    // Given: the same real connection and client, but with the two subscriptions
+    // swapped back into the order the defect had — the handler first, the client
+    // second.
+    const socket = new WireSocket();
+    const started: Array<{ target: EnvironmentId; scopeError: string | null }> = [];
+    const runtimeActionClient = shallowRef<unknown>(null);
+    const runtimeEnvironmentId = shallowRef<EnvironmentId | null>(null);
+    const unifiedSessionTree = shallowRef<unknown>(null);
+    const connection = createRuntimeConnection({
+      reference: { url: 'ws://127.0.0.1:43210/runtime' },
+      resolveAuthentication: async () => ({}),
+      createWebSocket: () => socket,
+    });
+    const DEFECTIVE = transpile([
+      appFunctionDeclaration('disposeUnifiedSessionTree'),
+      appFunctionDeclaration('buildUnifiedSessionTree'),
+      'watch([runtimeActionClient, runtimeEnvironmentId], buildUnifiedSessionTree, { immediate: true, flush: "sync" });',
+      // The defect, reproduced exactly: subscribe the environment-id handler
+      // first, then construct the client (which subscribes its own receive).
+      'connection.subscribe((event) => { if (event.kind !== "hello") return; try { runtimeEnvironmentId.value = parseEnvironmentId(event.hello.target); } catch { runtimeEnvironmentId.value = null; } });',
+      'runtimeActionClient.value = createRuntimeClient({ connection });',
+    ].join('\n'));
+    runInNewContext(DEFECTIVE, {
+      connection,
+      runtimeActionClient,
+      runtimeEnvironmentId,
+      unifiedSessionTree,
+      activeProfileId: box(PROFILE),
+      createRuntimeClient,
+      watch,
+      onScopeDispose: () => {},
+      parseEnvironmentId,
+      useRuntimeSessionTree: ({ client, target }: { client: { scope: (t: EnvironmentId) => unknown }; target: EnvironmentId }) => ({
+        start: async () => {
+          let scopeError: string | null = null;
+          try { client.scope(target); } catch (error) { scopeError = error instanceof Error ? error.message : String(error); }
+          started.push({ target, scopeError });
+        },
+        dispose: async () => {},
+      }),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    connection.connect();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // When: the same real hello arrives.
+    socket.frame(HELLO);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Then: the tree's start really ran, and its scope REJECTED — proving the
+    // ordering is what makes the tree load, and that this test can see it.
+    expect(started).toHaveLength(1);
+    expect(started[0]!.scopeError).not.toBeNull();
+    expect(started[0]!.scopeError).toContain('reconcile_required');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Row 64 — collaboration delivery must bind to the session it was GIVEN.
+//
+// `deliverRuntimePrompt` is the single send path behind `deliverAttempt`,
+// `deliverDelegation` and `deliverFanout`, and every one of those hands over the
+// session the collaboration service resolved for that participant. It used to
+// gate on `binding.session.nativeSessionId !== session.nativeSessionId` and then
+// send through `binding` — the AMBIENT selection — so as soon as the user's
+// selection moved off a participant, that participant's delivery answered
+// `{ackId: ''}` and the whole collaboration chain was unreachable. The invariant
+// is documented 200 lines away in `useBackendSessionActions.ts` ("finding A"):
+// the seam binds the operation to the session it was GIVEN; the ambient binding
+// supplies only the profile/environment/harness context.
+// ---------------------------------------------------------------------------
+
+describe('App.vue deliverRuntimePrompt binds to the GIVEN session (row 64)', () => {
+  const OTHER = parseSessionRef({
+    environmentId: ENV,
+    harnessInstanceId: HARNESS,
+    nativeSessionId: 'ses-ambient',
+  });
+  const GIVEN = parseSessionRef({
+    environmentId: ENV,
+    harnessInstanceId: HARNESS,
+    nativeSessionId: 'ses-given',
+  });
+
+  const PROGRAM = transpile(`${appFunctionDeclaration('deliverRuntimePrompt')};deliverRuntimePrompt;`);
+
+  function runDelivery(input: { ambient: SessionRef; given: SessionRef }) {
+    const sent: Array<{ session: SessionRef; text: string }> = [];
+    const runtime = {
+      binding: () => Object.freeze({ profileId: PROFILE, session: input.ambient }),
+      router: {
+        sendMessage: (binding: { session: SessionRef }, payload: { text: string }) => {
+          sent.push({ session: binding.session, text: payload.text });
+          return Promise.resolve({ operationId: 'op-real-1' });
+        },
+      },
+    };
+    const deliver = runInNewContext(PROGRAM, {
+      runtimeSessionRuntime: runtime,
+      bindRuntimeAction,
+      parseSessionRef,
+    }) as (session: SessionRef, prompt: string) => Promise<{ ackId: string }>;
+    return { deliver, sent };
+  }
+
+  it('delivers to a participant that is NOT the currently selected session', async () => {
+    // Given: the ambient selection is a DIFFERENT session than the participant
+    // the collaboration service is delivering to.
+    const wiring = runDelivery({ ambient: OTHER, given: GIVEN });
+
+    // When: the prompt is delivered for the GIVEN session.
+    const outcome = await wiring.deliver(GIVEN, 'review this change');
+
+    // Then: the send really went out over the app's own router...
+    expect(wiring.sent).toHaveLength(1);
+    // ...bound to the session it was GIVEN, not the ambient selection...
+    expect(wiring.sent[0]!.session).toEqual(GIVEN);
+    expect(wiring.sent[0]!.session.nativeSessionId).toBe('ses-given');
+    // ...and the real operation id came back, so the delivery is not ambiguous.
+    expect(outcome).toEqual({ ackId: 'op-real-1' });
+  });
+
+  it('still delivers when the given session happens to be the selected one', async () => {
+    // Given: the participant IS the ambient selection.
+    const wiring = runDelivery({ ambient: GIVEN, given: GIVEN });
+
+    // When: the prompt is delivered.
+    const outcome = await wiring.deliver(GIVEN, 'review this change');
+
+    // Then: it still goes out, still bound to that session, still readable.
+    expect(wiring.sent).toHaveLength(1);
+    expect(wiring.sent[0]!.session).toEqual(GIVEN);
+    expect(outcome).toEqual({ ackId: 'op-real-1' });
+  });
+
+  it('answers with no ack when there is no seam to deliver through', async () => {
+    // Given: no runtime seam at all (a bare OpenCode server is not a runtime
+    // wire endpoint) — the legacy path keeps running and nothing is sent.
+    const wiring = runDelivery({ ambient: OTHER, given: GIVEN });
+    const deliver = runInNewContext(PROGRAM, {
+      runtimeSessionRuntime: null,
+      bindRuntimeAction,
+      parseSessionRef,
+    }) as (session: SessionRef, prompt: string) => Promise<{ ackId: string }>;
+
+    // When/Then: the delivery is ambiguous and the router was never touched.
+    expect(await deliver(GIVEN, 'review this change')).toEqual({ ackId: '' });
+    expect(wiring.sent).toHaveLength(0);
   });
 });

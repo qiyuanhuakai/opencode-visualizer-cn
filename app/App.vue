@@ -54,6 +54,28 @@
           @logout="handleLogout"
           @dropdown-closed="focusInput"
         />
+        <div class="app-runtime-actions">
+          <button
+            type="button"
+            class="app-runtime-action"
+            data-testid="open-runtime-thread"
+            :disabled="unifiedSessionTree === null"
+            :title="t('runtime.thread.openTitle', 'Open a Host Thread for the selected session')"
+            @click="openRuntimeThreadForSelection()"
+          >
+            {{ t('runtime.thread.open', 'Host Thread') }}
+          </button>
+          <button
+            type="button"
+            class="app-runtime-action"
+            data-testid="open-runtime-collaboration"
+            :disabled="runtimeThreadState.threadId.value === null"
+            :title="t('runtime.collaboration.openTitle', 'Open the collaboration surface for the open Host Thread')"
+            @click="openCollaborationPanel()"
+          >
+            {{ t('runtime.collaboration.open', 'Team') }}
+          </button>
+        </div>
       </header>
       <div
         ref="appBodyEl"
@@ -76,6 +98,16 @@
             :todo-label="activeBackendKind === 'codex' ? t('codexPanel.planTitle') : undefined"
             :session-tree-data="sessionTreeData"
             :session-tree-expanded-paths="sessionTreeExpandedPaths"
+            :unified-tree-rows="unifiedTreeRows"
+            :unified-tree-selected-key="unifiedTreeSelectedKey"
+            :unified-tree-sources="unifiedTreeSources"
+            :unified-tree-retrying="unifiedTreeRetrying"
+            :unified-tree-child-scans="unifiedTreeChildScans"
+            :unified-tree-status="unifiedTreeStatus"
+            :unified-tree-loaded="unifiedTreeLoaded"
+            :unified-tree-error="unifiedTreeError"
+            :unified-tree-filter-kinds="unifiedTreeFilterKinds"
+            :unified-tree-search="unifiedTreeSearch"
             :tree-nodes="treeNodes"
             :expanded-tree-paths="expandedTreePaths"
             :selected-tree-path="selectedTreePath"
@@ -92,6 +124,12 @@
             @change-tab="setSidePanelTab"
             @select-session="handleSidePanelSessionSelect"
             @toggle-expand="toggleSessionTreeExpand"
+            @toggle-key="handleUnifiedToggleKey"
+            @select-key="handleUnifiedSelectKey"
+            @retry-source="handleUnifiedRetrySource"
+            @filter-change="handleUnifiedFilterChange"
+            @search="handleUnifiedSearch"
+            @load-more-children="handleUnifiedLoadMoreChildren"
             @pin-project="pinProject"
             @unpin-project="unpinProject"
             @pin-sandbox="pinSandbox"
@@ -583,6 +621,7 @@
     <ProjectPicker
       :open="isProjectPickerOpen"
       :home-path="projectPickerHomePath"
+      :backend-kind="activeBackendKind"
       @close="isProjectPickerOpen = false"
       @select="handleProjectDirectorySelect"
     />
@@ -594,6 +633,37 @@
       :controls="harnessSettingsControls"
       :title="t('app.harnessSettings.title')"
       @save="handleHarnessSettingsSave"
+    />
+    <CollaborationPanel
+      v-if="isCollaborationPanelOpen"
+      :open="isCollaborationPanelOpen"
+      :thread-id="runtimeCollaborationState.threadId.value"
+      :team="runtimeCollaborationState.team.value"
+      :tasks="runtimeCollaborationState.tasks.value"
+      :selected-task-id="runtimeCollaborationState.selectedTaskId.value"
+      :selected-task="runtimeCollaborationState.selectedTask.value"
+      :attempts="runtimeCollaborationState.attempts.value"
+      :budgets="runtimeCollaborationState.budgets.value"
+      :fanout="runtimeCollaborationState.fanout.value"
+      :writer="runtimeCollaborationState.writer.value"
+      :busy="runtimeCollaborationState.busy.value"
+      :error="runtimeCollaborationState.error.value"
+      @close="isCollaborationPanelOpen = false"
+      @select-task="runtimeCollaborationState.selectTask"
+      @add-member="runtimeCollaborationState.addMember"
+      @create-task="runtimeCollaborationState.createTask"
+      @fan-out="(input) => runtimeCollaborationState.fanOut(input.prompt, input.targets)"
+      @dispatch="(taskId) => runtimeCollaborationState.dispatchTask(taskId)"
+      @send="(taskId) => runtimeCollaborationState.sendTask(taskId)"
+      @finish="(input) => runtimeCollaborationState.finishTask(input.taskId, input.nativeEventId)"
+      @register-deliverable="(input) => runtimeCollaborationState.registerDeliverable(input.taskId, input.deliverable)"
+      @submit-review="(input) => runtimeCollaborationState.submitForReview(input.taskId, input.reviewer)"
+      @review="(input) => runtimeCollaborationState.reviewTask(input.taskId, input.decision, input.reviewer)"
+      @accept="(input) => runtimeCollaborationState.acceptTask(input.taskId, input)"
+      @reject="(input) => runtimeCollaborationState.rejectTask(input.taskId, input.reason)"
+      @cancel="(input) => runtimeCollaborationState.cancelTask(input.taskId, input.reason)"
+      @allocate-writer="(input) => runtimeCollaborationState.allocateWriter(input.taskId, input.repository)"
+      @approve="(input) => runtimeCollaborationState.approveReview(input.taskId, input.reviewerId)"
     />
     <SettingsModal
       :open="isSettingsOpen"
@@ -638,6 +708,7 @@
       :open="!!editingProject"
       :project-id="editingProject?.projectId ?? ''"
       :worktree="editingProject?.worktree ?? ''"
+      :backend-kind="activeBackendKind"
       :name="editingProjectMeta?.name"
       :icon-color="editingProjectMeta?.icon?.color"
       :icon-override="editingProjectMeta?.icon?.override"
@@ -719,6 +790,7 @@ import {
   nextTick,
   onBeforeUnmount,
   onMounted,
+  onScopeDispose,
   provide,
   reactive,
   ref,
@@ -809,21 +881,41 @@ import { usePtyOneshot } from './composables/usePtyOneshot';
 import { decideWorkspaceCapability } from './composables/useWorkspaceCapability';
 import { createRuntimeClient, type RuntimeClient } from './runtime/client';
 import type { RuntimeActionClient } from './composables/useRuntimeSessionActions';
-import { createRuntimeConnection } from './runtime/connection';
-import { parseConnectionProfileId, parseEnvironmentId, parseHarnessInstanceId, parseSessionRef } from '../shared/runtime/identity.js';
-import { parseConnectionReference } from './runtime/connectionProfile';
-import type { ConnectionProfileId, EnvironmentId, HarnessInstanceId, SessionRef } from '../shared/runtime/identity.js';
+import { createRuntimeConnection, type RuntimeConnection } from './runtime/connection';
+import { parseConnectionProfileId, parseEnvironmentId, parseHarnessInstanceId, parseSessionRef, encodeSessionKey, decodeSessionKey, decodeRepoKey } from '../shared/runtime/identity.js';
+import type { ConnectionProfileId, EnvironmentId, HarnessInstanceId, RepoRef, SessionRef } from '../shared/runtime/identity.js';
+import { managementCandidate, parseConnectionReference, type ConnectionReference } from './runtime/connectionProfile';
+import {
+  useRuntimeSessionTree,
+  type HarnessEntry,
+  type SessionHarness,
+  type UnifiedFlatRow,
+  type UnifiedSearchState,
+  type UnifiedSessionTree,
+} from './composables/useRuntimeSessionTree';
+import type { RuntimeSessionRecord } from './runtime/threadPorts';
+import { createAppThreadPorts } from './runtime/threadPorts';
+import { createAppCollaborationPorts } from './runtime/collaborationPorts';
+import {
+  RUNTIME_COLLABORATION_STATE_KEY,
+  createRuntimeCollaborationState,
+} from './composables/useRuntimeCollaboration';
+import {
+  RUNTIME_THREAD_STATE_KEY,
+  createRuntimeThreadState,
+} from './composables/useRuntimeThread';
+import {
+  RUNTIME_SESSION_ACTIONS_KEY,
+  bindRuntimeAction,
+  useRuntimeSessionActions,
+  type RuntimeSessionRuntime,
+} from './composables/useRuntimeSessionActions';
 import { HARNESS_KINDS } from '../shared/runtime/harnessContract.js';
 import { HARNESS_CONTROLS } from './composables/useRuntimeCapabilities';
 import { legacyDigestSync } from './utils/legacyDigest';
 import type { HarnessKind, HarnessManifest } from '../shared/runtime/harnessContract.js';
 import { HARNESS_LABELS } from './composables/useRuntimeSessionTree';
 import type { SelectionCapture } from './runtime/selectionScope';
-import {
-  RUNTIME_SESSION_ACTIONS_KEY,
-  useRuntimeSessionActions,
-  type RuntimeSessionRuntime,
-} from './composables/useRuntimeSessionActions';
 import { useRuntimeMessageSend } from './composables/useRuntimeMessageSend';
 import { useRuntimeInteractions } from './composables/useRuntimeInteractions';
 import { useRuntimeCapabilities, type ControlScope } from './composables/useRuntimeCapabilities';
@@ -837,6 +929,9 @@ import { DraftStore } from './runtime/draftStore';
 import ConnectionEntry, { type ConnectionProfileEntry } from './components/runtime/ConnectionEntry.vue';
 import HarnessSettings from './components/runtime/HarnessSettings.vue';
 import MigrationWizard, { type MigrationInventory } from './components/runtime/MigrationWizard.vue';
+// The collaboration surface is its own async chunk, so the entry chunk keeps its
+// size while the Team UI stays reachable from the running app.
+const CollaborationPanel = defineAsyncComponent(() => import('./components/runtime/CollaborationPanel.vue'));
 import { useFloatingWindows, type FloatingWindowEntry } from './composables/useFloatingWindows';
 import { usePermissions, type PermissionReply, type PermissionRequest } from './composables/usePermissions';
 import { useQuestions } from './composables/useQuestions';
@@ -847,6 +942,7 @@ import { codexPlansToTodoSessions } from './utils/codexPlanTodos';
 import { createCodexSubpanelProps } from './utils/codexSubpanelProps';
 import { defaultComposerMode } from './utils/defaultComposerMode';
 import { useBackendSessionTrees } from './composables/useBackendSessionTrees';
+import type { SessionTreeData } from './types/session-tree';
 import { useBackendSessionActions } from './composables/useBackendSessionActions';
 import {
   createDynamicBackendAbortSession,
@@ -948,9 +1044,7 @@ import {
   configureDshBackend,
   disconnectDshBackend as disconnectDshBackendAdapter,
   configureOpenCodeBackend,
-  getActiveBackendAdapter,
   getBackendAdapter,
-  setActiveBackendKind,
 } from './backends/registry';
 import { AcpAdapter } from './backends/acp/acpAdapter';
 import {
@@ -2062,7 +2156,11 @@ const providersFetchCount = ref(0);
 const agentsLoading = ref(false);
 const commandsLoading = ref(false);
 const serverState = useServerState();
-const openCodeApi = useOpenCodeApi(serverState.projects, t);
+// The per-connection active backend kind. It is the single source of truth for
+// which adapter a runtime action resolves through (`getBackendAdapter(kind)`):
+// the retired module-global routing never sees a production write again.
+const activeBackendKind = ref<BackendKind>('opencode');
+const openCodeApi = useOpenCodeApi(serverState.projects, t, activeBackendKind);
 const codexApi = useCodexApi({
   onTaskCompleted: ({ sessionId, completionId }) => {
     if (activeBackendKind.value === 'codex') showBrowserNotification(CODEX_PROJECT_ID, sessionId, 'idle', completionId);
@@ -2488,7 +2586,6 @@ const loginUrl = ref(DEFAULT_OPENCODE_URL);
 const loginUsername = ref('');
 const loginPassword = ref('');
 const loginRequiresAuth = ref(false);
-const activeBackendKind = ref<BackendKind>('opencode');
 const connectedBridgeHealthUrl = computed(() => {
   if (!desktopApi || uiInitState.value !== 'ready') return '';
   return resolveDesktopBridgeHealthUrl({
@@ -2707,7 +2804,7 @@ let acpGitInfoHydrationQueued = false;
 const kimiGitInfoCheckedDirectories = new Set<string>();
 let kimiGitInfoHydrationQueued = false;
 
-const { topPanelTreeData, sessionTreeData, navigableTree } = useBackendSessionTrees({
+const legacySessionTrees = useBackendSessionTrees({
   activeBackendKind,
   projects: serverState.projects,
   pinnedStore: localPinnedSessionStore,
@@ -2718,6 +2815,7 @@ const { topPanelTreeData, sessionTreeData, navigableTree } = useBackendSessionTr
   resolveProjectColor: resolveProjectColorHex,
   codexProjectId: CODEX_PROJECT_ID,
 });
+const { topPanelTreeData, navigableTree } = legacySessionTrees;
 
 const allowedSessionIds = computed(() => {
   const rootId = selectedSessionId.value;
@@ -2758,6 +2856,7 @@ const {
   fw,
   allowedSessionIds: allowedRequestSessionIds,
   activeDirectory,
+  activeBackendKind,
   ensureConnectionReady,
   sendReply: async (requestId, reply) => {
     if (activeBackendKind.value === 'codex' && requestId.startsWith('codex:')) {
@@ -2795,7 +2894,7 @@ const {
         return;
       }
     }
-    const replyPermission = getActiveBackendAdapter().replyPermission;
+      const replyPermission = getBackendAdapter(activeBackendKind.value).replyPermission;
     if (!replyPermission) throw new Error('Active backend does not support permission replies.');
     await replyPermission(requestId, {
       directory: activeDirectory.value.trim() || undefined,
@@ -2815,6 +2914,7 @@ const {
   fw,
   allowedSessionIds: allowedRequestSessionIds,
   activeDirectory,
+  activeBackendKind,
   ensureConnectionReady,
   getTextContent: (messageId: string) => msg.getTextContent(messageId) || '',
   sendReply: async (requestId, answers) => {
@@ -2849,7 +2949,7 @@ const {
         return;
       }
     }
-    const replyQuestion = getActiveBackendAdapter().replyQuestion;
+      const replyQuestion = getBackendAdapter(activeBackendKind.value).replyQuestion;
     if (!replyQuestion) throw new Error('Active backend does not support question replies.');
     await replyQuestion(requestId, {
       directory: activeDirectory.value.trim() || undefined,
@@ -2878,7 +2978,7 @@ const {
         return;
       }
     }
-    const rejectQuestion = getActiveBackendAdapter().rejectQuestion;
+      const rejectQuestion = getBackendAdapter(activeBackendKind.value).rejectQuestion;
     if (!rejectQuestion) throw new Error('Active backend does not support question rejection.');
     await rejectQuestion(requestId, activeDirectory.value.trim() || undefined);
   },
@@ -3223,7 +3323,7 @@ const {
   todoErrorBySessionId,
   normalizeTodoItems,
   reloadTodosForAllowedSessions,
-} = useTodos({ selectedSessionId, allowedSessionIds, activeDirectory });
+} = useTodos({ selectedSessionId, allowedSessionIds, activeDirectory, activeBackendKind });
 
 const {
   treeNodes,
@@ -3274,7 +3374,7 @@ const treeDirectoryName = computed(() => {
   return segments.at(-1) ?? '/';
 });
 
-const { runOneShotPtyCommand } = usePtyOneshot({ activeDirectory, translate: t });
+const { runOneShotPtyCommand } = usePtyOneshot({ activeDirectory, activeBackendKind, translate: t });
 const forgeAuxiliary = useForgeAuxiliary((command, args) =>
   runOneShotPtyCommand(command, Array.from(args)),
 );
@@ -8513,7 +8613,7 @@ function dshRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function dshBackend(): DshAdapter {
-  const adapter = getActiveBackendAdapter();
+  const adapter = getBackendAdapter(activeBackendKind.value);
   if (!(adapter instanceof DshAdapter)) throw new Error('dsh backend is not configured.');
   return adapter;
 }
@@ -9474,7 +9574,6 @@ watchEffect(() => {
         : configuredBackendKind;
   activeBackendKind.value = effectiveBackendKind;
   loginBackendKind.value = credentials.backendKind.value;
-  setActiveBackendKind(effectiveBackendKind);
   syncAcpMessageBridge(acpMessageBridge, effectiveBackendKind, configuredAcp);
 });
 
@@ -9492,7 +9591,7 @@ watch(
 );
 
 async function bootstrapAcpWorkspace() {
-  const adapter = getActiveBackendAdapter();
+  const adapter = getBackendAdapter(activeBackendKind.value);
   if (!(adapter instanceof AcpAdapter)) throw new Error('ACP backend is not configured.');
   acpMessageBridge.bind(adapter);
   await adapter.initialize();
@@ -9507,7 +9606,7 @@ async function bootstrapAcpWorkspace() {
 }
 
 async function bootstrapKimiWebWorkspace(isCurrent: () => boolean) {
-  const adapter = getActiveBackendAdapter();
+  const adapter = getBackendAdapter(activeBackendKind.value);
   if (!(adapter instanceof KimiWebAdapter)) throw new Error('Kimi Web backend is not configured.');
   disconnectKimiWebBackend();
   acpGitInfoByDirectory.value = {};
@@ -9573,7 +9672,7 @@ async function bootstrapKimiWebWorkspace(isCurrent: () => boolean) {
           // declaration the local set disagrees with asks the authoritative
           // lists to be re-read (it never fabricates or clears an item).
           if (activeBackendKind.value !== 'kimi-web') return;
-          if (!isCurrent() || getActiveBackendAdapter() !== adapter) return;
+          if (!isCurrent() || getBackendAdapter(activeBackendKind.value) !== adapter) return;
           applyKimiWebSessionEvent(serverState.projects, op, context.origin);
           if (op.phase === 'created') scheduleKimiTopPanelGitInfoHydration();
           if (op.sessionId !== selectedSessionId.value) return;
@@ -9616,7 +9715,7 @@ watch(selectedSessionId, () => {
 });
 
 function backend() {
-  return getActiveBackendAdapter();
+  return getBackendAdapter(activeBackendKind.value);
 }
 
 /**
@@ -9649,32 +9748,22 @@ const activeProfileId = computed<ConnectionProfileId>(() =>
 );
 
 /**
- * The connection reference the runtime client attaches with. It is the active
- * bridge target, so a target switch re-attaches the client and invalidates
- * every scope bound to the previous target.
+ * The environment id the live `/runtime` connection actually publishes in its
+ * hello. The bridge owns the real environment identity (a persisted UUID); the
+ * derived id below is only a placeholder for the pre-runtime path, so the
+ * qualified identity switches to the real one the moment a hello arrives and
+ * falls back when no runtime client is attached.
  */
-/**
- * Parse the active bridge endpoint into a runtime management reference, or
- * null when the endpoint is not a runtime wire endpoint. The legacy bridge
- * paths (`/codex`, `/acp`, `/kimi-web/ws`, `/dsh/ws`) and a bare OpenCode
- * server are not runtime endpoints, so no qualified client is built for them.
- */
-function parseRuntimeManagementReference(url: string) {
-  if (!url.trim()) return null;
-  try {
-    return parseConnectionReference({ url, profileId: activeProfileId.value });
-  } catch {
-    return null;
-  }
-}
+const runtimeEnvironmentId = shallowRef<EnvironmentId | null>(null);
 
 /**
- * The runtime environment the active bridge target represents. Derived from
- * the same bridge identity the connection profile is, so a target switch
- * changes the qualified identity of every workspace action.
+ * The runtime environment the active bridge target represents. The live
+ * connection's own environment id once a hello has arrived, otherwise the id
+ * derived from the same bridge identity the connection profile is, so a target
+ * switch changes the qualified identity of every workspace action.
  */
 const activeRuntimeEnvironmentId = computed<EnvironmentId>(() =>
-  parseEnvironmentId(deriveUuid(`env:${activeBackendKind.value}:${activeBridgeUrl.value}`)),
+  runtimeEnvironmentId.value ?? parseEnvironmentId(deriveUuid(`env:${activeBackendKind.value}:${activeBridgeUrl.value}`)),
 );
 
 /**
@@ -9698,33 +9787,400 @@ const activeHarnessInstanceId = computed<HarnessInstanceId>(() =>
 );
 
 /**
+ * The bridge token the active backend's own connection authenticates with.
+ * Read from the same credential store the legacy transport uses, so the runtime
+ * wire and the legacy wire never disagree about who is connecting. It is read
+ * lazily (inside `resolveAuthentication`), because the credentials store is
+ * created later in setup and the connection only resolves authentication once
+ * it actually connects.
+ */
+function activeBridgeToken(): string {
+  switch (activeBackendKind.value) {
+    case 'codex':
+      return credentials.codexBridgeToken.value;
+    case 'acp':
+      return credentials.acpBridgeToken.value;
+    case 'kimi-web':
+      return credentials.kimiWebBridgeToken.value;
+    case 'dsh':
+      return credentials.dshBridgeToken.value;
+    default:
+      return '';
+  }
+}
+
+/**
  * The runtime client the qualified action router drives. It resolves against
  * the active bridge target, so every routed operation carries the target it
  * was bound for.
  *
- * The runtime wire endpoint is derived from the active bridge's endpoint; when
- * the active backend's bridge is not a runtime endpoint (for example a bare
- * OpenCode server), no client is constructed and the qualified router is
- * inert, which keeps the legacy path exactly as before.
+ * The `/runtime` endpoint is derived from the active backend's REAL connection
+ * configuration: `managementCandidate` normalizes the very bridge URL that
+ * backend connects through (a bare bridge root, `/codex`, `/acp`,
+ * `/kimi-web/ws` or `/dsh/ws`) onto `/runtime`, which is the single Bridge
+ * entry point the protocol defines. When the active backend has no bridge at
+ * all (a bare OpenCode server speaks HTTP), no client is constructed and the
+ * qualified router stays inert, which keeps the legacy path exactly as before.
+ *
+ * The socket is a REAL WebSocket and the connection is really `connect()`ed, so
+ * the qualified routers send and receive over the live wire. The client is
+ * rebuilt whenever the active bridge target changes, and the previous
+ * connection is disposed so a target switch never leaks a socket.
  */
-const runtimeActionClient = computed<RuntimeClient | null>(() => {
-  const reference = parseRuntimeManagementReference(activeBridgeUrl.value);
-  if (!reference) return null;
+const runtimeActionClient = shallowRef<RuntimeClient | null>(null);
+let runtimeConnectionOwner: RuntimeConnection | undefined;
+let runtimeHelloUnsubscribe: (() => void) | undefined;
+
+function buildRuntimeActionClient(): void {
+  const previous = runtimeConnectionOwner;
+  runtimeConnectionOwner = undefined;
+  runtimeActionClient.value = null;
+  runtimeEnvironmentId.value = null;
+  if (previous !== undefined) {
+    previous.dispose();
+    runtimeHelloUnsubscribe?.();
+    runtimeHelloUnsubscribe = undefined;
+  }
+  const url = activeBridgeUrl.value;
+  if (!url.trim()) return;
+  let reference: ConnectionReference;
+  try {
+    reference = parseConnectionReference({ ...managementCandidate(url), profileId: activeProfileId.value });
+  } catch {
+    // Not a runtime wire endpoint (a bare OpenCode server, or a malformed URL):
+    // the qualified router stays inert and the legacy path keeps running.
+    return;
+  }
   const connection = createRuntimeConnection({
     reference,
-    resolveAuthentication: async () => ({}),
-    createWebSocket: () => ({
-      binaryType: 'arraybuffer',
-      readyState: WebSocket.CONNECTING,
-      bufferedAmount: 0,
-      close: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      send: () => {},
-    }),
+    resolveAuthentication: async () => {
+      const token = activeBridgeToken();
+      return token.length > 0 ? { bridgeToken: token } : {};
+    },
+    createWebSocket: (endpoint) => new WebSocket(endpoint),
   });
-  return createRuntimeClient({ connection });
+  runtimeConnectionOwner = connection;
+  // ORDER IS A CONTRACT, NOT A STYLE CHOICE. The client's own `receive`
+  // registers the hello's target in its `targets` map, and every routed
+  // operation — including the unified tree's first `state.start`, which this
+  // file's synchronous `runtimeEnvironmentId` watcher fires the instant the
+  // environment id is published — resolves that target through
+  // `client.scope()` → `getTarget()` → `requireValue(..., 'target.attachment',
+  // 'reconcile_required')`. Subscribing the environment-id handler FIRST (the
+  // order this block used to have) therefore ran `tree.start()` against an
+  // empty map, the start rejected, and its empty `catch` swallowed it with no
+  // retry: the five-source tree never self-loaded in the running app.
+  // `useRuntimeConnection.ts` — the canonical wiring for this same pair —
+  // builds the client before subscribing for exactly this reason.
+  runtimeActionClient.value = createRuntimeClient({ connection });
+  runtimeHelloUnsubscribe = connection.subscribe((event) => {
+    // The hello carries the bridge's own persisted environment identity, which
+    // is the only identity the runtime wire accepts for a target.
+    if (event.kind !== 'hello') return;
+    try {
+      runtimeEnvironmentId.value = parseEnvironmentId(event.hello.target);
+    } catch {
+      runtimeEnvironmentId.value = null;
+    }
+  });
+  void connection.connect().catch(() => {
+    // A bridge that is not reachable leaves the client unattached; every routed
+    // operation then fails closed with a typed error, and the legacy path is
+    // unaffected because the binding resolves to null.
+  });
+}
+
+watch(activeBridgeUrl, buildRuntimeActionClient, { immediate: true, flush: 'sync' });
+onScopeDispose(() => {
+  const owned = runtimeConnectionOwner;
+  runtimeConnectionOwner = undefined;
+  runtimeHelloUnsubscribe?.();
+  runtimeHelloUnsubscribe = undefined;
+  runtimeActionClient.value = null;
+  runtimeEnvironmentId.value = null;
+  if (owned !== undefined) owned.dispose();
 });
+
+/** Shared empty sets so the unified sidebar props never allocate per render. */
+const EMPTY_STRING_SET: ReadonlySet<string> = new Set<string>();
+const EMPTY_HARNESS_SET: ReadonlySet<SessionHarness> = new Set<SessionHarness>();
+const EMPTY_SESSION_TREE_DATA: SessionTreeData = [];
+
+/**
+ * The unified session tree over the live `/runtime` connection (task 49).
+ *
+ * The legacy per-backend tree above stays exactly as it is — it is the
+ * read-only migration source and the fallback whenever no runtime client is
+ * attached. This tree is built ONLY once a real runtime client exists and its
+ * hello has published the bridge's own environment identity, so every row,
+ * every expand and every selection travels over real wire frames
+ * (`state.start` opens the target's single observer, `readIndex` pages the
+ * index, `select` writes the selection scope).
+ *
+ * The tree owns the task-20 bounded state layer, so it is disposed when the
+ * target changes or the app unmounts; a rebuild never leaves an observer open.
+ */
+const unifiedSessionTree = shallowRef<UnifiedSessionTree | null>(null);
+
+function disposeUnifiedSessionTree(): void {
+  const owned = unifiedSessionTree.value;
+  unifiedSessionTree.value = null;
+  if (owned !== null) void owned.dispose().catch(() => {});
+}
+
+function buildUnifiedSessionTree(): void {
+  disposeUnifiedSessionTree();
+  const client = runtimeActionClient.value;
+  const target = runtimeEnvironmentId.value;
+  if (client === null || target === null) return;
+  const tree = useRuntimeSessionTree({
+    client,
+    profileId: activeProfileId.value,
+    target,
+  });
+  unifiedSessionTree.value = tree;
+  void tree.start().catch(() => {
+    // A target whose snapshot cannot be opened leaves the tree in its error
+    // state, which the sidebar renders; the legacy tree keeps running.
+  });
+}
+
+watch([runtimeActionClient, runtimeEnvironmentId], buildUnifiedSessionTree, { immediate: true, flush: 'sync' });
+onScopeDispose(disposeUnifiedSessionTree);
+
+/**
+ * The sidebar's session tree. On a live `/runtime` connection it is the unified
+ * five-source tree and the legacy per-backend shape is not read at all (the
+ * sidebar renders the unified rows and ignores this prop); without one — a bare
+ * OpenCode server is not a runtime wire endpoint — it stays the legacy tree,
+ * which is the read-only migration source the plan keeps.
+ */
+const sessionTreeData = computed<SessionTreeData>(() =>
+  unifiedSessionTree.value === null ? legacySessionTrees.sessionTreeData.value : EMPTY_SESSION_TREE_DATA,
+);
+
+/** The unified tree's rows, or undefined so the sidebar keeps its legacy tree. */
+const unifiedTreeRows = computed<readonly UnifiedFlatRow[] | undefined>(() => unifiedSessionTree.value?.rows.value);
+const unifiedTreeSources = computed<readonly HarnessEntry[]>(() => unifiedSessionTree.value?.harnesses.value ?? []);
+const unifiedTreeRetrying = computed<ReadonlySet<string>>(() => unifiedSessionTree.value?.retrying.value ?? EMPTY_STRING_SET);
+const unifiedTreeChildScans = computed<ReadonlySet<string>>(() => unifiedSessionTree.value?.childScans.value ?? EMPTY_STRING_SET);
+const unifiedTreeStatus = computed<'loading' | 'partial' | 'complete' | 'error'>(() => unifiedSessionTree.value?.viewStatus.value ?? 'loading');
+const unifiedTreeLoaded = computed(() => unifiedSessionTree.value?.viewLoaded.value ?? 0);
+const unifiedTreeError = computed<string | null>(() => {
+  const code = unifiedSessionTree.value?.viewError.value;
+  return code === null || code === undefined ? null : String(code);
+});
+const unifiedTreeFilterKinds = computed<ReadonlySet<SessionHarness>>(() => unifiedSessionTree.value?.filterKinds.value ?? EMPTY_HARNESS_SET);
+const unifiedTreeSearch = computed<UnifiedSearchState | null>(() => unifiedSessionTree.value?.searchState.value ?? null);
+/** The unified selection's own session key, so the sidebar can mark the row. */
+const unifiedTreeSelectedKey = computed(() => unifiedSessionTree.value?.selection.value?.selection.session
+  ? encodeSessionKey(unifiedSessionTree.value.selection.value!.selection.session)
+  : '');
+
+function handleUnifiedSelectKey(key: string): void {
+  const tree = unifiedSessionTree.value;
+  if (tree === null) return;
+  void tree.selectByKey(key).then((selected) => {
+    if (!selected) return;
+    const session = tree.selection.value?.selection.session;
+    if (session !== undefined && session !== null) selectedSessionId.value = session.nativeSessionId;
+  });
+}
+
+function handleUnifiedToggleKey(key: string): void {
+  unifiedSessionTree.value?.toggleExpand(key);
+}
+
+function handleUnifiedFilterChange(kinds: readonly SessionHarness[]): void {
+  unifiedSessionTree.value?.setFilterKinds(kinds);
+}
+
+function handleUnifiedSearch(query: string): void {
+  void unifiedSessionTree.value?.search(query).catch(() => {});
+}
+
+function handleUnifiedRetrySource(harnessInstanceId: string): void {
+  void unifiedSessionTree.value?.retrySource(harnessInstanceId).catch(() => {});
+}
+
+function handleUnifiedLoadMoreChildren(key: string): void {
+  void unifiedSessionTree.value?.loadMoreChildren(key).catch(() => {});
+}
+
+/**
+ * The native seams the Thread and collaboration services declare, wired to the
+ * running app's own paths. Every one of them answers with what the app actually
+ * observed; an outcome it cannot read is reported as unread, which the services
+ * record as ambiguous rather than as progress.
+ */
+function resolveRuntimeSession(ref: SessionRef): Promise<RuntimeSessionRecord | null> {
+  const tree = unifiedSessionTree.value;
+  if (tree === null) return Promise.resolve(null);
+  const key = encodeSessionKey(ref);
+  const row =
+    tree.sessions.value.find((entry) => entry.key === key)
+    ?? [...tree.nativeChildren.value.values()].flat().find((entry) => entry.key === key);
+  if (row === undefined) return Promise.resolve(null);
+  let parentSession: SessionRef | null = null;
+  if (row.parentSessionKey !== null) {
+    try {
+      parentSession = decodeSessionKey(row.parentSessionKey);
+    } catch {
+      parentSession = null;
+    }
+  }
+  return Promise.resolve({ session: ref, archived: row.archived, parentSession });
+}
+
+/** Select a native session in the running app: the sidebar row and the wire selection. */
+async function selectRuntimeSession(session: SessionRef): Promise<void> {
+  selectedSessionId.value = session.nativeSessionId;
+  const tree = unifiedSessionTree.value;
+  if (tree === null) return;
+  await tree.selectByKey(encodeSessionKey(session));
+}
+
+/** The repo a native session belongs to, read from the live workspace topology. */
+function repoForSession(session: SessionRef): RepoRef | null {
+  const tree = unifiedSessionTree.value;
+  if (tree === null) return null;
+  const row = tree.sessions.value.find((entry) => entry.key === encodeSessionKey(session));
+  const directory = row?.directory ?? null;
+  const workspace = directory === null ? undefined : tree.workspaces.value.find((entry) => entry.path === directory);
+  if (workspace !== undefined && workspace.repoKey !== null) {
+    try {
+      return decodeRepoKey(workspace.repoKey);
+    } catch {
+      // A repo key the client cannot decode is not a repo this session can open a thread on.
+    }
+  }
+  return null;
+}
+
+/**
+ * Deliver a carried prompt over the app's real send path. The qualified router
+ * is used whenever the active bridge target has one attached; a delivery whose
+ * outcome cannot be read answers with no ack, which the calling service records
+ * as ambiguous — never retried, never marked successful.
+ *
+ * Invariant (`useBackendSessionActions.ts` "finding A"): the seam binds the
+ * operation to the session it was GIVEN; the ambient binding supplies only the
+ * profile/environment/harness context; a global selection switch must never
+ * redirect the action. Every caller here names its participant explicitly —
+ * `deliverFanout`, `deliverDelegation` and `deliverAttempt` each hand over the
+ * session the collaboration service resolved — so the delivery must be bound to
+ * THAT session. Gating on (or sending through) the ambient selection instead
+ * answered `{ackId: ''}` for every participant that was not the currently
+ * selected session, which made the whole collaboration chain unreachable in the
+ * running app the moment the user's selection moved.
+ */
+async function deliverRuntimePrompt(session: SessionRef, prompt: string): Promise<{ ackId: string }> {
+  const ambient = bindRuntimeAction(runtimeSessionRuntime);
+  if (ambient === null) return { ackId: '' };
+  let given: SessionRef;
+  try {
+    given = parseSessionRef(session);
+  } catch {
+    return { ackId: '' };
+  }
+  const selected =
+    ambient.session.environmentId === given.environmentId
+    && ambient.session.harnessInstanceId === given.harnessInstanceId
+    && ambient.session.nativeSessionId === given.nativeSessionId;
+  const binding = selected
+    ? ambient
+    : Object.freeze({ profileId: ambient.profileId, session: given });
+  try {
+    const result = (await runtimeSessionRuntime.router.sendMessage(binding, { text: prompt })) as { operationId?: string };
+    return { ackId: typeof result?.operationId === 'string' ? result.operationId : '' };
+  } catch {
+    return { ackId: '' };
+  }
+}
+
+/**
+ * The Host Thread state (task 52). The ports compose the landed task-31 Thread
+ * service and the landed task-34 Handoff service; the components read this state
+ * through `RUNTIME_THREAD_STATE_KEY`, and the observe button stays disabled
+ * until a real native event id exists because the handoff service's own
+ * derivation is the only writer of `active`.
+ */
+const runtimeThreadPorts = createAppThreadPorts({
+  resolveSession: resolveRuntimeSession,
+  openTarget: async ({ target }) => {
+    await selectRuntimeSession(target.session);
+    return { nativeSessionId: target.session.nativeSessionId };
+  },
+  sendPrompt: async ({ target, prompt }) => deliverRuntimePrompt(target.session, prompt),
+});
+const runtimeThreadState = createRuntimeThreadState(runtimeThreadPorts);
+provide(RUNTIME_THREAD_STATE_KEY, runtimeThreadState);
+
+// The session tree's current selection is the thread's current selection, so the
+// participant resolution always matches the row the user is on.
+watch(
+  () => unifiedSessionTree.value?.selection.value?.selection.session ?? null,
+  (session) => { runtimeThreadState.setSelectedSession(session); },
+  { immediate: true },
+);
+
+async function openRuntimeThreadForSelection(): Promise<void> {
+  const session = runtimeSelectedSessionRef.value;
+  if (session === null) {
+    setSendStatusText('Select a session before opening a Host Thread.');
+    return;
+  }
+  const repo = repoForSession(session);
+  if (repo === null) {
+    setSendStatusText('This session has no repository on the connected target, so no Host Thread can be opened for it.');
+    return;
+  }
+  await runtimeThreadState.openThread({ session, repo });
+}
+
+/**
+ * The collaboration state (task 53). The ports compose the landed task-37
+ * coordinator, the task-38 fan-out service and the task-39 delegation service;
+ * `accepted` is reachable only through the acceptance sink, so a native end
+ * structurally cannot render a task as accepted.
+ */
+const runtimeCollaborationPorts = createAppCollaborationPorts({
+  deliverAttempt: async (payload) => {
+    const record = payload as { session?: SessionRef; prompt?: string };
+    if (record.session === undefined || record.prompt === undefined) return { ackId: '' };
+    return deliverRuntimePrompt(record.session, record.prompt);
+  },
+  deliverDelegation: async (payload) => {
+    const record = payload as { session?: SessionRef; prompt?: string };
+    if (record.session === undefined || record.prompt === undefined) return { ackId: '' };
+    return deliverRuntimePrompt(record.session, record.prompt);
+  },
+  deliverFanout: async (target) => deliverRuntimePrompt(target.session, target.prompt),
+});
+const runtimeCollaborationState = createRuntimeCollaborationState(runtimeCollaborationPorts);
+provide(RUNTIME_COLLABORATION_STATE_KEY, runtimeCollaborationState);
+
+const isCollaborationPanelOpen = ref(false);
+
+/** Open the team under the thread the user is on; a task always carries its Thread target. */
+async function openCollaborationPanel(): Promise<void> {
+  const threadId = runtimeThreadState.threadId.value;
+  const owner = runtimeThreadState.summary.value?.participants[0];
+  const session = owner === undefined ? null : runtimeThreadState.sessionOfParticipant(owner.participantId);
+  const repo = session === null ? null : repoForSession(session);
+  if (threadId === null || owner === undefined || session === null || repo === null) {
+    setSendStatusText('Open a Host Thread before opening the collaboration surface.');
+    return;
+  }
+  await runtimeCollaborationState.openTeam({
+    threadId,
+    teamName: 'Vis Team',
+    environmentId: session.environmentId,
+    owner: { participantId: owner.participantId, session },
+    lease: { ownerId: owner.participantId, expiresAt: Date.now() + 24 * 60 * 60 * 1000 },
+  });
+  isCollaborationPanelOpen.value = true;
+}
 
 /**
  * The workspace capability decision for a local-only workspace action against
@@ -9914,12 +10370,46 @@ function parseQualifiedSession(): SessionRef | null {
   }
 }
 
-const runtimeSelectedSessionRef = computed<SessionRef | null>(parseQualifiedSession);
+/**
+ * The qualified session the routers act on. When the unified session tree holds
+ * the selection, that selection's OWN SessionRef is used verbatim: it carries
+ * the bridge's real environment and harness-instance identity, which is the only
+ * identity the runtime wire accepts, so a selection made in the sidebar travels
+ * over real wire frames. Otherwise the legacy derived identity is used, which
+ * keeps the pre-runtime path exactly as before.
+ */
+const runtimeSelectedSessionRef = computed<SessionRef | null>(() => {
+  const tree = unifiedSessionTree.value;
+  const captured = tree?.selection.value ?? null;
+  if (captured !== null && captured.selection.session.nativeSessionId === selectedSessionId.value) {
+    return captured.selection.session;
+  }
+  return parseQualifiedSession();
+});
+
+/**
+ * Whether the active bridge target has really attached a target for this
+ * session's environment. A `/runtime` client exists as soon as the active
+ * backend has a bridge URL, but it only holds a target once the bridge answers
+ * `hello`; until then every qualified operation would fail closed with
+ * `reconcile_required`, which is exactly the state the legacy fallback covers.
+ */
+function runtimeTargetAttached(session: SessionRef): boolean {
+  const client = runtimeActionClient.value;
+  if (!client) return false;
+  try {
+    client.scope(session.environmentId);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function runtimeSelectionCapture(): SelectionCapture | null {
   const session = runtimeSelectedSessionRef.value;
   const client = runtimeActionClient.value;
   if (!session || !client) return null;
+  if (!runtimeTargetAttached(session)) return null;
   const scope = client.scope(session.environmentId);
   return Object.freeze({
     selection: Object.freeze({ profileId: activeProfileId.value, session }),
@@ -9981,10 +10471,11 @@ const runtimeSessionRuntime: RuntimeSessionRuntime = {
   binding: () => {
     const session = runtimeSelectedSessionRef.value;
     if (!session) return null;
-    // The qualified router needs an attached runtime client. Until the active
-    // bridge target publishes one, the legacy backend-specific path keeps
-    // running exactly as before.
-    if (!runtimeActionClient.value) return null;
+    // The qualified router needs an ATTACHED runtime client, not merely a built
+    // one: until the active bridge target publishes its hello and the client
+    // holds a target for this session's environment, the legacy backend-specific
+    // path keeps running exactly as before.
+    if (!runtimeTargetAttached(session)) return null;
     return { profileId: activeProfileId.value, session };
   },
   router: {
@@ -12141,7 +12632,11 @@ const { startInitialization, abortInitialization } = useBackendActivation({
   serverState,
   t,
   toErrorMessage,
-  setActiveBackendKind,
+  setActiveBackendKind: (kind) => {
+    // The retired registry global is unwired: activation moves the
+    // per-connection kind ref the injected composables already read.
+    activeBackendKind.value = kind;
+  },
   configureCodexBackend,
   configureAcpBackend,
   configureKimiWebBackend,
@@ -12818,6 +13313,39 @@ body {
   flex: 0 0 auto;
   position: relative;
   z-index: 30;
+}
+
+.app-runtime-actions {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.app-runtime-action {
+  appearance: none;
+  border: 1px solid var(--color-border, rgba(120, 120, 120, 0.35));
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.app-runtime-action:hover:not(:disabled) {
+  background: rgba(125, 125, 125, 0.16);
+}
+
+.app-runtime-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .app-output {
