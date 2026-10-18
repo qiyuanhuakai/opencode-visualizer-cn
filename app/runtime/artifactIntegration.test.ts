@@ -344,6 +344,7 @@ interface IntegrationResult {
     | 'tests_failed'
     | 'test_runner_failed'
     | 'tree_changed'
+    | 'commit_tree_changed'
     | 'worktree_failed'
     | 'commit_failed'
     | 'fast_forward_failed';
@@ -2000,6 +2001,243 @@ describe('task 41 — the seven PR #197 review findings', () => {
       expect(result.targetBefore.fileCount).toBeGreaterThan(0);
       expect(result.targetBefore.treeDigest).toMatch(/^[a-f0-9]{64}$/);
       expect(result.targetAfter.treeDigest).toBe(result.targetBefore.treeDigest);
+    } finally {
+      harness.close();
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ PR #197 wave-3 review findings */
+
+describe('task 41 — the three remaining PR #197 wave-3 review findings', () => {
+  let logPath: string;
+
+  beforeAll(async () => {
+    logPath = path.join(await scratch('pr197w3-log'), 'order.log');
+  });
+
+  /** The three criteria, with the FIRST command replaced by `firstScript`. */
+  function testsWithFirst(firstScript: string): readonly TestSpec[] {
+    return [
+      { criterionId: 'applies-cleanly', command: process.execPath, args: ['-e', firstScript] },
+      { criterionId: 'tests-pass', command: process.execPath, args: ['-e', 'process.exit(0)'] },
+      { criterionId: 'fast-forward-only', command: process.execPath, args: ['-e', 'process.exit(0)'] },
+    ];
+  }
+
+  it('W1: a linked worktree that checks the target out DURING the tests is refused before the ref moves', async () => {
+    const repository = await createRepo('pr197w3-checkout-linked', ['integration/target']);
+    const harness = await buildHarness('pr197w3-checkout-linked');
+    try {
+      const artifact = await captureArtifact(harness, repository, 'pr197w3-checkout-linked-a', async (cwd) => {
+        await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
+      });
+      const review = await harness.reviews.create({
+        repository, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
+      });
+      const approval = harness.reviews.approve({
+        reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
+      });
+      const beforeBranch = branchOf(repository, 'integration/target');
+      const beforeHead = headOf(repository);
+      const beforeStatus = statusDigest(repository);
+
+      // The target is NOT checked out when the integration starts — the step-3 probe passes and
+      // the operation proceeds into its tests.
+      expect(runGit(repository, ['worktree', 'list', '--porcelain']))
+        .not.toContain('integration/target');
+
+      // While the frozen tests run, the target branch is checked out in a NEW linked worktree: a
+      // normal user git operation that the service's own repository lock cannot prevent.
+      const linkedRoot = await scratch('pr197w3-linked');
+      const linked = path.join(linkedRoot, 'linked');
+      const racer = [
+        "const {execFileSync}=require('node:child_process');",
+        `execFileSync('git', ['worktree','add','--',${JSON.stringify(linked)},'integration/target'], {cwd:${JSON.stringify(repository)}, stdio:'ignore'});`,
+      ].join('');
+      const result = await harness.integration.integrate({
+        approvalId: approval.approvalId,
+        criteria: CRITERIA,
+        tests: testsWithFirst(racer),
+        commitMessage: 'must not happen',
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe('target_checked_out');
+      expect(result.rejection?.code).toBe('conflict');
+      expect(result.rejection?.field).toBe('integration_target_checked_out');
+      // The refusal names the worktree that took the branch DURING the run.
+      const detail = result.rejection?.detail as { worktrees?: readonly string[] };
+      expect(detail.worktrees).toContain(linked);
+      // The ref never advanced, so the linked worktree is not a reverse modification of the
+      // integration's work: it still sits on the reviewed base with a clean tree.
+      expect(branchOf(repository, 'integration/target')).toBe(beforeBranch);
+      expect(headOf(repository)).toBe(beforeHead);
+      expect(statusDigest(repository)).toBe(beforeStatus);
+      expect(result.fastForward.applied).toBe(false);
+      expect(headOf(linked)).toBe(beforeBranch);
+      expect(runGit(linked, ['status', '--porcelain']).trim()).toBe('');
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('W2: the main worktree checking the target out DURING the tests is refused before the ref moves', async () => {
+    const repository = await createRepo('pr197w3-checkout-main', ['integration/target']);
+    const harness = await buildHarness('pr197w3-checkout-main');
+    try {
+      const artifact = await captureArtifact(harness, repository, 'pr197w3-checkout-main-a', async (cwd) => {
+        await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
+      });
+      const review = await harness.reviews.create({
+        repository, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
+      });
+      const approval = harness.reviews.approve({
+        reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
+      });
+      const beforeBranch = branchOf(repository, 'integration/target');
+
+      // While the tests run, the user's own directory switches to the target branch. Both
+      // branches sit on the SAME commit, so HEAD, targetHead and clean all read unchanged at the
+      // re-check — only the worktree occupancy reveals that the ref is about to move under a
+      // live checkout.
+      const racer = [
+        "const {execFileSync}=require('node:child_process');",
+        `execFileSync('git', ['checkout','integration/target'], {cwd:${JSON.stringify(repository)}, stdio:'ignore'});`,
+      ].join('');
+      const result = await harness.integration.integrate({
+        approvalId: approval.approvalId,
+        criteria: CRITERIA,
+        tests: testsWithFirst(racer),
+        commitMessage: 'must not happen',
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe('target_checked_out');
+      expect(result.rejection?.code).toBe('conflict');
+      expect(result.rejection?.field).toBe('integration_target_checked_out');
+      const detail = result.rejection?.detail as { worktrees?: readonly string[] };
+      expect(detail.worktrees).toContain(repository);
+      expect(branchOf(repository, 'integration/target')).toBe(beforeBranch);
+      expect(result.fastForward.applied).toBe(false);
+      // The user's directory was never reset or switched back: it stays where the user left it,
+      // on the target branch at the reviewed base, with a clean tree.
+      expect(runGit(repository, ['symbolic-ref', '--short', 'HEAD']).trim()).toBe('integration/target');
+      expect(headOf(repository)).toBe(beforeBranch);
+      expect(runGit(repository, ['status', '--porcelain']).trim()).toBe('');
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('W3: a pre-commit hook that adds an unreviewed file is refused before the ref moves', async () => {
+    const repository = await createRepo('pr197w3-hook', ['integration/target']);
+    const harness = await buildHarness('pr197w3-hook');
+    try {
+      // A legal, user-local pre-commit hook: it generates a file and stages it. It is trusted
+      // local configuration, not a permission bypass — the defect is that the "the commit
+      // contains only the reviewed artifact" contract does not survive it.
+      const hookPath = path.join(repository, '.git', 'hooks', 'pre-commit');
+      await mkdir(path.dirname(hookPath), { recursive: true });
+      await writeFile(hookPath, [
+        '#!/bin/sh',
+        "printf 'generated by the hook\\n' > hook-generated.txt",
+        'exec git add hook-generated.txt',
+        '',
+      ].join('\n'), 'utf8');
+      await chmod(hookPath, 0o755);
+
+      const artifact = await captureArtifact(harness, repository, 'pr197w3-hook-a', async (cwd) => {
+        await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
+      });
+      const review = await harness.reviews.create({
+        repository, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
+      });
+      const approval = harness.reviews.approve({
+        reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
+      });
+      const beforeBranch = branchOf(repository, 'integration/target');
+
+      // Every test exits zero and none of them writes anything: only the commit-time hook can
+      // change what the commit records.
+      const result = await harness.integration.integrate({
+        approvalId: approval.approvalId,
+        criteria: CRITERIA,
+        tests: passingTests(logPath, 'pr197w3-hook'),
+        commitMessage: 'integrate with a hook present',
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe('commit_tree_changed');
+      expect(result.rejection?.code).toBe('conflict');
+      expect(result.rejection?.field).toBe('integration_commit_tree');
+      // Two DIFFERENT real git tree objects: the approved one and the one the commit recorded.
+      const detail = result.rejection?.detail as { approvedTree?: string; observedTree?: string };
+      expect(detail.approvedTree).toMatch(/^[a-f0-9]{40}$/);
+      expect(detail.observedTree).toMatch(/^[a-f0-9]{40}$/);
+      expect(detail.approvedTree).not.toBe(detail.observedTree);
+      // A commit object WAS created — the hook runs inside it — but it never reached the target.
+      expect(result.commit.created).toBe(true);
+      expect(result.fastForward.applied).toBe(false);
+      expect(branchOf(repository, 'integration/target')).toBe(beforeBranch);
+      // The target tree is still the reviewed base: the hook's file is nowhere near it.
+      expect(runGit(repository, ['ls-tree', '-r', '--name-only', 'integration/target']))
+        .not.toContain('hook-generated.txt');
+      // The user's own directory is untouched.
+      expect(runGit(repository, ['status', '--porcelain']).trim()).toBe('');
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('W4: a test that only chmods an approved file is refused before the commit', async () => {
+    const repository = await createRepo('pr197w3-mode', ['integration/target']);
+    const harness = await buildHarness('pr197w3-mode');
+    try {
+      // The executable bit must be OBSERVABLE by git for this scenario to be real, so it is
+      // pinned explicitly rather than left to the ambient configuration.
+      gitQuiet(repository, ['config', 'core.filemode', 'true']);
+      const artifact = await captureArtifact(harness, repository, 'pr197w3-mode-a', async (cwd) => {
+        await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
+      });
+      const review = await harness.reviews.create({
+        repository, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
+      });
+      const approval = harness.reviews.approve({
+        reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
+      });
+      const beforeBranch = branchOf(repository, 'integration/target');
+
+      // The test changes ONLY the file mode. The content digest is unchanged, so only a check
+      // that binds the git tree — which records 100644 against 100755 — can see it.
+      const racer = [
+        "require('node:fs').chmodSync(require('node:path').join(process.env.VIS_INTEGRATION_WORKTREE,'src','a.txt'), 0o755);",
+      ].join('');
+      const result = await harness.integration.integrate({
+        approvalId: approval.approvalId,
+        criteria: CRITERIA,
+        tests: testsWithFirst(racer),
+        commitMessage: 'must not happen',
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe('tree_changed');
+      expect(result.rejection?.field).toBe('integration_tree_changed');
+      const detail = result.rejection?.detail as {
+        approvedTree?: string;
+        observedTree?: string;
+        expectedTreeDigest?: string;
+        observedTreeDigest?: string;
+      };
+      // The content is byte-identical — the two digests MATCH — while the two git trees differ:
+      // that difference is the mode change, and it is the whole point of the check.
+      expect(detail.expectedTreeDigest).toBe(detail.observedTreeDigest);
+      expect(detail.approvedTree).toMatch(/^[a-f0-9]{40}$/);
+      expect(detail.observedTree).toMatch(/^[a-f0-9]{40}$/);
+      expect(detail.approvedTree).not.toBe(detail.observedTree);
+      expect(result.commit.created).toBe(false);
+      expect(result.fastForward.applied).toBe(false);
+      expect(branchOf(repository, 'integration/target')).toBe(beforeBranch);
     } finally {
       harness.close();
     }

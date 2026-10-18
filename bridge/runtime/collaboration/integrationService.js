@@ -30,19 +30,28 @@ import { createGitRunner } from './writerLeases.js';
  *   4. a temporary clean integration worktree of the reviewed base is created. It belongs to this
  *      operation and to nobody else.
  *   5. the artifact is applied into that worktree, using task 40's lossless apply, and the tree
- *      that produced is recorded.
+ *      that produced is recorded twice: as a content digest, and — staged and written with
+ *      `write-tree` — as the git TREE OBJECT a commit of it would carry, which binds the paths,
+ *      the blobs, the file types and the executable modes.
  *   6. the frozen criteria's tests run in that worktree. The child's stdin is IGNORED — the test
  *      runner's type has no member that can write to a child's stdin — and any input blob reaches
  *      the test as a temp file, which is how `bridge/workspaceCommand.js`'s stdin limitation is
  *      honoured. A failing test refuses, a runner failure (timeout, spawn error, output overflow)
  *      is recorded as a refusal rather than thrown, and a tree that the tests changed is refused:
- *      the commit may record the reviewed artifact and nothing else. Only THIS operation's temp is
- *      cleaned.
+ *      the commit may record the reviewed artifact and nothing else. The comparison is made at
+ *      both levels, because a mode-only change (a chmod) leaves the content digest identical
+ *      while changing what the commit records. Only THIS operation's temp is cleaned.
  *   7. the commit is created in that worktree, through a sink whose only member is `commit` and
  *      which is constructed from the operation's own worktree path. The sink's type has no member
- *      that accepts a directory, so it cannot be aimed at the user's original directory.
+ *      that accepts a directory, so it cannot be aimed at the user's original directory. The
+ *      commit's ACTUAL tree is then read back and compared with the approved tree: `git commit`
+ *      runs the repository's configured hooks, and a hook that stages extra content must refuse
+ *      here rather than let unreviewed files reach the target.
  *   8. the target is re-checked again immediately before the ref moves — the repository lock
- *      serializes this service, not the user or another git command — and then fast-forwarded
+ *      serializes this service, not the user or another git command — including a re-probe that
+ *      the target branch is still not checked out in ANY worktree, since an ordinary `git
+ *      checkout` or `git worktree add` during the tests would otherwise turn the fast-forward
+ *      into a reverse modification of a live workspace. Then the branch is fast-forwarded
  *      with `git update-ref <ref> <new> <old>`, where `<old>` is the reviewed base. The update is
  *      atomic: if the branch moved, git refuses. There is no push, no `reset --hard`, no `stash`
  *      and no force anywhere in this module.
@@ -88,6 +97,7 @@ export const INTEGRATION_LIMITS = Object.freeze({
 });
 
 const COMMIT_PATTERN = /^[0-9a-f]{40,64}$/;
+const TREE_PATTERN = /^[0-9a-f]{40,64}$/;
 const MAX_ARG_CHARS = 32768;
 const EMPTY_DIRTY_PATHS = Object.freeze([]);
 
@@ -240,7 +250,10 @@ async function pathExists(fsLike, target) {
  *
  * A symlink is observed by its RAW link target, read with readlink: git allows a committed link
  * whose target does not exist, and resolving one (realpath) would both throw ENOENT on a legal
- * tree and record a host-absolute path that changes when the repository moves.
+ * tree and record a host-absolute path that changes when the repository moves. The file TYPE and
+ * the executable MODE are deliberately NOT part of this digest — they are bound separately, as
+ * the git tree object the artifact produced (see stageTree), because a chmod leaves this digest
+ * unchanged while changing what a commit of this tree records.
  */
 async function observeTree(fsLike, root) {
   const files = {};
@@ -295,6 +308,36 @@ async function checkedOutBranches(runGit, repository) {
     }
   }
   return Object.freeze(branches);
+}
+
+/**
+ * The git TREE OBJECT the applied artifact produced, bound as its object id. `add -A` stages the
+ * worktree's exact state and `write-tree` records what a commit of that index would carry — so
+ * this binds the approved content the way git itself will commit it: every path, every blob and
+ * every file TYPE and executable MODE (100644 against 100755), none of which the content digest
+ * above can see. Every later comparison is against this id, which is what makes a mode-only
+ * change (a chmod) and a hook-added file both observable before the target ref moves.
+ */
+async function stageTree(runGit, worktree) {
+  const added = await runGit({ cwd: worktree, args: ['add', '-A'] });
+  if (added.exitCode !== 0) {
+    throw new CollaborationError('source_unavailable', 'integration_stage', {
+      worktree,
+      stderr: added.stderr.slice(0, 512),
+    });
+  }
+  const tree = await runGit({ cwd: worktree, args: ['write-tree'] });
+  if (tree.exitCode !== 0) {
+    throw new CollaborationError('source_unavailable', 'integration_write_tree', {
+      worktree,
+      stderr: tree.stderr.slice(0, 512),
+    });
+  }
+  const sha = tree.stdout.trim();
+  if (!TREE_PATTERN.test(sha)) {
+    throw new CollaborationError('conflict', 'integration_write_tree', { worktree });
+  }
+  return sha;
 }
 
 /* ------------------------------------------------------------------ the service */
@@ -575,6 +618,7 @@ export function createIntegrationService(options = {}) {
       grant: null,
       lockHeldMs: 0,
       worktreeAfterApply: null,
+      approvedTree: '',
     };
 
     async function run() {
@@ -704,6 +748,23 @@ export function createIntegrationService(options = {}) {
       // The approved content is the applied artifact and nothing else. The tree the artifact
       // produced is recorded here, so step 6 can prove the tests did not add to it.
       state.worktreeAfterApply = await observeTree(fsLike, worktreePath);
+      // The same approved content, bound the way git will commit it: staged and written as a
+      // tree object, so the paths, the blobs, the file types and the executable modes are all
+      // part of the binding. A test that only chmods a file leaves the content digest above
+      // untouched, and only this tree comparison sees it.
+      try {
+        state.approvedTree = await stageTree(runGit, worktreePath);
+      } catch (error) {
+        if (error instanceof CollaborationError) {
+          state.outcome = 'worktree_failed';
+          state.rejection = refusal(error.code, error.field, {
+            worktree: worktreePath,
+            detail: error.detail ?? null,
+          });
+          return;
+        }
+        throw error;
+      }
 
       // 6 — the frozen criteria's tests, in the worktree, with stdin IGNORED. A runner failure
       // (a timeout, a spawn error, an output overflow) is a REFUSAL recorded here, never an
@@ -782,10 +843,85 @@ export function createIntegrationService(options = {}) {
         });
         return;
       }
+      // 6c — the same comparison at the level git will actually commit. The content digest above
+      // cannot see a mode-only change: a chmod leaves every byte identical while turning a
+      // 100644 entry into a 100755 one, and `add -A` would carry that into the commit. Staging
+      // the post-test state and writing its tree makes the mode part of the approved content.
+      let afterTestsTree;
+      try {
+        afterTestsTree = await stageTree(runGit, worktreePath);
+      } catch (error) {
+        if (error instanceof CollaborationError) {
+          state.outcome = 'worktree_failed';
+          state.rejection = refusal(error.code, error.field, {
+            worktree: worktreePath,
+            detail: error.detail ?? null,
+          });
+          return;
+        }
+        throw error;
+      }
+      if (afterTestsTree !== state.approvedTree) {
+        state.outcome = 'tree_changed';
+        state.rejection = refusal('conflict', 'integration_tree_changed', {
+          artifactHash,
+          expectedTreeDigest: state.worktreeAfterApply.treeDigest,
+          observedTreeDigest: afterTests.treeDigest,
+          expectedFileCount: state.worktreeAfterApply.fileCount,
+          observedFileCount: afterTests.fileCount,
+          approvedTree: state.approvedTree,
+          observedTree: afterTestsTree,
+        });
+        return;
+      }
 
       // 7 — the commit, in the operation's own worktree and nowhere else.
       const commitSink = createCommitSink({ worktree: worktreePath });
       state.commitSha = await commitSink.commit(commitMessage);
+
+      // 7b — the commit's ACTUAL tree must be the approved tree. `git commit` runs the repository's
+      // configured hooks, and a pre-commit hook can stage extra files (or re-mode or remove ones)
+      // after every check above has passed. The hook is the user's own trusted local
+      // configuration, not a bypass — the defect is that "the commit contains only the reviewed
+      // artifact" would no longer hold. The commit object already exists at this point, but the
+      // target ref has not moved, so refusing here keeps the unreviewed content out of the
+      // target and leaves the operation's temp to be cleaned.
+      let committedTree;
+      try {
+        committedTree = await runGit({
+          cwd: worktreePath,
+          args: ['rev-parse', '--verify', `${state.commitSha}^{tree}`],
+        });
+      } catch (error) {
+        if (error instanceof CollaborationError) {
+          state.outcome = 'worktree_failed';
+          state.rejection = refusal(error.code, error.field, {
+            worktree: worktreePath,
+            detail: error.detail ?? null,
+          });
+          return;
+        }
+        throw error;
+      }
+      if (committedTree.exitCode !== 0) {
+        state.outcome = 'worktree_failed';
+        state.rejection = refusal('source_unavailable', 'integration_commit_tree', {
+          worktree: worktreePath,
+          stderr: committedTree.stderr.slice(0, 512),
+        });
+        return;
+      }
+      const committedTreeSha = committedTree.stdout.trim();
+      if (committedTreeSha !== state.approvedTree) {
+        state.outcome = 'commit_tree_changed';
+        state.rejection = refusal('conflict', 'integration_commit_tree', {
+          artifactHash,
+          approvedTree: state.approvedTree,
+          observedTree: committedTreeSha,
+          commitSha: state.commitSha,
+        });
+        return;
+      }
 
       // 8a — the target is re-checked immediately before the ref moves. The pre-check at step 3
       // is not a lock: the repository can be dirtied or its HEAD moved by the user or by another
@@ -811,6 +947,26 @@ export function createIntegrationService(options = {}) {
             clean: rechecked.clean,
             dirtyPaths: rechecked.dirtyPaths,
           }),
+        });
+        return;
+      }
+
+      // 8b — the target must STILL not be checked out in any worktree. The step-3 probe is not a
+      // lock and never was: while the tests run, the user can check the target branch out in the
+      // main worktree or in a new linked one — an ordinary git operation this service neither
+      // performs nor prevents. Moving the ref under such a checkout would leave that worktree
+      // reading as a reverse modification of everything the integration just landed, so the
+      // occupancy is re-probed here and a branch taken during the run refuses exactly like one
+      // held at the start.
+      const holdersAfter = (await checkedOutBranches(runGit, repository))
+        .filter((entry) => entry.branch === `refs/heads/${target}`);
+      if (holdersAfter.length > 0) {
+        state.outcome = 'target_checked_out';
+        state.rejection = refusal('conflict', 'integration_target_checked_out', {
+          repository,
+          target,
+          worktrees: Object.freeze(holdersAfter.map((entry) => entry.worktree)),
+          observedAt: 'after-tests',
         });
         return;
       }
