@@ -519,6 +519,9 @@ export function createTurnTimeline(): TurnTimeline {
     const late = context.native.terminal;
     const sourceKey = timelineSourceKey(input.source);
     const seq = input.seq > 0 ? input.seq : context.nextSeq(sourceKey);
+    // 2**53 + 1 === 2**53, so an auto-assigned successor past the safe range could never be
+    // enumerated by gaps(): refuse it here, before order, entries, seen and the seq bucket change.
+    if (!Number.isSafeInteger(seq)) throw new TurnError('invalid_request', 'timeline_seq');
     const order = context.nextOrder();
     const entry: InternalEntry = Object.freeze({
       entryId: `${context.turnId}:${order}`,
