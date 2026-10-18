@@ -588,6 +588,10 @@ function parseCheckpointEntry(raw) {
     ? evidence.hash
     : evidenceHash(raw.text);
   if (expected !== hash) throw new ContextError('conflict', 'checkpoint_entry_hash');
+  // The token count is re-derived from the verified text with the builder's own estimator, so a
+  // wire entry that under-reports itself cannot slip past the checkpoint token budget.
+  const estimatedTokens = estimateTokens(raw.text === null ? '' : raw.text);
+  if (estimatedTokens !== raw.estimatedTokens) throw new ContextError('conflict', 'checkpoint_entry_tokens');
   return deepFreeze({
     entryId: raw.entryId,
     class: entryClass,
@@ -596,7 +600,7 @@ function parseCheckpointEntry(raw) {
     untrusted: raw.untrusted,
     untrustedReason: raw.untrustedReason,
     redactions: raw.redactions,
-    estimatedTokens: raw.estimatedTokens,
+    estimatedTokens,
     hash,
     evidence,
   });
@@ -628,10 +632,21 @@ export function parseCheckpoint(value) {
   // A matching digest proves provenance, not budget: every builder ceiling is re-validated here.
   if (value.entryCount > MAX_CHECKPOINT_ENTRIES) throw new ContextError('invalid_request', 'checkpoint_entry_count');
   if (value.estimatedTokens > CHECKPOINT_MAX_ESTIMATED_TOKENS) throw new ContextError('invalid_request', 'checkpoint_tokens');
-  if (value.transcriptBytes > CHECKPOINT_MAX_BYTES) throw new ContextError('invalid_request', 'checkpoint_transcript_bytes');
   const entries = value.entries.map(parseCheckpointEntry);
   const evidence = value.evidence.map((item) => parseEvidenceRef(item));
   const digest = parseEvidenceHash(value.digest);
+  // transcriptBytes is the builder's PRE-TRIM statistic — the cost of every wrapped entry, not of
+  // the retained payload — so the serialized ceiling cannot bound it. A long history that the
+  // builder trimmed into budget is re-validated against the retained entries plus the dropped
+  // cost instead, which keeps the statistic honest without refusing legal checkpoints.
+  const retainedBytes = entries.reduce((total, entry) => total + byteLengthOf(JSON.stringify(entry)), 0);
+  if (value.transcriptBytes !== retainedBytes + value.droppedBytes) {
+    throw new ContextError('invalid_request', 'checkpoint_transcript_bytes');
+  }
+  // The summary is re-derived from the per-entry counts the entries were just re-validated
+  // against, so a wire provider cannot under-report the checkpoint's token cost.
+  const derivedTokens = entries.reduce((total, entry) => total + entry.estimatedTokens, 0);
+  if (derivedTokens !== value.estimatedTokens) throw new ContextError('conflict', 'checkpoint_tokens');
   const canonical = {
     checkpointId,
     schemaVersion: CONTEXT_SCHEMA_VERSION,
