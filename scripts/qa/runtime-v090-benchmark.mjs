@@ -116,6 +116,36 @@ export const TREE = Object.freeze({
   note: 'seeded into the harness-owned IndexedDB vis-runtime-perf-tree (stores worktrees + summaries) in the same real Chromium as the pin/draft substrate; no browser-side product store carries worktree topology in this harness, so the tree dimension is graded over the seeded composition itself, not over a product module',
 });
 
+// The frozen load profiles the draft coverage must exercise. The task-44 draft
+// leg only ever imported 2KiB single-`body`-part drafts, so large content and
+// attachments had NO load coverage at all. Each profile below is a plan literal:
+// the part names/kinds/sizes are fixed here and graded against the independent
+// Node-side hash oracle, never against a value this driver measured.
+export const LOAD_PROFILES = Object.freeze([
+  {
+    label: 'large-body',
+    drafts: 4,
+    parts: Object.freeze([{ name: 'body', kind: 'body', size: 512 * 1024, seed: 11 }]),
+  },
+  {
+    label: 'multi-part-attachment',
+    drafts: 4,
+    parts: Object.freeze([
+      { name: 'body', kind: 'body', size: 64 * 1024, seed: 21 },
+      { name: 'attachment-0', kind: 'attachment', size: 128 * 1024, seed: 22 },
+      { name: 'attachment-1', kind: 'attachment', size: 128 * 1024, seed: 23 },
+    ]),
+  },
+]);
+
+// The frozen recovery-leg count. The drafts leg used to prove THREE legs
+// (offline read-back, switch, resume) while its row was named
+// "offline/restart/switch/resume": no restart was ever executed — the offline
+// read-back happened with the store/cache still open, and the dispose/close ran
+// only AFTER the read. Restart is now its own graded leg: destroy the
+// store/cache AND the page, rebuild, then read back offline.
+export const RESTART_LEG_EXPECTED = 4;
+
 /**
  * Independent Node-side derivation of the plan's composition rule from the
  * frozen generation input only. This is the ORACLE the observed numbers are
@@ -693,13 +723,28 @@ export async function createStack({ out, log = () => {} }) {
       return { usedSize: usage.usedSize, totalSize: usage.totalSize, sizeLimit: usage.sizeLimit };
     };
     const readLongTasks = () => page.evaluate(() => globalThis.__perfLongTasks ?? []);
+    // A REAL observation of the emulated network: one same-origin round trip
+    // measured in the page. With Network.emulateNetworkConditions latency L
+    // applied, the round trip cannot complete faster than L, so this is the
+    // verification that the formal samples are actually taken under the
+    // profile's network conditions — not merely labelled with them (the
+    // network100ms profile's drafts leg resets the emulation to unlimited at
+    // its end, which used to leave the formal samples measuring an unlimited
+    // network while the report still called them 100ms-RTT).
+    const measureRoundTripMs = async () => {
+      const started = await page.evaluate(() => performance.now());
+      await page.evaluate(() => fetch('/', { cache: 'no-store' }).then(() => undefined));
+      return (await page.evaluate(() => performance.now())) - started;
+    };
+    // The verification predicate, exported through the stack so the driver can
+    // fail loudly on a network that did not take effect.
+    const verifyNetworkLatency = (observedMs, expectedRttMs) => observedMs >= expectedRttMs;
     const setNetwork = (conditions) => cdp.send('Network.emulateNetworkConditions', conditions);
     const evaluate = (fn, argument) => page.evaluate(fn, argument);
 
     return {
       origin, page, cdp, context, browser, server, vite, lifecycle,
-      log, measureRss, collectHeap, readLongTasks, setNetwork, evaluate,
-      longTaskCount: async () => (await readLongTasks()).length,
+      log, measureRss, collectHeap, readLongTasks, setNetwork, evaluate, measureRoundTripMs, verifyNetworkLatency,      longTaskCount: async () => (await readLongTasks()).length,
       async close() {
         if (page) { await page.close().catch(() => {}); lifecycle.completed.push('close page'); }
         if (context) { await context.close().catch(() => {}); lifecycle.completed.push('close context'); }
@@ -1147,10 +1192,33 @@ export async function runDraftsLeg(stack, { count, prefix, out }) {
   const offlineExpected = expectedPartHash(2048, 0);
   const offlineMatch = offlineExport.digest === offlineExpected;
 
+  // ---- REAL restart: destroy the store/cache AND the page, rebuild, read offline ----
+  // The offline leg above ran with the store and cache STILL OPEN and disposed
+  // only AFTER the read, so it proved an in-memory cache hit, not persistence
+  // across a restart — while the recovery row was named
+  // "offline/restart/switch/resume". This leg destroys the cache, the store and
+  // the page itself, rebuilds the world from the same origin, cuts the network
+  // at CDP and reads the same draft back: the restart is a graded leg of its
+  // own in the performance driver (RESTART_LEG_EXPECTED).
+  await evaluate(() => window.perf.disposeCache());
+  await evaluate(() => window.perf.closeDraftStore());
+  await page.goto(stack.origin + '/perf/', { waitUntil: 'networkidle' });
+  await page.waitForFunction(() => typeof window.perf !== 'undefined');
+  // Open the store and cache BEFORE cutting the network: opening them performs
+  // the page's dynamic module imports, which are real fetches and cannot run
+  // under an offline emulation.
+  await evaluate(() => window.perf.openDraftStore());
+  await evaluate(() => window.perf.openDraftCache());
+  await stack.setNetwork({ offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 });
+  const restartOnline = await page.evaluate(() => navigator.onLine);
+  const restartExport = await evaluate((args) => window.perf.cacheExportPart({ identity: { context: args, clientOrigin: 'task44-perf-client', revision: 1 }, part: 'body' }), FIXTURE.draftContext(prefix, 0));
+  await stack.setNetwork({ offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+  const restartMatch = restartExport.digest === offlineExpected && restartExport.bytes === 2048;
+
   await evaluate(() => window.perf.disposeCache());
   await evaluate(() => window.perf.closeDraftStore());
 
-  log('drafts-leg-done', { count, allMatch, resumeMatch, offlineMatch });
+  log('drafts-leg-done', { count, allMatch, resumeMatch, offlineMatch, restartMatch });
   return {
     scenario: 'drafts-leg',
     count,
@@ -1163,7 +1231,103 @@ export async function runDraftsLeg(stack, { count, prefix, out }) {
     switch: switchProbe,
     resume: { ...resume, expected: resumeExpected, match: resumeMatch },
     offline: { online: offlineOnline, digest: offlineExport.digest, expected: offlineExpected, match: offlineMatch },
+    restart: { online: restartOnline, digest: restartExport.digest, bytes: restartExport.bytes, expected: offlineExpected, match: restartMatch },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: large-body and attachment loads — the load dimension the task-44
+// draft leg never covered. That leg only ever imported 2KiB single-`body`-part
+// drafts, so large content and multi-part attachments had no coverage at all
+// and no per-load-type reporting.
+//
+// For every frozen LOAD_PROFILES entry: import each draft one-by-one with every
+// part streamed, committed (which re-reads and re-verifies each part) and read
+// back with a folded digest, verifying each part against the independent
+// Node-side hash oracle. Then destroy the cache, the store AND the page, rebuild
+// from the same origin, cut the network at CDP and read EVERY part back offline.
+// Results are reported per load type, never pooled with the 2KiB single-part
+// drafts, so a large-content regression cannot hide behind the small-draft
+// numbers (and vice versa).
+// ---------------------------------------------------------------------------
+export async function runLoadsLeg(stack, { prefix, out }) {
+  const { page, evaluate, log } = stack;
+  log('loads-leg-start', { prefix, profiles: LOAD_PROFILES.map((profile) => profile.label) });
+  await page.goto(stack.origin + '/perf/', { waitUntil: 'networkidle' });
+  await page.waitForFunction(() => typeof window.perf !== 'undefined');
+  await evaluate(() => window.perf.openDraftStore());
+  await evaluate(() => window.perf.openDraftCache());
+
+  const profiles = [];
+  const ledger = [];
+  for (const profile of LOAD_PROFILES) {
+    let partsVerified = 0;
+    let partsExpected = 0;
+    let importMsTotal = 0;
+    for (let index = 0; index < profile.drafts; index += 1) {
+      // Each load profile owns its own context namespace: two profiles sharing
+      // one prefix would commit DIFFERENT part sets under the same identity and
+      // the store would (correctly) refuse the second header as a conflict.
+      const identity = { context: FIXTURE.draftContext(`${prefix}-${profile.label}`, index), clientOrigin: 'task44-perf-client', revision: 1 };
+      const written = [];
+      for (const part of profile.parts) {
+        const result = await evaluate((args) => window.perf.writeDraftPart({ identity: args.identity, name: args.part.name, kind: args.part.kind, size: args.part.size, seed: args.part.seed }), { identity, part });
+        importMsTotal += result.ms;
+        written.push(result.part);
+      }
+      await evaluate((args) => window.perf.commitDraftHeader({ identity: args.identity, parts: args.parts }), { identity, parts: written });
+      for (const [position, part] of profile.parts.entries()) {
+        const readBack = await evaluate((args) => window.perf.cacheExportPart({ identity: args.identity, part: args.name }), { identity, name: part.name });
+        const expected = expectedPartHash(part.size, part.seed);
+        const match = written[position].sha256 === expected && readBack.digest === expected && readBack.bytes === part.size;
+        partsExpected += 1;
+        if (match) partsVerified += 1;
+        ledger.push({ profile: profile.label, index, part: part.name, kind: part.kind, size: part.size, expected, storedSha256: written[position].sha256, readBackSha256: readBack.digest, bytes: readBack.bytes, match });
+      }
+    }
+    profiles.push({
+      label: profile.label,
+      drafts: profile.drafts,
+      parts: profile.parts.map((part) => ({ name: part.name, kind: part.kind, size: part.size })),
+      partsVerified,
+      partsExpected,
+      allMatch: partsVerified === partsExpected,
+      importMsPerPart: partsExpected > 0 ? importMsTotal / partsExpected : null,
+    });
+  }
+  const ledgerHash = sha256Hex(Buffer.from(JSON.stringify(ledger.map((entry) => [entry.profile, entry.index, entry.part, entry.expected, entry.storedSha256, entry.readBackSha256]))));
+  await writeFile(path.join(out, 'load-import-hash-ledger.json'), json({ prefix, ledgerHash, entries: ledger }));
+
+  // ---- offline restart read-back of EVERY part of EVERY load draft ----
+  await evaluate(() => window.perf.disposeCache());
+  await evaluate(() => window.perf.closeDraftStore());
+  await page.goto(stack.origin + '/perf/', { waitUntil: 'networkidle' });
+  await page.waitForFunction(() => typeof window.perf !== 'undefined');
+  // Open the store and cache BEFORE cutting the network: opening them performs
+  // the page's dynamic module imports, which are real fetches and cannot run
+  // under an offline emulation.
+  await evaluate(() => window.perf.openDraftStore());
+  await evaluate(() => window.perf.openDraftCache());
+  await stack.setNetwork({ offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 });
+  const restartOnline = await page.evaluate(() => navigator.onLine);
+  for (const entry of profiles) {
+    const profile = LOAD_PROFILES.find((candidate) => candidate.label === entry.label);
+    let readBack = 0;
+    for (let index = 0; index < profile.drafts; index += 1) {
+      const identity = { context: FIXTURE.draftContext(`${prefix}-${entry.label}`, index), clientOrigin: 'task44-perf-client', revision: 1 };
+      for (const part of profile.parts) {
+        const result = await evaluate((args) => window.perf.cacheExportPart({ identity: args.identity, part: args.name }), { identity, name: part.name });
+        if (result.digest === expectedPartHash(part.size, part.seed) && result.bytes === part.size) readBack += 1;
+      }
+    }
+    entry.offlineRestartReadBack = readBack;
+  }
+  await stack.setNetwork({ offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+  await evaluate(() => window.perf.disposeCache());
+  await evaluate(() => window.perf.closeDraftStore());
+
+  log('loads-leg-done', { profiles: profiles.map((entry) => `${entry.label}:${entry.partsVerified}/${entry.partsExpected}`), restartOnline });
+  return { scenario: 'loads-leg', prefix, ledgerHash, restartOnline, profiles };
 }
 
 // ---------------------------------------------------------------------------
