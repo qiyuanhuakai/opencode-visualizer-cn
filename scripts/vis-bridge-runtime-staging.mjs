@@ -44,7 +44,7 @@ const WORKER_ENTRY = ['bridge', 'runtime', 'storage', 'runtimeDatabaseWorker.mjs
 const STORAGE_PREFIX = 'bridge/runtime/storage/';
 const STAGED_RUNTIME_DIRECTORY = 'bridge/runtime/runtime';
 
-export function createRuntimeSidecarLayout(stageRoot) {
+export function createRuntimeSidecarLayout(stageRoot, platform = process.platform) {
   return {
     installRoot: path.join(stageRoot, 'bridge', 'runtime'),
     runtimeDirectory: path.join(stageRoot, ...STAGED_RUNTIME_DIRECTORY.split('/')),
@@ -52,7 +52,12 @@ export function createRuntimeSidecarLayout(stageRoot) {
     sidecarPath: path.join(
       stageRoot,
       ...STAGED_RUNTIME_DIRECTORY.split('/'),
-      process.platform === 'win32' ? 'vis_bridge_node.exe' : 'vis_bridge_node',
+      // The installed resolver demands the TARGET platform's sidecar name
+      // (vis_bridge_node.exe on Windows), so the name must follow the staged
+      // platform — not the host that happens to run the packaging. A Windows
+      // installer packaged on Linux otherwise ships vis_bridge_node and the
+      // installed bridge reports its sidecar missing.
+      platform === 'win32' ? 'vis_bridge_node.exe' : 'vis_bridge_node',
     ),
   };
 }
@@ -86,7 +91,7 @@ export async function computeRuntimeWorkerClosure(rootDirectory) {
 export async function stageRuntimeWorkerSidecar(rootDirectory, stageRoot, options = {}) {
   const platform = options.platform ?? process.platform;
   const sidecarSource = options.sidecarSource ?? process.execPath;
-  const layout = createRuntimeSidecarLayout(stageRoot);
+  const layout = createRuntimeSidecarLayout(stageRoot, platform);
   const closure = await computeRuntimeWorkerClosure(rootDirectory);
   if (!closure.includes(WORKER_ENTRY.join('/'))) {
     throw new Error(`runtime worker closure is missing its own entry: ${WORKER_ENTRY.join('/')}`);

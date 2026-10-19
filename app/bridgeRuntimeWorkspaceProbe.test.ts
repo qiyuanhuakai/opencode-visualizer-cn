@@ -85,3 +85,73 @@ describe('the seeded workspace catalog carries the repo identity the Host Thread
     expect(plainEntry!.repoKey ?? null).toBeNull();
   });
 });
+
+describe('a read-only root is a capability limit, not a startup failure (F3-P2-3)', () => {
+  async function gitRepo(root: string, name: string): Promise<string> {
+    const repo = path.join(root, name);
+    await mkdir(repo);
+    const gitExec = (args: readonly string[]) =>
+      execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    gitExec(['init', '--quiet']);
+    gitExec(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'base']);
+    return repo;
+  }
+
+  it('starts with mixed-permission roots, probing the authorized one and recording an explicit unknown for the read-only one', async () => {
+    // Given: a root granted the full permission set and a second, equally real
+    // repository granted READ ONLY — the runtime may read it but is not
+    // permitted to run git commands in it, which is a legitimate capability
+    // limit rather than a broken repository.
+    const root = await mkdtemp(path.join(tmpdir(), 'runtime-workspace-probe-mixed-'));
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+    const authorized = await gitRepo(root, 'authorized');
+    const readonly = await gitRepo(root, 'readonly');
+    const stateRoot = path.join(await mkdtemp(path.join(tmpdir(), 'runtime-workspace-probe-state-')), 'state');
+    await mkdir(stateRoot, { recursive: true });
+    cleanups.push(() => rm(path.dirname(stateRoot), { recursive: true, force: true }));
+    const services = await createRuntimeServices({
+      environmentId: randomUUID(),
+      stateRoot,
+      role: 'local',
+      roots: [
+        { root: authorized, permissions: ['read', 'write', 'command', 'pty', 'reverse'] },
+        { root: readonly, permissions: ['read'] },
+      ],
+      config: { version: 1, nativeServices: { opencode: false, codex: false, 'kimi-web': false, dsh: false }, acpAgents: [] },
+      nativeSupervisor: supervisor,
+      acpManager,
+      runtime: { mutate: async <T,>(operation: () => Promise<T>): Promise<T> => operation() },
+      factories: {},
+    });
+    cleanups.push(async () => { await services.close(); });
+
+    // When: the runtime starts. The read-only root's grant carries no command
+    // permission, so the startup probe cannot authorize it.
+    await services.start();
+
+    // Then: the startup completed — the read-only root did not block it — and
+    // the catalog still describes BOTH granted roots.
+    const page = await services.index.topology({ collection: 'workspaces' });
+    const byPath = new Map(page.items.map((item) => {
+      const value = item.value as { workspace: { canonicalPath: string }; gitKind?: string; repoKey?: string | null };
+      return [value.workspace.canonicalPath, value];
+    }));
+
+    // And: the AUTHORIZED root is probed for real — the fix probes every root
+    // it is permitted to probe, so the regression cannot be "fixed" by
+    // skipping all probes.
+    const authorizedEntry = byPath.get(await realpath(authorized));
+    expect(authorizedEntry).toBeDefined();
+    expect(authorizedEntry!.gitKind).toBe('git');
+    expect(typeof authorizedEntry!.repoKey).toBe('string');
+
+    // And: the read-only root is explicitly UNKNOWN with no repoKey: the
+    // runtime did not silently claim non-git for a real repository, and did not
+    // leave the root undescribed either. `repoForSession` refuses a Host Thread
+    // for it because the repo identity genuinely cannot be derived.
+    const readonlyEntry = byPath.get(await realpath(readonly));
+    expect(readonlyEntry).toBeDefined();
+    expect(readonlyEntry!.gitKind).toBe('unknown');
+    expect(readonlyEntry!.repoKey ?? null).toBeNull();
+  });
+});

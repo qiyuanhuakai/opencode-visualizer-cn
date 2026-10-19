@@ -27,7 +27,7 @@ export async function stageLinuxRuntimePayload({ payloadPath, binaryPath, rootDi
   await stageRuntimeWorkerSidecar(
     rootDirectory,
     path.join(payloadPath, 'usr', 'lib', 'vis_bridge'),
-    { platform: target.platform },
+    { platform: target.platform, sidecarSource: target.sidecarSource },
   );
 }
 
@@ -81,7 +81,7 @@ export async function packageMacInstaller(paths, target, rootDirectory, normaliz
   await stageRuntimeWorkerSidecar(
     rootDirectory,
     path.join(paths.workspacePath, 'usr', 'local', 'lib', 'vis_bridge'),
-    { platform: target.platform },
+    { platform: target.platform, sidecarSource: target.sidecarSource },
   );
   const scriptsDirectory = `${paths.workspacePath}-scripts`;
   await rm(scriptsDirectory, { recursive: true, force: true });

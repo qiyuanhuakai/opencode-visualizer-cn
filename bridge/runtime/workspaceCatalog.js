@@ -72,5 +72,33 @@ export function createWorkspaceCatalog({ store, git }) {
       }
       requireValue(false, 'git.catalog_contention', 'conflict');
     },
+    // A root the runtime is not PERMITTED to inspect (its grant carries no
+    // command permission, so `git.probe` refuses before it runs anything) is
+    // recorded as an explicit unknown instead of being probed: the entry stays
+    // visible, but its repo identity is honestly undetermined — `repoKey` null
+    // makes every consumer that gates on a repository refuse, which is the
+    // truthful answer, rather than a silent `non-git` claim about a repository
+    // the runtime simply may not run git in.
+    async recordUnknown(key) {
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const latest = await store.get({ collection: 'workspaces', key });
+        requireValue(latest?.value?.workspace, 'git.workspace');
+        try {
+          await store.mutate({
+            intentId: randomUUID(),
+            changes: [{
+              collection: 'workspaces',
+              key,
+              expectedRevision: latest.revision,
+              value: { ...latest.value, gitKind: 'unknown', repoKey: null },
+            }],
+          });
+          return;
+        } catch (error) {
+          if (error?.code !== 'conflict') throw error;
+        }
+      }
+      requireValue(false, 'git.catalog_contention', 'conflict');
+    },
   };
 }

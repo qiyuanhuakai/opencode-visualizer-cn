@@ -148,9 +148,20 @@ export function createWindowsInstallerScript(paths) {
     `  File /oname=remove-path.ps1 "${createNsiPath(removePathScript)}"`,
     '  SetOutPath "$INSTDIR\\node_modules\\node-pty"',
     `  File /r "${createNsiPath(path.join(paths.workspacePath, 'node_modules', 'node-pty', '*'))}"`,
-    '  SetOutPath "$INSTDIR"',
+    // The sidecar staging mirrors the repository depth: <stage>/bridge/runtime/
+    // runtime/** is the worker plus its Node 24 sidecar and <stage>/shared/
+    // runtime/** is the worker's import closure, and the installed resolver
+    // (installedStoreRootCandidates) only searches $INSTDIR\bridge\runtime.
+    // Per NSIS `File` semantics the directory before the wildcard is the
+    // SEARCH ROOT and only its contents are copied under $OUTDIR, so each
+    // level must be preserved with its own SetOutPath; copying both trees
+    // under $INSTDIR flattened them into $INSTDIR\runtime and left the
+    // installed bridge reporting its sidecar missing.
+    '  SetOutPath "$INSTDIR\\bridge"',
     `  File /r "${createNsiPath(path.join(paths.workspacePath, 'bridge', '*'))}"`,
+    '  SetOutPath "$INSTDIR\\shared"',
     `  File /r "${createNsiPath(path.join(paths.workspacePath, 'shared', '*'))}"`,
+    '  SetOutPath "$INSTDIR"',
     '  WriteUninstaller "$INSTDIR\\Uninstall.exe"',
     '  InitPluginsDir',
     '  SetOutPath "$PLUGINSDIR"',
@@ -190,6 +201,7 @@ async function packageWindowsInstaller(paths, target, rootDirectory) {
   );
   await stageRuntimeWorkerSidecar(rootDirectory, paths.workspacePath, {
     platform: target.platform,
+    sidecarSource: target.sidecarSource,
   });
   await writeFile(addPathScript, windowsPathScript('add'), 'utf8');
   await writeFile(removePathScript, windowsPathScript('remove'), 'utf8');

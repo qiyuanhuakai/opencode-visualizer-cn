@@ -83,7 +83,25 @@ export async function createRuntimeServices(options) {
         // contended eight times — in each of which the runtime would be
         // describing workspaces it cannot serve. Failing fast matches
         // `inspect()`'s own fail-fast composition.
-        for (const root of workspace.workspaces) await index.probeWorkspace(root.key, { visible: true });
+        //
+        // The ONE exception is a capability limit: a workspace grant may
+        // legitimately carry `permissions: ['read']`, and the probe chain
+        // authorizes with the default `command` permission, so such a root is
+        // refused with `unauthorized: git.permission` BEFORE any git command
+        // runs. That is not a broken repository or a startup failure — it is
+        // the grant saying the runtime may not run git there. Failing the
+        // whole startup for it would block every other root and every driver
+        // behind one normal capability limit, so the root is recorded as an
+        // explicit unknown (no repoKey) and the startup continues. Permissions
+        // are never elevated to make the probe pass.
+        for (const root of workspace.workspaces) {
+          try {
+            await index.probeWorkspace(root.key, { visible: true });
+          } catch (error) {
+            if (error?.code !== 'unauthorized' || error?.field !== 'git.permission') throw error;
+            await catalog.recordUnknown(root.key);
+          }
+        }
         await drivers.start(index);
         for (const manifest of drivers.registry.list()) {
           for (let attempt = 0; attempt < 4; attempt++) {
