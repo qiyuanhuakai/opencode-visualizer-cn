@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { webCryptoUuid } from '../../../shared/runtime/ids.js';
 import { encodeRepoKey, parseRepoRef, parseSessionRef } from '../../../shared/runtime/identity.js';
 import { ThreadError, parseThreadId, threadBindingKey } from '../../../shared/runtime/thread.js';
 import { createParticipantService } from './participantService.js';
@@ -75,7 +75,7 @@ export function createThreadService({ resolveSession } = {}) {
     if (summary === null || summary === undefined) throw new ThreadError('source_unavailable', 'thread_session_missing');
     if (summary.archived === true) throw new ThreadError('conflict', 'thread_session_archived');
     const thread = {
-      threadId: randomUUID(),
+      threadId: webCryptoUuid(),
       environmentId: ref.environmentId,
       repoKey,
       createdAt: Date.now(),

@@ -234,6 +234,19 @@
               {{ entry.text }}
             </li>
           </ol>
+          <!--
+            An unavailable participant's own target is not readable from here: a different
+            environment or harness instance, or a failed read on the right one. It is stated
+            explicitly — an empty list here would read as "this participant has no messages".
+          -->
+          <p
+            v-if="group.unavailable"
+            class="group-unavailable"
+            data-testid="native-history-unavailable"
+            :data-participant-id="group.participantId"
+          >
+            This participant's session belongs to another target; its history is unavailable here.
+          </p>
         </div>
       </section>
 
@@ -754,6 +767,13 @@ function handleFanout(): void {
 
 .group-entry::before {
   content: '· ';
+  color: var(--theme-text-muted, #94a3b8);
+}
+
+.group-unavailable {
+  margin: 0;
+  font-size: var(--type-caption, 10px);
+  line-height: 1.45;
   color: var(--theme-text-muted, #94a3b8);
 }
 

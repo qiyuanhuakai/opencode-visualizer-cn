@@ -276,10 +276,66 @@ describe('Stop cancels the operation the composer started, not the ambient bindi
     expect((router.cancel.mock.calls[0]![0] as { session: SessionRef }).session).toEqual(SESSION);
   });
 
-  it('releases the captured identity when the thread closes', async () => {
-    // The captured identity must not outlive the composer's send context: once the thread is
-    // gone there is no thread-resolved operation to cancel, and the ambient binding is the
-    // honest answer again.
+  it('still cancels the sent session after the thread closes with the operation in flight', async () => {
+    // Closing the thread panel is not evidence that the operation the prompt started has
+    // ended: the turn keeps running on B's own native session. Stop must therefore still
+    // cancel the session the prompt actually reached — releasing the captured identity on
+    // close is what left the live operation uncancellable and pointed Stop at the ambient
+    // session instead.
+    const { state } = await openThreadWithActiveB();
+    const router = makeRouter();
+    const port: RuntimeSessionRuntime = { binding: () => ({ profileId: PROFILE, session: SESSION }), router: router as unknown as RuntimeSessionRouter };
+    const { root, props } = mount({ port, threadState: state });
+
+    root.querySelector<HTMLElement>('.send-button')?.click();
+    expect((router.sendMessage.mock.calls[0]![0] as { session: SessionRef }).session).toEqual(TARGET_SESSION);
+    // The thread closes while B's turn is still running (the Stop surface is still up).
+    state.closeThread();
+    props.isThinking = true;
+    props.canAbort = true;
+    await vi.waitFor(() => { expect(root.querySelector<HTMLElement>('.stop')).not.toBeNull(); });
+
+    root.querySelector<HTMLElement>('.stop')?.click();
+    expect(router.cancel).toHaveBeenCalledTimes(1);
+    expect((router.cancel.mock.calls[0]![0] as { session: SessionRef }).session).toEqual(TARGET_SESSION);
+  });
+
+  it('releases the captured identity when the operation it belongs to completes', async () => {
+    // The release rule is the OPERATION's end, not the UI's: the router reports the send's
+    // completion, and only then is the capture retired. A later Stop falls back to the ambient
+    // binding, which is the honest answer once nothing this composer started is running.
+    const { state } = await openThreadWithActiveB();
+    const router = makeRouter();
+    let finishTurn: (() => void) | undefined;
+    router.sendMessage.mockReturnValue({
+      accepted: Promise.resolve({ operationId: 'op-1' }),
+      executed: new Promise<void>((resolve) => { finishTurn = resolve; }),
+    });
+    const port: RuntimeSessionRuntime = { binding: () => ({ profileId: PROFILE, session: SESSION }), router: router as unknown as RuntimeSessionRouter };
+    const { root, props } = mount({ port, threadState: state });
+
+    root.querySelector<HTMLElement>('.send-button')?.click();
+    props.isThinking = true;
+    props.canAbort = true;
+    await vi.waitFor(() => { expect(root.querySelector<HTMLElement>('.stop')).not.toBeNull(); });
+
+    // While the turn runs the capture is held: Stop cancels the session the prompt reached.
+    root.querySelector<HTMLElement>('.stop')?.click();
+    expect((router.cancel.mock.calls[0]![0] as { session: SessionRef }).session).toEqual(TARGET_SESSION);
+
+    // The turn ends: the router's send handle reports completion.
+    finishTurn?.();
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+    await vi.waitFor(() => { expect(root.querySelector<HTMLElement>('.stop')).not.toBeNull(); });
+
+    root.querySelector<HTMLElement>('.stop')?.click();
+    expect(router.cancel).toHaveBeenCalledTimes(2);
+    expect((router.cancel.mock.calls[1]![0] as { session: SessionRef }).session).toEqual(SESSION);
+  });
+
+  it('releases the captured identity when a later ambient send supersedes it', async () => {
+    // After the thread is gone the composer sends through the ambient binding again: that send
+    // is now the operation Stop has to cancel, so the earlier thread capture must not shadow it.
     const { state } = await openThreadWithActiveB();
     const router = makeRouter();
     const port: RuntimeSessionRuntime = { binding: () => ({ profileId: PROFILE, session: SESSION }), router: router as unknown as RuntimeSessionRouter };
@@ -288,6 +344,10 @@ describe('Stop cancels the operation the composer started, not the ambient bindi
     root.querySelector<HTMLElement>('.send-button')?.click();
     expect((router.sendMessage.mock.calls[0]![0] as { session: SessionRef }).session).toEqual(TARGET_SESSION);
     state.closeThread();
+    // A plain send with no thread open: the ambient binding is the send target again.
+    root.querySelector<HTMLElement>('.send-button')?.click();
+    expect(router.sendMessage).toHaveBeenCalledTimes(2);
+    expect((router.sendMessage.mock.calls[1]![0] as { session: SessionRef }).session).toEqual(SESSION);
     props.isThinking = true;
     props.canAbort = true;
     await vi.waitFor(() => { expect(root.querySelector<HTMLElement>('.stop')).not.toBeNull(); });

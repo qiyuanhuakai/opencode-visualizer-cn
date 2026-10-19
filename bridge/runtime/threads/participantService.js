@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { webCryptoUuid } from '../../../shared/runtime/ids.js';
 import { parseSessionRef } from '../../../shared/runtime/identity.js';
 import {
   ThreadError,
@@ -52,7 +52,7 @@ export function createParticipantService({ resolveSession } = {}) {
     if (resolved === null || resolved === undefined) throw new ThreadError('source_unavailable', 'participant_session_missing');
     if (resolved.archived === true) throw new ThreadError('conflict', 'participant_session_archived');
     const participant = {
-      participantId: randomUUID(),
+      participantId: webCryptoUuid(),
       role: parsedRole,
       state: 'active',
       session: ref,

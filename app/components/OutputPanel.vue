@@ -228,6 +228,7 @@ const props = defineProps<{
     harness: string;
     session: SessionRef;
     entries: readonly { id: string; kind: string; text: string; at: number }[];
+    unavailable?: boolean;
   }[];
   threadCheckpoint?: ContextCheckpointView | null;
   threadCurrentTarget?: { repoKey: string; revision: string } | null;
@@ -276,7 +277,10 @@ function onThreadJoin(session: SessionRef): void {
 
 function onThreadLocateSession(session: SessionRef): void {
   if (threadState === null) return;
-  threadState.setSelectedSession(session);
+  // The qualified locate: it answers the resolution the container drives the REAL session-tree
+  // selection with, so clicking Locate moves the tree instead of only writing a local ref no
+  // container consumed.
+  threadState.locateSession(session);
 }
 
 /** Native history is browsed per participant; the panel forwards it instead of dropping it. */
@@ -287,7 +291,7 @@ function onThreadBrowseNativeHistory(participantId: string): void {
   // Locating the participant's session AND asking the container to re-read that
   // participant's history: writing the selection alone left Refresh unable to
   // reload anything, because the panel never owns the history source.
-  threadState.setSelectedSession(session);
+  threadState.locateSession(session);
   emit('refresh-native-history', { participantId, session });
 }
 

@@ -137,6 +137,13 @@ export interface NativeHistoryGroup {
   readonly harness: string;
   readonly session: SessionRef;
   readonly entries: readonly { readonly id: string; readonly kind: string; readonly text: string; readonly at: number }[];
+  /**
+   * True when this participant's own qualified target is not one this browser can read — a
+   * different environment or harness instance, or a failed read on the right one. The group is
+   * then explicitly unavailable: never another target's bytes relabelled as this participant,
+   * and never a silent empty history that reads as "no messages".
+   */
+  readonly unavailable?: boolean;
 }
 
 /** A native session the picker can offer to the thread (the session tree's rows). */
@@ -179,6 +186,12 @@ export interface RuntimeThreadState {
   setTarget(participantId: string): void;
   clearTarget(): void;
   setSelectedSession(session: SessionRef | null): void;
+  /**
+   * The complete qualified locate: write the selection and answer the resolution the
+   * container drives the real session-tree selection with (null when the session is not
+   * part of the current thread).
+   */
+  locateSession(session: SessionRef | null): ThreadSessionResolution | null;
   beginHandoff(input: {
     sourceParticipantId: string;
     targetParticipantId: string;
@@ -434,6 +447,21 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
     selectedSession.value = session;
   }
 
+  /**
+   * Locate a native session THROUGH this thread — the complete qualified selection.
+   *
+   * Writing the ref alone left Locate inert: no container consumed
+   * `selectedSession`, so the real session tree never moved. The action therefore
+   * writes the selection AND answers the resolution the container drives the real
+   * tree selection with — `null` when the session is not a participant of the
+   * CURRENT thread, so a locate can never point the tree at a session the open
+   * thread does not hold.
+   */
+  function locateSession(session: SessionRef | null): ThreadSessionResolution | null {
+    selectedSession.value = session;
+    return selectedSessionResolution.value;
+  }
+
   function requireHandoffPort(): RuntimeHandoffPort | null {
     const port = ports.handoff ?? null;
     if (port === null) {
@@ -653,6 +681,7 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
     setTarget,
     clearTarget,
     setSelectedSession,
+    locateSession,
     beginHandoff,
     prepareHandoff,
     deliverHandoff,

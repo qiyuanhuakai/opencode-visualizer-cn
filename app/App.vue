@@ -10298,11 +10298,58 @@ const threadAvailableSessions = computed(() => {
 const threadNativeHistory = ref<readonly NativeHistoryGroup[]>([]);
 
 /**
+ * The generation every history read is stamped with.
+ *
+ * Opening a thread and closing one both start a NEW generation: a read that was issued under
+ * an older generation belongs to a thread that no longer exists, and backfilling its bytes
+ * would relabel another thread's data as the current one. Clearing the array on close cannot
+ * stop a late result — the read is already in flight — so the generation is checked before
+ * every write instead.
+ */
+let threadNativeHistoryGeneration = 0;
+/** The newest request sequence issued per participant; an older completion never overwrites a newer one. */
+const nativeHistoryRequestSeq = new Map<string, number>();
+
+/** Start a new history generation: every in-flight read from the previous one becomes stale. */
+function beginNativeHistoryGeneration(): void {
+  threadNativeHistoryGeneration += 1;
+  nativeHistoryRequestSeq.clear();
+  threadNativeHistory.value = [];
+}
+
+/** Stamp a read with the generation and per-participant sequence it is issued under. */
+function stampNativeHistoryRequest(participantId: string): { readonly generation: number; readonly seq: number } {
+  const generation = threadNativeHistoryGeneration;
+  const seq = (nativeHistoryRequestSeq.get(participantId) ?? 0) + 1;
+  nativeHistoryRequestSeq.set(participantId, seq);
+  return { generation, seq };
+}
+
+/**
+ * A read may only write when it is still the current thread's newest read for its participant:
+ * the generation rules out a closed or replaced thread, the sequence rules out an older read
+ * that completed after a newer one, and the participant must still be part of the thread the
+ * surface is rendering.
+ */
+function nativeHistoryRequestCurrent(participantId: string, stamp: { readonly generation: number; readonly seq: number }): boolean {
+  if (stamp.generation !== threadNativeHistoryGeneration) return false;
+  if (nativeHistoryRequestSeq.get(participantId) !== stamp.seq) return false;
+  return threadState.summary.value?.participants.some((participant) => participant.participantId === participantId) ?? false;
+}
+
+/**
  * Read ONE participant's OWN native history through the real backend.
  *
  * The group is never merged with another participant's: each participant's
  * history is its own native session's history, and merging them is exactly the
  * confusion the per-participant surface exists to prevent.
+ *
+ * The read goes to the participant's OWN qualified target or nowhere: this
+ * browser is connected to exactly ONE backend, so a participant whose session
+ * belongs to another environment or harness instance has no readable backend
+ * here. The honest answer is then an explicit `unavailable` group — never the
+ * ambient backend's bytes relabelled as this participant, and never a silent
+ * empty history that hides the mismatch as "no messages".
  */
 async function readParticipantNativeHistory(
   participantId: string,
@@ -10310,13 +10357,22 @@ async function readParticipantNativeHistory(
 ): Promise<NativeHistoryGroup> {
   const label = resolveSessionLabelById(session.nativeSessionId);
   const harness = HARNESS_LABELS[activeHarnessKind.value] ?? activeHarnessKind.value;
+  const unavailable: NativeHistoryGroup = { participantId, label, harness, session, entries: [], unavailable: true };
+  if (
+    session.environmentId !== activeRuntimeEnvironmentId.value
+    || session.harnessInstanceId !== activeHarnessInstanceId.value
+  ) {
+    return unavailable;
+  }
   const directory = activeDirectory.value.trim() || undefined;
   let raw: unknown;
   try {
     const listSessionMessages = requireBackendMethod(backend().listSessionMessages, 'session messages');
     raw = await listSessionMessages(session.nativeSessionId, { directory });
   } catch {
-    return { participantId, label, harness, session, entries: [] };
+    // A failure on the participant's OWN target is reported as unavailable rather than
+    // swallowed into an empty history the surface would render as "no messages".
+    return unavailable;
   }
   const entries: Array<{ id: string; kind: string; text: string; at: number }> = [];
   for (const item of Array.isArray(raw) ? raw : []) {
@@ -10352,9 +10408,15 @@ async function readParticipantNativeHistory(
  * container half: it re-reads through the real backend and backfills the group
  * the panel renders, so Refresh shows the re-read bytes rather than the first
  * read — the loop the test containers used to close on their own.
+ *
+ * The read is stamped before it starts and validated before it writes, so a
+ * close/reopen or a newer Refresh that lands while it is in flight retires it
+ * instead of letting a stale result overwrite the current thread's group.
  */
 async function handleRefreshNativeHistory(payload: { participantId: string; session: SessionRef }): Promise<void> {
+  const stamp = stampNativeHistoryRequest(payload.participantId);
   const group = await readParticipantNativeHistory(payload.participantId, payload.session);
+  if (!nativeHistoryRequestCurrent(payload.participantId, stamp)) return;
   threadNativeHistory.value = [
     ...threadNativeHistory.value.filter((entry) => entry.participantId !== payload.participantId),
     group,
@@ -10367,6 +10429,10 @@ async function handleRefreshNativeHistory(payload: { participantId: string; sess
  * The surface's Refresh button only exists for a participant that already has a
  * group, so the container owes a first read: without it a joined participant has
  * no Refresh at all and the re-read loop can never start.
+ *
+ * Each first read is stamped under the generation current at its issue, exactly
+ * like Refresh: a close/reopen that lands mid-batch retires the remaining reads
+ * rather than backfilling them into the new thread.
  */
 watch(
   () => threadState.summary.value?.participants.map((participant) => participant.participantId).join('\u0000') ?? '',
@@ -10376,11 +10442,15 @@ watch(
     const known = new Set(threadNativeHistory.value.map((group) => group.participantId));
     const missing = summary.participants.filter((participant) => !known.has(participant.participantId));
     if (missing.length === 0) return;
-    const groups = [...threadNativeHistory.value];
     for (const participant of missing) {
-      groups.push(await readParticipantNativeHistory(participant.participantId, participant.session));
+      const stamp = stampNativeHistoryRequest(participant.participantId);
+      const group = await readParticipantNativeHistory(participant.participantId, participant.session);
+      if (!nativeHistoryRequestCurrent(participant.participantId, stamp)) return;
+      threadNativeHistory.value = [
+        ...threadNativeHistory.value.filter((entry) => entry.participantId !== participant.participantId),
+        group,
+      ];
     }
-    threadNativeHistory.value = groups;
   },
 );
 
@@ -10391,14 +10461,64 @@ async function openHostThread(): Promise<void> {
     setSendStatusErrorText(t('inputPanel.threadOpenUnavailable'));
     return;
   }
-  threadNativeHistory.value = [];
+  // A new thread is a new history generation: reads still in flight from the
+  // previous one are retired by the guard, not by clearing the array alone.
+  beginNativeHistoryGeneration();
   await threadState.openThread({ session, repo });
 }
 
 function closeHostThread(): void {
   threadState.closeThread();
-  threadNativeHistory.value = [];
+  // Closing starts a new generation, so a read that completes after the close is
+  // dropped instead of backfilling into whatever thread opens next.
+  beginNativeHistoryGeneration();
 }
+
+/**
+ * Locate → the REAL session tree.
+ *
+ * The thread surface's Locate writes the qualified selection into the composable, and this is
+ * the container half that was missing: the selection is driven through the SAME action the
+ * side panel and the top panel drive, so the tree, the output session and the composer all
+ * follow the located participant. A session the open thread does not hold resolves to null and
+ * moves nothing — Locate can never point the real tree at a session no participant owns.
+ */
+watch(
+  () => threadState.selectedSession.value,
+  (session) => {
+    if (session === null) return;
+    if (selectedSessionId.value === session.nativeSessionId) return;
+    const projectId = resolveProjectIdForSession(session.nativeSessionId) ?? selectedProjectId.value;
+    if (!projectId) return;
+    void switchSessionSelection(projectId, session.nativeSessionId);
+  },
+);
+
+/**
+ * The reverse sync: the real tree's selection drives the thread's located session, so the
+ * thread surface follows the tree exactly as the tree follows Locate. Only a session the open
+ * thread actually holds is written — an unrelated tree selection leaves the thread's locate
+ * state alone rather than pointing it at a session no participant owns. The qualified identity
+ * is the ACTIVE target's, which is the only target the tree's rows can belong to.
+ */
+watch(selectedSessionId, (nativeSessionId) => {
+  if (threadState.threadId.value === null) return;
+  const id = nativeSessionId.trim();
+  if (!id) return;
+  let session: SessionRef;
+  try {
+    session = parseSessionRef({
+      environmentId: activeRuntimeEnvironmentId.value,
+      harnessInstanceId: activeHarnessInstanceId.value,
+      nativeSessionId: id,
+    });
+  } catch {
+    // A tree row the runtime cannot qualify is not a participant of anything.
+    return;
+  }
+  if (threadState.threadForSession(session) === null) return;
+  threadState.setSelectedSession(session);
+});
 
 const runtimeCapabilities = useRuntimeCapabilities();
 watch(

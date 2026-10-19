@@ -105,6 +105,11 @@ function nativeGroup(participantId: string, session: SessionRef, label: string, 
   });
 }
 
+/** The same group, marked unavailable: the participant's own target is not readable here. */
+function unavailableNativeGroup(participantId: string, session: SessionRef, label: string): NativeHistoryGroup {
+  return Object.freeze({ ...nativeGroup(participantId, session, label, []), unavailable: true });
+}
+
 async function settle(): Promise<void> {
   await nextTick();
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -653,6 +658,25 @@ describe('task 35 — native history is browsed per participant, never merged', 
     expect(extraGroup.textContent).not.toContain('owner entry');
     // The separation is stated explicitly, so a reader cannot mistake it for one history.
     expect(view.root.querySelector('[data-testid="native-history-note"]')?.textContent).toContain('never merged');
+
+    // A participant whose OWN target is not readable here says so explicitly: an empty list
+    // would read as "this participant has no messages".
+    const withUnavailable = await mountThreadView(services, {
+      nativeHistory: [
+        nativeGroup(services.owner.participantId, SESSION_A, 'opencode session-a', ['owner entry one']),
+        unavailableNativeGroup(services.extra.participantId, SESSION_B, 'codex session-b'),
+      ],
+    });
+    const unavailableGroup = [...withUnavailable.root.querySelectorAll('[data-testid="native-history-group"]')].find(
+      (group) => group.getAttribute('data-participant-id') === services.extra.participantId,
+    );
+    const marker = unavailableGroup?.querySelector('[data-testid="native-history-unavailable"]');
+    expect(marker?.getAttribute('data-participant-id')).toBe(services.extra.participantId);
+    expect(marker?.textContent).toContain('unavailable');
+    // The available participant's group states nothing of the sort.
+    expect(
+      [...withUnavailable.root.querySelectorAll('[data-testid="native-history-unavailable"]')],
+    ).toHaveLength(1);
 
     // A left participant keeps its own browsable history.
     await view.root.querySelector<HTMLButtonElement>(
