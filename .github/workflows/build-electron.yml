@@ -53,6 +53,12 @@ jobs:
       - name: Browser kernel clean-checkout smoke
         run: node --test scripts/qa/runtime-v090-browser-kernel.test.mjs
 
+      # The Windows installer QA helper's native calls must each be checked: without this,
+      # a failing assert-pty followed by successful lifecycle steps reported the packaged
+      # acceptance lane green (the pwsh wrapper propagates only the final exit code).
+      - name: Windows installer QA failure-propagation smoke
+        run: node --test scripts/qa/vis-bridge-installer-windows.test.mjs
+
       - name: Build web app
         run: pnpm build
 
@@ -737,6 +743,17 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/qa/vis-bridge-installer-windows.ps1
+
+      # The Windows lifecycle receipts the helper writes live in RUNNER_TEMP, outside the
+      # evidence tree the artifact below collects, so the install/reinstall/uninstall proof
+      # was being discarded. Stage them into the evidence tree before the upload.
+      - name: Stage the Windows lifecycle receipts into the evidence tree
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .omo/evidence/vis-v090/task-46 | Out-Null
+          Get-ChildItem $env:RUNNER_TEMP -Filter 'bridge-*lifecycle.json' -File -ErrorAction SilentlyContinue |
+            Copy-Item -Destination .omo/evidence/vis-v090/task-46/ -Force
 
       - name: Upload packaged Bridge QA evidence
         if: always()
