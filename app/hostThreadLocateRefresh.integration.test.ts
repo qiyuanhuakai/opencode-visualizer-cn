@@ -45,6 +45,18 @@ async function selectSessionA(fixture: { host: HTMLElement }) {
   });
 }
 
+/**
+ * Let a locate's full async consequence land before the tree is asserted on. The
+ * selection switch is a chain of watcher flushes and awaited state waits, so the
+ * assertion must observe the SETTLED tree — otherwise a locate that moves nothing
+ * could pass merely because the move has not happened yet.
+ */
+async function settleSelection() {
+  for (let index = 0; index < 5; index += 1) {
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+  }
+}
+
 describe('App is the real container of the Host Thread surface', () => {
   it('provides the thread state, so the thread surface can render in the running app', async () => {
     const fixture = await mountHistoryApp([historyEntry('message-1', 'first')]);
@@ -361,6 +373,106 @@ describe('App drives the real session tree from Locate, and back', () => {
       expect(fixture.readSetupBinding('selectedSessionId')).toBe('session-a');
     });
   });
+
+  it('a locate of a REAL session the current tree holds but the thread does not moves nothing', async () => {
+    // The non-member test above locates a session id no project holds, so it passes
+    // because the tree cannot resolve it — it never proved the membership guard. Here
+    // the session REALLY EXISTS in the current tree: locating it must still move
+    // nothing, because no participant of the open thread owns it. Locate is not a
+    // generic "select any session" action; it follows a participant.
+    const fixture = await mountHistoryApp([historyEntry('message-1', 'first-read-entry')], { otherDirectory: true });
+    mountedApps.push(fixture);
+    await selectSessionA(fixture);
+    const threadState = await openThreadWithTwoParticipants(fixture);
+
+    const owner = threadState.summary.value?.participants[0]?.session;
+    if (owner === undefined) throw new Error('the opened thread has no owner participant');
+    const located = threadState.locateSession(parseSessionRef({
+      environmentId: owner.environmentId,
+      harnessInstanceId: owner.harnessInstanceId,
+      nativeSessionId: 'session-other',
+    }));
+
+    // The locate resolves to nothing for the current thread, and it must not have been
+    // written into the selection either: the container's watcher moves the real tree on
+    // whatever selectedSession holds, native id alone.
+    expect(located).toBeNull();
+    expect(threadState.selectedSession.value).toBeNull();
+    await settleSelection();
+    expect(fixture.readSetupBinding('selectedSessionId')).toBe('session-a');
+  });
+
+  it('a locate of a same-named session of ANOTHER environment moves nothing', async () => {
+    // The thread keeps a participant qualified under environment A; the tree is showing
+    // environment B, and B's tree happens to contain another session with the SAME
+    // nativeSessionId. The watcher used to read the native id alone and call
+    // switchSessionSelection against B's CURRENT project — it selected B's same-named
+    // session instead of switching to A or refusing.
+    const fixture = await mountHistoryApp([historyEntry('message-1', 'first-read-entry')], { otherDirectory: true });
+    mountedApps.push(fixture);
+    await selectSessionA(fixture);
+    const threadState = await openThreadWithTwoParticipants(fixture);
+
+    // The tree sits on a DIFFERENT session, so the locate cannot hide behind the
+    // same-id early exit.
+    await fixture.selectOtherDirectorySession?.();
+    await vi.waitFor(() => {
+      expect(fixture.readSetupBinding('selectedSessionId')).toBe('session-other');
+    });
+
+    const owner = threadState.summary.value?.participants[0]?.session;
+    if (owner === undefined) throw new Error('the opened thread has no owner participant');
+    const located = threadState.locateSession(parseSessionRef({
+      environmentId: '30000000-0000-4000-8000-000000000001' as EnvironmentId,
+      harnessInstanceId: owner.harnessInstanceId,
+      nativeSessionId: 'session-a',
+    }));
+
+    expect(located).toBeNull();
+    expect(threadState.selectedSession.value).toBeNull();
+    await settleSelection();
+    // The same-named session of the CURRENT target is a different session that merely
+    // shares a name: the tree stays where the user left it.
+    expect(fixture.readSetupBinding('selectedSessionId')).toBe('session-other');
+  });
+
+  it('a locate of a thread participant after the active target switched moves nothing', async () => {
+    // The participant's frozen ref is qualified under the environment the thread was
+    // bound in. After the user switches the active target it STILL resolves as a member
+    // of the thread — only the container can see that its environment is no longer the
+    // active one, and must refuse to select the new tree's same-named session.
+    const fixture = await mountHistoryApp([historyEntry('message-1', 'first-read-entry')], { otherDirectory: true });
+    mountedApps.push(fixture);
+    await selectSessionA(fixture);
+    const threadState = await openThreadWithTwoParticipants(fixture);
+
+    await fixture.selectOtherDirectorySession?.();
+    await vi.waitFor(() => {
+      expect(fixture.readSetupBinding('selectedSessionId')).toBe('session-other');
+    });
+
+    const owner = threadState.summary.value?.participants[0]?.session;
+    if (owner === undefined) throw new Error('the opened thread has no owner participant');
+    // A real target switch: the environment identity is derived from the active bridge
+    // target, so re-pointing the stored server URL moves the active environment while
+    // the session tree — and the thread's participants — stay exactly where they were.
+    fixture.setStoredServerUrl('http://127.0.0.1:4096/harness-other-environment');
+    await vi.waitFor(() => {
+      expect(fixture.readSetupBinding('activeRuntimeEnvironmentId')).not.toBe(owner.environmentId);
+    });
+
+    // The participant is still a member of the open thread, so the composable answers
+    // the resolution and writes the selection...
+    const located = threadState.locateSession(owner);
+    expect(located?.participantId).toBe(threadState.summary.value?.participants[0]?.participantId);
+    expect(threadState.selectedSession.value?.nativeSessionId).toBe('session-a');
+
+    await settleSelection();
+    // ...and the container refuses the cross-target locate: this tree cannot represent
+    // the participant's session, and selecting its native id here would land on the new
+    // target's same-named session.
+    expect(fixture.readSetupBinding('selectedSessionId')).toBe('session-other');
+  });
 });
 
 describe('App reads a participant against the directory of its OWN sandbox, not the ambient one', () => {
@@ -399,7 +511,14 @@ describe('App reads a participant against the directory of its OWN sandbox, not 
 
     fixture.listSessionMessages.mockClear();
     fixture.listSessionMessages.mockResolvedValue([historyEntry('message-2', 'reloaded-entry')]);
-    fixture.host.querySelector<HTMLElement>('[data-testid="browse-native-history"]')?.click();
+    // The output panel is keyed by the selected session, so the tree move remounted it:
+    // the thread surface is an async component and re-renders a beat later.
+    const browse = await vi.waitFor(() => {
+      const button = fixture.host.querySelector<HTMLElement>('[data-testid="browse-native-history"]');
+      if (button === null) throw new Error('the browse button did not come back with the remounted panel');
+      return button;
+    });
+    browse.click();
 
     // The re-read lands in the participant's OWN group...
     await vi.waitFor(() => {

@@ -694,6 +694,16 @@ async function mountApp(
       window.localStorage.setItem(storageKey(StorageKeys.auth.backendKind), kind);
       dispatchStorageChange(StorageKeys.auth.backendKind, kind);
     },
+    /**
+     * Move the ACTIVE environment by re-pointing the stored server URL. The environment
+     * identity is derived from the active bridge target, so this is a real target switch
+     * that leaves the session tree — and a thread's participants, qualified under the
+     * previous environment — exactly where they were.
+     */
+    setStoredServerUrl(url: string) {
+      window.localStorage.setItem(storageKey(StorageKeys.auth.serverUrl), url);
+      dispatchStorageChange(StorageKeys.auth.serverUrl, url);
+    },
     readSetupBinding(name: string): unknown {
       const instance = Reflect.get(app, '_instance');
       if (!instance || typeof instance !== 'object') return undefined;

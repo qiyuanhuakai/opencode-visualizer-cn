@@ -10509,11 +10509,26 @@ function closeHostThread(): void {
  * side panel and the top panel drive, so the tree, the output session and the composer all
  * follow the located participant. A session the open thread does not hold resolves to null and
  * moves nothing — Locate can never point the real tree at a session no participant owns.
+ *
+ * The COMPLETE identity is checked before the tree moves, not the native id alone: the tree's
+ * rows can only be sessions of the ACTIVE target, so a participant located after a target
+ * switch — its frozen ref still qualified under the previous environment — must not select
+ * the current tree's same-named session. The same-id early exit is only sound behind that
+ * guard: within one target, native-id equality IS complete-identity equality, while across
+ * targets the same native id is a different session that merely shares a name.
  */
 watch(
   () => threadState.selectedSession.value,
   (session) => {
     if (session === null) return;
+    if (
+      session.environmentId !== activeRuntimeEnvironmentId.value
+      || session.harnessInstanceId !== activeHarnessInstanceId.value
+    ) {
+      // The located session belongs to another target: this tree cannot represent it, and
+      // selecting its native id here would land on a same-named session of the current one.
+      return;
+    }
     if (selectedSessionId.value === session.nativeSessionId) return;
     const projectId = resolveProjectIdForSession(session.nativeSessionId) ?? selectedProjectId.value;
     if (!projectId) return;

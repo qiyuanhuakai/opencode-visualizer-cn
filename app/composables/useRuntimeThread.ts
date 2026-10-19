@@ -267,13 +267,21 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
     return entered === generation;
   }
 
-  const selectedSessionResolution = computed<ThreadSessionResolution | null>(() => {
-    const session = selectedSession.value;
+  /**
+   * Resolve a candidate session against the CURRENT thread without touching the
+   * selection. The locate action validates with this BEFORE it writes, so a session
+   * the thread does not hold can never reach `selectedSession` at all.
+   */
+  function resolveSessionForCurrentThread(session: SessionRef | null): ThreadSessionResolution | null {
     const currentThreadId = threadId.value;
     if (session === null || currentThreadId === null) return null;
     const resolution = sessionIndex.get(threadBindingKey(session));
     return resolution !== undefined && resolution.threadId === currentThreadId ? resolution : null;
-  });
+  }
+
+  const selectedSessionResolution = computed<ThreadSessionResolution | null>(() =>
+    resolveSessionForCurrentThread(selectedSession.value),
+  );
 
   function syncTimeline(): void {
     timelinePage.value = timeline.page({ limit: TIMELINE_PAGE_LIMIT });
@@ -456,8 +464,16 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
    * tree selection with — `null` when the session is not a participant of the
    * CURRENT thread, so a locate can never point the tree at a session the open
    * thread does not hold.
+   *
+   * The resolution is validated BEFORE the selection is written. Writing first and
+   * answering null afterwards did not stop the container: its watcher fires on the
+   * write and reads the NATIVE id alone, so a locate that resolved to nothing still
+   * moved the real tree onto whatever same-named session the current target happens
+   * to hold. A session the thread does not hold must therefore never reach
+   * `selectedSession` at all, not merely resolve to null there.
    */
   function locateSession(session: SessionRef | null): ThreadSessionResolution | null {
+    if (session !== null && resolveSessionForCurrentThread(session) === null) return null;
     selectedSession.value = session;
     return selectedSessionResolution.value;
   }
