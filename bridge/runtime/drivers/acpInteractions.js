@@ -43,51 +43,60 @@ export function createAcpInteractions({ store, mutations, rpc, active, emit, ses
     const scope = mutations.scopeFor(session);
     const key = `acp-interaction:${fingerprint([scope, parent, message.id, randomUUID()])}`;
     const prepared = preparePayload(params, `payload:${key}`);
-    const processGuard = await mutations.authority();
+    let processGuard = await mutations.authority();
     await writePayload(store, 'interactions', prepared, false, new AbortController().signal);
     const occupancy = occupancyKey(scope, parent, message.id);
-    const claimed = await readRecord(store, 'interactions', occupancy);
-    // Only a request that is still outstanding rejects a same-ID receipt. Once the reply
-    // is on the wire the RPC layer has freed the ID, so the peer may re-use it inside the
-    // same prompt while the durable row is still being finalized.
-    if (claimed?.value && answered.get(occupancy) !== record(claimed.value).interactionId)
-      throw new StoreError('conflict', 'duplicate_native_request');
-    answered.delete(occupancy);
-    try {
-      await compareRecord(
-        store,
-        'interactions',
-        key,
-        null,
-        {
-          kind: 'acp-interaction',
-          scope,
-          parent,
-          nativeRequestId: message.id,
-          method: message.method,
-          phase: 'pending',
-          payloadRef: prepared.ref,
-        },
-        [
-          processGuard,
+    // The previous receipt's release() may be sweeping this very occupancy row while this
+    // claim is in flight, so the claim can lose that race. An occupancy that the sweep has
+    // already emptied is the state in which re-use is allowed, so the claim is retried
+    // rather than surfaced to the peer as an internal revision conflict.
+    for (let attempt = 0; ; attempt++) {
+      const claimed = await readRecord(store, 'interactions', occupancy);
+      // Only a request that is still outstanding rejects a same-ID receipt. Once the reply
+      // is on the wire the RPC layer has freed the ID, so the peer may re-use it inside the
+      // same prompt while the durable row is still being finalized.
+      if (claimed?.value && answered.get(occupancy) !== record(claimed.value).interactionId)
+        throw new StoreError('conflict', 'duplicate_native_request');
+      answered.delete(occupancy);
+      try {
+        await compareRecord(
+          store,
+          'interactions',
+          key,
+          null,
           {
-            collection: 'interactions',
-            key: occupancy,
-            expectedRevision: claimed?.revision ?? 0,
-            value: {
-              kind: 'acp-interaction-native',
-              interactionId: key,
-              parent,
-              nativeRequestId: message.id,
-            },
+            kind: 'acp-interaction',
+            scope,
+            parent,
+            nativeRequestId: message.id,
+            method: message.method,
+            phase: 'pending',
+            payloadRef: prepared.ref,
           },
-        ],
-        false,
-      );
-    } catch (error) {
-      if (!isRevisionConflict(error)) throw error;
-      if (!(await readRecord(store, 'interactions', occupancy))?.value) throw error;
-      throw new StoreError('conflict', 'duplicate_native_request');
+          [
+            processGuard,
+            {
+              collection: 'interactions',
+              key: occupancy,
+              expectedRevision: claimed?.revision ?? 0,
+              value: {
+                kind: 'acp-interaction-native',
+                interactionId: key,
+                parent,
+                nativeRequestId: message.id,
+              },
+            },
+          ],
+          false,
+        );
+        break;
+      } catch (error) {
+        if (!isRevisionConflict(error)) throw error;
+        if ((await readRecord(store, 'interactions', occupancy))?.value)
+          throw new StoreError('conflict', 'duplicate_native_request');
+        if (attempt === 3) throw new StoreError('conflict', 'concurrent_update');
+        processGuard = await mutations.authority();
+      }
     }
     rpc.assertCurrent();
     pending.set(key, { session, params, parent, nativeRequestId: message.id });

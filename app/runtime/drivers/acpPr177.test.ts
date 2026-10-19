@@ -628,3 +628,111 @@ test('retrying an older config operation does not roll back the current cache', 
       'a',
     ]);
   }));
+
+test('a claim parked under the previous release sweep still admits the reused native ID', () =>
+  withStore(async (store) => {
+    // The previous receipt's release() can sweep the occupancy row while the re-used ID's
+    // claim is still inside the store. That sweep is what makes re-use legal, so the claim
+    // must be retried rather than surfaced as an internal revision conflict.
+    const bGate = Promise.withResolvers<void>();
+    const aTerminalGate = Promise.withResolvers<void>();
+    const bParked = Promise.withResolvers<void>();
+    const replyOnWire = Promise.withResolvers<void>();
+    let claims = 0;
+    const wrapped: RuntimeStore = {
+      ...store,
+      async mutate(input) {
+        for (const change of input.changes) {
+          if (change.collection !== 'interactions') continue;
+          const value = change.value;
+          if (!isJsonObject(value) || value.kind !== 'acp-interaction-native') continue;
+          if (++claims !== 2) continue;
+          bParked.resolve();
+          await bGate.promise;
+        }
+        return store.mutate(input);
+      },
+      async mutateControl(input) {
+        const terminal = input.changes.some(
+          (change) =>
+            change.collection === 'operations' &&
+            isJsonObject(change.value) &&
+            change.value.phase === 'terminal',
+        );
+        if (terminal) await aTerminalGate.promise;
+        return store.mutateControl(input);
+      },
+    };
+    const mutations = await createAcpMutations({
+      store: wrapped,
+      ...binding,
+      assertCurrent() {},
+    });
+    const events: AcpObject[] = [];
+    const replies: (string | number)[] = [];
+    const rpc: AcpRpc = {
+      async request() {
+        return { configOptions: [] };
+      },
+      reply(id: string | number) {
+        replies.push(id);
+        replyOnWire.resolve();
+      },
+      notify() {},
+      assertCurrent() {},
+      active: true,
+      processGeneration: binding.processGeneration,
+      pid: 1,
+      async close() {},
+    };
+    const active = new Map<string, string>();
+    const interactions = createAcpInteractions({
+      store: wrapped,
+      mutations,
+      rpc,
+      active,
+      emit: (event) => {
+        events.push(event as AcpObject);
+      },
+      sessionFor: (id) =>
+        mutations.scopeFor(
+          parseSessionRef({
+            environmentId: binding.target,
+            harnessInstanceId: binding.harnessInstanceId,
+            nativeSessionId: id,
+          }),
+        ).session as SessionRef,
+    });
+    const started = Promise.withResolvers<string>();
+    const gate = Promise.withResolvers<void>();
+    const prompt = mutations.run(
+      { session, idempotencyKey: 'prompt', method: 'session/prompt', payload: {} },
+      async ({ operationId }) => {
+        started.resolve(operationId);
+        await gate.promise;
+        return { stopReason: 'end_turn' };
+      },
+    );
+    const parent = await started.promise;
+    active.set(session.nativeSessionId, parent);
+    await interactions.receive(permissionRequest(7));
+    const firstKey = interactionIds(events)[0];
+    const first = interactions
+      .respond({ interactionId: firstKey, session, answer, idempotencyKey: 'reply-a' })
+      .catch((error) => reasonOf(error));
+    await replyOnWire.promise;
+    const second = interactions.receive(permissionRequest(7)).catch((error) => reasonOf(error));
+
+    await bParked.promise;
+    aTerminalGate.resolve();
+    await first;
+    bGate.resolve();
+    const secondOutcome = await second;
+    gate.resolve();
+    await prompt;
+    expect([
+      replies.includes(7),
+      secondOutcome,
+      interactionIds(events).length,
+    ]).toEqual([true, undefined, 2]);
+  }));
