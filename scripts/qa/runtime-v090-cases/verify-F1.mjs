@@ -32,10 +32,42 @@ export const sourceFiles = [
   'package.json',
 ];
 
-const WORKTREES = '/home/qiyuaner/apps/vis_app/vis-wt';
-const FINAL = path.join(WORKTREES, 'vis-v090-task-20');
-const FINAL_HEAD = 'e7f33e6be18d7affcf80abf63c04d7787ea73a6b';
-const PLAN_MAIN = '/home/qiyuaner/apps/vis_app/vis/.omo/plans/vis-v090-unified-runtime.md';
+// ------------------------------------------------------------------ audit inputs
+// Every path and the target revision resolve from the runner's context — the
+// checkout being verified — plus explicit evidence/plan/revision inputs. No
+// input is a personal absolute path: this lane used to hardcode one machine's
+// worktree farm, an old revision and a plan path, so on any other checkout the
+// happy lane died reading the plan while the outer runner still stamped the
+// result with the CURRENT checkout's productionRevision/sourceHashes — the
+// audited bytes and the claimed bytes could differ. The inputs are now:
+//
+//   root             the audited checkout (context.root — the runner's own root)
+//   evidenceRoot     the unified evidence tree: context.evidenceRoot
+//                    (--evidence-root) or VIS_F1_EVIDENCE_ROOT, else
+//                    <root>/.omo/evidence/vis-v090
+//   planPath         context.planPath or VIS_F1_PLAN, else
+//                    <root>/.omo/plans/vis-v090-unified-runtime.md
+//   ledgerWorktrees  the campaign's per-lane worktree root, for the lanes whose
+//                    evidence predates the unified ledger (tasks 1-19 and the
+//                    task-6 normalization re-runs): context.ledgerWorktrees or
+//                    VIS_F1_LEDGER_WORKTREES. Explicit input only; when unset,
+//                    those lanes report a located prerequisite gap instead of
+//                    being read from a hardcoded machine path.
+//   finalHead        the revision the evidence was frozen at: context.finalHead
+//                    or VIS_F1_FINAL_HEAD, else the head recorded by the
+//                    evidence's own final/revision-manifest.json.
+//
+// A missing plan, evidence tree or seed file is a LOCATED prerequisite error
+// naming the path and the input that configures it — never a bare ENOENT.
+function auditInputs(context = {}) {
+  const root = context.root;
+  assert(typeof root === 'string' && root.length > 0, 'F1 requires the runner context root');
+  const evidenceRoot = context.evidenceRoot ?? process.env.VIS_F1_EVIDENCE_ROOT ?? path.join(root, '.omo/evidence/vis-v090');
+  const planPath = context.planPath ?? process.env.VIS_F1_PLAN ?? path.join(root, '.omo/plans/vis-v090-unified-runtime.md');
+  const ledgerWorktrees = context.ledgerWorktrees ?? process.env.VIS_F1_LEDGER_WORKTREES ?? null;
+  const finalHead = context.finalHead ?? process.env.VIS_F1_FINAL_HEAD ?? null;
+  return { root, evidenceRoot, planPath, ledgerWorktrees, finalHead };
+}
 
 // Wave-9 integration rows 49-56 carry no registered Invocation row: the runner's
 // selector accepts --task 1-48 only (plan line 221 registers exactly 1-48) and
@@ -44,17 +76,21 @@ const PLAN_MAIN = '/home/qiyuaner/apps/vis_app/vis/.omo/plans/vis-v090-unified-r
 // evidence is the lane DoneClaim, recorded at the location each lane actually
 // wrote it; the claim's `head` is the commit the row was delivered at.
 const WAVE9_EVIDENCE = {
-  49: '.omo/evidence/vis-v090/task-49-53/DoneClaim.json',
-  50: '.omo/evidence/vis-v090/task-50/DoneClaim.json',
-  51: '.omo/evidence/vis-v090/task-49-53/DoneClaim.json',
-  52: '.omo/evidence/vis-v090/task-49-53/DoneClaim.json',
-  53: '.omo/evidence/vis-v090/task-49-53/DoneClaim.json',
-  54: '.omo/evidence/vis-v090/task-54/DoneClaim.json',
-  55: '.omo/evidence/vis-v090/final/F2-DoneClaim.json',
-  56: '.omo/evidence/vis-v090/task-56/DoneClaim.json',
+  49: 'task-49-53/DoneClaim.json',
+  50: 'task-50/DoneClaim.json',
+  51: 'task-49-53/DoneClaim.json',
+  52: 'task-49-53/DoneClaim.json',
+  53: 'task-49-53/DoneClaim.json',
+  54: 'task-54/DoneClaim.json',
+  55: 'final/F2-DoneClaim.json',
+  56: 'task-56/DoneClaim.json',
 };
 
-// The pre-runner lanes' real QA heads. Tasks 1-5 predate the QA runner, so their
+// A Wave-9 claim is evidence, so it resolves inside the evidence tree; the
+// stored relatives keep their historical .omo/evidence/vis-v090 prefix.
+const wave9Claim = (task, inputs) => path.join(inputs.evidenceRoot, WAVE9_EVIDENCE[task] ?? '');
+
+// The pre-runner lanes' normalized QA heads. Tasks 1-5 predate the QA runner, so their
 // raw Vitest receipts carry no productionRevision; the task-6 and task-56
 // normalization lanes re-ran those receipts through the real runner
 // ("controlled-rerun", recorded in task-6/task-56 normalization.json and in
@@ -62,13 +98,20 @@ const WAVE9_EVIDENCE = {
 // manifests with a productionRevision. Those manifests — not the task branch
 // tips — are the lanes' QA heads: a branch tip is whatever the worktree happened
 // to point at, a side branch the delivery line never saw.
-const PRE_RUNNER_NORMALIZED = {
-  1: [path.join(WORKTREES, 'vis-v090-task-6/.omo/evidence/vis-v090/task-6/legacy-task1/happy.json')],
-  2: [path.join(WORKTREES, 'vis-v090-task-6/.omo/evidence/vis-v090/task-6/legacy-task2/happy.json')],
-  3: [path.join(FINAL, '.omo/evidence/vis-v090/task-56/normalization/legacy-task3/happy.json')],
-  4: [path.join(FINAL, '.omo/evidence/vis-v090/task-56/normalization/legacy-task4/happy.json')],
-  5: [path.join(WORKTREES, 'vis-v090-task-6/.omo/evidence/vis-v090/task-6/legacy-task5/happy.json')],
-};
+//
+// Resolution: the unified evidence tree first, then the explicitly configured
+// ledger worktrees (the task-6 worktree holds the legacy-taskN re-runs directly
+// under task-6/, the task-20 tree holds them under task-56/normalization/).
+// Nothing here names a personal path.
+function normalizedCandidates(task, inputs) {
+  const names = [`task-6/legacy-task${task}/happy.json`, `task-56/normalization/legacy-task${task}/happy.json`];
+  const roots = [inputs.evidenceRoot];
+  if (inputs.ledgerWorktrees) {
+    roots.push(path.join(inputs.ledgerWorktrees, 'vis-v090-task-6', '.omo/evidence/vis-v090'));
+    roots.push(path.join(inputs.ledgerWorktrees, 'vis-v090-task-20', '.omo/evidence/vis-v090'));
+  }
+  return roots.flatMap((root) => names.map((name) => path.join(root, name)));
+}
 
 // Plan dependency matrix (Todos 1-56: "Depends on" for rows 1-48, "Blocked by"
 // for the Wave-9 rows 49-56), transcribed from the plan. Rows 54-56 state no
@@ -93,38 +136,55 @@ const DEPENDS = {
 const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } };
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
-const resolveShort = (short) => { try { return git(FINAL, 'rev-parse', short); } catch { return null; } };
 
 // ------------------------------------------------------------------ audit core
 
-function taskEvidenceDir(task, evidenceRoot) {
-  if (task <= 19) return path.join(WORKTREES, `vis-v090-task-${task}`, '.omo/evidence/vis-v090', `task-${task}`);
-  return path.join(evidenceRoot, `task-${task}`);
+// A lane's evidence directory carries a receipt: happy.json (runner-shaped),
+// result.json (raw Vitest for the pre-runner tasks) or failure.json.
+function hasLaneReceipt(directory) {
+  return existsSync(path.join(directory, 'happy.json')) || existsSync(path.join(directory, 'result.json')) || existsSync(path.join(directory, 'failure.json'));
 }
 
-function boundHead(task) {
-  const happy = readJson(path.join(taskEvidenceDir(task, path.join(FINAL, '.omo/evidence/vis-v090')), 'happy.json'));
+// Tasks 1-19 were delivered in their own worktrees, so their evidence resolves
+// in the unified evidence tree when that tree actually carries the lane's
+// receipt, and otherwise — only when the campaign's ledger-worktree root is
+// explicitly configured — in the owning worktree. The returned path may not
+// exist; callers report the gap with the searched roots.
+function taskEvidenceDir(task, inputs) {
+  const unified = path.join(inputs.evidenceRoot, `task-${task}`);
+  if (task > 19 || hasLaneReceipt(unified)) return unified;
+  if (inputs.ledgerWorktrees) {
+    const owned = path.join(inputs.ledgerWorktrees, `vis-v090-task-${task}`, '.omo/evidence/vis-v090', `task-${task}`);
+    if (hasLaneReceipt(owned)) return owned;
+  }
+  return unified;
+}
+
+function boundHead(task, inputs) {
+  const happy = readJson(path.join(taskEvidenceDir(task, inputs), 'happy.json'));
   if (happy && typeof happy.productionRevision === 'string' && /^[0-9a-f]{40}$/.test(happy.productionRevision)) return happy.productionRevision;
   if (task <= 5) {
     // Pre-runner tasks carry raw Vitest receipts; the normalization lanes' green
     // controlled re-runs are the lanes' real QA heads. The task branch tip stays
     // as the last-resort fallback for a pre-runner task whose normalization never
     // landed — it is a side branch, not a QA head, so it can only ever be a
-    // fallback, never the primary resolution.
-    for (const candidate of PRE_RUNNER_NORMALIZED[task] ?? []) {
+    // fallback, never the primary resolution, and it needs the explicitly
+    // configured ledger worktrees to exist at all.
+    for (const candidate of normalizedCandidates(task, inputs)) {
       const normalized = readJson(candidate);
       if (normalized && normalized.status === 'passed' && normalized.exitCode === 0 && typeof normalized.productionRevision === 'string' && /^[0-9a-f]{40}$/.test(normalized.productionRevision)) return normalized.productionRevision;
     }
+    if (!inputs.ledgerWorktrees) return null;
     try {
-      const wt = path.join(WORKTREES, `vis-v090-task-${task}`);
-      return git(FINAL, 'rev-parse', git(wt, 'rev-parse', '--abbrev-ref', 'HEAD'));
+      const wt = path.join(inputs.ledgerWorktrees, `vis-v090-task-${task}`);
+      return git(inputs.root, 'rev-parse', git(wt, 'rev-parse', '--abbrev-ref', 'HEAD'));
     } catch { return null; }
   }
   if (task >= 49) {
-    // Wave-9 integration rows own no runner-shaped happy.json; the lane DoneClaim
+    // Wave-9 integration row: no runner-shaped happy.json; the lane DoneClaim
     // records the head the row was delivered at.
-    const claim = readJson(path.join(FINAL, WAVE9_EVIDENCE[task] ?? ''));
-    if (claim && typeof claim.head === 'string') return resolveShort(claim.head);
+    const claim = readJson(wave9Claim(task, inputs));
+    if (claim && typeof claim.head === 'string') { try { return git(inputs.root, 'rev-parse', claim.head); } catch { return null; } }
   }
   return null;
 }
@@ -203,9 +263,12 @@ const SURFACES = [
   'docs/runtime.md', 'docs/remote.md', 'docs/collaboration.md', 'docs/migration-v090.md',
 ];
 
-// The complete audit. `scope` selects the real tree or a mutated copy.
-// Returns { checks, findings }; findings are compliance shortfalls.
-function audit({ root = FINAL, evidenceRoot = path.join(FINAL, '.omo/evidence/vis-v090'), planPath = PLAN_MAIN } = {}) {
+// The complete audit. Every input comes from `auditInputs` — the runner's
+// context root plus explicit evidence/plan/revision inputs; nothing defaults to
+// a machine-specific tree. Returns { checks, findings, artifacts }; findings are
+// compliance shortfalls.
+function audit(inputs) {
+  const { root, evidenceRoot, planPath, ledgerWorktrees } = inputs;
   const findings = [];
   const add = (id, severity, planLine, detail) => findings.push({ id, severity, planLine, detail });
 
@@ -224,24 +287,24 @@ function audit({ root = FINAL, evidenceRoot = path.join(FINAL, '.omo/evidence/vi
   const ledger = [];
   const wave9 = [];
   for (let task = 1; task <= 56; task++) {
-    const dir = taskEvidenceDir(task, evidenceRoot);
+    const dir = taskEvidenceDir(task, inputs);
     const entry = { task };
     if (task >= 49) {
       // Wave-9 integration row: no registered Invocation row, so no runner-shaped
       // happy/failure evidence exists or is required; the lane DoneClaim at the
       // location the lane actually wrote is this row's delivery evidence, and its
-      // head must resolve to a real commit in the final tree.
+      // head must resolve to a real commit in the audited tree.
       const rel = WAVE9_EVIDENCE[task];
-      const claim = rel ? readJson(path.join(FINAL, rel)) : null;
-      const resolved = claim && typeof claim.head === 'string' ? resolveShort(claim.head) : null;
+      const claim = rel ? readJson(wave9Claim(task, inputs)) : null;
+      const resolved = claim && typeof claim.head === 'string' ? (() => { try { return git(root, 'rev-parse', claim.head); } catch { return null; } })() : null;
       entry.wave9 = { task, claim: rel ?? null, head: claim?.head ?? null, resolved: Boolean(resolved) };
       wave9.push(entry.wave9);
-      if (!claim) add('LEDGER-WAVE9-EVIDENCE', 'blocking', `task ${task} lane evidence (no registered Invocation row)`, `Wave-9 integration row ${task} has no lane DoneClaim at ${rel}`);
-      else if (!resolved) add('LEDGER-WAVE9-EVIDENCE', 'blocking', `task ${task} lane evidence (no registered Invocation row)`, `Wave-9 integration row ${task} DoneClaim head ${claim.head} does not resolve to a commit in the final tree`);
+      if (!claim) add('LEDGER-WAVE9-EVIDENCE', 'blocking', `task ${task} lane evidence (no registered Invocation row)`, `Wave-9 integration row ${task} has no lane DoneClaim at ${path.join(evidenceRoot, rel ?? '')}`);
+      else if (!resolved) add('LEDGER-WAVE9-EVIDENCE', 'blocking', `task ${task} lane evidence (no registered Invocation row)`, `Wave-9 integration row ${task} DoneClaim head ${claim.head} does not resolve to a commit in the audited tree`);
       ledger.push(entry);
       continue;
     }
-    if (!existsSync(dir)) { entry.state = 'missing-dir'; add('LEDGER-MISSING-DIR', 'blocking', 'Verification strategy', `task ${task} evidence directory missing`); ledger.push(entry); continue; }
+    if (!existsSync(dir)) { entry.state = 'missing-dir'; add('LEDGER-MISSING-DIR', 'blocking', 'Verification strategy', `task ${task} evidence directory missing: searched ${dir}${task <= 19 && !ledgerWorktrees ? ' (tasks 1-19 predate the unified ledger; configure the campaign ledger-worktree root with VIS_F1_LEDGER_WORKTREES)' : ''}`); ledger.push(entry); continue; }
     const happy = readJson(path.join(dir, 'happy.json'));
     const failure = readJson(path.join(dir, 'failure.json'));
     const result = readJson(path.join(dir, 'result.json'));
@@ -258,9 +321,10 @@ function audit({ root = FINAL, evidenceRoot = path.join(FINAL, '.omo/evidence/vi
     }
     ledger.push(entry);
   }
-  // task-6 normalization ledger for the pre-runner tasks
-  const normalization = readJson(path.join(FINAL, '.omo/evidence/vis-v090/task-6/normalization.json'))
-    ?? readJson(path.join(WORKTREES, 'vis-v090-task-6/.omo/evidence/vis-v090/task-6/normalization.json'));
+  // task-6 normalization ledger for the pre-runner tasks: the unified evidence
+  // tree first, then the explicitly configured ledger worktrees.
+  const normalization = readJson(path.join(evidenceRoot, 'task-6/normalization.json'))
+    ?? (ledgerWorktrees ? readJson(path.join(ledgerWorktrees, 'vis-v090-task-6/.omo/evidence/vis-v090/task-6/normalization.json')) : null);
   const normalized = [...new Set((normalization ?? []).map((e) => e.task))].sort((a, b) => a - b);
   for (const task of [1, 2, 3, 4, 5]) if (!normalized.includes(task)) add('LEDGER-NORMALIZATION', 'blocking', 'Verification strategy (task 6 normalization)', `task ${task} has no normalized happy/failure.json in the unified ledger`);
   // runner case modules (plan line 221: every task owns runtime-v090-cases/task-N.mjs)
@@ -294,12 +358,12 @@ function audit({ root = FINAL, evidenceRoot = path.join(FINAL, '.omo/evidence/vi
     24: 'e0f83b871', 25: '18d8ae82b', 26: '0ebcbe00e', 27: '0ebcbe00e', 28: '495370ca9',
     29: '3418809f1', 30: '395a828bf', 41: 'f8ea4a14f', 42: '07b495f39',
   };
-  const resolve = (short) => { try { return git(FINAL, 'rev-parse', short); } catch { return null; } };
+  const resolve = (short) => { try { return git(root, 'rev-parse', short); } catch { return null; } };
   const deliveryHeads = {};
   for (const [task, short] of Object.entries(DELIVERY_HEADS)) deliveryHeads[task] = resolve(short);
   const heads = {};
-  for (let task = 1; task <= 56; task++) heads[task] = boundHead(task);
-  const contains = (a, c) => { try { execFileSync('git', ['merge-base', '--is-ancestor', a, c], { cwd: FINAL, stdio: 'ignore' }); return true; } catch { return false; } };
+  for (let task = 1; task <= 56; task++) heads[task] = boundHead(task, inputs);
+  const contains = (a, c) => { try { execFileSync('git', ['merge-base', '--is-ancestor', a, c], { cwd: root, stdio: 'ignore' }); return true; } catch { return false; } };
   const edgeChecks = [];
   for (const [t, blockers] of Object.entries(DEPENDS)) {
     const task = Number(t);
@@ -319,7 +383,12 @@ function audit({ root = FINAL, evidenceRoot = path.join(FINAL, '.omo/evidence/vi
   }
 
   // -- 4. final digest binding -------------------------------------------------
+  // The target revision is the head the evidence's OWN final manifest records,
+  // unless an explicit finalHead input overrides it. A hardcoded revision here
+  // would silently re-target the audit at one past tree.
   const manifest = readJson(path.join(evidenceRoot, 'final/revision-manifest.json'));
+  const finalHead = inputs.finalHead ?? manifest?.finalSourceDigest?.head ?? null;
+  if (!finalHead) add('PREREQUISITE-FINAL-HEAD', 'blocking', 'final revision manifest', `no target revision available: neither an explicit finalHead input (context.finalHead / VIS_F1_FINAL_HEAD) nor finalSourceDigest.head in ${path.join(evidenceRoot, 'final/revision-manifest.json')}`);
   let digestState = 'missing-manifest';
   let digestObserved = null;
   if (manifest) {
@@ -329,8 +398,9 @@ function audit({ root = FINAL, evidenceRoot = path.join(FINAL, '.omo/evidence/vi
     digestState = recomputed.digest === claimed.digest ? 'match' : 'mismatch';
     if (digestState === 'mismatch') add('DIGEST-STALE', 'blocking', 'task 48 Happy QA (plan line 727)', `frozen digest ${claimed.digest.slice(0, 12)}… over ${claimed.fileCount} files no longer matches the tree (recomputed ${recomputed.digest.slice(0, 12)}… over ${recomputed.fileCount} files); a post-freeze production change requires re-freeze`);
     if (recomputed.fileCount !== claimed.fileCount) add('DIGEST-FILECOUNT', 'blocking', 'task 48 Happy QA', `file count ${recomputed.fileCount} != frozen ${claimed.fileCount}`);
-    if (git(FINAL, 'rev-parse', 'HEAD') !== FINAL_HEAD) add('HEAD-DRIFT', 'blocking', 'final revision manifest', `worktree head drifted from ${FINAL_HEAD}`);
-  } else add('DIGEST-MANIFEST-MISSING', 'blocking', 'task 48 Happy QA', 'final/revision-manifest.json missing');
+    const rootHead = (() => { try { return git(root, 'rev-parse', 'HEAD'); } catch { return null; } })();
+    if (finalHead && rootHead !== finalHead) add('HEAD-DRIFT', 'blocking', 'final revision manifest', rootHead === null ? `the audited checkout ${root} has no resolvable HEAD (not a git repository, or no commits), so it cannot be shown to sit at the frozen revision ${finalHead.slice(0, 10)}` : `audited checkout head ${rootHead.slice(0, 10)} drifted from the frozen revision ${finalHead.slice(0, 10)}`);
+  } else add('DIGEST-MANIFEST-MISSING', 'blocking', 'task 48 Happy QA', `final/revision-manifest.json missing from ${evidenceRoot}`);
 
   // -- 5. downstream reruns -----------------------------------------------------
   const downstream = [];
@@ -342,8 +412,8 @@ function audit({ root = FINAL, evidenceRoot = path.join(FINAL, '.omo/evidence/vi
     if (runnerBound) {
       row.productionRevision = report.productionRevision ?? null;
       row.sourceHashes = report.sourceHashes ? Object.keys(report.sourceHashes).length : 0;
-      if (report.productionRevision !== FINAL_HEAD) add('DOWNSTREAM-REVISION', 'blocking', 'task 48 Happy QA', `${file} productionRevision ${report.productionRevision} != final head`);
-      const drifted = Object.entries(report.sourceHashes ?? {}).filter(([rel, hash]) => { const p = path.join(FINAL, rel); return !existsSync(p) || sha256(p) !== hash; }).map(([rel]) => rel);
+      if (finalHead && report.productionRevision !== finalHead) add('DOWNSTREAM-REVISION', 'blocking', 'task 48 Happy QA', `${file} productionRevision ${report.productionRevision} != frozen head ${finalHead}`);
+      const drifted = Object.entries(report.sourceHashes ?? {}).filter(([rel, hash]) => { const p = path.join(root, rel); return !existsSync(p) || sha256(p) !== hash; }).map(([rel]) => rel);
       if (drifted.length) add('DOWNSTREAM-SOURCE-HASH', 'blocking', 'task 48 Happy QA', `${file} source hashes drifted: ${drifted.slice(0, 3).join(', ')}`);
     } else {
       add('DOWNSTREAM-UNBOUND', 'non-blocking', 'plan line 221 (task 6 ownership)', `${file} is a direct-script artifact with no runner productionRevision/sourceHashes binding`);
@@ -351,7 +421,7 @@ function audit({ root = FINAL, evidenceRoot = path.join(FINAL, '.omo/evidence/vi
     downstream.push(row);
   }
 
-  // -- 6. task-19 correction bytes in the final tree ---------------------------
+  // -- 6. task-19 correction bytes in the audited tree -------------------------
   const task19 = Object.entries(TASK19_DELIVERY).map(([rel, expected]) => {
     const p = path.join(root, rel);
     return { file: rel, match: existsSync(p) && sha256(p) === expected };
@@ -364,9 +434,23 @@ function audit({ root = FINAL, evidenceRoot = path.join(FINAL, '.omo/evidence/vi
   const packageVersion = readJson(path.join(root, 'package.json'))?.version;
   if (packageVersion !== '0.9.0-alpha') add('VERSION', 'blocking', 'task 47', `package.json version ${packageVersion} != 0.9.0-alpha`);
 
+  // -- 8. declared artifacts, resolved inside the evidence tree ------------------
+  // Listed only when present (a listed artifact is re-verified downstream), and
+  // a missing one is a finding, never a silent drop.
+  const declared = [
+    [path.join(evidenceRoot, 'final/revision-manifest.json'), 'final-revision-manifest'],
+    [path.join(evidenceRoot, 'task-48-gate/DoneClaim.json'), 'task-48-gate-claim'],
+  ];
+  const artifacts = [];
+  for (const [file, kind] of declared) {
+    if (existsSync(file)) artifacts.push(artifact(file, kind));
+    else add('ARTIFACT-MISSING', 'non-blocking', 'task 48 Happy QA', `declared artifact ${kind} not found at ${file}`);
+  }
+
   return {
-    checks: { rows: rows.length, taskRows: taskRows.length, uncheckedTasks: uncheckedTasks.map((r) => r.id), uncheckedItems: uncheckedItems.map((r) => ({ line: r.line, title: r.title })), uncheckedFinalWave, ledger, normalized, missingModules, unregisteredRows, missingVerifiers, edgeChecks, digestState, digestObserved, downstream, wave9, task19, missingSurfaces, packageVersion },
+    checks: { rows: rows.length, taskRows: taskRows.length, uncheckedTasks: uncheckedTasks.map((r) => r.id), uncheckedItems: uncheckedItems.map((r) => ({ line: r.line, title: r.title })), uncheckedFinalWave, ledger, normalized, missingModules, unregisteredRows, missingVerifiers, edgeChecks, digestState, digestObserved, downstream, wave9, task19, missingSurfaces, packageVersion, finalHead, evidenceRoot, planPath, root },
     findings,
+    artifacts,
   };
 }
 
@@ -382,8 +466,14 @@ export async function run(context) {
   assert(context.verify === 'F1', 'this module is the F1 verifier registration');
   const lane = context.case ?? (/F1-negative/.test(path.basename(context.out)) ? 'failure' : 'happy');
   assert(['happy', 'failure'].includes(lane), 'unknown F1 lane');
+  const inputs = auditInputs(context);
   if (lane === 'happy') {
-    const result = summarize(audit());
+    // A missing plan or evidence tree is a LOCATED prerequisite failure naming
+    // the path and the input that configures it — never a bare ENOENT from deep
+    // inside the audit, and never a silent audit of some other machine's tree.
+    if (!existsSync(inputs.planPath)) throw new Error(`F1 prerequisite missing: the plan file ${inputs.planPath} does not exist (set --plan/VIS_F1_PLAN or run in a checkout that carries .omo/plans/vis-v090-unified-runtime.md)`);
+    if (!existsSync(inputs.evidenceRoot)) throw new Error(`F1 prerequisite missing: the evidence tree ${inputs.evidenceRoot} does not exist (set --evidence-root/VIS_F1_EVIDENCE_ROOT or run in a checkout that carries the ledger)`);
+    const result = summarize(audit(inputs));
     const greenGaps = result.findings.filter((f) => ['LEDGER-HAPPY', 'LEDGER-FAILURE', 'LEDGER-LEGACY', 'LEDGER-MISSING-DIR'].includes(f.id));
     const edgeViolations = result.findings.filter((f) => f.id === 'DEP-BLOCKER-DIVERGENT');
     const evidenceBindingViolations = result.findings.filter((f) => f.id === 'DEP-EVIDENCE-BINDING');
@@ -395,6 +485,10 @@ export async function run(context) {
       scenario: 'F1 plan compliance audit — complete ledger',
       verdict: result.verdict,
       findings: result.findings,
+      // The resolved inputs ride with the evidence, so a runner-bound manifest
+      // proves WHICH tree, evidence root, plan and target revision were audited
+      // — the claim and the audited bytes can no longer silently diverge.
+      checks: result.checks,
       requiredTaskRows: result.findings.filter((f) => f.severity === 'blocking').map((f) => `- [ ] N. [${f.planLine}] ${f.id}: ${f.detail}`),
       startedAt,
       finishedAt: new Date().toISOString(),
@@ -415,26 +509,27 @@ export async function run(context) {
           { name: 'every Wave-9 integration row 49-56 carries its lane evidence — the task-49-53 App.vue integration DoneClaim (rows 49/51/52/53), the task-50 seeding-and-scoring DoneClaim, the task-54 selector/verify-module DoneClaim, the F2 DoneClaim for row 55 and the task-56 ledger/re-freeze DoneClaim each exist and bind a real head on the final delivery line', passed: wave9Gaps.length === 0 && wave9Bound.length === 8, observed: { boundRows: wave9Bound, gaps: wave9Gaps.map((f) => f.detail) }, expected: { boundRows: [49, 50, 51, 52, 53, 54, 55, 56], gaps: [] } },
         ],
       }],
-      artifacts: [
-        artifact(path.join(FINAL, '.omo/evidence/vis-v090/final/revision-manifest.json'), 'final-revision-manifest'),
-        artifact(path.join(FINAL, '.omo/evidence/vis-v090/task-48-gate/DoneClaim.json'), 'task-48-gate-claim'),
-      ],
+      artifacts: result.artifacts,
       versions: { audit: 'F1-plan-compliance', node: process.version },
     };
   }
 
   // ---- failure lane: mutate a COPY and require rejection --------------------
+  // The seeds come from the SAME explicit inputs as the happy lane; a missing
+  // seed is a located prerequisite failure, not an ENOENT from copyFileSync.
   const scratch = path.join(context.temporaryRoot ?? path.join(tmpdir(), `f1-negative-${process.pid}`), 'f1-negative');
   rmSync(scratch, { recursive: true, force: true });
   mkdirSync(scratch, { recursive: true });
   const copyEvidence = path.join(scratch, 'evidence');
   const planCopy = path.join(scratch, 'plan.md');
   mkdirSync(copyEvidence, { recursive: true });
-  copyFileSync(PLAN_MAIN, planCopy);
+  copyFileSync(inputs.planPath, planCopy);
   for (const rel of ['final/revision-manifest.json', 'task-48/task-43-system.json', 'task-44/happy.json']) {
+    const source = path.join(inputs.evidenceRoot, rel);
+    if (!existsSync(source)) throw new Error(`F1 failure lane prerequisite missing: ${source} (configure the evidence root with --evidence-root/VIS_F1_EVIDENCE_ROOT)`);
     const dest = path.join(copyEvidence, rel);
     mkdirSync(path.dirname(dest), { recursive: true });
-    copyFileSync(path.join(FINAL, '.omo/evidence/vis-v090', rel), dest);
+    copyFileSync(source, dest);
   }
   const readCopy = (rel) => readFileSync(path.join(copyEvidence, rel), 'utf8');
   const writeCopy = (rel, text) => writeFileSync(path.join(copyEvidence, rel), text);
@@ -442,7 +537,7 @@ export async function run(context) {
   const mutations = [];
   const applyMutation = (id, detect, mutate) => {
     mutate();
-    const result = summarize(audit({ evidenceRoot: copyEvidence, planPath: planCopy }));
+    const result = summarize(audit({ ...inputs, evidenceRoot: copyEvidence, planPath: planCopy }));
     const hit = result.findings.find(detect);
     mutations.push({ id, detected: Boolean(hit), finding: hit ? { id: hit.id, detail: hit.detail } : null, totalFindings: result.findings.length });
     assert(hit, `mutation ${id} was NOT rejected — the audit ignored the tampered copy`);
@@ -461,7 +556,7 @@ export async function run(context) {
   });
   applyMutation('DIGEST-MANIFEST-MISSING', (f) => f.id === 'DIGEST-MANIFEST-MISSING', () => rmSync(path.join(copyEvidence, 'final/revision-manifest.json'), { force: true }));
   applyMutation('PLAN-UNCHECKED-TODO', (f) => f.id === 'PLAN-UNCHECKED-TODO' && /row 42/.test(f.detail), () => {
-    writeFileSync(planCopy, readFileSync(PLAN_MAIN, 'utf8').replace('- [x] 42. 实现Team任务与改动审查界面', '- [ ] 42. 实现Team任务与改动审查界面'));
+    writeFileSync(planCopy, readFileSync(inputs.planPath, 'utf8').replace('- [x] 42. 实现Team任务与改动审查界面', '- [ ] 42. 实现Team任务与改动审查界面'));
   });
   rmSync(scratch, { recursive: true, force: true });
 

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtempSync, writeFileSync, rmSync, readdirSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readdirSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -108,5 +108,107 @@ describe('runtime QA evidence binding', () => {
       { scenarios: [{ name: 'invented', assertions: [{ name: 'invented', passed: true, observed: 2, expected: 2 }] }] },
       { process: { ...value.process, invocation: ['node', 'unrelated-script'] } },
     ]) expect(() => validateEvidence({ ...value, ...changed }, repository)).toThrow();
+  });
+});
+
+// The F1 plan-compliance audit resolves every input from the runner context
+// (the checkout being verified) plus explicit evidence/plan/revision inputs.
+// These tests put a checkout at an ARBITRARY temporary path with a DECOY old
+// tree beside it: the audit must read the context's tree and the configured
+// inputs, never a hardcoded machine path, and a missing input must be a located
+// prerequisite report.
+import { run as runF1 } from '../scripts/qa/runtime-v090-cases/verify-F1.mjs';
+
+const F1_PLAN = `- [x] 1. first temporary row
+- [x] 42. 实现Team任务与改动审查界面
+- [ ] F1. final wave row
+- [ ] F2. final wave row
+- [ ] F3. final wave row
+- [ ] F4. final wave row
+`;
+const FROZEN_HEAD = 'a'.repeat(40);
+
+function f1Checkout() {
+  const base = mkdtempSync(path.join(tmpdir(), 'f1-isolation-'));
+  const checkout = path.join(base, 'checkout');
+  const decoy = path.join(base, 'decoy-old-tree');
+  const evidence = path.join(checkout, '.omo/evidence/vis-v090');
+  const plan = path.join(checkout, '.omo/plans/vis-v090-unified-runtime.md');
+  mkdirSync(path.join(checkout, '.omo/plans'), { recursive: true });
+  mkdirSync(path.join(evidence, 'final'), { recursive: true });
+  mkdirSync(path.join(evidence, 'task-48'), { recursive: true });
+  mkdirSync(path.join(evidence, 'task-44'), { recursive: true });
+  writeFileSync(plan, F1_PLAN);
+  writeFileSync(path.join(evidence, 'final/revision-manifest.json'), JSON.stringify({ finalSourceDigest: { digest: 'b'.repeat(64), fileCount: 3, head: FROZEN_HEAD } }));
+  writeFileSync(path.join(evidence, 'task-48/task-43-system.json'), JSON.stringify({ status: 'passed', productionRevision: FROZEN_HEAD, sourceHashes: { 'package.json': 'c'.repeat(64) }, scenarioCount: 18 }));
+  writeFileSync(path.join(evidence, 'task-44/happy.json'), JSON.stringify({ status: 'passed', exitCode: 0, assertions: 9 }));
+  writeFileSync(path.join(checkout, 'package.json'), JSON.stringify({ version: '0.9.0-alpha' }));
+  // The decoy: a DIFFERENT plan (nine rows) and different evidence beside the checkout.
+  mkdirSync(path.join(decoy, '.omo/plans'), { recursive: true });
+  mkdirSync(path.join(decoy, '.omo/evidence/vis-v090/final'), { recursive: true });
+  writeFileSync(path.join(decoy, '.omo/plans/vis-v090-unified-runtime.md'), Array.from({ length: 9 }, (_, index) => `- [x] ${index + 1}. decoy row`).join('\n'));
+  writeFileSync(path.join(decoy, '.omo/evidence/vis-v090/final/revision-manifest.json'), JSON.stringify({ finalSourceDigest: { digest: 'd'.repeat(64), fileCount: 9, head: 'e'.repeat(40) } }));
+  return { base, checkout, decoy, evidence, plan };
+}
+
+describe('F1 verifier input resolution', () => {
+  it('audits the checkout the runner names, never the decoy tree beside it', async () => {
+    const { checkout, decoy, evidence, plan } = f1Checkout();
+    try {
+      const report = await runF1({ verify: 'F1', case: 'happy', root: checkout, evidenceRoot: evidence, planPath: plan, out: path.join(checkout, 'f1.json') });
+      expect(report.checks.planPath).toBe(plan);
+      expect(report.checks.root).toBe(checkout);
+      expect(report.checks.evidenceRoot).toBe(evidence);
+      const rowCount = report.findings.find((finding) => finding.id === 'PLAN-TASK-ROW-COUNT');
+      expect(rowCount?.detail).toContain('observed 2');
+      for (const finding of report.findings) expect(finding.detail).not.toContain(decoy);
+      expect(JSON.stringify(report.findings)).not.toContain('decoy row');
+    } finally { rmSync(path.dirname(checkout), { recursive: true, force: true }); }
+  });
+
+  it('reports a located prerequisite gap for the pre-runner ledger when no worktree root is configured', async () => {
+    const { checkout, evidence, plan } = f1Checkout();
+    try {
+      const report = await runF1({ verify: 'F1', case: 'happy', root: checkout, evidenceRoot: evidence, planPath: plan, out: path.join(checkout, 'f1.json') });
+      const missing = report.findings.find((finding) => finding.id === 'LEDGER-MISSING-DIR' && /task 1 /.test(finding.detail));
+      expect(missing).toBeDefined();
+      expect(missing?.detail).toContain(path.join(evidence, 'task-1'));
+      expect(missing?.detail).toContain('VIS_F1_LEDGER_WORKTREES');
+    } finally { rmSync(path.dirname(checkout), { recursive: true, force: true }); }
+  });
+
+  it('reads the explicitly configured ledger worktrees', async () => {
+    const { checkout, evidence, plan, base } = f1Checkout();
+    try {
+      const farm = path.join(base, 'farm');
+      mkdirSync(path.join(farm, 'vis-v090-task-1/.omo/evidence/vis-v090/task-1'), { recursive: true });
+      writeFileSync(path.join(farm, 'vis-v090-task-1/.omo/evidence/vis-v090/task-1/happy.json'), JSON.stringify({ status: 'passed', exitCode: 0, assertions: 4, productionRevision: FROZEN_HEAD }));
+      const report = await runF1({ verify: 'F1', case: 'happy', root: checkout, evidenceRoot: evidence, planPath: plan, ledgerWorktrees: farm, out: path.join(checkout, 'f1.json') });
+      expect(report.findings.find((finding) => finding.id === 'LEDGER-MISSING-DIR' && /task 1 /.test(finding.detail))).toBeUndefined();
+      expect(report.findings.find((finding) => finding.id === 'LEDGER-HAPPY' && /task 1 /.test(finding.detail))).toBeUndefined();
+    } finally { rmSync(base, { recursive: true, force: true }); }
+  });
+
+  it('the failure lane rejects every mutation from context-resolved inputs', async () => {
+    const { checkout, evidence, plan } = f1Checkout();
+    try {
+      const report = await runF1({ verify: 'F1', case: 'failure', root: checkout, evidenceRoot: evidence, planPath: plan, out: path.join(checkout, 'f1-negative.json'), temporaryRoot: path.join(checkout, '.tmp') });
+      expect(report.mutations.map((mutation) => mutation.id)).toEqual(['LEDGER-HAPPY', 'DOWNSTREAM-REVISION', 'DIGEST-STALE', 'DIGEST-MANIFEST-MISSING', 'PLAN-UNCHECKED-TODO']);
+      for (const mutation of report.mutations) expect(mutation.detected).toBe(true);
+    } finally { rmSync(path.dirname(checkout), { recursive: true, force: true }); }
+  });
+
+  it('a missing plan or evidence tree is a located prerequisite error, not a bare ENOENT', async () => {
+    const { checkout, evidence, plan } = f1Checkout();
+    try {
+      await expect(runF1({ verify: 'F1', case: 'happy', root: checkout, evidenceRoot: evidence, planPath: path.join(checkout, 'absent-plan.md'), out: path.join(checkout, 'f1.json') }))
+        .rejects.toThrow(/F1 prerequisite missing: the plan file .*absent-plan\.md does not exist/);
+      await expect(runF1({ verify: 'F1', case: 'happy', root: checkout, evidenceRoot: path.join(checkout, 'absent-evidence'), planPath: plan, out: path.join(checkout, 'f1.json') }))
+        .rejects.toThrow(/F1 prerequisite missing: the evidence tree .*absent-evidence does not exist/);
+    } finally { rmSync(path.dirname(checkout), { recursive: true, force: true }); }
+  });
+
+  it('the F1 module carries no personal absolute path', () => {
+    expect(readFileSync(path.join(repository, 'scripts/qa/runtime-v090-cases/verify-F1.mjs'), 'utf8')).not.toContain('/home/qiyuaner');
   });
 });

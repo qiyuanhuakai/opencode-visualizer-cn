@@ -51,7 +51,14 @@ export const sourceFiles = [
   'scripts/qa/runtime-v090-cases/verify-F4.mjs',
 ];
 
-const WORKTREES = '/home/qiyuaner/apps/vis_app/vis-wt';
+// The campaign's per-lane worktree root: tasks 1-19 were delivered in their own
+// worktrees, so a cited path absent from the integration evidence root resolves
+// there. An EXPLICIT input only (context.ledgerWorktrees / VIS_F1_LEDGER_WORKTREES) —
+// never a hardcoded personal path; when unset, the fallback simply does not apply
+// and an absent path is reported missing.
+function ledgerWorktreesRoot(context) {
+  return context.ledgerWorktrees ?? process.env.VIS_F1_LEDGER_WORKTREES ?? null;
+}
 const PLAN_LINE = 'Success criteria table (plan lines 793-802)';
 
 // The eight rows verbatim from the plan's Success criteria table (plan lines 793-802).
@@ -72,13 +79,13 @@ const PASSING = new Set(['passed', 'recorded', 'done']);
 const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
 
 /** Resolution: the given root first, then the owning task worktree (live root only). */
-function resolve(rel, root, evidenceRoot) {
+function resolve(rel, root, evidenceRoot, ledgerWorktrees) {
   const local = path.join(root, rel);
   if (existsSync(local)) return { found: true, abs: local, origin: root === evidenceRoot ? 'integration-worktree' : 'negative-copy' };
-  if (root === evidenceRoot) {
+  if (root === evidenceRoot && ledgerWorktrees) {
     const match = /^task-(\d+)\//.exec(rel);
     if (match) {
-      const taskWorktree = path.join(WORKTREES, `vis-v090-task-${match[1]}`, '.omo/evidence/vis-v090', rel);
+      const taskWorktree = path.join(ledgerWorktrees, `vis-v090-task-${match[1]}`, '.omo/evidence/vis-v090', rel);
       if (existsSync(taskWorktree)) return { found: true, abs: taskWorktree, origin: `worktree vis-v090-task-${match[1]}` };
     }
   }
@@ -97,13 +104,13 @@ function probe(file) {
 }
 
 /** The join itself: every cited path resolved, hashed and classified; the verdict is derived. */
-function runJoin(root, evidenceRoot) {
+function runJoin(root, evidenceRoot, ledgerWorktrees) {
   const rows = [];
   const missing = [];
   for (const row of ROWS) {
     const proofs = [];
     for (const rel of row.paths) {
-      const resolved = resolve(rel, root, evidenceRoot);
+      const resolved = resolve(rel, root, evidenceRoot, ledgerWorktrees);
       if (!resolved.found) { missing.push(`${row.is}:${rel}`); proofs.push({ path: rel, present: false, proof: false, reason: 'absent' }); continue; }
       const isDirectory = statSync(resolved.abs).isDirectory();
       const entry = { path: rel, present: true, origin: resolved.origin, sha256: isDirectory ? null : sha256(resolved.abs), bytes: isDirectory ? null : statSync(resolved.abs).size };
@@ -137,6 +144,7 @@ export async function run(context) {
   assert(['happy', 'failure'].includes(lane), 'unknown F4 lane');
   const root = context.root;
   const evidenceRoot = path.join(root, '.omo/evidence/vis-v090');
+  const ledgerWorktrees = ledgerWorktreesRoot(context);
   const detailDir = path.join(root, '.omo/evidence/vis-v090/task-54/verify-F4');
   mkdirSync(detailDir, { recursive: true });
   const scenarios = [];
@@ -150,7 +158,7 @@ export async function run(context) {
   };
 
   if (lane === 'happy') {
-    const join = runJoin(evidenceRoot, evidenceRoot);
+    const join = runJoin(evidenceRoot, evidenceRoot, ledgerWorktrees);
     const fileProofs = join.rows.flatMap((row) => row.proofs).filter((proof) => proof.kind === 'manifest');
     check('the join table is the plan\'s Success criteria table exactly: eight IS rows, every cited path present in the table with no invented or dropped citation', { rows: ROWS.length, uniquePaths: UNIQUE_PATHS.length, totalCitations: TOTAL_CITATIONS, rowIds: ROWS.map((row) => row.is) }, { rows: 8, uniquePaths: 43, totalCitations: 52, rowIds: ['IS-1', 'IS-2', 'IS-3', 'IS-4', 'IS-5', 'IS-6', 'IS-7', 'IS-8'] }, PLAN_LINE);
     check('every cited proof resolves and passes on the live tree: all 43 cited paths exist (a task lane\'s path resolves in its own worktree when absent from the integration root), every QA manifest among them carries a passing status, and the join verdict is therefore PASS with no missing entry', { verdict: join.verdict, missing: join.missing, rowsComplete: join.rows.filter((row) => row.rowComplete).length, rowsIncomplete: join.rows.filter((row) => !row.rowComplete).map((row) => row.is), fileProofs: fileProofs.length, directoryProofs: join.rows.flatMap((row) => row.proofs).filter((proof) => proof.kind === 'directory').length }, { verdict: 'PASS', missing: [], rowsComplete: 8, rowsIncomplete: [], fileProofs: fileProofs.length, directoryProofs: join.rows.flatMap((row) => row.proofs).filter((proof) => proof.kind === 'directory').length }, 'the eight-row join over the live evidence tree: every path resolved, hashed and status-classified');
@@ -209,7 +217,7 @@ export async function run(context) {
   const copyRoot = path.join(scratch, 'evidence');
   // The copy is self-contained: every cited path is copied in at the same relative layout, so the
   // join's worktree fallback (live root only) cannot mask a deletion inside it.
-  const copySources = UNIQUE_PATHS.map((rel) => ({ rel, resolved: resolve(rel, evidenceRoot, evidenceRoot) }));
+  const copySources = UNIQUE_PATHS.map((rel) => ({ rel, resolved: resolve(rel, evidenceRoot, evidenceRoot, ledgerWorktrees) }));
   for (const entry of copySources) {
     assert(entry.resolved.found, `cited path ${entry.rel} did not resolve on the live tree — the copy cannot be built`);
     const destination = path.join(copyRoot, entry.rel);
@@ -218,7 +226,7 @@ export async function run(context) {
     else copyFileSync(entry.resolved.abs, destination);
   }
 
-  const baseline = runJoin(copyRoot, evidenceRoot);
+  const baseline = runJoin(copyRoot, evidenceRoot, ledgerWorktrees);
   check('the copy is self-contained and faithful: with every cited path present the copy\'s join reproduces the live PASS verdict, so a later rejection is attributable to the injected deletion', { verdict: baseline.verdict, missing: baseline.missing, rowsComplete: baseline.rows.filter((row) => row.rowComplete).length }, { verdict: 'PASS', missing: [], rowsComplete: 8 }, 'the eight-row join over the negative copy before any mutation');
 
   // Every expectation is a frozen literal derived from the plan's table: which rows cite the path,
@@ -255,20 +263,20 @@ export async function run(context) {
       manifest.status = 'failed';
       writeFileSync(target, `${JSON.stringify(manifest, null, 2)}\n`);
     }
-    const mutated = runJoin(copyRoot, evidenceRoot);
+    const mutated = runJoin(copyRoot, evidenceRoot, ledgerWorktrees);
     const hit = mutated.missing.includes(mutation.expectedMissing);
     results.push({ id: mutation.id, rel: mutation.rel, verdict: mutated.verdict, expectedMissing: mutation.expectedMissing, detected: hit, missingCount: mutated.missing.length, rowsIncomplete: mutated.rows.filter((row) => !row.rowComplete).map((row) => row.is) });
     assert.equal(mutated.verdict, 'REJECT', `mutation ${mutation.id} was NOT rejected — the join ignored the tampered copy`);
     assert.ok(hit, `mutation ${mutation.id} did not produce the expected missing entry ${mutation.expectedMissing}; observed ${JSON.stringify(mutated.missing)}`);
     // Restore the copy from the live bytes and prove the join returns to its baseline.
     if (mutation.kind === 'delete') { mkdirSync(path.dirname(target), { recursive: true }); if (before === null) mkdirSync(target, { recursive: true }); else copyFileSync(liveSource, target); } else copyFileSync(liveSource, target);
-    const restored = runJoin(copyRoot, evidenceRoot);
+    const restored = runJoin(copyRoot, evidenceRoot, ledgerWorktrees);
     assert.equal(restored.verdict, 'PASS', `restoring ${mutation.rel} did not return the copy to its baseline PASS verdict`);
     assert.deepEqual(restored.missing, [], `restoring ${mutation.rel} left missing entries ${JSON.stringify(restored.missing)}`);
   }
   check('every IS-proof deletion/corruption in the copy is rejected with the exact missing entry, and restoring the live bytes returns the copy to its baseline PASS — so the rejection is caused by the removed proof, not by a broken copy', results, MUTATIONS.map((mutation) => ({ id: mutation.id, rel: mutation.rel, verdict: 'REJECT', expectedMissing: mutation.expectedMissing, detected: true, missingCount: mutation.missingCount, rowsIncomplete: mutation.rowsIncomplete })), 'seven isolated mutations over the self-contained copy, each rejected by the join and then restored — including the two the old never-true proof rule could not reject (a deleted status key and an unparseable manifest)');
 
-  const liveAfter = runJoin(evidenceRoot, evidenceRoot);
+  const liveAfter = runJoin(evidenceRoot, evidenceRoot, ledgerWorktrees);
   check('the live evidence tree was never touched by the failure lane: its join still PASSes with no missing entry after every copy mutation', { verdict: liveAfter.verdict, missing: liveAfter.missing }, { verdict: 'PASS', missing: [] }, 'the eight-row join over the live evidence tree after the failure lane');
 
   const report = { lane: 'failure', baseline: { verdict: baseline.verdict, missing: baseline.missing }, mutations: results, liveAfter: { verdict: liveAfter.verdict, missing: liveAfter.missing } };
