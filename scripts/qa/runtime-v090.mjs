@@ -24,9 +24,9 @@ export function parseSelector(args) {
     assert(['happy', 'failure'].includes(values['--case']), 'unknown case');
   } else {
     assert(['F1', 'F2', 'F3', 'F4'].includes(values['--verify']), 'unknown verifier');
-    assert(!values['--case'], 'verify cannot select a case');
+    assert(values['--case'] === undefined || ['happy', 'failure'].includes(values['--case']), 'unknown case');
   }
-  return { ...(values['--task'] ? { task: Number(values['--task']), case: values['--case'] } : { verify: values['--verify'] }), out: path.resolve(values['--out']), ...(values['--evidence-root'] ? { evidenceRoot: path.resolve(values['--evidence-root']) } : {}) };
+  return { ...(values['--task'] ? { task: Number(values['--task']), case: values['--case'] } : { verify: values['--verify'], ...(values['--case'] ? { case: values['--case'] } : {}) }), out: path.resolve(values['--out']), ...(values['--evidence-root'] ? { evidenceRoot: path.resolve(values['--evidence-root']) } : {}) };
 }
 function inventory(root) {
   const directories = ['shared/runtime', 'scripts/qa', 'app/dev/runtime-v090'];
@@ -38,7 +38,26 @@ async function execute(selector, root) {
   mkdirSync(outDir, { recursive: true });
   const registration = path.join(root, 'scripts/qa/runtime-v090-cases', selector.verify ? `verify-${selector.verify}.mjs` : `task-${selector.task}.mjs`);
   if (!(selector.task <= 5)) assert(existsSync(registration), `scenario not implemented: ${selector.verify ?? selector.task}`);
-  const registered = selector.task <= 5 ? null : await import(pathToFileURL(registration).href);
+  // Up-front prerequisite resolution. A registration that references files this
+  // tree does not deliver must fail HERE with a located message naming each
+  // missing one — never a bare ERR_MODULE_NOT_FOUND from the import, and never
+  // an ENOENT from realpathSync deep inside sourceSnapshot. The first F2/F3
+  // delivery gap was exactly that class: legal selectors that could not execute.
+  let registered = null;
+  if (!(selector.task <= 5)) {
+    try {
+      registered = await import(pathToFileURL(registration).href);
+    } catch (error) {
+      if (error !== null && typeof error === 'object' && error.code === 'ERR_MODULE_NOT_FOUND') {
+        throw new Error(`prerequisite missing: ${path.relative(root, registration)} cannot load in this tree — ${String(error.message).split('\n')[0]} (the registration statically imports a module this checkout does not deliver; deliver it or re-point the registration)`);
+      }
+      throw error;
+    }
+    const missingSources = (registered.sourceFiles ?? []).filter((rel) => !existsSync(path.join(root, rel)));
+    if (missingSources.length > 0) {
+      throw new Error(`prerequisite missing: ${path.relative(root, registration)} registers ${missingSources.length} source file(s) absent from this tree: ${missingSources.join(', ')} (the runner hashes every registered source before the lane starts)`);
+    }
+  }
   if (registered) assert(Array.isArray(registered.sourceFiles) && registered.sourceFiles.length > 0 && typeof registered.run === 'function', 'registration requires production sourceFiles and run');
   const context = { ...selector, root, outDir, temporaryRoot: process.env.VIS_RUNTIME_QA_TEMP };
   if (process.env.VIS_RUNTIME_QA_WORKER === '1') {

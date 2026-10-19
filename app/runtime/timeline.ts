@@ -19,6 +19,7 @@ export const TURN_COMMAND_PHASES = Object.freeze(['accepted', 'sent', 'cancelled
 export const MAX_TIMELINE_ENTRY_CHARS = 262_144;
 export const DEFAULT_TIMELINE_PAGE_LIMIT = 100;
 export const MAX_TIMELINE_PAGE_LIMIT = 500;
+export const MAX_TIMELINE_SEQ_SPAN = 1_048_576;
 
 const UUID_PATTERN = /^[\da-f]{8}-[\da-f]{4}-[1-8][\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i;
 const MAX_TEXT_CHARS = 512;
@@ -214,7 +215,7 @@ function parseAt(value: unknown): number {
 
 function parseSeq(value: unknown): number {
   if (value === undefined) return 0;
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new TurnError('invalid_request', 'timeline_seq');
   }
   return value;
@@ -341,7 +342,7 @@ interface TurnInternals {
   readonly entries: InternalEntry[];
   readonly seen: Map<string, string>;
   readonly terminalKeys: Set<string>;
-  readonly seqs: Set<number>;
+  readonly seqsBySource: Map<string, Set<number>>;
   lastOrder: number | null;
   seqMax: number;
 }
@@ -354,10 +355,11 @@ interface EntryContext {
   readonly turnId: string;
   readonly entries: InternalEntry[];
   readonly seen: Map<string, string>;
-  readonly seqs: Set<number>;
+  readonly seqsBySource: Map<string, Set<number>>;
   readonly native: TurnNativeState;
   nextOrder(): number;
-  nextSeq(): number;
+  nextSeq(sourceKey: string): number;
+  noteSeq(sourceKey: string, seq: number): void;
   note(entry: InternalEntry): void;
   publish(entry: InternalEntry): void;
   markDuplicate(): void;
@@ -447,16 +449,25 @@ export function createTurnTimeline(): TurnTimeline {
       turnId: turn.turnId,
       entries: turn.entries,
       seen: turn.seen,
-      seqs: turn.seqs,
+      seqsBySource: turn.seqsBySource,
       native: turn.native,
       nextOrder: () => {
         orderCounter += 1;
         return orderCounter;
       },
-      nextSeq: () => {
+      nextSeq: (sourceKey: string) => {
+        const bucket = turn.seqsBySource.get(sourceKey);
         let max = 0;
-        for (const value of turn.seqs) if (value > max) max = value;
+        if (bucket !== undefined) for (const value of bucket) if (value > max) max = value;
         return max + 1;
+      },
+      noteSeq: (sourceKey: string, seq: number) => {
+        let bucket = turn.seqsBySource.get(sourceKey);
+        if (bucket === undefined) {
+          bucket = new Set();
+          turn.seqsBySource.set(sourceKey, bucket);
+        }
+        bucket.add(seq);
       },
       note: (entry) => {
         turn.seqMax = Math.max(turn.seqMax, entry.seq);
@@ -506,7 +517,11 @@ export function createTurnTimeline(): TurnTimeline {
     }
     const payload = frozenPayload(input.payload);
     const late = context.native.terminal;
-    const seq = input.seq > 0 ? input.seq : context.nextSeq();
+    const sourceKey = timelineSourceKey(input.source);
+    const seq = input.seq > 0 ? input.seq : context.nextSeq(sourceKey);
+    // 2**53 + 1 === 2**53, so an auto-assigned successor past the safe range could never be
+    // enumerated by gaps(): refuse it here, before order, entries, seen and the seq bucket change.
+    if (!Number.isSafeInteger(seq)) throw new TurnError('invalid_request', 'timeline_seq');
     const order = context.nextOrder();
     const entry: InternalEntry = Object.freeze({
       entryId: `${context.turnId}:${order}`,
@@ -522,7 +537,7 @@ export function createTurnTimeline(): TurnTimeline {
     });
     context.entries.push(entry);
     context.seen.set(dedupKey, entry.entryId);
-    context.seqs.add(seq);
+    context.noteSeq(sourceKey, seq);
     context.note(entry);
     if (late) context.markLate();
     context.publish(entry);
@@ -557,7 +572,7 @@ export function createTurnTimeline(): TurnTimeline {
       entries: [],
       seen: new Map(),
       terminalKeys: new Set(),
-      seqs: new Set(),
+      seqsBySource: new Map(),
       lastOrder: null,
       seqMax: 0,
     };
@@ -738,15 +753,20 @@ export function createTurnTimeline(): TurnTimeline {
   function gaps(turnId: string): readonly number[] {
     assertOpen();
     const turn = requireTurn(turnId);
-    if (turn.seqs.size === 0) return Object.freeze([]);
-    const sorted = [...turn.seqs].sort((left, right) => left - right);
-    const first = sorted[0] ?? 0;
-    const last = sorted[sorted.length - 1] ?? 0;
-    const missing: number[] = [];
-    for (let value = first; value <= last; value += 1) {
-      if (!turn.seqs.has(value)) missing.push(value);
+    const missing = new Set<number>();
+    for (const bucket of turn.seqsBySource.values()) {
+      if (bucket.size === 0) continue;
+      const sorted = [...bucket].sort((left, right) => left - right);
+      const first = sorted[0] as number;
+      const last = sorted[sorted.length - 1] as number;
+      if (last - first > MAX_TIMELINE_SEQ_SPAN) {
+        throw new TurnError('invalid_request', 'timeline_seq_span');
+      }
+      for (let value = first; value <= last; value += 1) {
+        if (!bucket.has(value)) missing.add(value);
+      }
     }
-    return Object.freeze(missing);
+    return Object.freeze([...missing].sort((left, right) => left - right));
   }
 
   function close(): void {
