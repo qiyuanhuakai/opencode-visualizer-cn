@@ -8,6 +8,8 @@ import { parseAck, parseFrame, record } from '../../../shared/runtime/native/kim
 
 const MAX_RESPONSE = 2097152;
 const MAX_FRAME = 1048576;
+// Raw source pieces handed to the bounded history substrate stay <=64KiB including backing allocation.
+const RAW_CHUNK = 65536;
 function failure(code, reason) { return new ProtocolError(code, reason); }
 function maskedFrame(payload, opcode = 1) {
   const bytes = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
@@ -103,18 +105,71 @@ export function createKimiWebTransport({ endpoint, getAuthorization, deadlineMs 
     });
   }
   async function request(method, pathname, body, signal) { return (await prepare(method, pathname, body)).send(signal); }
+  /** Raw native response body for the selected-history producer: same origin, path, authorization and deadline
+   * policy as `prepare`, but nothing is accumulated or parsed because the bounded substrate owns every bound. */
+  function stream(pathname, signal) {
+    if (stopped) return Promise.reject(failure('source_unavailable', 'driver_closed'));
+    if (signal?.aborted) return Promise.reject(failure('cancelled', 'native_cancelled'));
+    if (!pathname.startsWith('/') || pathname.startsWith('//')) return Promise.reject(failure('invalid_request', 'native_path'));
+    const url = new URL(pathname, base);
+    if (url.origin !== base.origin) return Promise.reject(failure('invalid_request', 'native_path'));
+    return (async () => {
+      const auth = await authorization();
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const request = (url.protocol === 'https:' ? https : http).request(url, { method: 'GET', headers: { Authorization: auth, Accept: 'application/json' } });
+        active.add(request);
+        const settle = (error, value) => {
+          if (settled) return;
+          settled = true; clearTimeout(timer); signal?.removeEventListener('abort', abort);
+          if (error) reject(error); else resolve(value);
+        };
+        const abort = () => { settle(failure('cancelled', 'native_cancelled')); request.destroy(); };
+        const timer = setTimeout(() => { settle(failure('timeout', 'native_timeout')); request.destroy(); }, deadlineMs);
+        signal?.addEventListener('abort', abort, { once: true });
+        request.on('error', () => settle(failure('source_unavailable', 'native_transport')));
+        request.on('response', (response) => {
+          response.on('error', () => {});
+          response.on('aborted', () => {});
+          const refuse = (error) => { response.resume(); settle(error); };
+          if (response.statusCode === 401 || response.statusCode === 403) return refuse(failure('unauthorized', 'native_authorization'));
+          if (response.statusCode < 200 || response.statusCode >= 300) return refuse(failure('source_unavailable', 'native_http'));
+          if (response.statusCode === 204) return settle(null, null);
+          settle(null, Object.freeze({
+            body: (async function* () {
+              try {
+                for await (const chunk of response) {
+                  for (let offset = 0; offset < chunk.length; offset += RAW_CHUNK) {
+                    const length = Math.min(RAW_CHUNK, chunk.length - offset);
+                    const piece = new Uint8Array(length);
+                    piece.set(chunk.subarray(offset, offset + length));
+                    yield piece;
+                  }
+                }
+              } catch (error) { throw error instanceof ProtocolError ? error : failure('source_unavailable', 'native_body'); }
+              finally { response.destroy(); active.delete(request); }
+            })(),
+            release() { response.destroy(); request.destroy(); active.delete(request); },
+          }));
+        });
+        request.end();
+      });
+    })();
+  }
   function send(frame, opcode = 1) {
     if (!connection || connection.socket.destroyed) throw failure('source_unavailable', 'native_disconnected');
     if (connection.socket.writableLength > MAX_FRAME) throw failure('replay_required', 'native_backpressure');
     connection.socket.write(maskedFrame(opcode === 1 ? JSON.stringify(frame) : frame, opcode));
   }
-  function control(type, payload = {}) {
+  function control(type, payload = {}, options = {}) {
     if (pending.size >= 256) return Promise.reject(failure('source_unavailable', 'native_control_queue'));
     const id = `vis-${generation}-${++serial}`;
+    // A non-destructive control reports its own timeout instead of destroying the shared connection.
+    const destructive = options.destructive !== false;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id); reject(failure('timeout', 'native_ack_timeout'));
-        connection?.socket.destroy();
+        if (destructive) connection?.socket.destroy();
       }, deadlineMs);
       pending.set(id, { resolve, reject, timer });
       try { send({ type, id, payload }); }
@@ -210,5 +265,5 @@ export function createKimiWebTransport({ endpoint, getAuthorization, deadlineMs 
     await disconnect();
     if (connecting) await connecting.catch((error) => { if (!(error instanceof ProtocolError)) throw error; });
   }
-  return { request, prepare, open, control, disconnect, close, get connected() { return !!connection && !connection.socket.destroyed; }, get generation() { return generation; }, get heartbeats() { return { pings, pongs }; } };
+  return { request, prepare, stream, open, control, disconnect, close, get connected() { return !!connection && !connection.socket.destroyed; }, get generation() { return generation; }, get heartbeats() { return { pings, pongs }; } };
 }

@@ -74,9 +74,19 @@ export function classifyDesktopBridgeEndpoint(url: string): DesktopBridgeEndpoin
   }
 }
 
+export interface DesktopBridgeHostIdentity {
+  readonly transportKind: 'local' | 'direct' | 'ssh' | 'slurm';
+}
+
+export interface UseDesktopBridgeVersionOptions {
+  readonly hostIdentity?: Ref<DesktopBridgeHostIdentity | undefined>;
+  readonly minimumVersion?: string;
+}
+
 export function useDesktopBridgeVersion(
   healthUrl: Ref<string>,
   desktopApi: DesktopApi | undefined,
+  options?: UseDesktopBridgeVersionOptions,
 ) {
   let latestReport: Promise<unknown> = Promise.resolve();
 
@@ -84,7 +94,12 @@ export function useDesktopBridgeVersion(
     const reportBridgeVersion = desktopApi?.reportBridgeVersion;
     if (!reportBridgeVersion) return;
     const version = connection.status === 'ready' ? connection.version : null;
-    const endpointLocality = classifyDesktopBridgeEndpoint(healthUrl.value);
+    const hostKind = options?.hostIdentity?.value?.transportKind;
+    // A managed remote host is remote even when its endpoint is a loopback URL: the host identity,
+    // not the URL, decides where an update is applied.
+    const endpointLocality = hostKind === 'ssh' || hostKind === 'slurm'
+      ? 'remote'
+      : classifyDesktopBridgeEndpoint(healthUrl.value);
     const request = reportBridgeVersion.call(desktopApi, {
       connectionId,
       endpointLocality,
@@ -94,8 +109,9 @@ export function useDesktopBridgeVersion(
     latestReport = request;
   }
 
-  const { state, refresh: refreshHealth } = useConnectedBridgeVersion(healthUrl, {
+  const { state, refresh: refreshHealth, upgradePath } = useConnectedBridgeVersion(healthUrl, {
     onConnectionChange: report,
+    minimumVersion: options?.minimumVersion,
   });
 
   async function refresh(): Promise<boolean> {
@@ -118,5 +134,5 @@ export function useDesktopBridgeVersion(
     );
   }
 
-  return { state, refresh };
+  return { state, refresh, upgradePath };
 }

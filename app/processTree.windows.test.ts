@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { stopWindowsProcessTree } from '../bridge/processTree.js';
 
@@ -36,5 +36,77 @@ describe('Windows process tree cleanup', () => {
     await expect(stopWindowsProcessTree(42, true, { spawnProcess })).rejects.toThrow(
       'Windows process tree did not stop (pid 42)',
     );
+  });
+});
+
+describe('Windows process tree escalation', () => {
+  const platform = process.platform;
+  const stop = vi.fn<typeof stopWindowsProcessTree>();
+  let stopProcessTree: typeof import('../bridge/processTree.js').stopProcessTree;
+
+  beforeEach(async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    vi.resetModules();
+    stop.mockReset();
+    vi.doMock('../bridge/windowsProcessTree.js', () => ({ stopWindowsProcessTree: stop }));
+    ({ stopProcessTree } = await import('../bridge/processTree.js'));
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: platform });
+    vi.doUnmock('../bridge/windowsProcessTree.js');
+    vi.resetModules();
+    vi.useRealTimers();
+  });
+
+  function terminal() {
+    const state: { pid: number; exitCode: number | null; kill: () => boolean } = {
+      pid: 42, exitCode: null, kill: () => true,
+    };
+    return Object.assign(new EventEmitter(), state);
+  }
+
+  it('forces shutdown when graceful tree cleanup rejects', async () => {
+    const child = terminal();
+    stop
+      .mockRejectedValueOnce(new Error('Graceful cleanup failed'))
+      .mockImplementationOnce(async () => { child.exitCode = 0; });
+
+    await expect(stopProcessTree(child)).resolves.toBeUndefined();
+
+    expect(stop.mock.calls).toEqual([[42, false], [42, true]]);
+  });
+
+  it('rejects with the forced cleanup failure after graceful cleanup rejects', async () => {
+    const child = terminal();
+    const forcedFailure = new Error('Forced cleanup failed');
+    stop
+      .mockRejectedValueOnce(new Error('Graceful cleanup failed'))
+      .mockRejectedValueOnce(forcedFailure);
+
+    await expect(stopProcessTree(child)).rejects.toBe(forcedFailure);
+  });
+
+  it('does not force a terminal that exits during graceful cleanup', async () => {
+    const child = terminal();
+    stop
+      .mockImplementationOnce(async () => { child.exitCode = 0; });
+
+    await expect(stopProcessTree(child)).resolves.toBeUndefined();
+
+    expect(stop.mock.calls).toEqual([[42, false]]);
+  });
+
+  it('still rejects if the terminal never exits after forced cleanup', async () => {
+    vi.useFakeTimers();
+    const child = terminal();
+    stop
+      .mockRejectedValueOnce(new Error('Graceful cleanup failed'))
+      .mockResolvedValue(undefined);
+
+    const stopping = stopProcessTree(child, { graceMs: 1, forceMs: 1 })
+      .then(() => undefined, (error: unknown) => error);
+    await vi.runAllTimersAsync();
+    expect(await stopping).toEqual(new Error('Process tree did not stop (pid 42).'));
   });
 });

@@ -11,8 +11,14 @@ directories:
 files:
   - "dist/**/*"
   - "electron/**/*"
+  # 从 electron/main.js 可达、但不在 electron/** 下的本地运行时模块闭包：
+  # 显式列出以保证它们随安装包一同发布（见 app/desktopUpdateMetadata.test.ts）。
+  - "shared/runtime/identity.js"
+  - "shared/runtime/connectionProfile.js"
+  - "shared/runtime/capabilities.js"
   - "shared/runtime/migration/**/*"
   - "bridge/update*.js"
+  - "bridge/runtime/transports/remoteBootstrap.js"
   - "package.json"
   - "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}"
   - "!.editorconfig"

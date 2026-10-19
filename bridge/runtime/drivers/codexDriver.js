@@ -26,7 +26,7 @@ import { createCodexCatalog } from '../../../shared/runtime/native/codex/catalog
 import { CODEX_PROFILE, codexManifest } from '../../../shared/runtime/native/codex/capabilities.js';
 import { createOperationJournal, fingerprint } from '../operationJournal.js';
 import { createInteractionStore } from '../interactionStore.js';
-import { createCodexHistory } from './codexHistory.js';
+import { createCodexHistory, createCodexHistoryStream } from './codexHistory.js';
 import { createCodexProcess } from './codexProcess.js';
 
 export async function createCodexDriver(options) {
@@ -272,6 +272,28 @@ export async function createCodexDriver(options) {
       return history({
         session: context.session,
         ...fields(context.params ?? {}, ['cursor', 'limit']),
+      });
+    },
+    openHistory(context) {
+      validateContext(context, true);
+      requireValue(
+        context.params?.epoch === epoch && context.params?.processGeneration === processGeneration,
+        'codex.request_generation',
+        'reconcile_required',
+      );
+      assertCurrent();
+      return createCodexHistoryStream({
+        session: context.session,
+        request,
+        requestHistory: (method, params) => {
+          assertCurrent();
+          return client.requestHistory(method, params);
+        },
+        processGeneration,
+        epoch,
+        assertCurrent,
+        randomUUID,
+        secrets: options.credentialValues ?? [],
       });
     },
     async createSession(context) {
