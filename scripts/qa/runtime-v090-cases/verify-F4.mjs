@@ -59,6 +59,22 @@ export const sourceFiles = [
 function ledgerWorktreesRoot(context) {
   return context.ledgerWorktrees ?? process.env.VIS_F1_LEDGER_WORKTREES ?? null;
 }
+
+// The evidence tree this lane audits. An EXPLICIT input first — the runner's
+// context.evidenceRoot (--evidence-root) or VIS_F4_EVIDENCE_ROOT — exactly as
+// verify-F1 resolves its inputs (874a9bca1 "resolve every F1/F4 audit input from
+// the runner context, not a personal path"). The checkout default applies only
+// when neither is given.
+//
+// F4 used to ignore the given root and always read root/.omo/evidence/vis-v090,
+// so a caller that pointed the lane at another evidence tree had that tree
+// silently ignored while the report still claimed to audit the campaign
+// evidence: the bytes hashed in the join were not the bytes the caller named.
+// A missing tree is now a LOCATED prerequisite error rather than a deep
+// ENOENT/statSync crash inside the join.
+function evidenceRootOf(context, root) {
+  return context.evidenceRoot ?? process.env.VIS_F4_EVIDENCE_ROOT ?? path.join(root, '.omo/evidence/vis-v090');
+}
 const PLAN_LINE = 'Success criteria table (plan lines 793-802)';
 
 // The eight rows verbatim from the plan's Success criteria table (plan lines 793-802).
@@ -143,9 +159,10 @@ export async function run(context) {
   const lane = context.case ?? (/F4-negative/.test(path.basename(context.out)) ? 'failure' : 'happy');
   assert(['happy', 'failure'].includes(lane), 'unknown F4 lane');
   const root = context.root;
-  const evidenceRoot = path.join(root, '.omo/evidence/vis-v090');
+  const evidenceRoot = evidenceRootOf(context, root);
+  if (!existsSync(evidenceRoot)) throw new Error(`F4 prerequisite missing: the evidence tree ${evidenceRoot} does not exist (set --evidence-root / VIS_F4_EVIDENCE_ROOT, or run in a checkout that carries the campaign evidence)`);
   const ledgerWorktrees = ledgerWorktreesRoot(context);
-  const detailDir = path.join(root, '.omo/evidence/vis-v090/task-54/verify-F4');
+  const detailDir = path.join(evidenceRoot, 'task-54/verify-F4');
   mkdirSync(detailDir, { recursive: true });
   const scenarios = [];
   const artifacts = [];
@@ -206,6 +223,9 @@ export async function run(context) {
       perIsEvaluation,
       scenarios,
       artifacts,
+      // The resolved audit inputs ride in the report so a bound manifest proves
+      // WHICH evidence tree this lane audited, not merely that it audited one.
+      resolvedInputs: { root, evidenceRoot, ledgerWorktrees, detailDir },
       versions: { node: process.version },
     };
   }
@@ -287,8 +307,9 @@ export async function run(context) {
       scenario: 'F4 ideal-state fidelity — negative controls over a mutated evidence copy',
       checkerVerdict: 'REJECTED (every injected IS-proof deletion/corruption rejected, then restored)',
       mutationCount: MUTATIONS.length,
-    scenarios,
-    artifacts,
-    versions: { node: process.version },
-  };
+      scenarios,
+      artifacts,
+      resolvedInputs: { root, evidenceRoot, ledgerWorktrees, detailDir },
+      versions: { node: process.version },
+    };
 }

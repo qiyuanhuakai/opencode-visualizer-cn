@@ -118,6 +118,9 @@ describe('runtime QA evidence binding', () => {
 // inputs, never a hardcoded machine path, and a missing input must be a located
 // prerequisite report.
 import { run as runF1 } from '../scripts/qa/runtime-v090-cases/verify-F1.mjs';
+import type { F1Finding, F1Mutation, VerifierContext } from '../scripts/qa/runtime-v090-cases/verify-F1.d.mts';
+import { run as runF4 } from '../scripts/qa/runtime-v090-cases/verify-F4.mjs';
+import type { F4Report } from '../scripts/qa/runtime-v090-cases/verify-F4.d.mts';
 
 const F1_PLAN = `- [x] 1. first temporary row
 - [x] 42. 实现Team任务与改动审查界面
@@ -159,7 +162,7 @@ describe('F1 verifier input resolution', () => {
       expect(report.checks.planPath).toBe(plan);
       expect(report.checks.root).toBe(checkout);
       expect(report.checks.evidenceRoot).toBe(evidence);
-      const rowCount = report.findings.find((finding) => finding.id === 'PLAN-TASK-ROW-COUNT');
+      const rowCount = report.findings.find((finding: F1Finding) => finding.id === 'PLAN-TASK-ROW-COUNT');
       expect(rowCount?.detail).toContain('observed 2');
       for (const finding of report.findings) expect(finding.detail).not.toContain(decoy);
       expect(JSON.stringify(report.findings)).not.toContain('decoy row');
@@ -170,7 +173,7 @@ describe('F1 verifier input resolution', () => {
     const { checkout, evidence, plan } = f1Checkout();
     try {
       const report = await runF1({ verify: 'F1', case: 'happy', root: checkout, evidenceRoot: evidence, planPath: plan, out: path.join(checkout, 'f1.json') });
-      const missing = report.findings.find((finding) => finding.id === 'LEDGER-MISSING-DIR' && /task 1 /.test(finding.detail));
+      const missing = report.findings.find((finding: F1Finding) => finding.id === 'LEDGER-MISSING-DIR' && /task 1 /.test(finding.detail));
       expect(missing).toBeDefined();
       expect(missing?.detail).toContain(path.join(evidence, 'task-1'));
       expect(missing?.detail).toContain('VIS_F1_LEDGER_WORKTREES');
@@ -184,8 +187,8 @@ describe('F1 verifier input resolution', () => {
       mkdirSync(path.join(farm, 'vis-v090-task-1/.omo/evidence/vis-v090/task-1'), { recursive: true });
       writeFileSync(path.join(farm, 'vis-v090-task-1/.omo/evidence/vis-v090/task-1/happy.json'), JSON.stringify({ status: 'passed', exitCode: 0, assertions: 4, productionRevision: FROZEN_HEAD }));
       const report = await runF1({ verify: 'F1', case: 'happy', root: checkout, evidenceRoot: evidence, planPath: plan, ledgerWorktrees: farm, out: path.join(checkout, 'f1.json') });
-      expect(report.findings.find((finding) => finding.id === 'LEDGER-MISSING-DIR' && /task 1 /.test(finding.detail))).toBeUndefined();
-      expect(report.findings.find((finding) => finding.id === 'LEDGER-HAPPY' && /task 1 /.test(finding.detail))).toBeUndefined();
+      expect(report.findings.find((finding: F1Finding) => finding.id === 'LEDGER-MISSING-DIR' && /task 1 /.test(finding.detail))).toBeUndefined();
+      expect(report.findings.find((finding: F1Finding) => finding.id === 'LEDGER-HAPPY' && /task 1 /.test(finding.detail))).toBeUndefined();
     } finally { rmSync(base, { recursive: true, force: true }); }
   });
 
@@ -193,7 +196,7 @@ describe('F1 verifier input resolution', () => {
     const { checkout, evidence, plan } = f1Checkout();
     try {
       const report = await runF1({ verify: 'F1', case: 'failure', root: checkout, evidenceRoot: evidence, planPath: plan, out: path.join(checkout, 'f1-negative.json'), temporaryRoot: path.join(checkout, '.tmp') });
-      expect(report.mutations.map((mutation) => mutation.id)).toEqual(['LEDGER-HAPPY', 'DOWNSTREAM-REVISION', 'DIGEST-STALE', 'DIGEST-MANIFEST-MISSING', 'PLAN-UNCHECKED-TODO']);
+      expect(report.mutations.map((mutation: F1Mutation) => mutation.id)).toEqual(['LEDGER-HAPPY', 'DOWNSTREAM-REVISION', 'DIGEST-STALE', 'DIGEST-MANIFEST-MISSING', 'PLAN-UNCHECKED-TODO']);
       for (const mutation of report.mutations) expect(mutation.detected).toBe(true);
     } finally { rmSync(path.dirname(checkout), { recursive: true, force: true }); }
   });
@@ -210,5 +213,108 @@ describe('F1 verifier input resolution', () => {
 
   it('the F1 module carries no personal absolute path', () => {
     expect(readFileSync(path.join(repository, 'scripts/qa/runtime-v090-cases/verify-F1.mjs'), 'utf8')).not.toContain('/home/qiyuaner');
+  });
+});
+
+// The 11 distinct FILE citations the plan's Success criteria table names. The
+// remaining 32 of the 43 unique citations are directories, where presence alone
+// is the proof. Transcribed here so the fixture can be built; the module's own
+// first assertion re-checks these counts against the frozen table, so if the
+// plan's table ever changes this fixture fails loudly instead of drifting.
+const F4_MANIFESTS = [
+  'task-13/happy.json',
+  'task-14/happy.json',
+  'task-18/failure.json',
+  'task-43/happy.json',
+  'task-43/failure.json',
+  'task-44/standard.json',
+  'task-44/stress.json',
+  'task-46/ssh.json',
+  'task-46/slurm.json',
+  'final/F2.json',
+  'final/F3.json',
+];
+const F4_DIRECTORIES = [
+  'task-4/', 'task-11/', 'task-12/', 'task-13/', 'task-14/', 'task-15/', 'task-16/', 'task-17/',
+  'task-20/', 'task-21/', 'task-22/', 'task-23/', 'task-24/', 'task-26/', 'task-27/', 'task-28/',
+  'task-29/', 'task-31/', 'task-33/', 'task-34/', 'task-35/', 'task-36/', 'task-37/', 'task-38/',
+  'task-39/', 'task-40/', 'task-41/', 'task-42/', 'task-43/', 'task-44/', 'task-45/', 'task-47/',
+];
+
+/** A complete, self-consistent campaign evidence tree: every cited path present. */
+function f4EvidenceTree(base: string, options: { degradedStatus?: string } = {}) {
+  const evidence = path.join(base, '.omo/evidence/vis-v090');
+  for (const rel of F4_DIRECTORIES) mkdirSync(path.join(evidence, rel), { recursive: true });
+  mkdirSync(path.join(evidence, 'final'), { recursive: true });
+  for (const rel of F4_MANIFESTS) {
+    mkdirSync(path.dirname(path.join(evidence, rel)), { recursive: true });
+    // Every manifest carries a DISTINCT payload, so no two share a hash (the
+    // module grades distinctHashes against the 11 distinct file paths).
+    const degraded = options.degradedStatus !== undefined && rel === options.degradedStatus.split('=')[0];
+    writeFileSync(path.join(evidence, rel), `${JSON.stringify({ status: degraded ? options.degradedStatus?.split('=')[1] : 'passed', scenarioCount: 3, evidence: rel }, null, 2)}\n`);
+  }
+  return evidence;
+}
+
+describe('F4 verifier input resolution', () => {
+  it('audits the evidence tree the runner names, never the checkout default beside it', async () => {
+    const base = mkdtempSync(path.join(tmpdir(), 'f4-isolation-'));
+    try {
+      const checkout = path.join(base, 'checkout');
+      mkdirSync(checkout, { recursive: true });
+      writeFileSync(path.join(checkout, 'package.json'), JSON.stringify({ version: '0.9.0-alpha' }));
+      // The evidence tree the caller NAMES, at an arbitrary path outside the checkout.
+      const given = f4EvidenceTree(path.join(base, 'named-evidence'));
+      // The DECOY: a complete tree at the checkout default, but with one manifest
+      // carrying a failing status, so reading it instead of the named tree is a
+      // visible REJECT rather than an identical PASS.
+      f4EvidenceTree(checkout, { degradedStatus: 'task-44/standard.json=failed' });
+      const report: F4Report = await runF4({ verify: 'F4', case: 'happy', root: checkout, evidenceRoot: given, out: path.join(checkout, 'f4.json') } as VerifierContext);
+      expect(report.resolvedInputs.evidenceRoot).toBe(given);
+      expect(report.checkerVerdict).toBe('PASS');
+      expect(existsSync(path.join(given, 'task-54/verify-F4/happy-join.json'))).toBe(true);
+      expect(existsSync(path.join(checkout, '.omo/evidence/vis-v090/task-54/verify-F4/happy-join.json'))).toBe(false);
+      // The join artifact records WHICH bytes were audited: the named tree's
+      // manifest hash is there, and the decoy's failing status is nowhere.
+      const join = JSON.parse(readFileSync(path.join(given, 'task-54/verify-F4/happy-join.json'), 'utf8'));
+      const standard = join.join.rows.flatMap((row: { proofs: { path: string; sha256?: string; status?: string }[] }) => row.proofs).find((proof: { path: string }) => proof.path === 'task-44/standard.json');
+      expect(standard.sha256).toBe(digest(readFileSync(path.join(given, 'task-44/standard.json'))));
+      expect(join.join.missing).toEqual([]);
+      expect(JSON.stringify(join)).not.toContain('status=failed');
+    } finally { rmSync(base, { recursive: true, force: true }); }
+  }, 30000);
+
+  it('a missing named evidence tree is a located prerequisite error naming the configured root', async () => {
+    const base = mkdtempSync(path.join(tmpdir(), 'f4-isolation-'));
+    try {
+      const checkout = path.join(base, 'checkout');
+      mkdirSync(checkout, { recursive: true });
+      writeFileSync(path.join(checkout, 'package.json'), JSON.stringify({ version: '0.9.0-alpha' }));
+      const absent = path.join(base, 'named-but-absent');
+      await expect(runF4({ verify: 'F4', case: 'happy', root: checkout, evidenceRoot: absent, out: path.join(checkout, 'f4.json') } as VerifierContext))
+        .rejects.toThrow(new RegExp(`F4 prerequisite missing: the evidence tree .*named-but-absent does not exist`));
+    } finally { rmSync(base, { recursive: true, force: true }); }
+  });
+
+  it('the failure lane also audits the named tree and leaves the checkout default untouched', async () => {
+    const base = mkdtempSync(path.join(tmpdir(), 'f4-isolation-'));
+    try {
+      const checkout = path.join(base, 'checkout');
+      mkdirSync(checkout, { recursive: true });
+      writeFileSync(path.join(checkout, 'package.json'), JSON.stringify({ version: '0.9.0-alpha' }));
+      const given = f4EvidenceTree(path.join(base, 'named-evidence'));
+      f4EvidenceTree(checkout);
+      const report: F4Report = await runF4({ verify: 'F4', case: 'failure', root: checkout, evidenceRoot: given, out: path.join(checkout, 'f4-negative.json'), temporaryRoot: path.join(base, 'scratch') } as VerifierContext);
+      expect(report.resolvedInputs.evidenceRoot).toBe(given);
+      expect(report.mutationCount).toBe(7);
+      expect(existsSync(path.join(given, 'task-54/verify-F4/failure-join.json'))).toBe(true);
+      // The decoy at the checkout default is byte-identical to the named tree, so
+      // the negative copy was built from the named one and the default was never read.
+      expect(existsSync(path.join(checkout, '.omo/evidence/vis-v090/task-54/verify-F4/failure-join.json'))).toBe(false);
+    } finally { rmSync(base, { recursive: true, force: true }); }
+  }, 30000);
+
+  it('the F4 module carries no personal absolute path', () => {
+    expect(readFileSync(path.join(repository, 'scripts/qa/runtime-v090-cases/verify-F4.mjs'), 'utf8')).not.toContain('/home/qiyuaner');
   });
 });
