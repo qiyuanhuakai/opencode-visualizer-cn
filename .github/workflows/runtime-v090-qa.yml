@@ -2,16 +2,29 @@ name: Runtime v0.9.0 Live QA (task 46)
 
 # Live verification of the REAL remote/HPC surfaces for the v0.9.0 unified runtime.
 #
-#   - Linux isolated runner: installs system OpenSSH / Slurm / Munge and brings up a REAL
-#     controller + login + two compute nodes in REAL network namespaces, then exercises real
-#     sshd (host key / jump host / reconnection) and real slurmctld + two real slurmd with a
-#     real `srun` in BOTH the TCP and the relay mode.
-#   - macOS / Windows runners: measure real SSH plus the REAL packaged Bridge / Electron
-#     artifacts produced by task 45 (never a dev-mode process).
+#   - Linux isolated runner: brings up a REAL controller + login + two compute nodes,
+#     with a real slurmctld, two real slurmd, a real munged and a real sshd, inside
+#     REAL network namespaces, and exercises real sshd (host key / jump host /
+#     reconnection) and real slurmctld + two real slurmd with a real `srun` in BOTH
+#     the TCP and the relay mode.
+#   - The packaged Bridge / Electron artifacts produced by task 45 are measured on
+#     macOS / Windows by build-electron.yml's `packaged-bridge-qa` job, which sits
+#     downstream of the producing `bridge-installers` job IN THE SAME RUN: an
+#     artifact download that does not name its producing run finds nothing, because
+#     actions/download-artifact only sees the current run's artifacts.
 #
-# Every apt install lands only on the disposable GitHub-hosted runner. No step ever touches
-# a developer or production host. A missing namespace/daemon precondition exits non-zero and
-# still uploads a real artifact; a mock is never substituted for a graded surface.
+# Privileged initialisation, stated explicitly instead of assumed: the lab writes
+# /etc/hosts, installs system packages, creates real network namespaces and
+# delegates cgroup v2 — all root-only. A `sudo apt-get` in one step does NOT make a
+# later step root. The lab therefore runs in the matched isolated environment, a
+# `--privileged ubuntu:24.04` container that owns the whole privileged init, runs
+# every daemon as its dedicated user (slurm / munge / labuser), and is discarded on
+# teardown; a preflight proves the container can really do that work BEFORE any
+# lane, so a missing capability is never mistaken for a dependency-install problem.
+# Every apt install lands only inside that disposable container. No step ever
+# touches a developer or production host. A missing namespace/daemon precondition
+# exits non-zero and still uploads a real artifact; a mock is never substituted for
+# a graded surface.
 
 on:
   pull_request:
@@ -49,19 +62,28 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # The isolated runner IS the test VM: every package below is installed onto this
-      # disposable runner only, and the lab script records exactly where each one landed.
-      - name: Install system OpenSSH, Slurm and Munge on the isolated runner
+      # The isolated runner IS the test VM, but the runner user is NOT root and a
+      # `sudo apt-get` in an earlier step does not confer root on later ones. The
+      # lab's real privileged initialisation — /etc/hosts, system packages, real
+      # network namespaces, cgroup v2 delegation — therefore happens inside a
+      # --privileged ubuntu:24.04 container (the `docker` lab runtime), with every
+      # daemon running as its dedicated user inside it. Prove the container can
+      # really perform that privileged work BEFORE any lane: a missing capability
+      # must fail here, loudly, instead of being mistaken for a dependency problem.
+      - name: Verify the isolated runner can host the privileged lab container
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y openssh-server slurm-wlm munge iproute2 util-linux procps libpmix2t64
+          set -euo pipefail
+          docker info --format 'docker daemon reachable: {{.ServerVersion}}'
+          docker run --rm --privileged ubuntu:24.04 ip netns add vislab-preflight
+          echo "privileged container created a real network namespace"
 
       - name: Live Slurm happy lane (real srun, real slurmctld, two real slurmd)
         run: |
           node scripts/qa/runtime-v090-live-slurm.mjs \
             --lab isolated \
             --modes "${{ github.event.inputs.modes || 'tcp,relay' }}" \
-            --runtime native \
+            --runtime docker \
             --out .omo/evidence/vis-v090/task-46/slurm.json
 
       - name: Live Slurm failure lane (laptop/relay/compute/manager kill, expire/requeue, store fail, borrowed stop, saturated step, changed key)
@@ -70,8 +92,15 @@ jobs:
             --lab isolated \
             --modes "${{ github.event.inputs.modes || 'tcp,relay' }}" \
             --case failure \
-            --runtime native \
+            --runtime docker \
             --out .omo/evidence/vis-v090/task-46/slurm-failure.json
+
+      # The lab discards its own container on success; this covers a lane that died
+      # mid-lab, so the runner never carries a stale privileged container forward.
+      - name: Discard the lab container
+        if: always()
+        shell: bash
+        run: docker rm -f vis-v090-slurm-lab >/dev/null 2>&1 || true
 
       - name: Upload live Slurm evidence
         if: always()
@@ -102,16 +131,23 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install system OpenSSH on the isolated runner
+      # Same privileged-initialisation contract as the Slurm lane: the lab's real
+      # /etc/hosts edit, package install, network namespaces and daemons run inside
+      # a --privileged ubuntu:24.04 container, never as the unprivileged runner
+      # user, and the container capability is proven before either lane starts.
+      - name: Verify the isolated runner can host the privileged lab container
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y openssh-server iproute2 util-linux
+          set -euo pipefail
+          docker info --format 'docker daemon reachable: {{.ServerVersion}}'
+          docker run --rm --privileged ubuntu:24.04 ip netns add vislab-preflight
+          echo "privileged container created a real network namespace"
 
       - name: Live SSH happy lane
         run: |
           node scripts/qa/runtime-v090-live-ssh.mjs \
             --isolated \
-            --runtime native \
+            --runtime docker \
             --out .omo/evidence/vis-v090/task-46/ssh.json
 
       - name: Live SSH failure lane
@@ -119,8 +155,13 @@ jobs:
           node scripts/qa/runtime-v090-live-ssh.mjs \
             --isolated \
             --case failure \
-            --runtime native \
+            --runtime docker \
             --out .omo/evidence/vis-v090/task-46/ssh-failure.json
+
+      - name: Discard the lab container
+        if: always()
+        shell: bash
+        run: docker rm -f vis-v090-slurm-lab >/dev/null 2>&1 || true
 
       - name: Upload live SSH evidence
         if: always()
@@ -131,113 +172,18 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-  # macOS and Windows measure real SSH plus the REAL packaged Bridge / Electron artifacts
-  # built by task 45. They do not rebuild the lab: the graded surface here is that the
-  # packaged binaries really perform the SSH argv / host-key / jump / reconnect contract on
-  # the platform, using the artifact the release actually ships.
-  cross-platform-packaged:
-    name: Packaged Bridge/Electron on ${{ matrix.os }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15-intel
-            os: macOS x64
-            platform: macos
-            arch: x64
-          - runner: macos-latest
-            os: macOS arm64
-            platform: macos
-            arch: arm64
-          - runner: windows-2022
-            os: Windows x64
-            platform: windows
-            arch: x64
-          - runner: windows-11-arm
-            os: Windows arm64
-            platform: windows
-            arch: arm64
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # Must match the artifact name build-electron.yml's bridge-installers job uploads:
-      # bridge-<platform>-<arch>-artifacts, platform in linux|macos|windows, arch in x64|arm64.
-      - name: Download packaged Bridge artifacts (task 45)
-        uses: actions/download-artifact@v4
-        with:
-          pattern: bridge-${{ matrix.platform }}-${{ matrix.arch }}-artifacts
-          path: dist-bridge/packaged
-          merge-multiple: true
-
-      - name: Locate the packaged Bridge
-        shell: bash
-        run: |
-          set -euo pipefail
-          candidate=""
-          for path in dist-bridge/packaged/*; do
-            [ -f "$path" ] || continue
-            candidate="$path"
-            break
-          done
-          if [ -z "$candidate" ]; then
-            echo "::error::no packaged Bridge artifact was produced by task 45 for this platform"
-            exit 1
-          fi
-          echo "VIS_PACKAGED_BRIDGE=$candidate" >> "$GITHUB_ENV"
-          echo "packaged Bridge: $candidate"
-
-      - name: Real SSH client version on this platform
-        shell: bash
-        run: |
-          set -euo pipefail
-          if command -v ssh >/dev/null 2>&1; then
-            ssh -V 2>&1 | tee .omo/evidence/vis-v090/task-46/ssh-version.txt || true
-          else
-            echo "no system ssh on this runner" | tee .omo/evidence/vis-v090/task-46/ssh-version.txt
-          fi
-          mkdir -p .omo/evidence/vis-v090/task-46
-          node -e "console.log('node ' + process.version + ' on ' + process.platform + ' ' + process.arch)" \
-            | tee .omo/evidence/vis-v090/task-46/platform.txt
-
-      - name: Packaged Bridge really starts and reports its version
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p .omo/evidence/vis-v090/task-46
-          if [ ! -x "$VIS_PACKAGED_BRIDGE" ]; then
-            echo "::error::packaged Bridge at $VIS_PACKAGED_BRIDGE is not executable"
-            exit 1
-          fi
-          "$VIS_PACKAGED_BRIDGE" --version 2>&1 | tee .omo/evidence/vis-v090/task-46/bridge-version.txt
-
-      - name: Upload cross-platform evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: runtime-v090-cross-platform-${{ matrix.os }}
-          path: .omo/evidence/vis-v090/task-46/
-          retention-days: 30
-          if-no-files-found: warn
+  # The packaged Bridge / Electron artifacts are NOT consumed here: an artifact
+  # download that does not name its producing run only sees the current run's
+  # artifacts and finds none (that is exactly how all four platforms used to stop
+  # at "Locate the packaged Bridge"). Production and consumption therefore sit in
+  # the SAME run's dependency chain: build-electron.yml's `packaged-bridge-qa`
+  # job runs with `needs: [bridge-installers]`, downloads the artifact that job
+  # uploaded in the same run, and is gated by that workflow's `complete-ci`.
 
   live-qa-complete:
     name: Live QA complete
     runs-on: ubuntu-latest
-    needs: [live-slurm, live-ssh, cross-platform-packaged]
+    needs: [live-slurm, live-ssh]
     if: always()
     steps:
       - name: Require every live lane to have succeeded
@@ -245,10 +191,9 @@ jobs:
         env:
           SLURM: ${{ needs.live-slurm.result }}
           SSH: ${{ needs.live-ssh.result }}
-          CROSS: ${{ needs.cross-platform-packaged.result }}
         run: |
           failed=0
-          for lane in "live-slurm:$SLURM" "live-ssh:$SSH" "cross-platform:$CROSS"; do
+          for lane in "live-slurm:$SLURM" "live-ssh:$SSH"; do
             name="${lane%%:*}"; result="${lane##*:}"
             if [ "$result" != "success" ]; then
               echo "::error::$name did not succeed ($result)"
