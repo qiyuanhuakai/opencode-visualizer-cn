@@ -679,20 +679,22 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # The artifact this run's bridge-installers job uploaded for this exact
-      # platform/arch: bridge-<platform>-<arch>-artifacts.
+      # platform/arch: bridge-<platform>-<arch>-artifacts. Downloaded to the
+      # layout the producer's own lanes use, so the platform installer QA below
+      # finds it where it expects.
       - name: Download packaged Bridge artifacts (same run as the producer)
         uses: actions/download-artifact@v4
         with:
           pattern: bridge-${{ matrix.platform }}-${{ matrix.arch }}-artifacts
-          path: dist-bridge/packaged
+          path: dist-bridge/installers
           merge-multiple: true
 
-      - name: Locate the packaged Bridge
+      - name: Locate the packaged Bridge installer
         shell: bash
         run: |
           set -euo pipefail
           candidate=""
-          for path in dist-bridge/packaged/*; do
+          for path in dist-bridge/installers/*; do
             [ -f "$path" ] || continue
             candidate="$path"
             break
@@ -702,7 +704,7 @@ jobs:
             exit 1
           fi
           echo "VIS_PACKAGED_BRIDGE=$candidate" >> "$GITHUB_ENV"
-          echo "packaged Bridge: $candidate"
+          echo "packaged Bridge installer: $candidate"
 
       - name: Real SSH client version on this platform
         shell: bash
@@ -717,16 +719,24 @@ jobs:
           node -e "console.log('node ' + process.version + ' on ' + process.platform + ' ' + process.arch)" \
             | tee .omo/evidence/vis-v090/task-46/platform.txt
 
-      - name: Packaged Bridge really starts and reports its version
+      # The shipped artifact is an INSTALLER, so the start test installs it and
+      # runs the installed binary: the graded surface is the packaged product the
+      # release actually ships, never a dev-mode process.
+      - name: Install the packaged Bridge and prove it starts (macOS)
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p .omo/evidence/vis-v090/task-46
-          if [ ! -x "$VIS_PACKAGED_BRIDGE" ]; then
-            echo "::error::packaged Bridge at $VIS_PACKAGED_BRIDGE is not executable"
-            exit 1
-          fi
-          "$VIS_PACKAGED_BRIDGE" --version 2>&1 | tee .omo/evidence/vis-v090/task-46/bridge-version.txt
+          sudo installer -pkg "$VIS_PACKAGED_BRIDGE" -target /
+          test -x /usr/local/bin/vis_bridge
+          /usr/local/bin/vis_bridge --version 2>&1 | tee .omo/evidence/vis-v090/task-46/bridge-version.txt
+          grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+' .omo/evidence/vis-v090/task-46/bridge-version.txt
+
+      - name: Install the packaged Bridge and prove it starts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/qa/vis-bridge-installer-windows.ps1
 
       - name: Upload packaged Bridge QA evidence
         if: always()

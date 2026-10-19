@@ -75,8 +75,13 @@ jobs:
         run: |
           set -euo pipefail
           docker info --format 'docker daemon reachable: {{.ServerVersion}}'
-          docker run --rm --privileged ubuntu:24.04 ip netns add vislab-preflight
-          echo "privileged container created a real network namespace"
+          # The lab's privileged init installs iproute2 and creates a real network
+          # namespace inside the container; prove BOTH before any lane, so a
+          # missing capability fails here instead of being mistaken for a
+          # dependency problem mid-lane.
+          docker run --rm --privileged ubuntu:24.04 bash -c \
+            "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq iproute2 >/dev/null 2>&1 && ip netns add vislab-preflight"
+          echo "privileged container installed packages and created a real network namespace"
 
       - name: Live Slurm happy lane (real srun, real slurmctld, two real slurmd)
         run: |
@@ -140,8 +145,13 @@ jobs:
         run: |
           set -euo pipefail
           docker info --format 'docker daemon reachable: {{.ServerVersion}}'
-          docker run --rm --privileged ubuntu:24.04 ip netns add vislab-preflight
-          echo "privileged container created a real network namespace"
+          # The lab's privileged init installs iproute2 and creates a real network
+          # namespace inside the container; prove BOTH before any lane, so a
+          # missing capability fails here instead of being mistaken for a
+          # dependency problem mid-lane.
+          docker run --rm --privileged ubuntu:24.04 bash -c \
+            "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq iproute2 >/dev/null 2>&1 && ip netns add vislab-preflight"
+          echo "privileged container installed packages and created a real network namespace"
 
       - name: Live SSH happy lane
         run: |
