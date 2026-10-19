@@ -302,6 +302,24 @@
           </template>
         </Dropdown>
       </div>
+      <!--
+        Task 35: the target row. The chips name every participant the single prompt goes to, and
+        the reserved fan-out marker stays visible next to them until task 42 enables it. The row
+        only renders when a container wired the thread state.
+      -->
+      <div v-if="threadState && threadState.summary.value" class="input-thread-row" data-testid="input-thread-row">
+        <ThreadTargetRow
+          variant="composer"
+          :open="true"
+          :thread="threadState.summary.value"
+          :targets="threadState.targets.value"
+          :handoff="threadState.handoff.value"
+          :draft-text="messageValue"
+          :busy="threadState.busy.value"
+          :error="threadState.error.value"
+          @select-target="threadState.setTarget"
+        />
+      </div>
       <div class="input-toolbar">
         <div class="input-selects">
           <slot name="before-controls" />
@@ -541,7 +559,7 @@
             class="input-button stop send-button"
             :disabled="props.disabled || !canAbort"
             :title="$t('inputPanel.stop')"
-            @click="$emit('abort')"
+            @click="requestAbort"
           >
             <Icon icon="ph:stop-fill" :width="16" :height="16" />
           </button>
@@ -551,7 +569,7 @@
             class="input-button primary send-button"
             :disabled="props.readOnly || (!canRunCodexCommand && !canRunForgeCommand && (props.disabled || !canSend))"
             :title="sendTooltip"
-            @click="$emit('send')"
+            @click="requestSend"
           >
             <Icon icon="lucide:send" :width="16" :height="16" />
           </button>
@@ -562,7 +580,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch, inject, type Ref } from 'vue';
+import { computed, defineAsyncComponent, nextTick, ref, watch, inject, type Ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import { FileIcon, FolderIcon } from '@vue-symbols/icons';
@@ -590,6 +608,18 @@ import {
 import { truncateTextTransformerString, validateTextTransformerLibrary } from '../utils/snippets';
 import type { CodexSkill } from '../backends/codex/codexAdapter';
 import { parseLeadingSlashCommand } from '../utils/codexSlashCommands';
+import {
+  RUNTIME_SESSION_ACTIONS_KEY,
+  bindRuntimeAction,
+  type RuntimeActionBinding,
+  type RuntimeSendInput,
+  type RuntimeSessionRuntime,
+} from '../composables/useRuntimeSessionActions';
+import { useRuntimeThreadState } from '../composables/useRuntimeThread';
+
+// Task 35: the thread surfaces are lazily loaded so the composer's entry chunk keeps its size;
+// the panel variant lives in OutputPanel.
+const ThreadTargetRow = defineAsyncComponent(() => import('./runtime/ThreadView.vue'));
 type ModelOption = {
   id: string;
   modelID: string;
@@ -694,6 +724,122 @@ const emit = defineEmits<{
   (event: 'open-snippet-settings'): void;
   (event: 'status-error', message: string): void;
 }>();
+
+// Task 22: when a container provides the qualified runtime action port, send
+// and abort go through the new path (routed by full SessionRef). Without a
+// provider the component keeps its legacy emits, so existing parents are
+// unaffected.
+const runtimeSessionActions = inject<RuntimeSessionRuntime | null>(RUNTIME_SESSION_ACTIONS_KEY, null);
+
+// Task 35: when a container provides the thread state, the composer shows exactly which
+// participants the input goes to. Absent → the row is not rendered and the composer is unchanged.
+const threadState = useRuntimeThreadState();
+
+function runtimeBinding() {
+  return runtimeSessionActions ? bindRuntimeAction(runtimeSessionActions) : null;
+}
+
+function runtimeSendInput(): RuntimeSendInput {
+  return {
+    text: props.messageInput,
+    mode: props.selectedMode,
+    model: props.selectedModel,
+    thinking: props.selectedThinking,
+    attachments: props.attachments.map((attachment) => ({
+      filename: attachment.filename,
+      mime: attachment.mime,
+      dataUrl: attachment.dataUrl,
+      lineComment: attachment.lineComment ?? null,
+    })),
+  };
+}
+
+/**
+ * The binding the prompt is actually sent through. With a thread open, the prompt goes to the
+ * EFFECTIVE target's own native session — the very participant the chips display (explicit
+ * selection, else the thread's active participant) — instead of whatever session the runtime
+ * binding happens to hold. When that participant cannot be resolved, the answer is `null`: the
+ * caller refuses the send visibly rather than silently falling back to the ambient binding,
+ * which is how a prompt once reached the wrong session.
+ */
+function sendBinding(binding: RuntimeActionBinding): RuntimeActionBinding | null {
+  const state = threadState;
+  if (state === null) return binding;
+  // No thread open: the composer keeps its legacy behaviour exactly.
+  if (state.threadId.value === null) return binding;
+  const effective = state.effectiveTargets.value;
+  const session = effective.length === 1 ? effective[0]?.session : undefined;
+  if (session === undefined) return null;
+  return Object.freeze({ ...binding, session });
+}
+
+/**
+ * The binding the last send actually went through.
+ *
+ * `requestAbort` must cancel the operation THIS composer started, not whatever the ambient
+ * binding happens to hold when Stop is pressed. With a thread open the send is routed to the
+ * effective target's own native session, so re-deriving the binding at cancel time answered a
+ * DIFFERENT session's cancel — the ambient A instead of the B the prompt reached — the moment
+ * the thread's active participant moved. The identity is therefore captured at send and held
+ * for the cancel path, exactly as `sendBinding` already resolves it for the send itself.
+ *
+ * It is only recorded when the send went through a thread-resolved target (the only case where
+ * the two diverge), and it is released BY THE OPERATION'S OWN END — the send handle's reported
+ * completion, or the next send superseding it — never by the thread UI closing. Closing the
+ * thread panel is not evidence that the operation the prompt started has ended: the turn keeps
+ * running on the target's own native session, so dropping the capture on close left Stop
+ * pointing at the ambient session while the real operation was still live and uncancellable.
+ * Without a thread the recorded value stays `null` and the ambient binding is used unchanged.
+ */
+let lastSentBinding: RuntimeActionBinding | null = null;
+
+/**
+ * Retire a captured send identity once the operation it belongs to reports completion.
+ *
+ * The real router hands back the send's mutation, whose `executed` promise settles when the
+ * turn ends; a router that reports nothing simply keeps the capture until a new send
+ * supersedes it, which is the conservative direction — a live operation stays cancellable.
+ */
+function releaseSentBindingOnCompletion(captured: RuntimeActionBinding, handle: unknown): void {
+  const executed = (handle as { executed?: unknown } | null | undefined)?.executed;
+  if (!(executed instanceof Promise)) return;
+  const release = () => {
+    if (lastSentBinding === captured) lastSentBinding = null;
+  };
+  void executed.then(release, release);
+}
+
+function requestSend() {
+  const binding = runtimeBinding();
+  if (binding && runtimeSessionActions) {
+    const target = sendBinding(binding);
+    if (target === null) {
+      emit('status-error', t('inputPanel.threadTargetUnresolved'));
+      return;
+    }
+    const handle = runtimeSessionActions.router.sendMessage(target, runtimeSendInput());
+    // The last send's identity is what Stop cancels: a thread-routed send records the target
+    // it reached; an ambient send records nothing, because the ambient binding is then the
+    // honest answer and a capture from an earlier thread send must not outlive it.
+    lastSentBinding = target === binding ? null : target;
+    if (lastSentBinding !== null) releaseSentBindingOnCompletion(lastSentBinding, handle);
+    return;
+  }
+  lastSentBinding = null;
+  emit('send');
+}
+
+function requestAbort() {
+  const binding = runtimeBinding();
+  if (binding && runtimeSessionActions) {
+    // Prefer the session the last send actually reached: that is the operation Stop has to
+    // cancel. The ambient binding is the fallback only when this composer has no recorded
+    // thread send, which is the legacy behaviour exactly.
+    void runtimeSessionActions.router.cancel(lastSentBinding ?? binding);
+    return;
+  }
+  emit('abort');
+}
 
 const messageValue = computed({
   get: () => props.messageInput,
@@ -1612,7 +1758,7 @@ function handleKeydown(event: KeyboardEvent) {
   // Ctrl+Enter: always send
   if (isAlwaysSend) {
     event.preventDefault();
-    emit('send');
+    requestSend();
     return;
   }
   // Enter (no modifiers): send or newline depending on setting
@@ -1625,7 +1771,7 @@ function handleKeydown(event: KeyboardEvent) {
     enterToSend.value
   ) {
     event.preventDefault();
-    emit('send');
+    requestSend();
   }
 }
 
@@ -1853,6 +1999,15 @@ const inputMessageStyle = computed(() => {
 
 .input-message:has(.input-textarea:disabled) {
   opacity: 0.6;
+}
+
+.input-thread-row {
+  padding: 0 10px 6px;
+}
+
+.input-thread-row :deep(.target-section) {
+  padding: 6px 8px;
+  gap: 4px;
 }
 
 .input-toolbar {
