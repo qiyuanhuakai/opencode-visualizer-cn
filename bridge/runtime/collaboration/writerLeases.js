@@ -413,6 +413,13 @@ export function createWriterLeaseService(options = {}) {
    */
   const reservedByTask = new Map();
   const reservedByRepository = new Map();
+  /**
+   * The leases that still OCCUPY a budget: a removed lease's record is kept so the retention read
+   * model can still answer for it, but its worktree is gone, so it holds neither a repository
+   * writer slot nor a service lease slot. `release` does NOT decrement it: a released worktree is
+   * still on disk until a user confirms its removal, so it still occupies the repository.
+   */
+  let occupyingLeases = 0;
   let closed = false;
 
   function assertOpen() {
@@ -522,7 +529,7 @@ export function createWriterLeaseService(options = {}) {
     if (byTask.has(taskId) || reservedByTask.has(taskId)) {
       throw new CollaborationError('conflict', 'writer_lease_task', { taskId });
     }
-    if (leasesById.size + reservedByTask.size >= WRITER_LIMITS.maxActiveLeases) {
+    if (occupyingLeases + reservedByTask.size >= WRITER_LIMITS.maxActiveLeases) {
       throw new CollaborationError('conflict', 'writer_lease_capacity', {
         limit: WRITER_LIMITS.maxActiveLeases,
       });
@@ -581,6 +588,7 @@ export function createWriterLeaseService(options = {}) {
       };
       createAllocationSink(record.allocation).assign({ worktree, baseCommit, nativeCwd: worktree });
       leasesById.set(leaseId, record);
+      occupyingLeases += 1;
       byTask.set(taskId, leaseId);
       // Re-read the repository bucket at registration: a concurrent allocation may have published
       // its own bucket in the meantime, and pushing into a stale array would lose its entry.
@@ -814,6 +822,15 @@ export function createWriterLeaseService(options = {}) {
     createRemovalSink(record.removal).markRemoved(at);
     record.state = 'removed';
     record.removedAt = at;
+    // The worktree is gone, so this lease occupies no budget slot. The record STAYS in
+    // leasesById: the retention read model and the idempotent release still answer for it.
+    occupyingLeases -= 1;
+    const held = byRepository.get(record.repository);
+    if (held !== undefined) {
+      const index = held.indexOf(record.leaseId);
+      if (index >= 0) held.splice(index, 1);
+      if (held.length === 0) byRepository.delete(record.repository);
+    }
     return retentionView(record);
   }
 

@@ -1632,3 +1632,127 @@ describe('task 40 — the six PR #196 review findings', () => {
     store.close();
   });
 });
+
+/* ------------------------------------------------------------------ independent review regression
+ *
+ * SEC197-b: a lease whose worktree was REMOVED is a tombstone the retention read model still
+ * needs, but it must not keep spending the two writer budgets it can no longer use. Driven end
+ * to end against real temporary git repositories and real worktrees.
+ */
+
+describe('task 40 — a removed writer lease frees its budget', () => {
+  let leasesModule: WriterLeasesModule;
+
+  beforeAll(() => {
+    leasesModule = require_('../../bridge/runtime/collaboration/writerLeases.js') as WriterLeasesModule;
+  });
+
+  async function retire(service: WriterLeaseService, lease: LeaseView, at: number): Promise<void> {
+    service.release({ leaseId: lease.leaseId, at });
+    await service.confirmWorktreeRemoval({ leaseId: lease.leaseId, at: at + 1 });
+    await service.removeWorktree({ leaseId: lease.leaseId, at: at + 2 });
+  }
+
+  it('S1: once every writer on a repository is released, confirmed and removed, the repository still admits a new writer', async () => {
+    const repository = await createRepo('quota-removal');
+    const writersRoot = await scratch('quota-removal');
+    const service = leasesModule.createWriterLeaseService({ writersRoot });
+    const quota = leasesModule.WRITER_LIMITS.maxWritersPerRepository;
+    const at = 1700000000000;
+
+    const leases: LeaseView[] = [];
+    for (let index = 0; index < quota; index += 1) {
+      leases.push(await service.allocate({
+        repository,
+        taskId: taskIdFor(`quota-removal-${index}`),
+        ownerId: `writer-${index}`,
+        at: at + index,
+      }));
+    }
+    expect(service.leasesByRepository(repository)).toHaveLength(quota);
+
+    for (const lease of leases) {
+      await retire(service, lease, at + 1000);
+    }
+
+    // Every writer is gone: no live lease, no worktree left on disk.
+    const state = service.state();
+    expect(state.active).toBe(0);
+    expect(state.removed).toBe(quota);
+    expect(state.worktreesRemoved).toBe(quota);
+    for (const lease of leases) {
+      expect(await exists(lease.worktree)).toBe(false);
+    }
+
+    // The retention read model still answers for the removed lease...
+    const retention = await service.retention(leases[0].leaseId);
+    expect(retention.userConfirmed).toBe(true);
+    expect(retention.removedAt).toBe(at + 1002);
+    // ...and a release of a removed lease is still a conflict, never a silent second release.
+    expect(() => service.release({ leaseId: leases[0].leaseId, at: at + 5000 }).state).toThrow();
+
+    // A fresh writer on the SAME repository must still be admitted: a removed lease holds no
+    // writer slot.
+    const admitted = await service.allocate({
+      repository,
+      taskId: taskIdFor('quota-removal-fresh'),
+      ownerId: 'writer-fresh',
+      at: at + 4000,
+    });
+    expect(admitted.state).toBe('active');
+    expect(service.leasesByRepository(repository)).toHaveLength(1);
+    service.close();
+  });
+
+  it('S2: once every lease in the service is removed, the service still admits a new writer on a new repository', async () => {
+    const service = leasesModule.createWriterLeaseService({ writersRoot: await scratch('capacity-removal') });
+    const quota = leasesModule.WRITER_LIMITS.maxWritersPerRepository;
+    const capacity = leasesModule.WRITER_LIMITS.maxActiveLeases;
+    const at = 1700000000000;
+
+    const repositories: string[] = [];
+    const leases: LeaseView[] = [];
+    let clock = 0;
+    for (let index = 0; index * quota < capacity; index += 1) {
+      const repository = await createRepo(`capacity-removal-${index}`);
+      repositories.push(repository);
+      for (let writer = 0; writer < quota; writer += 1) {
+        leases.push(await service.allocate({
+          repository,
+          taskId: taskIdFor(`capacity-removal-${index}-${writer}`),
+          ownerId: `writer-${index}-${writer}`,
+          at: at + (clock += 1),
+        }));
+      }
+    }
+    expect(service.state().total).toBe(capacity);
+
+    // At capacity, one more writer anywhere is the explicit conflict the limits promise.
+    const overflow = await rejection(service.allocate({
+      repository: repositories[0],
+      taskId: taskIdFor('capacity-removal-overflow'),
+      ownerId: 'writer-overflow',
+      at: at + 1000,
+    }));
+    expect(overflow.code).toBe('conflict');
+    expect(overflow.field).toBe('writer_lease_capacity');
+
+    for (const lease of leases) {
+      await retire(service, lease, at + 2000);
+    }
+    const state = service.state();
+    expect(state.active).toBe(0);
+    expect(state.removed).toBe(capacity);
+
+    // With no live lease left, a brand-new repository must still be servable.
+    const fresh = await createRepo('capacity-removal-fresh');
+    const admitted = await service.allocate({
+      repository: fresh,
+      taskId: taskIdFor('capacity-removal-fresh'),
+      ownerId: 'writer-fresh',
+      at: at + 5000,
+    });
+    expect(admitted.state).toBe('active');
+    service.close();
+  });
+});
