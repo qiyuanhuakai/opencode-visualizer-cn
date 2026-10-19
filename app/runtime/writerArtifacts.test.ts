@@ -1630,6 +1630,49 @@ describe('task 40 — the six PR #196 review findings', () => {
     store.close();
   });
 
+  it('P2e: a directory replaced by a symlink replays onto a clean base, retiring the old child first', async () => {
+    const repository = await createRepo('dir-to-symlink');
+    // The base commit carries a tracked FILE inside a tracked directory.
+    await mkdir(path.join(repository, 'bundle'), { recursive: true });
+    await writeFile(path.join(repository, 'bundle', 'child'), 'nested\n', 'utf8');
+    runGit(repository, ['add', '-A']);
+    runGit(repository, ['-c', 'user.name=vis', '-c', 'user.email=vis@example.invalid', 'commit', '-q', '-m', 'add bundle']);
+
+    const writersRoot = await scratch('dir-to-symlink');
+    const storeRoot = await scratch('dir-to-symlink-store');
+    const service = leasesModule.createWriterLeaseService({ writersRoot });
+    const store = storeModule.createArtifactStore({ root: storeRoot });
+    const artifacts = serviceModule.createArtifactService({ store, root: storeRoot });
+    const lease = await service.allocate({
+      repository,
+      taskId: taskIdFor('dir-to-symlink'),
+      ownerId: 'writer-d2s',
+    });
+    // The writer replaces the tracked DIRECTORY with a SYMLINK to an in-repo path that does not
+    // exist yet.
+    await rm(path.join(lease.nativeCwd, 'bundle'), { recursive: true });
+    await symlink('moved/bundle', path.join(lease.nativeCwd, 'bundle'));
+
+    const captured = await artifacts.capture({ lease });
+    expect(captured.manifest.find((entry) => entry.path === 'bundle')?.kind).toBe('symlink');
+    expect(captured.manifest.find((entry) => entry.path === 'bundle/child')?.kind).toBe('delete');
+
+    // Replaying onto the pristine base: the old child file is a plain file here, so the first
+    // phase retires it BEFORE the directory is replaced by the symlink — the conversion must
+    // replay instead of being refused by the planned-symlink precheck.
+    const applyTarget = await scratch('dir-to-symlink-apply');
+    await mkdir(path.join(applyTarget, 'bundle'), { recursive: true });
+    await writeFile(path.join(applyTarget, 'bundle', 'child'), 'nested\n', 'utf8');
+    const applied = await artifacts.apply({ artifactHash: captured.artifactHash }, applyTarget);
+    expect(applied.applied).toBe(2);
+    const observed = await lstat(path.join(applyTarget, 'bundle'));
+    expect(observed.isSymbolicLink()).toBe(true);
+    expect(await readlink(path.join(applyTarget, 'bundle'))).toBe('moved/bundle');
+    expect(await exists(path.join(applyTarget, 'bundle', 'child'))).toBe(false);
+    service.close();
+    store.close();
+  });
+
   it('P3: a git timeout STOPS the child process instead of waiting for it to exit on its own', async () => {
     const stops: unknown[] = [];
     const spawned: EventEmitter[] = [];

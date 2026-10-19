@@ -94,16 +94,20 @@ function sha256Of(payload) {
  * the artifact created, which is the same escape by another route), and `retiring`, the deletions
  * the first phase retires because their target is not a directory. A retired path is gone before
  * any create runs, so it neither blocks a file -> directory transition nor counts as a symlinked
- * ancestor; an UNDECLARED file in the way is refused rather than silently clobbered.
+ * ancestor; a retired ENTRY is likewise exempt from the created-symlink refusal, because its own
+ * deletion runs before the link exists and nothing is ever written through it. Every other entry
+ * keeps the refusal, every phase still re-checks the live disk as it executes, and an UNDECLARED
+ * file in the way is refused rather than silently clobbered.
  */
 async function assertNoSymlinkAncestor(fsLike, resolved, applyRoot, context = EMPTY_CONTEXT) {
   const relative = path.relative(applyRoot, resolved);
   let current = applyRoot;
   let blocker = null;
+  const symlinkAhead = !context.retiring.has(resolved);
   for (const segment of relative.split(path.sep).slice(0, -1)) {
     if (segment.length === 0) continue;
     current = path.join(current, segment);
-    if (context.createdSymlinks.has(current)) {
+    if (symlinkAhead && context.createdSymlinks.has(current)) {
       throw new CollaborationError('invalid_request', 'artifact_path', {
         path: relative,
         reason: 'artifact_creates_symlink',
