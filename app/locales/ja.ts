@@ -725,6 +725,7 @@ const messages: LocaleMessages = {
     searchPlaceholder: '検索…',
     noMatchingModels: '一致するモデルがありません',
     clipboardReadFailed: 'クリップボードを読み取れなかったため、スニペットを挿入しませんでした。',
+    threadTargetUnresolved: 'このスレッドには入力を受け取れる参加者がいません。送信前にアクティブな参加者を選択してください。',
     bookmark: 'ブックマーク',
     removeFromFavorites: 'お気に入りから削除',
     createSnippetFromFavorite: 'お気に入りからスニペットを作成',

@@ -94,6 +94,8 @@
           :read-evidence="threadReadEvidence"
           :busy="threadState.busy.value"
           :error="threadState.error.value"
+          :selected-session="threadState.selectedSession.value"
+          :selected-session-resolution="threadState.selectedSessionResolution.value"
           @select-target="onThreadSelectTarget"
           @activate="onThreadActivate"
           @leave="onThreadLeave"
@@ -245,6 +247,7 @@ const emit = defineEmits<{
   (event: 'card-notice', message: string): void;
   (event: 'open-image', payload: { url: string; filename: string }): void;
   (event: 'show-thread-history', payload: { entries: HistoryWindowEntry[] }): void;
+  (event: 'refresh-native-history', payload: { participantId: string; session: SessionRef }): void;
   (event: 'show-subagent-history', payload: { sessionId: string; label: string }): void;
   (event: 'open-file', path: string, lines?: string): void;
   (event: 'show-commit', hash: string): void;
@@ -281,7 +284,11 @@ function onThreadBrowseNativeHistory(participantId: string): void {
   if (threadState === null) return;
   const session = threadState.sessionOfParticipant(participantId);
   if (session === null) return;
+  // Locating the participant's session AND asking the container to re-read that
+  // participant's history: writing the selection alone left Refresh unable to
+  // reload anything, because the panel never owns the history source.
   threadState.setSelectedSession(session);
+  emit('refresh-native-history', { participantId, session });
 }
 
 function onThreadBeginHandoff(input: {

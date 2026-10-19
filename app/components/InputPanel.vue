@@ -755,25 +755,33 @@ function runtimeSendInput(): RuntimeSendInput {
 }
 
 /**
- * The binding the prompt is actually sent through. When the thread target row names exactly one
- * participant, the prompt goes to THAT participant's own native session — the same session the
- * chips display — instead of whatever session the runtime binding happens to hold.
+ * The binding the prompt is actually sent through. With a thread open, the prompt goes to the
+ * EFFECTIVE target's own native session — the very participant the chips display (explicit
+ * selection, else the thread's active participant) — instead of whatever session the runtime
+ * binding happens to hold. When that participant cannot be resolved, the answer is `null`: the
+ * caller refuses the send visibly rather than silently falling back to the ambient binding,
+ * which is how a prompt once reached the wrong session.
  */
-function sendBinding(binding: RuntimeActionBinding): RuntimeActionBinding {
+function sendBinding(binding: RuntimeActionBinding): RuntimeActionBinding | null {
   const state = threadState;
   if (state === null) return binding;
-  const selected = state.targets.value;
-  if (selected.length !== 1) return binding;
-  const participant = state.summary.value?.participants.find((entry) => entry.participantId === selected[0]);
-  const session = participant?.session;
-  if (session === undefined) return binding;
+  // No thread open: the composer keeps its legacy behaviour exactly.
+  if (state.threadId.value === null) return binding;
+  const effective = state.effectiveTargets.value;
+  const session = effective.length === 1 ? effective[0]?.session : undefined;
+  if (session === undefined) return null;
   return Object.freeze({ ...binding, session });
 }
 
 function requestSend() {
   const binding = runtimeBinding();
   if (binding && runtimeSessionActions) {
-    void runtimeSessionActions.router.sendMessage(sendBinding(binding), runtimeSendInput());
+    const target = sendBinding(binding);
+    if (target === null) {
+      emit('status-error', t('inputPanel.threadTargetUnresolved'));
+      return;
+    }
+    void runtimeSessionActions.router.sendMessage(target, runtimeSendInput());
     return;
   }
   emit('send');

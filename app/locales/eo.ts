@@ -721,6 +721,7 @@ const messages: LocaleMessages = {
     searchPlaceholder: 'Serĉi…',
     noMatchingModels: 'Neniu kongrua modelo',
     clipboardReadFailed: 'Ne eblis legi la tondujon. La tekstpeco ne estis enmetita.',
+    threadTargetUnresolved: 'Ĉi tiu fadeno havas neniun partoprenon kiu povas ricevi la enigon. Elektu aktivan partoprenon antaŭ sendi.',
     bookmark: 'Legosigno',
     removeFromFavorites: 'Forigi el favoratoj',
     createSnippetFromFavorite: 'Krei eron el favorato',

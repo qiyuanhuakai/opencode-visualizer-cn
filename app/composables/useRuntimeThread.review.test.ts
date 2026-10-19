@@ -545,4 +545,52 @@ describe('evidence cache invalidation', () => {
     app.unmount();
     host.remove();
   });
+
+  it('clears the previously read page when the SAME target object is revised in place', async () => {
+    const module = await import('../components/runtime/ContextEvidenceView.vue');
+    const View = module.default;
+    const payload = 'AAAA payload at revision one';
+    const readEvidence = (): { bytes: Uint8Array; totalBytes: number } => {
+      const bytes = new TextEncoder().encode(payload);
+      return { bytes, totalBytes: bytes.byteLength };
+    };
+    const checkpoint = Object.freeze({
+      checkpointId: '77777777-7777-4777-8777-777777777777',
+      evidence: [Object.freeze({ hash: evidenceHash(payload), bytes: payload.length, target: Object.freeze({ repoKey: 'repo:/repo', revision: '1' }) })],
+    }) as unknown as ContextCheckpointView;
+    // The SAME mutable object is revised in place, so its identity never changes:
+    // a cache scoped to the object reference alone cannot see the new revision.
+    const currentTarget = ref<{ repoKey: string; revision: string }>({ repoKey: 'repo:/repo', revision: '1' });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const app = createApp(defineComponent({
+      setup() {
+        return () => h(View as never, {
+          checkpoint,
+          currentTarget: currentTarget.value,
+          readEvidence,
+          pageLength: 4096,
+        } as never);
+      },
+    }));
+    app.mount(host);
+    await nextTick();
+    await tick();
+    host.querySelector<HTMLButtonElement>('[data-testid="read-evidence-page"]')?.click();
+    await nextTick();
+    await tick();
+    expect(host.querySelector('[data-testid="evidence-page-text"]')?.textContent).toContain('AAAA');
+
+    // When: the live target is revised in place — same object, new revision.
+    currentTarget.value.revision = '2';
+    await nextTick();
+    await tick();
+
+    // Then: the held bytes are stale under the new revision and must be dropped, not
+    // re-labelled as the current target's evidence.
+    expect(host.querySelector('[data-testid="evidence-page-text"]')).toBeNull();
+
+    app.unmount();
+    host.remove();
+  });
 });

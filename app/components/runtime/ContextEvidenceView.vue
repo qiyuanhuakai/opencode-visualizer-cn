@@ -171,8 +171,20 @@ function resetPage(): void {
   lastRef = null;
 }
 
+/**
+ * The cached page is scoped to the exact boundary it was read through. Any change of checkpoint,
+ * current target or reader makes the held bytes stale, so the cache is dropped rather than shown
+ * under a different scope. The target's boundary is its IDENTITY — repoKey and revision — read as
+ * scalars, because a live target can be revised in place (the same object, a new revision) and a
+ * reference watch would never fire for that.
+ */
 watch(
-  () => [props.checkpoint?.checkpointId ?? null, props.currentTarget, props.readEvidence] as const,
+  () => [
+    props.checkpoint?.checkpointId ?? null,
+    props.currentTarget?.repoKey ?? null,
+    props.currentTarget?.revision ?? null,
+    props.readEvidence,
+  ] as const,
   () => { resetPage(); },
 );
 

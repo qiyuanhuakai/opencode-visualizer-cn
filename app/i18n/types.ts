@@ -696,6 +696,7 @@ export interface LocaleMessages {
     searchPlaceholder: string;
     noMatchingModels: string;
     clipboardReadFailed: string;
+    threadTargetUnresolved: string;
     bookmark: string;
     removeFromFavorites: string;
     createSnippetFromFavorite: string;

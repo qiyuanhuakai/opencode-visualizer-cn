@@ -733,6 +733,7 @@ const messages: LocaleMessages = {
     searchPlaceholder: 'Search...',
     noMatchingModels: 'No matching models',
     clipboardReadFailed: 'Clipboard could not be read. The Snippet was not inserted.',
+    threadTargetUnresolved: 'This thread has no participant the input can be sent to. Select an active participant before sending.',
     bookmark: 'Bookmark',
     removeFromFavorites: 'Remove from favorites',
     createSnippetFromFavorite: 'Create snippet from favorite',

@@ -26,9 +26,36 @@ import { computed, inject, ref, type ComputedRef, type InjectionKey, type Ref } 
 import type { ProtocolError } from '../../shared/runtime/capabilities.js';
 import type { RepoRef, SessionRef } from '../../shared/runtime/identity.js';
 import type { ThreadService, ThreadSummary } from '../../bridge/runtime/threads/threadService.js';
+import type { ParticipantView } from '../../bridge/runtime/threads/participantService.js';
 import { threadBindingKey } from '../../shared/runtime/thread.js';
 import type { TimelinePage, TurnTimeline } from '../runtime/timeline';
 import { createTurnTimeline } from '../runtime/timeline';
+
+/**
+ * THE target rule, in one place: an explicit selection wins; with none, the
+ * input follows the thread's active participant.
+ *
+ * ThreadView's chips render exactly this list, and InputPanel sends through
+ * exactly this participant, so the display and the send can never disagree
+ * about where a prompt lands. The rule is a pure function of the frozen read
+ * model so both callers — and the composable's own `effectiveTargets` — are
+ * provably the same rule rather than two implementations that can drift.
+ */
+export function effectiveTargetParticipants(
+  summary: ThreadSummary | null,
+  targets: readonly string[],
+): readonly ParticipantView[] {
+  if (summary === null) return Object.freeze([]);
+  if (targets.length > 0) {
+    return Object.freeze(
+      summary.participants.filter((participant) => targets.includes(participant.participantId)),
+    );
+  }
+  const active = summary.participants.find(
+    (participant) => participant.participantId === summary.activeParticipantId,
+  );
+  return Object.freeze(active === undefined ? [] : [active]);
+}
 
 /**
  * The frozen handoff read model this UI renders (task 34's `handoffView`).
@@ -131,6 +158,11 @@ export interface RuntimeThreadState {
   readonly summary: Ref<ThreadSummary | null>;
   /** Which participants the single prompt goes to. Empty = follow the active participant. */
   readonly targets: Ref<readonly string[]>;
+  /**
+   * THE target rule: explicit selection, else the thread's active participant.
+   * The chips render this list and the composer sends through it.
+   */
+  readonly effectiveTargets: ComputedRef<readonly ParticipantView[]>;
   readonly handoff: Ref<RuntimeHandoffView | null>;
   readonly handoffOps: Ref<readonly RuntimeHandoffOpView[]>;
   /** The session tree's current selection, resolved against this thread. */
@@ -203,6 +235,9 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
   const threadId = ref<string | null>(null);
   const summary = ref<ThreadSummary | null>(null);
   const targets = ref<readonly string[]>([]);
+  const effectiveTargets = computed<readonly ParticipantView[]>(() =>
+    effectiveTargetParticipants(summary.value, targets.value),
+  );
   const handoff = ref<RuntimeHandoffView | null>(null);
   const handoffOps = ref<readonly RuntimeHandoffOpView[]>([]);
   const selectedSession = ref<SessionRef | null>(null);
@@ -602,6 +637,7 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
     threadId,
     summary,
     targets,
+    effectiveTargets,
     handoff,
     handoffOps,
     selectedSession,

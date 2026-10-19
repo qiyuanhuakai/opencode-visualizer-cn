@@ -717,6 +717,7 @@ const messages: LocaleMessages = {
     searchPlaceholder: '搜尋...',
     noMatchingModels: '無符合的模型',
     clipboardReadFailed: '無法讀取剪貼簿，未插入文字片段。',
+    threadTargetUnresolved: '目前執行緒沒有可接收輸入的參與者，請先選擇一位活躍參與者再傳送。',
     bookmark: '收藏',
     removeFromFavorites: '從收藏中移除',
     createSnippetFromFavorite: '從收藏建立片段',
