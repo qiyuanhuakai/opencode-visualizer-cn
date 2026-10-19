@@ -13,13 +13,14 @@ export interface Item { readonly key: string; readonly revision: number; readonl
 export interface PageOptions { readonly collection: Collection; readonly cursor?: string | null; readonly limit?: number; readonly token?: string }
 export interface Page { readonly items: readonly Item[]; readonly cursor: string | null }
 export interface Snapshot extends Page { readonly token: string; readonly epoch: string; readonly revision: number; readonly watermark: number; readonly expiresAt: number }
-export interface Inspection { readonly fence: number; readonly epoch: string; readonly revision: number; readonly seq: number; readonly floor: number; readonly pid: number; readonly backupPath: string | null; readonly locality: { readonly local: boolean; readonly platform: string; readonly type: string; readonly canonicalPath: string } }
+export interface Inspection { readonly environment: string; readonly fence: number; readonly epoch: string; readonly revision: number; readonly seq: number; readonly floor: number; readonly pid: number; readonly backupPath: string | null; readonly locality: { readonly local: boolean; readonly platform: string; readonly type: string; readonly canonicalPath: string } }
 export interface Exit { readonly code: number | null; readonly signal: string | null; readonly pid: number }
 export interface RuntimeStore {
   readonly ready: Promise<Inspection>; readonly pid: number; readonly queue: { readonly normal: number; readonly control: number; readonly bytes: number };
   mutate(params: Mutation): Promise<Ack>;
   mutateControl(params: Mutation): Promise<Ack>;
   readIntent(params: { readonly intentId: string }): Promise<Ack | null>;
+  getControl(params: { readonly collection: 'operations' | 'interactions'; readonly key: string }): Promise<Item | null>;
   get(params: { readonly collection: Collection; readonly key: string }): Promise<Item | null>;
   page(params: PageOptions): Promise<Page>;
   snapshot(params: PageOptions): Promise<Snapshot>;
