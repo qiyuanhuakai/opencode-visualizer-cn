@@ -1,8 +1,13 @@
 // @vitest-environment node
-import { parseSessionRef } from '../../../shared/runtime/identity.js';
+import {
+  parseSessionRef,
+  parseEnvironmentId,
+  parseHarnessInstanceId,
+} from '../../../shared/runtime/identity.js';
 import { encodeSessionKey } from '../../../shared/runtime/identity.js';
-import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import type { InternalNativeHistoryHandle } from '../../../bridge/runtime/historyService.js';
+import { randomUUID, createHash } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRuntimeStore } from '../../../bridge/runtime/storage/runtimeStore.js';
@@ -668,4 +673,595 @@ describe('Codex cancellation durable ownership', () => {
       }
     }
   });
+});
+
+describe('Codex native selected-history raw producer', () => {
+  const environmentId = parseEnvironmentId('11111111-1111-4111-8111-111111111111');
+  const harnessInstanceId = parseHarnessInstanceId('22222222-2222-4222-8222-222222222222');
+  const epoch = '33333333-3333-4333-8333-333333333333';
+  const session = parseSessionRef({ environmentId, harnessInstanceId, nativeSessionId: 'thr_native' });
+  const signal = (): AbortSignal => new AbortController().signal;
+  const turnPage = (id: string) => ({
+    data: [{ id, status: 'completed', items: [], startedAtMs: 0, completedAtMs: 3 }],
+    nextCursor: null,
+  });
+  async function storeFor() {
+    const { createHistoryStream, createHistoryDiskBudget } =
+      await import('../../../bridge/runtime/historyStream.js');
+    return createHistoryStream({
+      scope: 'codex-test',
+      createDirectory: () => mkdtemp(path.join(tmpdir(), 'vis-codex-history-spool-')),
+      globalDisk: createHistoryDiskBudget(),
+    });
+  }
+  async function producerFor(
+    buildFrame: (id: number) => string,
+    secrets: readonly string[] = [],
+    chunkBytes?: number,
+  ): Promise<InternalNativeHistoryHandle> {
+    const { createCodexHistoryStream } =
+      await import('../../../bridge/runtime/drivers/codexHistory.js');
+    const { createAppServerClient } =
+      await import('../../../shared/runtime/native/codex/appServerClient.js');
+    const transport = {
+      subscribe(): () => void {
+        return () => {};
+      },
+      send() {},
+      close() {},
+      requestRaw(_raw: string, id: number): AsyncIterable<Uint8Array> {
+        return (async function* () {
+          const frame = Buffer.from(buildFrame(id), 'utf8');
+          if (!chunkBytes) {
+            yield frame;
+            return;
+          }
+          for (let offset = 0; offset < frame.length; offset += chunkBytes)
+            yield frame.subarray(offset, offset + chunkBytes);
+        })();
+      },
+    };
+    const client = createAppServerClient({ transport, onMessage() {} });
+    return createCodexHistoryStream({
+      session,
+      request: async () => turnPage('t1'),
+      requestHistory: (method, params) => client.requestHistory(method, params),
+      processGeneration: 1,
+      epoch,
+      assertCurrent() {},
+      randomUUID,
+      secrets,
+    });
+  }
+  async function drain(
+    handle: InternalNativeHistoryHandle,
+    pageId: string,
+    descriptorId: string,
+  ): Promise<Buffer> {
+    const parts: Buffer[] = [];
+    let offset = 0;
+    for (;;) {
+      const chunk = await handle.chunk({ pageId, descriptorId, offset, signal: signal() });
+      expect(chunk.bytes.byteLength).toBeLessThanOrEqual(65536);
+      expect(chunk.bytes.buffer.byteLength).toBeLessThanOrEqual(65536);
+      parts.push(Buffer.from(chunk.bytes.buffer, chunk.bytes.byteOffset, chunk.bytes.byteLength));
+      const next = chunk.nextOffset;
+      chunk.release();
+      if (next === null) break;
+      offset = next;
+    }
+    return Buffer.concat(parts);
+  }
+  it('registers core.openHistory as a supported producer without changing any other manifest entry', async () => {
+    const { createCodexDriver } =
+      await import('../../../bridge/runtime/drivers/codexDriver.js');
+    const { createRuntimeHost } = await import('../../../bridge/runtime/runtimeHost.js');
+    const directory = await mkdtemp(path.join(tmpdir(), 'vis-codex-driver-'));
+    const ownerId = '44444444-4444-4444-8444-444444444444';
+    const store = createRuntimeStore({
+      stateDirectory: path.join(directory, 'runtime'),
+      environmentId,
+      ownerId,
+      epoch,
+    });
+    await store.ready;
+    const runtime = createRuntimeHost({ environmentId, role: 'local' });
+    runtime.start();
+    let receive: (raw: string) => void = () => {};
+    const transport = {
+      subscribe(callback: (raw: string) => void): () => void {
+        receive = callback;
+        return () => {};
+      },
+      send(raw: string) {
+        const message = JSON.parse(raw);
+        if (message.method === 'initialize')
+          receive(
+            JSON.stringify({ id: message.id, result: { userAgent: 'codex-cli/0.160.0 test' } }),
+          );
+      },
+      close() {},
+    };
+    const { createWorkspaceService } = await import('../../../bridge/runtime/workspaceService.js');
+    const workspace = await createWorkspaceService({
+      target: environmentId,
+      epoch,
+      roots: [{ root: directory, permissions: ['read'] }],
+    });
+    const driver = await createCodexDriver({
+      environmentId,
+      harnessInstanceId,
+      epoch,
+      processGeneration: 1,
+      store,
+      runtime,
+      workspace,
+      allowedWorkspaces: workspace.workspaces.map((root) => root.key),
+      transport,
+      isProcessCurrent: () => true,
+    });
+    try {
+      expect(driver.registration.manifest.core.openHistory).toEqual({ state: 'supported' });
+      expect(typeof driver.registration.driver.core.openHistory).toBe('function');
+      expect(driver.registration.manifest.core.readHistoryPage).toEqual({ state: 'supported' });
+      expect(driver.registration.manifest.capabilities.sessionPin).toMatchObject({
+        state: 'unsupported',
+      });
+    } finally {
+      await driver.close();
+      await workspace.close();
+      await runtime.stop();
+      await store.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it('streams a >4 MiB native item through the bounded substrate with an exact SHA-256 proof', async () => {
+    const payload = 'x'.repeat(6 * 1024 * 1024);
+    const element = {
+      turnId: 't1',
+      item: { id: 'item-1', type: 'commandExecution', aggregatedOutput: payload },
+      startedAtMs: 1,
+      completedAtMs: 2,
+    };
+    const handle = await producerFor((id) =>
+      JSON.stringify({ id, result: { data: [element], nextCursor: null } }),
+    );
+    const store = await storeFor();
+    try {
+      await handle.open({ signal: signal(), streamStore: store });
+      const page = await handle.page({ signal: signal() });
+      expect(page.items.map((item) => item.recordId)).toEqual(['item-1']);
+      expect(page.items.every((item) => item.kind === 'stream')).toBe(true);
+      expect(page).toMatchObject({ completeness: 'complete', cursor: null });
+      const frame = JSON.stringify({ id: 1, result: { data: [element], nextCursor: null } });
+      expect(Buffer.byteLength(frame)).toBeGreaterThan(4 * 1024 * 1024);
+      const descriptor = page.document;
+      if (!descriptor) throw new TypeError('missing native document');
+      const document = await drain(handle, page.pageId, descriptor.id);
+      expect(createHash('sha256').update(document).digest('hex')).toBe(descriptor.sha256);
+      expect(document.toString('utf8')).toBe(frame);
+      const first = page.items[0];
+      if (first?.kind !== 'stream') throw new TypeError('missing native record');
+      const record = await drain(handle, page.pageId, first.descriptor.id);
+      expect(record.toString('utf8')).toBe(JSON.stringify(element));
+      expect(store.usage().diskBytes).toBe(descriptor.totalBytes);
+    } finally {
+      await handle.close();
+      await store.close();
+    }
+  });
+  it('correlates the actual native id emitted after an oversized result', async () => {
+    const payload = 'z'.repeat(5 * 1024 * 1024);
+    const element = {
+      turnId: 't1',
+      item: { id: 'late-1', aggregatedOutput: payload },
+      startedAtMs: 1,
+      completedAtMs: 2,
+    };
+    const handle = await producerFor((id) =>
+      JSON.stringify({ result: { data: [element], nextCursor: null }, id }),
+    );
+    const store = await storeFor();
+    try {
+      await handle.open({ signal: signal(), streamStore: store });
+      const page = await handle.page({ signal: signal() });
+      expect(page.items.map((item) => item.recordId)).toEqual(['late-1']);
+      const first = page.items[0];
+      if (first?.kind !== 'stream') throw new TypeError('missing native record');
+      const record = await drain(handle, page.pageId, first.descriptor.id);
+      expect(JSON.parse(record.toString('utf8')).item.aggregatedOutput).toBe(payload);
+    } finally {
+      await handle.close();
+      await store.close();
+    }
+  });
+  it('failure rejects an uncorrelatable native id instead of publishing a page', async () => {
+    const element = {
+      turnId: 't1',
+      item: { id: 'x', aggregatedOutput: 'y' },
+      startedAtMs: 1,
+      completedAtMs: 2,
+    };
+    const handle = await producerFor((id) =>
+      JSON.stringify({ id: id + 1000, result: { data: [element], nextCursor: null } }),
+    );
+    const store = await storeFor();
+    try {
+      await handle.open({ signal: signal(), streamStore: store });
+      await expect(handle.page({ signal: signal() })).rejects.toMatchObject({
+        code: 'reconcile_required',
+        field: 'codex.history_correlation',
+      });
+      expect(store.usage()).toMatchObject({
+        diskBytes: 0,
+        pages: 0,
+        fileHandles: 0,
+        pendingWrites: 0,
+        outputs: 0,
+      });
+    } finally {
+      await handle.close();
+      await store.close();
+    }
+  });
+  it('failure maps a native JSON-RPC history error without publishing a page', async () => {
+    const handle = await producerFor((id) =>
+      JSON.stringify({ id, error: { code: -32601, message: 'unsupported' } }),
+    );
+    const store = await storeFor();
+    try {
+      await handle.open({ signal: signal(), streamStore: store });
+      await expect(handle.page({ signal: signal() })).rejects.toMatchObject({
+        code: 'unsupported',
+        nativeCode: -32601,
+      });
+      expect(store.usage()).toMatchObject({ diskBytes: 0, pages: 0 });
+    } finally {
+      await handle.close();
+      await store.close();
+    }
+  });
+  it('parses a successful page whose items carry a nested tool error as success', async () => {
+    const element = {
+      turnId: 't1',
+      item: {
+        id: 'tool-1',
+        type: 'mcpToolCall',
+        status: 'failed',
+        error: { code: -32601, message: 'tool execution rejected' },
+      },
+      startedAtMs: 1,
+      completedAtMs: 2,
+    };
+    const handle = await producerFor((id) =>
+      JSON.stringify({ id, result: { data: [element], nextCursor: null } }),
+    );
+    const store = await storeFor();
+    try {
+      await handle.open({ signal: signal(), streamStore: store });
+      const page = await handle.page({ signal: signal() });
+      expect(page.items.map((item) => item.recordId)).toEqual(['tool-1']);
+      expect(page).toMatchObject({ completeness: 'complete', cursor: null });
+    } finally {
+      await handle.close();
+      await store.close();
+    }
+  });
+  it('reads nextCursor from the result envelope and ignores a same-named nested field', async () => {
+    const element = {
+      turnId: 't1',
+      item: { id: 'item-1', nextCursor: 'nested-should-be-ignored', aggregatedOutput: 'x' },
+      startedAtMs: 1,
+      completedAtMs: 2,
+    };
+    const handle = await producerFor((id) =>
+      JSON.stringify({ id, result: { data: [element], nextCursor: 'page-2' } }),
+    );
+    const store = await storeFor();
+    try {
+      await handle.open({ signal: signal(), streamStore: store });
+      const page = await handle.page({ signal: signal() });
+      expect(page).toMatchObject({ completeness: 'partial', cursor: 'page-2' });
+    } finally {
+      await handle.close();
+      await store.close();
+    }
+  });
+  it('parses a nested tool error and result cursor when the frame arrives one byte per chunk', async () => {
+    const element = {
+      turnId: 't1',
+      item: { id: 'tool-x', type: 'mcpToolCall', error: { code: -32601, message: 'rejected' } },
+      startedAtMs: 1,
+      completedAtMs: 2,
+    };
+    const handle = await producerFor(
+      (id) => JSON.stringify({ id, result: { data: [element], nextCursor: 'page-9' } }),
+      [],
+      1,
+    );
+    const store = await storeFor();
+    try {
+      await handle.open({ signal: signal(), streamStore: store });
+      const page = await handle.page({ signal: signal() });
+      expect(page.items.map((item) => item.recordId)).toEqual(['tool-x']);
+      expect(page).toMatchObject({ completeness: 'partial', cursor: 'page-9' });
+    } finally {
+      await handle.close();
+      await store.close();
+    }
+  });
+  it('failure rejects a duplicate native record identity before publishing a page', async () => {
+    const payload = 'q'.repeat(1024);
+    const item = (turnId: string, startedAtMs: number, completedAtMs: number) => ({
+      turnId,
+      item: { id: 'dup', aggregatedOutput: payload },
+      startedAtMs,
+      completedAtMs,
+    });
+    const handle = await producerFor((id) =>
+      JSON.stringify({
+        id,
+        result: { data: [item('t1', 1, 2), item('t2', 3, 4)], nextCursor: null },
+      }),
+    );
+    const store = await storeFor();
+    try {
+      await handle.open({ signal: signal(), streamStore: store });
+      await expect(handle.page({ signal: signal() })).rejects.toMatchObject({
+        code: 'invalid_request',
+        field: 'history.record_identity',
+      });
+      expect(store.usage()).toMatchObject({ diskBytes: 0, pages: 0 });
+    } finally {
+      await handle.close();
+      await store.close();
+    }
+  });
+  it('redacts configured secret substrings before any spool byte is written', async () => {
+    const secret = 'top-secret-token';
+    const filler = 'a'.repeat(70000);
+    const element = {
+      turnId: 't1',
+      item: {
+        id: 'secret-1',
+        aggregatedOutput: `${filler} ${secret} tail`,
+        note: secret,
+      },
+      startedAtMs: 1,
+      completedAtMs: 2,
+    };
+    const handle = await producerFor(
+      (id) => JSON.stringify({ id, result: { data: [element], nextCursor: null } }),
+      [secret],
+    );
+    const store = await storeFor();
+    try {
+      await handle.open({ signal: signal(), streamStore: store });
+      const page = await handle.page({ signal: signal() });
+      const descriptor = page.document;
+      if (!descriptor) throw new TypeError('missing native document');
+      const document = await drain(handle, page.pageId, descriptor.id);
+      expect(document.toString('utf8')).not.toContain(secret);
+      const first = page.items[0];
+      if (first?.kind !== 'stream') throw new TypeError('missing native record');
+      const record = await drain(handle, page.pageId, first.descriptor.id);
+      const text = record.toString('utf8');
+      expect(text).not.toContain(secret);
+      expect(text).toContain('[REDACTED]');
+      expect(JSON.parse(text).item.note).toBe('[REDACTED]');
+    } finally {
+      await handle.close();
+      await store.close();
+    }
+  });
+});
+
+describe('Codex stdio app-server raw history routing', () => {
+  const FIXTURE = [
+    "let buffer = '';",
+    "process.stdin.on('data', (chunk) => {",
+    "  buffer += chunk.toString('utf8');",
+    '  for (;;) {',
+    "    const index = buffer.indexOf('\\n');",
+    '    if (index < 0) break;',
+    '    const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);',
+    '    if (!line.trim()) continue;',
+    '    const message = JSON.parse(line);',
+    "    if (message.method === 'echo') process.stdout.write(JSON.stringify({ id: message.id, result: { ok: true } }) + '\\n');",
+    "    else if (message.method === 'history') { const payload = 'x'.repeat(6 * 1024 * 1024); process.stdout.write(JSON.stringify({ result: { data: [{ turnId: 't1', item: { id: 'item-1', payload }, startedAtMs: 1, completedAtMs: 2 }], nextCursor: null }, id: message.id }) + '\\n'); }",
+    "    else if (message.method === 'bigordinary') process.stdout.write(JSON.stringify({ id: message.id, result: { payload: 'y'.repeat(6 * 1024 * 1024) } }) + '\\n');",
+    '  }',
+    '});',
+  ].join('\n');
+  async function spawnFixture() {
+    const { createCodexProcess } =
+      await import('../../../bridge/runtime/drivers/codexProcess.js');
+    const dir = await mkdtemp(path.join(tmpdir(), 'vis-codex-app-server-'));
+    const script = path.join(dir, 'app-server.mjs');
+    await writeFile(script, FIXTURE, 'utf8');
+    const proc = createCodexProcess({ executable: process.execPath, args: [script] });
+    return { proc, dir };
+  }
+  async function waitFor(predicate: () => boolean) {
+    const deadline = Date.now() + 10000;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error('native condition was not reached');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+  it('streams an oversized history frame raw before the 4 MiB line bound and keeps the ordinary parser byte-identical', async () => {
+    const { proc, dir } = await spawnFixture();
+    const lines: string[] = [];
+    const endings: string[] = [];
+    proc.subscribe(
+      (line) => lines.push(line),
+      () => endings.push('ended'),
+    );
+    try {
+      proc.send(JSON.stringify({ id: 1, method: 'echo', params: {} }));
+      await waitFor(() => lines.length === 1);
+      expect(JSON.parse(lines[0] ?? 'null')).toEqual({ id: 1, result: { ok: true } });
+      expect(proc.inspection().maxFrameBytes).toBe(4 * 1024 * 1024);
+      const requestRaw = proc.requestRaw;
+      if (!requestRaw) throw new TypeError('missing raw transport');
+      const raw = requestRaw(JSON.stringify({ id: 2, method: 'history', params: {} }), 2);
+      const parts: Buffer[] = [];
+      for await (const chunk of raw) parts.push(Buffer.from(chunk));
+      const frame = Buffer.concat(parts).toString('utf8');
+      expect(Buffer.byteLength(frame)).toBeGreaterThan(4 * 1024 * 1024);
+      expect(JSON.parse(frame)).toMatchObject({
+        id: 2,
+        result: { data: [{ item: { id: 'item-1' } }] },
+      });
+      expect(lines).toHaveLength(1);
+      expect(proc.inspection().failed).toBe(false);
+      proc.send(JSON.stringify({ id: 3, method: 'bigordinary', params: {} }));
+      await waitFor(() => endings.length === 1);
+      expect(proc.inspection().failed).toBe(true);
+    } finally {
+      await proc.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Codex history cancellation before the first byte (upper client/producer)', () => {
+  // Controlled stdio app-server stand-in reproducing the reviewer's finding 2 restatement:
+  // `thread/turns/list` answers normally, `thread/items/list` is held with NO response, and `echo`
+  // answers normally. The held raw frame never delivers a byte, so the pending iterator.next() can
+  // only be woken by an explicit cancel at the raw layer.
+  const HELD_FIXTURE = [
+    "let buffer = '';",
+    "process.stdin.on('data', (chunk) => {",
+    "  buffer += chunk.toString('utf8');",
+    '  for (;;) {',
+    "    const index = buffer.indexOf('\\n');",
+    '    if (index < 0) break;',
+    '    const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);',
+    '    if (!line.trim()) continue;',
+    '    const message = JSON.parse(line);',
+    "    if (message.method === 'thread/turns/list') {",
+    "      process.stdout.write(JSON.stringify({ id: message.id, result: { data: [{ id: 't1', status: 'completed', items: [], startedAtMs: 0, completedAtMs: 3 }], nextCursor: null } }) + '\\n');",
+    "    } else if (message.method === 'thread/items/list') {",
+    "      process.stderr.write('items-held\\n');",
+    "    } else if (message.method === 'echo') {",
+    "      process.stdout.write(JSON.stringify({ id: message.id, result: { ok: true } }) + '\\n');",
+    '    }',
+    '  }',
+    '});',
+  ].join('\n');
+
+  const environmentId = parseEnvironmentId('11111111-1111-4111-8111-111111111111');
+  const harnessInstanceId = parseHarnessInstanceId('2222' + '2222-2222-4222-8222-222222222222');
+  const epoch = '33333333-3333-4333-8333-333333333333';
+  const session = parseSessionRef({ environmentId, harnessInstanceId, nativeSessionId: 'thr_held' });
+
+  async function spawnHeldFixture() {
+    const { createCodexProcess } =
+      await import('../../../bridge/runtime/drivers/codexProcess.js');
+    const dir = await mkdtemp(path.join(tmpdir(), 'vis-codex-held-'));
+    const script = path.join(dir, 'app-server.mjs');
+    await writeFile(script, HELD_FIXTURE, 'utf8');
+    const proc = createCodexProcess({ executable: process.execPath, args: [script] });
+    return { proc, dir };
+  }
+
+  async function waitFor(predicate: () => boolean, deadlineMs = 8000): Promise<void> {
+    const deadline = Date.now() + deadlineMs;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error('native condition was not reached');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  function settled(work: Promise<unknown>, ms = 1500): Promise<'settled' | 'pending'> {
+    return Promise.race([
+      work.then(
+        () => 'settled' as const,
+        () => 'settled' as const,
+      ),
+      new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), ms)),
+    ]);
+  }
+
+  it('settles the page and close when items/list is held and the read is cancelled before its first byte', async () => {
+    const { proc, dir } = await spawnHeldFixture();
+    const { createAppServerClient } =
+      await import('../../../shared/runtime/native/codex/appServerClient.js');
+    const { createCodexHistoryStream } =
+      await import('../../../bridge/runtime/drivers/codexHistory.js');
+    const { createHistoryStream, createHistoryDiskBudget } =
+      await import('../../../bridge/runtime/historyStream.js');
+    // Observe when the producer is parked on the raw next(); the held fixture never answers it.
+    let pendingNext = 0;
+    const transport = {
+      subscribe: proc.subscribe.bind(proc),
+      send: proc.send.bind(proc),
+      close: proc.close.bind(proc),
+      requestRaw(raw: string, id: number) {
+        const frame = proc.requestRaw?.(raw, id);
+        if (!frame) throw new TypeError('missing raw transport');
+        const iterator = frame[Symbol.asyncIterator]();
+        return {
+          [Symbol.asyncIterator]() {
+            return {
+              next(...args: [] | [undefined]) {
+                pendingNext += 1;
+                return iterator.next(...args);
+              },
+              return(...args: [] | [undefined]) {
+                return iterator.return?.(...args) ?? Promise.resolve({ value: undefined, done: true });
+              },
+            };
+          },
+          cancel() {
+            frame.cancel?.();
+          },
+        };
+      },
+    };
+    const client = createAppServerClient({ transport, onMessage() {} });
+    const store = createHistoryStream({
+      scope: 'codex-held-test',
+      createDirectory: () => mkdtemp(path.join(tmpdir(), 'vis-codex-history-spool-')),
+      globalDisk: createHistoryDiskBudget(),
+    });
+    const handle = createCodexHistoryStream({
+      session,
+      request: (method, params) => client.request(method, params),
+      requestHistory: (method, params) => client.requestHistory(method, params),
+      processGeneration: 1,
+      epoch,
+      assertCurrent() {},
+      randomUUID,
+      secrets: [],
+    });
+    const controller = new AbortController();
+    let page: Promise<unknown> | undefined;
+    try {
+      await handle.open({ signal: controller.signal, streamStore: store });
+      page = handle.page({ signal: controller.signal });
+      void page.catch(() => {});
+      await waitFor(() => proc.inspection().stderrBytes > 0 && pendingNext > 0, 5000);
+      controller.abort();
+      expect(await settled(page)).toBe('settled');
+      expect(await settled(handle.close())).toBe('settled');
+      // And the shared connection is usable again for an ordinary RPC.
+      const echoed = await Promise.race([
+        client.request('echo', {}),
+        new Promise<never>((_resolve, reject) =>
+          setTimeout(() => reject(new Error('echo timed out')), 4000),
+        ),
+      ]);
+      expect(echoed).toEqual({ ok: true });
+      expect(proc.inspection().failed).toBe(false);
+      expect(proc.inspection().rawPending).toBe(false);
+    } finally {
+      void page?.catch(() => {});
+      await settled(proc.close(), 3000);
+      await settled(handle.close(), 3000);
+      await settled(store.close(), 3000);
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  }, 20000);
 });

@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { StringDecoder } from 'node:string_decoder';
 import { parseSessionRef, encodeSessionKey } from '../../../shared/runtime/identity.js';
 import { StoreError } from '../storage/storeProtocol.js';
+import { requireValue, integerValue, ProtocolError } from '../../../shared/runtime/capabilities.js';
 import { record, text } from '../../../shared/runtime/native/acp/capabilities.js';
+
+export const ACP_HISTORY_LIMITS = Object.freeze({ chunkBytes: 65536, captureBytes: 2097152, headerBytes: 8192 });
 
 export function createAcpSessions({ rpc, mutations, capabilities, queue, cwd, emit }) {
   const sessions = new Map();
@@ -30,6 +34,14 @@ export function createAcpSessions({ rpc, mutations, capabilities, queue, cwd, em
     return value;
   }
   async function create(input) {
+    // This ACP process and its reverse-call scope are bound to one root (the factory's
+    // firstRoot). A session/new for any other granted workspace would run the native agent
+    // outside the connection's grant while the reverse tools remain scoped to the bound
+    // root, so a non-bound workspace is refused BEFORE the native call rather than being
+    // silently created in the bound root. `cwd` is what dispatch resolves from the request
+    // workspaceKey; `directory` is the equivalent field used by direct driver callers.
+    const requested = input.cwd ?? input.directory;
+    requireValue(requested === undefined || requested === cwd, 'acp.workspace', 'unauthorized');
     return queue(async () => {
       const result = await mutations.run(
         {
@@ -166,4 +178,203 @@ export function createAcpSessions({ rpc, mutations, capabilities, queue, cwd, em
       };
     },
   };
+}
+
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+
+export function createAcpHistory(options) {
+  const { session, authority, current, assertCurrent, attachRaw } = options;
+  const uuid = options.randomUUID ?? randomUUID;
+  const maxBytes = options.maxBytes ?? ACP_HISTORY_LIMITS.captureBytes;
+  const nativeSessionId = text(session.nativeSessionId);
+  const sessionField = new RegExp(`"sessionId"\\s*:\\s*${escapeRegExp(JSON.stringify(nativeSessionId))}`, 'u');
+  let store, opened = false, closed = false, through = 0, failure, capture, captureSignal;
+  const pages = new Set();
+  let change = Promise.withResolvers();
+  const wake = () => { const previous = change; change = Promise.withResolvers(); previous.resolve(); };
+  // Settle when the native session advances or the caller aborts, and drop the abort listener once
+  // either wins so a timed-out read cannot strand the owner or the exclusive read waiter.
+  function awaitChange(signal) {
+    const pending = change.promise;
+    if (!signal) return pending;
+    if (signal.aborted) return Promise.reject(new ProtocolError('cancelled', 'acp.history_read'));
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(new ProtocolError('cancelled', 'acp.history_read'));
+      signal.addEventListener('abort', onAbort, { once: true });
+      pending.then(
+        () => { signal.removeEventListener('abort', onAbort); resolve(); },
+        (error) => { signal.removeEventListener('abort', onAbort); reject(error); },
+      );
+    });
+  }
+  function alive(signal) {
+    requireValue(!closed, 'acp.history_closed', 'cancelled');
+    requireValue(!signal?.aborted, 'acp.history_cancelled', 'cancelled');
+    requireValue(current(), 'acp.history_generation', 'reconcile_required');
+  }
+  async function fenced(signal) { alive(signal); await assertCurrent(); alive(signal); }
+  const grammar = Object.freeze({
+    records: Object.freeze([Object.freeze({
+      path: Object.freeze(['*']),
+      fields: Object.freeze([
+        Object.freeze({ name: 'sessionId', path: Object.freeze(['params', 'sessionId']) }),
+        Object.freeze({ name: 'method', path: Object.freeze(['method']) }),
+      ]),
+      validate(metadata) {
+        requireValue(metadata.method === 'session/update' && metadata.sessionId === nativeSessionId, 'acp.history_scope', 'reconcile_required');
+        return uuid();
+      },
+    })]),
+    fields: Object.freeze([]),
+    validate() {},
+  });
+  function openCapture() {
+    if (failure || closed) return false;
+    let waiting, ended = false;
+    const queue = [];
+    const source = {
+      push(piece) { if (ended) return; if (waiting) { const settle = waiting; waiting = undefined; settle({ value: piece, done: false }); } else queue.push(piece); },
+      end() { if (ended) return; ended = true; if (waiting) { const settle = waiting; waiting = undefined; settle({ value: undefined, done: true }); } },
+      [Symbol.asyncIterator]() { return { next() { if (queue.length) return Promise.resolve({ value: queue.shift(), done: false }); if (ended) return Promise.resolve({ value: undefined, done: true }); return new Promise((resolve) => { waiting = resolve; }); } }; },
+    };
+    source.push(Uint8Array.of(0x5b));
+    const work = (async () => {
+      try { return await store.ingest({ source, cancel: () => source.end(), grammar, signal: captureSignal, maxBytes }); }
+      catch (error) { failure ??= error; throw error; }
+    })();
+    work.catch(() => {});
+    capture = { source, work, frames: 0 };
+    return true;
+  }
+  function pushText(target, value) {
+    if (!value) return;
+    const bytes = Buffer.from(value, 'utf8');
+    for (let offset = 0; offset < bytes.length;) {
+      const length = Math.min(ACP_HISTORY_LIMITS.chunkBytes, bytes.length - offset);
+      const piece = new Uint8Array(length);
+      piece.set(bytes.subarray(offset, offset + length));
+      target.push(piece);
+      offset += length;
+    }
+  }
+  function decide(text_) {
+    const method = /"method"\s*:\s*"([^"]*)"/u.exec(text_);
+    if (method && method[1] !== 'session/update') return 'foreign';
+    if (method && sessionField.test(text_)) return 'selected';
+    if (text_.length >= ACP_HISTORY_LIMITS.headerBytes) return 'foreign';
+    return 'undecided';
+  }
+  const decoder = new StringDecoder('utf8');
+  let frameText = '', selected = null, discarding = false;
+  function feed(chunk) {
+    if (closed || !opened || !store || failure) return;
+    let decoded;
+    try { decoded = decoder.write(chunk instanceof Uint8Array ? chunk : Buffer.from(chunk)); }
+    catch { return; }
+    if (!decoded) return;
+    frameText += decoded;
+    for (;;) {
+      if (discarding) {
+        const boundary = frameText.indexOf('\n');
+        if (boundary < 0) { frameText = ''; return; }
+        frameText = frameText.slice(boundary + 1); discarding = false; selected = null;
+        if (!frameText) return;
+        continue;
+      }
+      if (selected === null) {
+        const boundary = frameText.indexOf('\n');
+        const limit = Math.min(boundary < 0 ? frameText.length : boundary, ACP_HISTORY_LIMITS.headerBytes);
+        const verdict = decide(frameText.slice(0, limit));
+        if (verdict === 'selected') selected = true;
+        else {
+          if (boundary >= 0) { frameText = frameText.slice(boundary + 1); if (!frameText) return; continue; }
+          if (verdict === 'foreign') { discarding = true; continue; }
+          return;
+        }
+      }
+      // A frame is committed to the capture only once its newline arrives; a half-frame is retained
+      // so a page switch always lands on a complete frame boundary instead of a synthetic `]`.
+      const boundary = frameText.indexOf('\n');
+      if (boundary < 0) {
+        if (frameText.length > maxBytes) failure = new ProtocolError('source_unavailable', 'acp.history_frame');
+        return;
+      }
+      if (!capture && !openCapture()) { discarding = true; continue; }
+      if (capture.frames > 0) capture.source.push(Uint8Array.of(0x2c));
+      pushText(capture.source, frameText.slice(0, boundary));
+      frameText = frameText.slice(boundary + 1);
+      capture.frames += 1; selected = null; through += 1; wake();
+      if (!frameText) return;
+    }
+  }
+  async function finalize() {
+    const active = capture; capture = null;
+    if (!active) return null;
+    active.source.push(Uint8Array.of(0x5d));
+    active.source.end();
+    return active.work;
+  }
+  async function open({ signal, streamStore }) {
+    requireValue(!opened && !closed, 'acp.history_open', 'conflict');
+    await fenced(signal);
+    opened = true; store = streamStore; captureSignal = signal;
+    attachRaw(feed);
+    return { fence: { id: uuid(), sourceGeneration: authority.processGeneration } };
+  }
+  async function page({ cursor, releasePageIds = [], signal }) {
+    await fenced(signal);
+    requireValue(opened && store, 'acp.history_open', 'replay_required');
+    requireValue(Array.isArray(releasePageIds), 'acp.history_release');
+    for (const id of releasePageIds) { text(id); requireValue(pages.has(id), 'acp.history_page_owner', 'unauthorized'); await store.release(id); pages.delete(id); }
+    await fenced(signal);
+    requireValue(cursor === undefined || cursor === null, 'acp.history_cursor', 'replay_required');
+    if (failure) throw failure;
+    const output = await finalize();
+    requireValue(output, 'acp.history_open', 'replay_required');
+    await fenced(signal);
+    pages.add(output.id);
+    return {
+      pageId: output.id,
+      items: output.records.map((entry) => ({ recordId: entry.recordId, kind: 'stream', descriptor: { id: entry.id, format: entry.format, totalBytes: entry.totalBytes, sha256: entry.sha256 } })),
+      document: { id: output.document.id, format: output.document.format, totalBytes: output.document.totalBytes, sha256: output.document.sha256 },
+      cursor: null,
+      completeness: 'partial',
+      reason: 'native-live-session-update',
+    };
+  }
+  async function chunk({ pageId, descriptorId, offset, signal }) {
+    await fenced(signal);
+    requireValue(opened && store, 'acp.history_open', 'replay_required');
+    text(pageId); text(descriptorId); integerValue(offset, 'acp.history_offset');
+    requireValue(pages.has(pageId), 'acp.history_page_owner', 'replay_required');
+    const output = await store.read({ pageId, descriptorId, offset });
+    await fenced(signal);
+    return output;
+  }
+  async function read({ after, signal }) {
+    await fenced(signal);
+    requireValue(opened, 'acp.history_open', 'replay_required');
+    integerValue(after, 'acp.history_after');
+    for (;;) {
+      if (failure) return { through, changed: false, status: failure.code === 'replay_required' ? 'replay_required' : 'source_unavailable' };
+      if (through > after) return { through, changed: true, status: 'current' };
+      if (closed || signal?.aborted) throw new ProtocolError('cancelled', 'acp.history_read');
+      await awaitChange(signal);
+      await fenced(signal);
+    }
+  }
+  async function close() {
+    if (closed) return;
+    closed = true; wake();
+    try { attachRaw(undefined); } catch {}
+    const active = capture; capture = null;
+    if (active) {
+      active.source.push(Uint8Array.of(0x5d)); active.source.end();
+      try { await active.work; } catch {}
+    }
+    const owned = [...pages]; pages.clear();
+    for (const id of owned) { try { await store?.release(id); } catch {} }
+    store = undefined;
+  }
+  return Object.freeze({ capabilities: Object.freeze({ archive: 'live-only', recordStream: true, live: 'invalidate' }), open, page, chunk, read, close });
 }
