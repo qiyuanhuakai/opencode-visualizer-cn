@@ -14,6 +14,14 @@ function rejects(value: unknown, code = 'invalid_request') {
   expect(() => encodeFrame(value)).toThrow(expect.objectContaining({ code }));
 }
 describe('runtime protocol', () => {
+  it('correlates target attachment as a control without a native mutation receipt', () => {
+    const state = createProtocolState(binding);
+    const control = { ...request, id: 'attach', method: 'runtime.target.attach', params: { target }, idempotencyKey: undefined };
+    const { idempotencyKey: _unused, ...frame } = control;
+    state.register(frame);
+    expect(state.receive({ ...accepted, id: 'attach', phase: 'read', result: { attached: true } })).toMatchObject({ phase: 'read' });
+    expect(state.snapshot().pending).toBe(0);
+  });
   it('roundtrips request, accepted/executed result, event and hello with shared validators', () => {
     for (const frame of [request, accepted, executed, event, hello]) expect(decodeFrame(encodeFrame(frame))).toEqual(frame);
     expect(() => decodeFrame('{')).toThrow(ProtocolError);
