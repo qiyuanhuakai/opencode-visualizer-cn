@@ -773,6 +773,23 @@ function sendBinding(binding: RuntimeActionBinding): RuntimeActionBinding | null
   return Object.freeze({ ...binding, session });
 }
 
+/**
+ * The binding the last send actually went through.
+ *
+ * `requestAbort` must cancel the operation THIS composer started, not whatever the ambient
+ * binding happens to hold when Stop is pressed. With a thread open the send is routed to the
+ * effective target's own native session, so re-deriving the binding at cancel time answered a
+ * DIFFERENT session's cancel — the ambient A instead of the B the prompt reached — the moment
+ * the thread's active participant moved. The identity is therefore captured at send and held
+ * for the cancel path, exactly as `sendBinding` already resolves it for the send itself.
+ *
+ * It is only recorded when the send went through a thread-resolved target (the only case where
+ * the two diverge), it is replaced by the next send, and it is released when the thread goes
+ * away — the one point at which this composer's send context is gone entirely. Without a
+ * thread the recorded value stays `null` and the ambient binding is used unchanged.
+ */
+let lastSentBinding: RuntimeActionBinding | null = null;
+
 function requestSend() {
   const binding = runtimeBinding();
   if (binding && runtimeSessionActions) {
@@ -782,6 +799,7 @@ function requestSend() {
       return;
     }
     void runtimeSessionActions.router.sendMessage(target, runtimeSendInput());
+    if (target !== binding) lastSentBinding = target;
     return;
   }
   emit('send');
@@ -790,11 +808,21 @@ function requestSend() {
 function requestAbort() {
   const binding = runtimeBinding();
   if (binding && runtimeSessionActions) {
-    void runtimeSessionActions.router.cancel(binding);
+    // Prefer the session the last send actually reached: that is the operation Stop has to
+    // cancel. The ambient binding is the fallback only when this composer has no recorded
+    // thread send, which is the legacy behaviour exactly.
+    void runtimeSessionActions.router.cancel(lastSentBinding ?? binding);
     return;
   }
   emit('abort');
 }
+
+// The thread closing (or a different one opening) ends this composer's send context, so the
+// captured operation identity must not outlive it.
+watch(
+  () => threadState?.threadId.value ?? null,
+  () => { lastSentBinding = null; },
+);
 
 const messageValue = computed({
   get: () => props.messageInput,

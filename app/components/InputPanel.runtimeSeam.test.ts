@@ -49,6 +49,8 @@ function mount(options: { port?: RuntimeSessionRuntime; threadState?: RuntimeThr
   const props = reactive({
     ...INPUT_PANEL_DEFAULT_PROPS,
     messageInput: 'hi',
+    isThinking: false as boolean,
+    canAbort: false as boolean,
     canSend: true,
     onSend: options.onSend ?? vi.fn(),
     ...(options.onStatusError === undefined ? {} : { onStatusError: options.onStatusError }),
@@ -61,7 +63,7 @@ function mount(options: { port?: RuntimeSessionRuntime; threadState?: RuntimeThr
   if (options.port) app.provide(RUNTIME_SESSION_ACTIONS_KEY, options.port);
   if (options.threadState) app.provide(RUNTIME_THREAD_STATE_KEY, options.threadState);
   app.mount(root);
-  return root;
+  return { root, props };
 }
 
 describe('InputPanel uses the qualified runtime path when a port is provided', () => {
@@ -69,7 +71,7 @@ describe('InputPanel uses the qualified runtime path when a port is provided', (
     const router = makeRouter();
     const onSend = vi.fn();
     const port: RuntimeSessionRuntime = { binding: () => ({ profileId: PROFILE, session: SESSION }), router: router as unknown as RuntimeSessionRouter };
-    const root = mount({ port, onSend });
+    const { root } = mount({ port, onSend });
     root.querySelector<HTMLElement>('.send-button')?.click();
     expect(router.sendMessage).toHaveBeenCalledTimes(1);
     const [binding, input] = router.sendMessage.mock.calls[0]!;
@@ -80,7 +82,7 @@ describe('InputPanel uses the qualified runtime path when a port is provided', (
 
   it('falls back to the legacy emit when no port is provided', () => {
     const onSend = vi.fn();
-    const root = mount({ onSend });
+    const { root } = mount({ onSend });
     root.querySelector<HTMLElement>('.send-button')?.click();
     expect(onSend).toHaveBeenCalledTimes(1);
   });
@@ -89,7 +91,7 @@ describe('InputPanel uses the qualified runtime path when a port is provided', (
     const router = makeRouter();
     const onSend = vi.fn();
     const port: RuntimeSessionRuntime = { binding: () => null, router: router as unknown as RuntimeSessionRouter };
-    const root = mount({ port, onSend });
+    const { root } = mount({ port, onSend });
     root.querySelector<HTMLElement>('.send-button')?.click();
     expect(router.sendMessage).not.toHaveBeenCalled();
     expect(onSend).toHaveBeenCalledTimes(1);
@@ -112,7 +114,7 @@ describe('InputPanel uses the qualified runtime path when a port is provided', (
 
     const router = makeRouter();
     const port: RuntimeSessionRuntime = { binding: () => ({ profileId: PROFILE, session: SESSION }), router: router as unknown as RuntimeSessionRouter };
-    const root = mount({ port, threadState: state });
+    const { root } = mount({ port, threadState: state });
     root.querySelector<HTMLElement>('.send-button')?.click();
     expect(router.sendMessage).toHaveBeenCalledTimes(1);
     const [binding] = router.sendMessage.mock.calls[0]!;
@@ -140,7 +142,7 @@ describe('InputPanel uses the qualified runtime path when a port is provided', (
 
     const router = makeRouter();
     const port: RuntimeSessionRuntime = { binding: () => ({ profileId: PROFILE, session: SESSION }), router: router as unknown as RuntimeSessionRouter };
-    const root = mount({ port, threadState: state });
+    const { root } = mount({ port, threadState: state });
     root.querySelector<HTMLElement>('.send-button')?.click();
     expect(router.sendMessage).toHaveBeenCalledTimes(1);
     const [binding] = router.sendMessage.mock.calls[0]!;
@@ -167,7 +169,7 @@ describe('InputPanel uses the qualified runtime path when a port is provided', (
 
     const router = makeRouter();
     const port: RuntimeSessionRuntime = { binding: () => ({ profileId: PROFILE, session: SESSION }), router: router as unknown as RuntimeSessionRouter };
-    const root = mount({ port, threadState: state });
+    const { root } = mount({ port, threadState: state });
 
     // When: the composer's own target row (the real ThreadView chips) renders.
     // The row is an async component, so it settles on a later microtask.
@@ -202,7 +204,7 @@ describe('InputPanel uses the qualified runtime path when a port is provided', (
     const router = makeRouter();
     const statusError = vi.fn();
     const port: RuntimeSessionRuntime = { binding: () => ({ profileId: PROFILE, session: SESSION }), router: router as unknown as RuntimeSessionRouter };
-    const root = mount({ port, threadState: anomalous, onStatusError: statusError });
+    const { root } = mount({ port, threadState: anomalous, onStatusError: statusError });
     root.querySelector<HTMLElement>('.send-button')?.click();
 
     // Then: nothing is sent through the ambient binding — the silent fallback
@@ -210,5 +212,88 @@ describe('InputPanel uses the qualified runtime path when a port is provided', (
     expect(router.sendMessage).not.toHaveBeenCalled();
     expect(statusError).toHaveBeenCalledTimes(1);
     expect(String(statusError.mock.calls[0]?.[0])).not.toBe('');
+  });
+});
+
+describe('Stop cancels the operation the composer started, not the ambient binding', () => {
+  async function openThreadWithActiveB() {
+    const sessions = new Map<string, { session: SessionRef; archived: boolean; parentSession: null }>([
+      [SESSION.nativeSessionId, { session: SESSION, archived: false, parentSession: null }],
+      [TARGET_SESSION.nativeSessionId, { session: TARGET_SESSION, archived: false, parentSession: null }],
+    ]);
+    const threads = createThreadService({
+      resolveSession: async (ref: SessionRef) => sessions.get(ref.nativeSessionId) ?? null,
+    });
+    const bound = await threads.bind({ session: SESSION, repo: REPO });
+    const joined = await threads.join({ threadId: bound.threadId, session: TARGET_SESSION, repo: REPO });
+    const state = createRuntimeThreadState({ thread: threads });
+    await state.openThread({ session: SESSION, repo: REPO });
+    await state.joinThread(TARGET_SESSION);
+    await state.activateParticipant(joined.participantId);
+    return { state, bound, joined };
+  }
+
+  it('cancels the session the prompt was sent to after the active participant moves on', async () => {
+    // Given: the ambient runtime binding holds A, and the thread's active participant is B,
+    // so the prompt is routed to B's own native session.
+    const { state } = await openThreadWithActiveB();
+    const participantA = state.summary.value?.participants[0]?.participantId ?? '';
+    const router = makeRouter();
+    const port: RuntimeSessionRuntime = { binding: () => ({ profileId: PROFILE, session: SESSION }), router: router as unknown as RuntimeSessionRouter };
+    const { root, props } = mount({ port, threadState: state });
+
+    // When: the prompt is sent (to B) and the composer flips to its thinking/Stop state.
+    root.querySelector<HTMLElement>('.send-button')?.click();
+    expect(router.sendMessage).toHaveBeenCalledTimes(1);
+    expect((router.sendMessage.mock.calls[0]![0] as { session: SessionRef }).session).toEqual(TARGET_SESSION);
+    props.isThinking = true;
+    props.canAbort = true;
+    await vi.waitFor(() => { expect(root.querySelector<HTMLElement>('.stop')).not.toBeNull(); });
+
+    // And: the thread's active participant moves back to A while B's turn is still running.
+    await state.activateParticipant(participantA);
+
+    // Then: Stop cancels the session the prompt actually reached. Cancelling A here both
+    // leaves B's operation running and points a cancel at a session that has no operation.
+    root.querySelector<HTMLElement>('.stop')?.click();
+    expect(router.cancel).toHaveBeenCalledTimes(1);
+    expect((router.cancel.mock.calls[0]![0] as { session: SessionRef }).session).toEqual(TARGET_SESSION);
+  });
+
+  it('still cancels the ambient binding when this composer never sent through the router', async () => {
+    // The positive control for the legacy path: no send happened, so the ambient binding is
+    // the only operation identity there is, and the fix must not have changed that.
+    const router = makeRouter();
+    const port: RuntimeSessionRuntime = { binding: () => ({ profileId: PROFILE, session: SESSION }), router: router as unknown as RuntimeSessionRouter };
+    const { root, props } = mount({ port });
+    props.isThinking = true;
+    props.canAbort = true;
+    await vi.waitFor(() => { expect(root.querySelector<HTMLElement>('.stop')).not.toBeNull(); });
+
+    root.querySelector<HTMLElement>('.stop')?.click();
+    expect(router.sendMessage).not.toHaveBeenCalled();
+    expect(router.cancel).toHaveBeenCalledTimes(1);
+    expect((router.cancel.mock.calls[0]![0] as { session: SessionRef }).session).toEqual(SESSION);
+  });
+
+  it('releases the captured identity when the thread closes', async () => {
+    // The captured identity must not outlive the composer's send context: once the thread is
+    // gone there is no thread-resolved operation to cancel, and the ambient binding is the
+    // honest answer again.
+    const { state } = await openThreadWithActiveB();
+    const router = makeRouter();
+    const port: RuntimeSessionRuntime = { binding: () => ({ profileId: PROFILE, session: SESSION }), router: router as unknown as RuntimeSessionRouter };
+    const { root, props } = mount({ port, threadState: state });
+
+    root.querySelector<HTMLElement>('.send-button')?.click();
+    expect((router.sendMessage.mock.calls[0]![0] as { session: SessionRef }).session).toEqual(TARGET_SESSION);
+    state.closeThread();
+    props.isThinking = true;
+    props.canAbort = true;
+    await vi.waitFor(() => { expect(root.querySelector<HTMLElement>('.stop')).not.toBeNull(); });
+
+    root.querySelector<HTMLElement>('.stop')?.click();
+    expect(router.cancel).toHaveBeenCalledTimes(1);
+    expect((router.cancel.mock.calls[0]![0] as { session: SessionRef }).session).toEqual(SESSION);
   });
 });
