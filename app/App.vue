@@ -151,6 +151,15 @@
                     :kimi-session-context="kimiSessionContext"
                     :is-loading="isLoadingHistory"
                     :is-anchoring="isOutputAnchoring"
+                    :thread-available-sessions="threadAvailableSessions"
+                    :thread-native-history="threadNativeHistory"
+                    :thread-checkpoint="null"
+                    :thread-current-target="null"
+                    :thread-read-evidence="null"
+                    :thread-draft-text="messageInput"
+                    :thread-handoff-entries="[]"
+                    :thread-latest-native-event-id="''"
+                    @refresh-native-history="handleRefreshNativeHistory"
                     @message-rendered="handleOutputPanelMessageRendered"
                     @resume-follow="handleOutputPanelResumeFollow"
                     @fork-message="backendSessionActions.handleForkMessage"
@@ -254,6 +263,17 @@
                 />
               </template>
               <template #after-thinking>
+                <button
+                  v-if="runtimeSelectedSessionRef"
+                  type="button"
+                  class="input-button"
+                  data-testid="host-thread-toggle"
+                  :disabled="connectionState !== 'ready' || !activeDirectory"
+                  :title="threadState.summary.value ? $t('inputPanel.threadClose') : $t('inputPanel.threadOpen')"
+                  @click="threadState.summary.value ? closeHostThread() : openHostThread()"
+                >
+                  {{ threadState.summary.value ? $t('inputPanel.threadClose') : $t('inputPanel.threadOpen') }}
+                </button>
                 <template v-if="activeBackendKind === 'codex'">
                   <CodexComposerFast :api="codexApi" @error="setSendStatusErrorText" />
                   <CodexComposerGoal :api="codexApi" @open="openCodexThreadGoal" />
@@ -810,9 +830,9 @@ import { decideWorkspaceCapability } from './composables/useWorkspaceCapability'
 import { createRuntimeClient, type RuntimeClient } from './runtime/client';
 import type { RuntimeActionClient } from './composables/useRuntimeSessionActions';
 import { createRuntimeConnection } from './runtime/connection';
-import { parseConnectionProfileId, parseEnvironmentId, parseHarnessInstanceId, parseSessionRef } from '../shared/runtime/identity.js';
+import { parseConnectionProfileId, parseEnvironmentId, parseHarnessInstanceId, parseRepoRef, parseSessionRef } from '../shared/runtime/identity.js';
 import { parseConnectionReference } from './runtime/connectionProfile';
-import type { ConnectionProfileId, EnvironmentId, HarnessInstanceId, SessionRef } from '../shared/runtime/identity.js';
+import type { ConnectionProfileId, EnvironmentId, HarnessInstanceId, RepoRef, SessionRef } from '../shared/runtime/identity.js';
 import { HARNESS_KINDS } from '../shared/runtime/harnessContract.js';
 import { HARNESS_CONTROLS } from './composables/useRuntimeCapabilities';
 import { legacyDigestSync } from './utils/legacyDigest';
@@ -824,6 +844,14 @@ import {
   useRuntimeSessionActions,
   type RuntimeSessionRuntime,
 } from './composables/useRuntimeSessionActions';
+import {
+  RUNTIME_THREAD_STATE_KEY,
+  createRuntimeThreadState,
+  type NativeHistoryGroup,
+  type RuntimeThreadState,
+} from './composables/useRuntimeThread';
+import { createThreadService } from '../bridge/runtime/threads/threadService.js';
+import type { ThreadService } from '../bridge/runtime/threads/threadService.js';
 import { useRuntimeMessageSend } from './composables/useRuntimeMessageSend';
 import { useRuntimeInteractions } from './composables/useRuntimeInteractions';
 import { useRuntimeCapabilities, type ControlScope } from './composables/useRuntimeCapabilities';
@@ -10167,6 +10195,210 @@ const migrationImportService: ImportService = {
 };
 
 provide(RUNTIME_SESSION_ACTIONS_KEY, runtimeSessionRuntime);
+
+// ---------------------------------------------------------------------------
+// Task 35: the Host Thread surface's container.
+//
+// The landed task-31 Thread service is bound to the REAL session tree and the
+// thread state is provided to the panels exactly as the session-actions port
+// is. Without this provide the thread surface never renders in the running
+// app: `useRuntimeThreadState()` answers null, OutputPanel's ThreadPanel is not
+// mounted, and Locate/Refresh has nothing to act on — the seam ended at the
+// test containers, which is the gap this closes.
+//
+// The handoff port is deliberately NOT wired: `openTarget`/`sendPrompt` drive
+// real native sessions and their production seams are not decided. The
+// composable refuses a handoff with a visible message rather than crashing, so
+// the surface stays honest about what it can do.
+// ---------------------------------------------------------------------------
+
+/**
+ * The repo identity the selected session's thread is bound to. The thread
+ * service requires the repo's environment to match the session's, so this is
+ * derived from the SAME active target the qualified session is, never from a
+ * second source that could disagree with it.
+ */
+function activeRuntimeRepoRef(): RepoRef | null {
+  const directory = activeDirectory.value.trim();
+  if (!directory) return null;
+  // The volume/case policy is probed from the target's own path shape. It is
+  // never inferred from the browser's platform, which knows nothing about the
+  // machine the backend runs on.
+  const windowsPath = /^[a-zA-Z]:[\\/]/.test(directory);
+  try {
+    return parseRepoRef({
+      environmentId: activeRuntimeEnvironmentId.value,
+      canonicalCommonDir: directory,
+      pathPolicy: windowsPath
+        ? { platform: 'windows', volumeId: directory.slice(0, 2).toUpperCase(), caseSensitive: false }
+        : { platform: 'posix', volumeId: '/', caseSensitive: true },
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The real session tree, resolved for the thread service's participant bind.
+ * A session the active target does not actually hold is `null`: the service
+ * then refuses the bind with `source_unavailable`, which is the truth, rather
+ * than admitting a participant the runtime cannot reach.
+ */
+async function resolveThreadSession(ref: SessionRef) {
+  if (ref.environmentId !== activeRuntimeEnvironmentId.value) return null;
+  if (ref.harnessInstanceId !== activeHarnessInstanceId.value) return null;
+  for (const projectSessions of Object.values(sessionsByProject.value)) {
+    const session = projectSessions.find((entry) => entry.id === ref.nativeSessionId);
+    if (session === undefined) continue;
+    const parentId = session.parentID;
+    let parentSession: SessionRef | null = null;
+    if (parentId !== undefined && parentId !== '') {
+      try {
+        parentSession = parseSessionRef({
+          environmentId: ref.environmentId,
+          harnessInstanceId: ref.harnessInstanceId,
+          nativeSessionId: parentId,
+        });
+      } catch {
+        // A parent id the runtime cannot qualify is reported as no parent rather
+        // than failing the participant's own bind.
+        parentSession = null;
+      }
+    }
+    return { session: ref, archived: typeof session.time?.archived === 'number', parentSession };
+  }
+  return null;
+}
+
+const threadService: ThreadService = createThreadService({ resolveSession: resolveThreadSession });
+const threadState: RuntimeThreadState = createRuntimeThreadState({ thread: threadService });
+provide(RUNTIME_THREAD_STATE_KEY, threadState);
+
+/** The sessions the thread picker can offer, straight from the real session tree. */
+const threadAvailableSessions = computed(() => {
+  const environmentId = activeRuntimeEnvironmentId.value;
+  const harnessInstanceId = activeHarnessInstanceId.value;
+  const rows: Array<{ session: SessionRef; label: string; harness: string }> = [];
+  for (const session of sessions.value) {
+    try {
+      rows.push({
+        session: parseSessionRef({ environmentId, harnessInstanceId, nativeSessionId: session.id }),
+        label: resolveSessionLabelById(session.id),
+        harness: HARNESS_LABELS[activeHarnessKind.value] ?? activeHarnessKind.value,
+      });
+    } catch {
+      // A session id the runtime cannot qualify is not offerable; it is skipped
+      // rather than crashing the whole picker.
+    }
+  }
+  return rows;
+});
+
+/** Per-participant native history the thread surface renders — never merged. */
+const threadNativeHistory = ref<readonly NativeHistoryGroup[]>([]);
+
+/**
+ * Read ONE participant's OWN native history through the real backend.
+ *
+ * The group is never merged with another participant's: each participant's
+ * history is its own native session's history, and merging them is exactly the
+ * confusion the per-participant surface exists to prevent.
+ */
+async function readParticipantNativeHistory(
+  participantId: string,
+  session: SessionRef,
+): Promise<NativeHistoryGroup> {
+  const label = resolveSessionLabelById(session.nativeSessionId);
+  const harness = HARNESS_LABELS[activeHarnessKind.value] ?? activeHarnessKind.value;
+  const directory = activeDirectory.value.trim() || undefined;
+  let raw: unknown;
+  try {
+    const listSessionMessages = requireBackendMethod(backend().listSessionMessages, 'session messages');
+    raw = await listSessionMessages(session.nativeSessionId, { directory });
+  } catch {
+    return { participantId, label, harness, session, entries: [] };
+  }
+  const entries: Array<{ id: string; kind: string; text: string; at: number }> = [];
+  for (const item of Array.isArray(raw) ? raw : []) {
+    const record = (item ?? {}) as { info?: Record<string, unknown>; parts?: unknown[] };
+    const info = record.info;
+    if (info === undefined) continue;
+    const id = typeof info.id === 'string' ? info.id : '';
+    if (!id) continue;
+    const time = (info.time ?? {}) as { created?: unknown };
+    const parts = Array.isArray(record.parts) ? record.parts : [];
+    const text = parts
+      .map((part) => {
+        const entry = (part ?? {}) as { type?: unknown; text?: unknown };
+        return entry.type === 'text' && typeof entry.text === 'string' ? entry.text : '';
+      })
+      .filter(Boolean)
+      .join('\n');
+    entries.push({
+      id,
+      kind: typeof info.role === 'string' ? info.role : 'message',
+      text,
+      at: typeof time.created === 'number' ? time.created : 0,
+    });
+  }
+  return { participantId, label, harness, session, entries };
+}
+
+/**
+ * Locate/Refresh, wired for real.
+ *
+ * OutputPanel writes the located participant's session into the composable AND
+ * asks the container to re-read that participant's history. This is the
+ * container half: it re-reads through the real backend and backfills the group
+ * the panel renders, so Refresh shows the re-read bytes rather than the first
+ * read — the loop the test containers used to close on their own.
+ */
+async function handleRefreshNativeHistory(payload: { participantId: string; session: SessionRef }): Promise<void> {
+  const group = await readParticipantNativeHistory(payload.participantId, payload.session);
+  threadNativeHistory.value = [
+    ...threadNativeHistory.value.filter((entry) => entry.participantId !== payload.participantId),
+    group,
+  ];
+}
+
+/**
+ * Every participant gets its OWN group, read once, the moment it joins the thread.
+ *
+ * The surface's Refresh button only exists for a participant that already has a
+ * group, so the container owes a first read: without it a joined participant has
+ * no Refresh at all and the re-read loop can never start.
+ */
+watch(
+  () => threadState.summary.value?.participants.map((participant) => participant.participantId).join('\u0000') ?? '',
+  async (key) => {
+    const summary = threadState.summary.value;
+    if (summary === null || key === '') return;
+    const known = new Set(threadNativeHistory.value.map((group) => group.participantId));
+    const missing = summary.participants.filter((participant) => !known.has(participant.participantId));
+    if (missing.length === 0) return;
+    const groups = [...threadNativeHistory.value];
+    for (const participant of missing) {
+      groups.push(await readParticipantNativeHistory(participant.participantId, participant.session));
+    }
+    threadNativeHistory.value = groups;
+  },
+);
+
+async function openHostThread(): Promise<void> {
+  const session = runtimeSelectedSessionRef.value;
+  const repo = activeRuntimeRepoRef();
+  if (session === null || repo === null) {
+    setSendStatusErrorText(t('inputPanel.threadOpenUnavailable'));
+    return;
+  }
+  threadNativeHistory.value = [];
+  await threadState.openThread({ session, repo });
+}
+
+function closeHostThread(): void {
+  threadState.closeThread();
+  threadNativeHistory.value = [];
+}
 
 const runtimeCapabilities = useRuntimeCapabilities();
 watch(
