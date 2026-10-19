@@ -24,11 +24,22 @@ export type AcpProcessStatus = {
   error?: string;
 };
 
+export type AcpRuntimeAttachment = {
+  readonly processGeneration: number;
+  readonly pid: number;
+  close(): Promise<void>;
+};
+
 export type AcpProcessManager = {
   reconcile(agents: AcpAgentConfig[]): Promise<AcpProcessStatus[]>;
   attach(id: string, client: AcpClient): void;
   getStatus(): AcpProcessStatus[];
   stopAll(): Promise<void>;
+};
+
+export type AcpRuntimeProcessManager = Omit<AcpProcessManager, 'attach'> & {
+  attach(id: string, client: AcpClient): void;
+  attach(id: string, client: AcpClient, options: { readonly runtime: true }): AcpRuntimeAttachment;
 };
 
 export type AcpClientRequest = Record<string, unknown> & {
@@ -46,4 +57,4 @@ export type AcpProcessManagerOptions = {
   };
 };
 
-export function createAcpProcessManager(options?: AcpProcessManagerOptions): AcpProcessManager;
+export function createAcpProcessManager(options?: AcpProcessManagerOptions): AcpRuntimeProcessManager;
