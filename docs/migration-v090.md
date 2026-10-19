@@ -4,7 +4,7 @@
 
 **本文所有结论均来自已落地的验收证据**，不是设计意图。每条关键声明后面标注了证据编号（E43、E44、E45、E46、E27 等），可在 `.omo/evidence/vis-v090/` 下对应目录核对。凡本文未标注证据的行为，即为未验证，不得据此声称支持。
 
-**迁移状态：部分完成。** 旧全局后端路由（`useBackend*` 接缝与 `activeBackendKind` 全局单例，即 `getActiveBackendAdapter`/`getActiveBackendKind`/`setActiveBackendKind` 生产路径）已由 task 48 移除：生产动作不再经过全局 backend 路由，运行时消费者按连接作用域携带的 kind 显式解析 `getBackendAdapter(kind)`；被移除的全局函数仅保留在 legacy 导出模块（`app/backends/legacyGlobalRouting.ts`）供测试沿袭，无生产引用。主界面已接入新运行时 wire：`app/App.vue` 在 Bridge 地址就绪后创建真实的 `/runtime` 连接（`createRuntimeConnection` + 真实 WebSocket）与运行时客户端（`createRuntimeClient`），调用 `connection.connect()`，hello 发布 target 身份后构建并 `start()` 统一会话树（`useRuntimeSessionTree`），并把该客户端交给会话动作、消息发送与交互模块（`useRuntimeSessionActions` / `useRuntimeMessageSend` / `useRuntimeInteractions`）。仍为真的限定：没有存活 `/runtime` 连接时（裸 OpenCode server 不是 runtime wire 端点）主界面回落到既有 per-backend 路径，登录页按后端选择与每后端直连地址在本 alpha 仍存在且仍可使用，详见本文第 3 节。
+**迁移状态：部分完成。** 旧全局后端路由（`useBackend*` 接缝与 `activeBackendKind` 全局单例，即 `getActiveBackendAdapter`/`getActiveBackendKind`/`setActiveBackendKind` 生产路径）已由 task 48 移除：生产动作不再经过全局 backend 路由，运行时消费者按连接作用域携带的 kind 显式解析 `getBackendAdapter(kind)`；被移除的全局函数仅保留在 legacy 导出模块（`app/backends/legacyGlobalRouting.ts`）供测试沿袭，无生产引用。主界面已接入新运行时 wire：`app/App.vue` 在 Bridge 地址就绪后创建真实的 `/runtime` 连接（`createRuntimeConnection` + 真实 WebSocket）与运行时客户端（`createRuntimeClient`），调用 `connection.connect()`，hello 发布 target 身份后构建并 `start()` 统一会话树（`useRuntimeSessionTree`），并把该客户端交给会话动作、消息发送与交互模块（`useRuntimeSessionActions` / `useRuntimeMessageSend` / `useRuntimeInteractions`）。仍为真的限定：未建立可用 runtime target 时（未绑定 bridge 地址，或 bridge 尚未回答 hello 因而 target 未附着，此时限定操作以 `reconcile_required` 失败关闭）会话动作沿用既有 per-backend 路径；未构建统一树时（如裸 OpenCode server 不是 runtime wire 端点）侧栏沿用旧树；连接 listener 只处理 hello，断线不会自动清空 target 与统一树，因此不能由连接失活推导整个界面回退；登录页按后端选择与每后端直连地址在本 alpha 仍存在且仍可使用，详见本文第 3 节。
 
 ---
 
@@ -43,7 +43,7 @@ v0.9.0-alpha 引入 `/runtime` v1 协议。这是**新增通道**，不与 v0.8 
 2. **每后端直连地址**：OpenCode `http://localhost:4096`、Codex `ws://localhost:23004/codex`、ACP `ws://localhost:23004`、Kimi Web `ws://localhost:23004/kimi-web/ws` 这类按后端分别填写的 URL。它们对 direct 连接仍然有效，但同一套地址在 managed remote 模式下改由管理端 `/runtime` 逻辑 WS 承载。
 3. **`useBackend*` 接缝与 `activeBackendKind` 全局路由（task 48 已移除，列出以记录对比）**：`app/backends/registry.ts` 不再持有全局后端单例，只导出 `getBackendAdapter(kind)`，未注册 kind 直接抛错（fail-closed，无默认回退）；主界面组件（`ProjectPicker.vue`、`ProjectSettingsDialog.vue`、`ProviderManagerModal.vue`、`StatusMonitorModal.vue`）经连接作用域的显式 kind prop/param 解析适配器，不经过全局单例。被移除的 `getActiveBackendAdapter`/`getActiveBackendKind`/`setActiveBackendKind` 仅保留在 `app/backends/legacyGlobalRouting.ts` 供测试沿袭：仅 4 个测试文件引用、0 生产引用、构建产物 0 匹配。
 
-**为什么仍可用**：全局后端路由的移除已由 task 48 完成（生产零消费，被移除函数仅保留在 legacy 导出模块供测试沿袭）。主界面已在存活 `/runtime` 连接上运行统一会话树（`app/App.vue` 创建真实连接与客户端、hello 后 `start()` 统一树，见本文开头"迁移状态"）；上述每后端选择与直连地址在本 alpha 仍是可用的连接方式——没有存活 `/runtime` 连接时（裸 OpenCode server 不是 runtime wire 端点）主界面即回落到该 per-backend 路径。运行时能力通过共享层、驱动、Bridge 与组合式函数真实交付并有验收证据。
+**为什么仍可用**：全局后端路由的移除已由 task 48 完成（生产零消费，被移除函数仅保留在 legacy 导出模块供测试沿袭）。主界面已在存活 `/runtime` 连接上运行统一会话树（`app/App.vue` 创建真实连接与客户端、hello 后 `start()` 统一树，见本文开头"迁移状态"）；上述每后端选择与直连地址在本 alpha 仍是可用的连接方式——未建立可用 runtime target 时，会话动作沿用该 per-backend 路径；未构建统一树时，侧栏沿用旧树。运行时能力通过共享层、驱动、Bridge 与组合式函数真实交付并有验收证据。
 
 ---
 
@@ -156,6 +156,6 @@ v0.9.0-alpha 引入 `/runtime` v1 协议。这是**新增通道**，不与 v0.8 
 
 ## 12. 已知未决项
 
-- 旧全局后端路由移除（task 48）已完成：`registry.ts` 只导出 `getBackendAdapter(kind)`（fail-closed），被移除的三个函数仅保留在 `app/backends/legacyGlobalRouting.ts` 供测试沿袭，生产零消费。主界面接入统一运行时 wire 亦已完成：`App.vue` 在存活 `/runtime` 连接上创建真实连接与运行时客户端、hello 后构建并 `start()` 统一会话树，并把客户端交给会话动作、消息发送与交互模块；仍未完成/仍为真的是：没有存活 `/runtime` 连接时主界面回落到废弃登录路径（第 3 节），该路径本身尚未移除。
+- 旧全局后端路由移除（task 48）已完成：`registry.ts` 只导出 `getBackendAdapter(kind)`（fail-closed），被移除的三个函数仅保留在 `app/backends/legacyGlobalRouting.ts` 供测试沿袭，生产零消费。主界面接入统一运行时 wire 亦已完成：`App.vue` 在存活 `/runtime` 连接上创建真实连接与运行时客户端、hello 后构建并 `start()` 统一会话树，并把客户端交给会话动作、消息发送与交互模块；仍未完成/仍为真的是：未建立可用 runtime target 时会话动作沿用废弃登录路径（第 3 节）、未构建统一树时侧栏沿用旧树，该路径本身尚未移除。
 - macOS/Windows 安装包产物、真实 GitHub-release 更新、Windows/macOS Electron 运行、真实 GPU、macOS/Windows live 腿均未取得证据（第 9 节）。
 - 已知非阻塞抖动：`app/runtimeGit.test.ts` 的 200-workspaces 用例与 `app/kimiWebWsProxy.boundaries.test.ts` 的 502 用例。

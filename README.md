@@ -91,10 +91,10 @@ v0.9.0-alpha 引入统一运行环境：连接一个 Bridge 入口后，在同�
 - 升级：旧历史、草稿、收藏、辅助元数据完整迁移（迁移对旧来源只读，卸载保留数据）；旧 Bridge 协议代 `v070-legacy` 在连接前被拒绝并给出升级路径。完整升级路径 backup → bind → import → verify → cutover 见 [迁移说明](docs/migration-v090.md)。
 - 远程：SSH/Slurm 连接、两种通道（TCP 与 step relay）、持久化条件与不支持拓扑见 [远程说明](docs/remote.md)。
 - 协作：Host Thread、handoff、任务/尝试/团队与隔离改动见 [协作说明](docs/collaboration.md)。
-- 性能：1 万会话/200 worktree/5 来源与 10 万 pins 压力档的实测数字（真实 Chromium、真实 IndexedDB、无 store mock、10 次运行）见迁移说明第 11 节；计划规定的 200 worktree 与五类树形构成已播种并已评分（seed 090：五类均分、1001+ Global roots、51+ Codex threads、archive/orphan/child、等时间戳，树形维度在 harness 自有 IndexedDB 上逐维评分）；五个 UI-TREE 渲染指标在 store-substrate 层级评分，因为主界面尚未接入新运行时，不声称运行中应用渲染表现。
+- 性能：1 万会话/200 worktree/5 来源与 10 万 pins 压力档的实测数字（真实 Chromium、真实 IndexedDB、无 store mock、10 次运行）见迁移说明第 11 节；计划规定的 200 worktree 与五类树形构成已播种并已评分（seed 090：五类均分、1001+ Global roots、51+ Codex threads、archive/orphan/child、等时间戳，树形维度在 harness 自有 IndexedDB 上逐维评分）；五个 UI-TREE 渲染指标在 store-substrate 层级评分（性能夹具驱动存储基底，未渲染运行中的 App.vue），不声称运行中应用渲染表现。
 - 平台限制：没有构建也没有声称任何 Windows 或 macOS 安装包产物；未走真实 GitHub-release 更新路径；Electron 运行时只在 Linux 实测；无物理 GPU。详见迁移说明第 9 节。
 
-> ⚠️ 迁移进行中：登录页按后端选择与每后端直连地址已标记废弃但在本 alpha 仍可使用；旧全局后端路由（全局单例与 `getActiveBackendAdapter` 等函数）已移除，生产动作按连接作用域显式解析适配器，被移除函数仅保留在 legacy 导出模块供测试沿袭；主界面尚未接入新运行时 wire。
+> ⚠️ 迁移进行中：登录页按后端选择与每后端直连地址已标记废弃但在本 alpha 仍可使用；旧全局后端路由（全局单例与 `getActiveBackendAdapter` 等函数）已移除，生产动作按连接作用域显式解析适配器，被移除函数仅保留在 legacy 导出模块供测试沿袭；主界面已接入新运行时 wire：未建立可用 runtime target（未绑定 bridge 地址，或 bridge 尚未回答 hello）时，会话动作沿用 per-backend 路径；未构建统一树时，侧栏沿用旧树；旧登录和直连路径仍保留。
 
 ---
 
@@ -506,10 +506,10 @@ v0.9.0-alpha adds the unified runtime: connect one Bridge entry, then browse all
 - Upgrade: legacy history, drafts, favorites, and auxiliary metadata migrate intact (the migration reads the legacy source read-only and uninstall preserves data); a legacy `v070-legacy` bridge is refused before connecting with an upgrade path. The full path backup → bind → import → verify → cutover is in [migration notes](docs/migration-v090.md).
 - Remote: SSH/Slurm connections, the two channels (TCP and step relay), persistence conditions, and unsupported topologies are in [remote notes](docs/remote.md).
 - Collaboration: Host Thread, handoff, tasks/attempts/teams, and isolated changes are in [collaboration notes](docs/collaboration.md).
-- Performance: measured numbers for 10k sessions / 200 worktrees / 5 sources and the 100k-pin stress profile (real Chromium, real IndexedDB, no store mock, 10 runs) are in section 11 of the migration notes; the prescribed 200 worktrees and the five-category tree composition are seeded and graded (seed 090: five categories split evenly, 1001+ Global roots, 51+ Codex threads, archive/orphan/child members, equal timestamps, each tree dimension graded over the harness-owned IndexedDB); the five UI-TREE render metrics are graded at the store-substrate level because the main app is not yet wired to the runtime, and no running-app rendering is claimed.
+- Performance: measured numbers for 10k sessions / 200 worktrees / 5 sources and the 100k-pin stress profile (real Chromium, real IndexedDB, no store mock, 10 runs) are in section 11 of the migration notes; the prescribed 200 worktrees and the five-category tree composition are seeded and graded (seed 090: five categories split evenly, 1001+ Global roots, 51+ Codex threads, archive/orphan/child members, equal timestamps, each tree dimension graded over the harness-owned IndexedDB); the five UI-TREE render metrics are graded at the store-substrate level (the performance fixture drives the store substrate and does not render the running App.vue), and no running-app rendering is claimed.
 - Platform limits: no Windows or macOS installer artifact was built or claimed; the real GitHub-release update path was not exercised; Electron runtime was exercised on Linux only; no physical GPU. See section 9 of the migration notes.
 
-> ⚠️ Migration in progress: the per-backend login selection and per-backend direct URLs are marked deprecated but remain usable in this alpha; the legacy global backend routing (the module-global singleton and the `getActiveBackendAdapter` family) is retired — production actions resolve adapters explicitly from the connection scope, and the removed functions survive only in the legacy export module for test lineage; the main app is not yet wired to the new runtime.
+> ⚠️ Migration in progress: the per-backend login selection and per-backend direct URLs are marked deprecated but remain usable in this alpha; the legacy global backend routing (the module-global singleton and the `getActiveBackendAdapter` family) is retired — production actions resolve adapters explicitly from the connection scope, and the removed functions survive only in the legacy export module for test lineage; the main app is wired to the new runtime: session actions keep the per-backend path until a usable runtime target is attached (no bridge URL bound, or the bridge has not answered hello), the sidebar keeps its legacy tree until the unified tree is built, and the legacy login and direct-connection paths remain.
 
 ---
 

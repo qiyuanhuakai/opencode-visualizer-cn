@@ -12,7 +12,7 @@
   - [x] SSH 与 Slurm 真实执行（task 46：122 断言 0 跳过，真实 sshd/slurmctld/双 slurmd/munge/网络命名空间；compute 禁 SSH 与应用 TCP 下 1 CPU/128 MiB replacement relay 成功）
   - [x] 打包产物可安装可卸可更新（task 45：happy 115 断言、failure 35 断言；PATH 无 node 仍启动 store worker 与 PTY）
   - [x] 移除旧全局后端路由（`useBackend*` 接缝、`activeBackendKind` 全局单例、`getActiveBackendAdapter`/`getActiveBackendKind`/`setActiveBackendKind` 生产路径；task 48 完成，生产零消费，legacy 导出模块保留供测试沿袭）
-  - [x] 完成主界面接入统一运行时 wire（App.vue 接入：真实 `/runtime` 连接与客户端、hello 后构建并 start 统一会话树、客户端交给会话动作/消息发送/交互模块；没有存活 `/runtime` 连接时仍回落到既有 per-backend 路径，该路径尚未移除）
+  - [x] 完成主界面接入统一运行时 wire（App.vue 接入：真实 `/runtime` 连接与客户端、hello 后构建并 start 统一会话树、客户端交给会话动作/消息发送/交互模块；未建立可用 runtime target 时会话动作仍沿用既有 per-backend 路径、未构建统一树时侧栏仍沿用旧树，该路径尚未移除）
   - [ ] Windows / macOS 安装包产物（**未构建也未声称**；RPM/NSIS/PKG 仅验证生成文本）
   - [ ] 真实 GitHub-release 更新下载+校验路径（未实测，只应用本地 deb）
   - [ ] macOS/Windows live 腿（只在 CI 工作流定义，未执行）
