@@ -121,19 +121,47 @@ export const TREE = Object.freeze({
 // attachments had NO load coverage at all. Each profile below is a plan literal:
 // the part names/kinds/sizes are fixed here and graded against the independent
 // Node-side hash oracle, never against a value this driver measured.
+//
+// Every size is the FROZEN seed090.json generation input
+// (app/dev/runtime-v090/fixtures/seed090.json), so this dimension exercises the
+// prescribed scales themselves — never a scaled-down stand-in:
+//   bodyBytes 2048              every ordinary draft's body (the drafts leg's size)
+//   attachmentEvery 100         every 100th draft carries ONE attachment
+//   attachmentBytes 1048576     that attachment is 1 MiB
+//   largeBodyBytes 16777216     the one oversized draft's body is 16 MiB
+//   largeAttachmentBytes 67108864  its attachment is 64 MiB
+// `multi-part-attachment` is the every-100th record's shape (2 KiB body plus
+// 1 MiB attachment parts), `large-body` samples the 16 MiB body class, and
+// `oversized-draft` IS the fixture's single extra draft (16 MiB body + 64 MiB
+// attachment). The every-100th DISTRIBUTION itself — 100 such drafts at the 10k
+// scale, 1000 at the 100k scale — is verified over the emitted dataset by
+// scripts/qa/runtime-v090-fixtures.mjs `check`; this leg SAMPLES the prescribed
+// sizes (four drafts per sampled class plus the one prescribed oversized draft)
+// because importing every attachment draft at the 100k scale (1000 x 1 MiB) is
+// outside this leg's budget. What is graded here is the prescribed SIZE of each
+// load class through the real store, hash-verified per part against the
+// independent oracle, on import AND after a real offline restart.
 export const LOAD_PROFILES = Object.freeze([
   {
     label: 'large-body',
     drafts: 4,
-    parts: Object.freeze([{ name: 'body', kind: 'body', size: 512 * 1024, seed: 11 }]),
+    parts: Object.freeze([{ name: 'body', kind: 'body', size: 16 * 1024 * 1024, seed: 11 }]),
   },
   {
     label: 'multi-part-attachment',
     drafts: 4,
     parts: Object.freeze([
-      { name: 'body', kind: 'body', size: 64 * 1024, seed: 21 },
-      { name: 'attachment-0', kind: 'attachment', size: 128 * 1024, seed: 22 },
-      { name: 'attachment-1', kind: 'attachment', size: 128 * 1024, seed: 23 },
+      { name: 'body', kind: 'body', size: 2 * 1024, seed: 21 },
+      { name: 'attachment-0', kind: 'attachment', size: 1024 * 1024, seed: 22 },
+      { name: 'attachment-1', kind: 'attachment', size: 1024 * 1024, seed: 23 },
+    ]),
+  },
+  {
+    label: 'oversized-draft',
+    drafts: 1,
+    parts: Object.freeze([
+      { name: 'body', kind: 'body', size: 16 * 1024 * 1024, seed: 31 },
+      { name: 'attachment-0', kind: 'attachment', size: 64 * 1024 * 1024, seed: 32 },
     ]),
   },
 ]);
@@ -765,8 +793,20 @@ export async function createStack({ out, log = () => {} }) {
   }
 }
 
-// Independent node-side expected hash for a deterministic draft part.
-const expectedPartHash = (size, seed = 0) => sha256Hex(generated(size, seed));
+// Independent node-side expected hash for a deterministic draft part. The value
+// is a pure function of the frozen (size, seed) literal, and the leg asks for
+// the same part's hash on import AND again after the offline restart, so the
+// derivation is memoized: the oracle's INPUTS and OUTPUT are unchanged — only
+// the re-generation of an identical multi-MiB buffer is avoided.
+const expectedPartHashCache = new Map();
+const expectedPartHash = (size, seed = 0) => {
+  const key = `${size}:${seed}`;
+  const cached = expectedPartHashCache.get(key);
+  if (cached !== undefined) return cached;
+  const digest = sha256Hex(generated(size, seed));
+  expectedPartHashCache.set(key, digest);
+  return digest;
+};
 
 // Identity/draft fixtures — deterministic, byte-identical to the in-page bridge.
 // The pin identity set IS the plan-prescribed composition (task 50): 10k/100k

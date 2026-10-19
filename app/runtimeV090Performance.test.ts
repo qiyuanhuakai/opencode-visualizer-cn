@@ -207,10 +207,22 @@ describe('large-body and attachment load coverage is graded, not silently droppe
     expect(result.passed).toBe(false);
   });
 
-  it('the frozen load profiles carry both a large single body and multi-part attachments', () => {
-    expect(LOAD_PROFILES.map((profile) => profile.label)).toEqual(['large-body', 'multi-part-attachment']);
-    expect(LOAD_PROFILES[0].parts[0].size).toBeGreaterThan(256 * 1024);
-    expect(LOAD_PROFILES[1].parts.filter((part) => part.kind === 'attachment').length).toBeGreaterThanOrEqual(2);
+  it('the frozen load profiles carry the prescribed seed090 scales: 16MiB body, 1MiB attachments, 64MiB large attachment', () => {
+    // The frozen generation input (app/dev/runtime-v090/fixtures/seed090.json)
+    // prescribes bodyBytes 2048, attachmentEvery 100, attachmentBytes 1 MiB,
+    // largeBodyBytes 16 MiB and largeAttachmentBytes 64 MiB. These profiles must
+    // carry those literals themselves — a smaller stand-in would leave the
+    // prescribed scale unexercised, which is the coverage gap this closes.
+    expect(LOAD_PROFILES.map((profile) => profile.label)).toEqual(['large-body', 'multi-part-attachment', 'oversized-draft']);
+    expect(LOAD_PROFILES[0].parts[0].size).toBe(16 * 1024 * 1024);
+    // The every-100th record's shape: a 2KiB body plus 1MiB attachment part(s).
+    expect(LOAD_PROFILES[1].parts[0]).toMatchObject({ kind: 'body', size: 2 * 1024 });
+    const attachments = LOAD_PROFILES[1].parts.filter((part) => part.kind === 'attachment');
+    expect(attachments.length).toBeGreaterThanOrEqual(1);
+    for (const attachment of attachments) expect(attachment.size).toBe(1024 * 1024);
+    // The fixture's one oversized draft: 16MiB body plus a 64MiB attachment.
+    expect(LOAD_PROFILES[2].drafts).toBe(1);
+    expect(LOAD_PROFILES[2].parts.map((part) => part.size)).toEqual([16 * 1024 * 1024, 64 * 1024 * 1024]);
   });
 });
 
@@ -224,7 +236,9 @@ describe('large-body and attachment load coverage is graded, not silently droppe
 // headers as 2KiB single-body-part drafts. The exact-count coverage row then
 // failed a HEALTHY run: 10009/10001 at the 10k scale and 100009/100001 at the
 // 100k scale, with both load profiles importing 4/4 and 12/12 parts whose
-// hashes and offline read-backs all matched.
+// hashes and offline read-backs all matched. (The leg now carries a third
+// profile — the fixture's prescribed oversized draft — so its own committed
+// header count is derived from LOAD_PROFILES below, not frozen at 8.)
 //
 // This drives the REAL runDraftsLeg, the REAL runLoadsLeg and the REAL
 // runCoverage through a controlled page/store double, so the two legs really do
@@ -419,11 +433,13 @@ describe('the load leg cannot pollute the plain draft coverage', () => {
     }
   });
 
-  it('the load leg really did commit its 8 headers into the SAME header set the coverage enumeration pages', () => {
+  it('the load leg really did commit its headers into the SAME header set the coverage enumeration pages', () => {
     // Without this, the regression below could pass vacuously by the load leg
-    // having written nothing at all.
+    // having written nothing at all. Derived from LOAD_PROFILES so the count can
+    // never go stale when a profile is added — and zero committed headers fails.
+    const expectedLoadHeaders = LOAD_PROFILES.reduce((total, profile) => total + profile.drafts, 0);
     const loadContexts = committedContexts.filter((context) => context.indexOf(`${INTEGRATION_PREFIX}-`) === 0 && plainDraftOrdinal(context, INTEGRATION_PREFIX) === null);
-    expect(loadContexts).toHaveLength(8);
+    expect(loadContexts).toHaveLength(expectedLoadHeaders);
     // Every one of them starts with the run prefix, i.e. every one of them would
     // have been swallowed by the old PREFIX-only filter.
     for (const context of loadContexts) expect(context.indexOf(`${INTEGRATION_PREFIX}-`)).toBe(0);
