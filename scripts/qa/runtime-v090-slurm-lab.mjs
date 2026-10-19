@@ -279,6 +279,14 @@ done
 idle=$(sinfo -h -N -o '%N %t' 2>/dev/null | grep -c 'idle' || true)
 [ "$idle" -ge 2 ] || fail "compute nodes never reached idle (sinfo: $(sinfo -h -N -o '%N %t' 2>/dev/null | tr '\\n' ' '))"
 
+# The completion marker. Everything a QA lane depends on is proven ABOVE this line: both
+# sshd listeners are listening, both compute nodes are idle, and the version record is
+# written. The Node-side readiness check requires this file, so "lab ready" can never again
+# be reported from the slurmctld/slurmd state alone while the login sshd is still starting
+# (that race made the first store login fail with a bare 'false !== true' assertion).
+rm -f /run/lab-setup-complete
+touch /run/lab-setup-complete
+
 # ---------------------------------------------------------------- 9. version + target record (AC4)
 srun --version 2>/dev/null | head -1 > /tmp/lab-versions.txt || true
 slurmctld --version >> /tmp/lab-versions.txt
@@ -360,14 +368,21 @@ export async function startLab(options = {}) {
 async function awaitLabReady(lab, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let last = '';
+  let setupComplete = false;
   while (Date.now() < deadline) {
     const probe = await execLab(lab, ['bash', '-c', 'sinfo -h -N -o "%N %t" 2>/dev/null | sort | tr "\\n" ";"']);
     last = probe.stdout.trim();
     const idle = (last.match(/idle/g) ?? []).length;
-    if (probe.exitCode === 0 && idle >= 2) return;
+    // The setup script's completion marker is written only AFTER it has proven both sshd
+    // listeners are listening and both compute nodes reached idle. Waiting for sinfo alone
+    // returned while the login namespace's sshd was still starting, so the very first store
+    // login raced the daemon and failed. The marker is the setup's own completion signal, so
+    // the ready condition is the setup's real end state rather than a parallel, weaker one.
+    setupComplete = (await execLab(lab, ['bash', '-c', 'test -f /run/lab-setup-complete && echo yes || echo no'])).stdout.trim() === 'yes';
+    if (probe.exitCode === 0 && idle >= 2 && setupComplete) return;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-  throw new Error(`lab did not become ready within ${timeoutMs}ms (last sinfo: ${last || '<none>'})`);
+  throw new Error(`lab did not become ready within ${timeoutMs}ms (last sinfo: ${last || '<none>'}; setup completion marker present: ${setupComplete})`);
 }
 
 async function readLabDescriptor(lab) {
