@@ -1,4 +1,5 @@
 import { fork } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { parseOptions, parseRequest, StoreError, STORE_LIMITS } from './storeProtocol.js';
@@ -6,9 +7,43 @@ import { parseOptions, parseRequest, StoreError, STORE_LIMITS } from './storePro
 export function resolveStoreWorker(installRoot) {
   return installRoot ? { workerPath: path.resolve(installRoot, 'runtime/runtimeDatabaseWorker.mjs'), execPath: path.resolve(installRoot, `runtime/vis_bridge_node${process.platform === 'win32' ? '.exe' : ''}`) } : { workerPath: fileURLToPath(new URL('./runtimeDatabaseWorker.mjs', import.meta.url)), execPath: process.execPath };
 }
+// A packaged (SEA) vis_bridge cannot fork ITSELF as a plain Node interpreter —
+// the blob is the main script and argv is ignored — so an installed bridge must
+// fork its store worker through the staged Node 24 sidecar next to the
+// executable. Mirrors packagedNodePtyEntries in bridge/ptyManager.js: the
+// dist-bridge staging keeps the sidecar beside the executable, POSIX installers
+// place the payload under <executableDirectory>/../lib/vis_bridge.
+export function installedStoreRootCandidates(execPath = process.execPath, platform = process.platform) {
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  const executableDirectory = pathApi.dirname(execPath);
+  return platform === 'win32'
+    ? [pathApi.join(executableDirectory, 'bridge', 'runtime')]
+    : [
+        pathApi.join(executableDirectory, 'bridge', 'runtime'),
+        pathApi.resolve(executableDirectory, '..', 'lib', 'vis_bridge', 'bridge', 'runtime'),
+      ];
+}
+export function resolveInstalledStoreRoot(execPath = process.execPath, platform = process.platform) {
+  const sidecarName = platform === 'win32' ? 'vis_bridge_node.exe' : 'vis_bridge_node';
+  return installedStoreRootCandidates(execPath, platform).find((candidate) =>
+    existsSync(path.join(candidate, 'runtime', 'runtimeDatabaseWorker.mjs'))
+    && existsSync(path.join(candidate, 'runtime', sidecarName))) ?? null;
+}
+function isSeaRuntime() {
+  try { return Boolean(process.getBuiltinModule?.('node:sea')?.isSea?.()); } catch { return false; }
+}
 export function createRuntimeStore(input) {
   const options = parseOptions(input);
-  const { workerPath, execPath } = resolveStoreWorker(options.installRoot);
+  // Installed SEA binary: the staged sidecar is the ONLY acceptable worker
+  // runtime. A missing sidecar fails loudly here with the expected paths —
+  // never a silent fallback to process.execPath (which would fork the SEA
+  // binary itself) or to repository source.
+  const installRoot = options.installRoot ?? (isSeaRuntime() ? resolveInstalledStoreRoot() : null);
+  if (isSeaRuntime() && !installRoot) {
+    const expected = installedStoreRootCandidates().map((candidate) => `${candidate}/runtime/runtimeDatabaseWorker.mjs + ${candidate}/runtime/vis_bridge_node`).join(' OR ');
+    throw new Error(`installed vis_bridge store sidecar is missing next to ${process.execPath}; expected ${expected}`);
+  }
+  const { workerPath, execPath } = resolveStoreWorker(installRoot);
   const worker = fork(workerPath, [], { execPath, execArgv: [], stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
   const pending = new Map(); let sequence = 0; let bytes = 0; let normal = 0; let control = 0; let stopped = false;
   let resolveExit;

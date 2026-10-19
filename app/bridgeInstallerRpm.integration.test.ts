@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -14,6 +15,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { packageVisBridgeInstaller } from '../scripts/package-vis-bridge-installer.mjs';
+import { computeRuntimeWorkerClosure } from '../scripts/vis-bridge-runtime-staging.mjs';
 
 const rpmToolsAvailable =
   process.platform === 'linux' &&
@@ -44,12 +46,28 @@ describe.runIf(rpmToolsAvailable)('vis_bridge RPM package', () => {
       chmodSync(bridgePath, 0o755);
       chmodSync(prebuildPath, 0o755);
 
+      // And: the runtime store sidecar payload. The packager stages the worker
+      // plus its import closure computed from the fixture root, so the fixture
+      // carries the REAL worker closure (copied from this checkout, never a
+      // re-implementation) and a CONTROLLABLE sidecar marker instead of the
+      // 100MB build interpreter. A fixture without them cannot produce the
+      // staged sidecar at all — which is exactly how this gate used to fail.
+      const repositoryRoot = process.cwd();
+      for (const relativePath of await computeRuntimeWorkerClosure(repositoryRoot)) {
+        const destination = path.join(root, ...relativePath.split('/'));
+        mkdirSync(path.dirname(destination), { recursive: true });
+        copyFileSync(path.join(repositoryRoot, ...relativePath.split('/')), destination);
+      }
+      const sidecarSource = path.join(root, 'staged-node-sidecar');
+      writeFileSync(sidecarSource, 'controllable Node 24 sidecar marker\n');
+
       // When: the production packager builds a real native-architecture RPM.
       const rpmPath = await packageVisBridgeInstaller(root, {
         version: 'v1.2.3',
         platform: 'linux',
         arch: architecture,
         format: 'rpm',
+        sidecarSource,
       });
 
       // Then: rpm tooling observes the public package contract and extracted bytes.
@@ -64,6 +82,12 @@ describe.runIf(rpmToolsAvailable)('vis_bridge RPM package', () => {
       expect(files).toContain(
         `/usr/lib/vis_bridge/node_modules/node-pty/prebuilds/linux-${architecture}/pty.node`,
       );
+      // And: the NEW sidecar payload is really in the package — the worker and
+      // its import closure under the layout the installed resolver searches
+      // (<installRoot>/runtime/**), plus the controllable sidecar itself.
+      expect(files).toContain('/usr/lib/vis_bridge/bridge/runtime/runtime/runtimeDatabaseWorker.mjs');
+      expect(files).toContain('/usr/lib/vis_bridge/bridge/runtime/runtime/vis_bridge_node');
+      expect(files).toContain('/usr/lib/vis_bridge/shared/runtime/protocol.js');
       const scripts = execFileSync('rpm', ['-qp', '--scripts', rpmPath], { encoding: 'utf8' });
       expect(scripts).toContain('preinstall scriptlet');
       expect(scripts).toContain('preuninstall scriptlet');
@@ -93,6 +117,34 @@ describe.runIf(rpmToolsAvailable)('vis_bridge RPM package', () => {
       expect(readFileSync(extractedPrebuild, 'utf8')).toBe('native-payload\n');
       expect(statSync(extractedBridge).mode & 0o777).toBe(0o755);
       expect(statSync(extractedPrebuild).mode & 0o777).toBe(0o755);
+      // And: the extracted sidecar payload carries the REAL worker bytes and
+      // the controllable sidecar marker, executable as the installed bridge
+      // forks it.
+      const extractedWorker = path.join(
+        extractionPath,
+        'usr',
+        'lib',
+        'vis_bridge',
+        'bridge',
+        'runtime',
+        'runtime',
+        'runtimeDatabaseWorker.mjs',
+      );
+      const extractedSidecar = path.join(
+        extractionPath,
+        'usr',
+        'lib',
+        'vis_bridge',
+        'bridge',
+        'runtime',
+        'runtime',
+        'vis_bridge_node',
+      );
+      expect(readFileSync(extractedWorker, 'utf8')).toBe(
+        readFileSync(path.join(process.cwd(), 'bridge', 'runtime', 'storage', 'runtimeDatabaseWorker.mjs'), 'utf8'),
+      );
+      expect(readFileSync(extractedSidecar, 'utf8')).toBe('controllable Node 24 sidecar marker\n');
+      expect(statSync(extractedSidecar).mode & 0o777).toBe(0o755);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

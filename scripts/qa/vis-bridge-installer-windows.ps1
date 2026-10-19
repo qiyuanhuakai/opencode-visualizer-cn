@@ -6,6 +6,24 @@
 
 $ErrorActionPreference = 'Stop'
 
+# Native exit codes must be checked ONE BY ONE. PowerShell's default native-error setting does
+# not make a non-zero native exit throw, and the GitHub pwsh wrapper propagates only the FINAL
+# exit code — so a failing assert-pty (exit 1) followed by a successful lifecycle spawn and a
+# successful uninstall made the whole step report green. Every native call below goes through
+# Invoke-Native, which throws on a non-zero exit and names the command that failed.
+function Invoke-Native {
+  param(
+    [Parameter(Mandatory = $true)][string]$Command,
+    [string[]]$Arguments = @(),
+    [string]$Label
+  )
+  $what = if ($Label) { $Label } else { ($Command, ($Arguments -join ' ')).Trim() }
+  & $Command @Arguments
+  if ($LASTEXITCODE -ne 0) {
+    throw "native command failed ($what): exit code $LASTEXITCODE"
+  }
+}
+
 $installDirectory = Join-Path $env:LOCALAPPDATA 'Programs/vis_bridge'
 $originalUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $originalProcessPath = $env:Path
@@ -46,29 +64,29 @@ try {
   $pathMatches = @($userPath -split ';' | Where-Object { $_ -eq $installDirectory })
   if ($pathMatches.Count -ne 1) { throw "Installer added PATH entry $($pathMatches.Count) times" }
   $env:Path = "$env:Path;$userPath"
-  vis_bridge --help
+  Invoke-Native -Command 'vis_bridge' -Arguments @('--help') -Label 'vis_bridge --help'
   $env:VIS_BRIDGE_STATE_DIR = $stateDirectory
   $daemonStarted = $true
-  vis_bridge start --port 23199
-  node scripts/qa/vis-bridge-installer-daemon-qa.mjs assert-pty $env:VIS_BRIDGE_STATE_DIR 23199 unused
+  Invoke-Native -Command 'vis_bridge' -Arguments @('start', '--port', '23199') -Label 'vis_bridge start --port 23199'
+  Invoke-Native -Command 'node' -Arguments @('scripts/qa/vis-bridge-installer-daemon-qa.mjs', 'assert-pty', $env:VIS_BRIDGE_STATE_DIR, '23199', 'unused') -Label 'installer assert-pty'
   $lifecycleEvidence = Join-Path $env:RUNNER_TEMP 'bridge-lifecycle.json'
-  node scripts/qa/vis-bridge-installer-daemon-qa.mjs spawn $env:VIS_BRIDGE_STATE_DIR 23199 $lifecycleEvidence
+  Invoke-Native -Command 'node' -Arguments @('scripts/qa/vis-bridge-installer-daemon-qa.mjs', 'spawn', $env:VIS_BRIDGE_STATE_DIR, '23199', $lifecycleEvidence) -Label 'installer spawn (first install)'
   $customStateDirectory = $env:VIS_BRIDGE_STATE_DIR
   Remove-Item Env:VIS_BRIDGE_STATE_DIR
   $secondInstall = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
   if ($secondInstall.ExitCode -ne 0) { throw "Daemon reinstall exited with $($secondInstall.ExitCode)" }
-  node scripts/qa/vis-bridge-installer-daemon-qa.mjs assert-stopped $customStateDirectory 23199 $lifecycleEvidence
+  Invoke-Native -Command 'node' -Arguments @('scripts/qa/vis-bridge-installer-daemon-qa.mjs', 'assert-stopped', $customStateDirectory, '23199', $lifecycleEvidence) -Label 'installer assert-stopped (after reinstall)'
   $daemonStarted = $false
   $env:VIS_BRIDGE_STATE_DIR = $customStateDirectory
   $daemonStarted = $true
-  vis_bridge start --port 23199
+  Invoke-Native -Command 'vis_bridge' -Arguments @('start', '--port', '23199') -Label 'vis_bridge start --port 23199'
   $uninstallEvidence = Join-Path $env:RUNNER_TEMP 'bridge-uninstall-lifecycle.json'
-  node scripts/qa/vis-bridge-installer-daemon-qa.mjs spawn $env:VIS_BRIDGE_STATE_DIR 23199 $uninstallEvidence
+  Invoke-Native -Command 'node' -Arguments @('scripts/qa/vis-bridge-installer-daemon-qa.mjs', 'spawn', $env:VIS_BRIDGE_STATE_DIR, '23199', $uninstallEvidence) -Label 'installer spawn (before uninstall)'
   $uninstaller = Join-Path $installDirectory 'Uninstall.exe'
   Remove-Item Env:VIS_BRIDGE_STATE_DIR
   $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
   if ($uninstall.ExitCode -ne 0) { throw "Uninstaller exited with $($uninstall.ExitCode)" }
-  node scripts/qa/vis-bridge-installer-daemon-qa.mjs assert-stopped $customStateDirectory 23199 $uninstallEvidence
+  Invoke-Native -Command 'node' -Arguments @('scripts/qa/vis-bridge-installer-daemon-qa.mjs', 'assert-stopped', $customStateDirectory, '23199', $uninstallEvidence) -Label 'installer assert-stopped (after uninstall)'
   $daemonStarted = $false
 } finally {
   Remove-Item Env:VIS_BRIDGE_STATE_DIR -ErrorAction SilentlyContinue
@@ -76,7 +94,7 @@ try {
   if ($daemonStarted) {
     try {
       $env:VIS_BRIDGE_STATE_DIR = $stateDirectory
-      vis_bridge stop
+      Invoke-Native -Command 'vis_bridge' -Arguments @('stop') -Label 'vis_bridge stop'
     } catch {
       # Continue cleanup so a failed stop cannot prevent uninstall and PATH restoration.
     } finally {

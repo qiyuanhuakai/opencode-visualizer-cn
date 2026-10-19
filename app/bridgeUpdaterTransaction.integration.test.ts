@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -17,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 
 import { buildVisBridgeBinary } from '../scripts/build-vis-bridge.mjs';
 import { packageVisBridgeInstaller } from '../scripts/package-vis-bridge-installer.mjs';
+import { computeRuntimeWorkerClosure } from '../scripts/vis-bridge-runtime-staging.mjs';
 
 const projectRoot = path.resolve(import.meta.dirname, '..');
 const nativeQaEnabled = process.env.VIS_BRIDGE_NATIVE_UPDATE_QA === '1'
@@ -30,7 +32,7 @@ describe.runIf(nativeQaEnabled)('vis_bridge native updater transaction', () => {
     const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'vis-bridge-native-update-'));
     const containerName = `vis-bridge-updater-transaction-${process.pid}`;
     try {
-      stageFixtureDependencies(fixtureRoot);
+      await stageFixtureDependencies(fixtureRoot);
       const oldInstaller = await buildFixtureInstaller(fixtureRoot, '0.7.12');
       const newInstaller = await buildFixtureInstaller(fixtureRoot, '0.8.0');
       chmodSync(fixtureRoot, 0o755);
@@ -64,11 +66,21 @@ describe.runIf(nativeQaEnabled)('vis_bridge native updater transaction', () => {
   }, 280_000);
 });
 
-function stageFixtureDependencies(fixtureRoot: string): void {
+async function stageFixtureDependencies(fixtureRoot: string): Promise<void> {
   const nodeModules = path.join(fixtureRoot, 'node_modules');
   mkdirSync(nodeModules, { recursive: true });
   symlinkSync(path.join(projectRoot, 'node_modules', 'node-pty'), path.join(nodeModules, 'node-pty'));
   mkdirSync(path.join(fixtureRoot, 'bridge'), { recursive: true });
+  // The production SEA build (buildVisBridgeBinary) unconditionally stages the
+  // runtime store worker plus its import closure into the build output, so the
+  // fixture root must carry the REAL worker closure computed from this checkout
+  // (never a re-implementation): a fixture without it cannot even build, which
+  // is exactly how both Linux gates failed. Mirrors the RPM/DEB fixtures.
+  for (const relativePath of await computeRuntimeWorkerClosure(projectRoot)) {
+    const destination = path.join(fixtureRoot, ...relativePath.split('/'));
+    mkdirSync(path.dirname(destination), { recursive: true });
+    copyFileSync(path.join(projectRoot, ...relativePath.split('/')), destination);
+  }
 }
 
 async function buildFixtureInstaller(fixtureRoot: string, version: string): Promise<string> {
