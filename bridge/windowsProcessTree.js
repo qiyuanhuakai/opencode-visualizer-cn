@@ -37,16 +37,20 @@ function runCommand(spawnProcess, command, args, options) {
   });
 }
 
-export async function stopWindowsProcessTree(pid, force, options = {}) {
+export async function taskkillProcessTree(pid, force, options = {}) {
   const spawnProcess = options.spawnProcess ?? spawn;
   const taskkillArgs = ['/PID', String(pid), '/T'];
   if (force) taskkillArgs.push('/F');
-  const taskkillCode = await runCommand(spawnProcess, 'taskkill', taskkillArgs, {
+  return (await runCommand(spawnProcess, 'taskkill', taskkillArgs, {
     stdio: 'ignore',
     windowsHide: true,
-  });
-  if (taskkillCode === 0) return;
+  })) === 0;
+}
 
+export async function stopWindowsProcessTree(pid, force, options = {}) {
+  if (await taskkillProcessTree(pid, force, options)) return;
+
+  const spawnProcess = options.spawnProcess ?? spawn;
   const sweepCode = await runCommand(
     spawnProcess,
     'powershell.exe',
