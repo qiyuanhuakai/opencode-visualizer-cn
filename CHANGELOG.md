@@ -8,6 +8,37 @@
 
 ---
 
+## [v0.9.0-alpha released]
+
+### 统一运行环境（Unified Runtime）
+
+- [x] 新增 `/runtime` v1 协议与 Bridge 协议代 `v090-runtime`：一个 Bridge 入口按 target 路由；握手 hello/version/capabilities；request 带幂等键；result 的 `durable-accepted` 与 `native-executed` 分离；独立 binary channel；固定错误码与限额。旧协议代 `v070-legacy`（如 bridge `0.7.10`）在连接前即被拒绝并给出升级路径。
+- [x] 一次连接后按 repository/worktree 浏览全部五类来源（OpenCode、Codex、ACP、Kimi Web、DSH）并显示 Harness 标识；非 Git、孤立、归档与原生子会话可发现；列表完整性由驱动报告 `complete|partial|unsupported`，一页异常不替整源宣告 complete。
+- [x] 原生能力保留并经实测能力矩阵呈现：OpenCode 19/29、Codex 14/29、ACP 11/29、Kimi Web 5/29、DSH 5/29 项受控能力；未声明项以来源名称明确呈现，不伪造能力（[docs/runtime.md](docs/runtime.md)）。
+- [x] 多会话并行：发送、权限、模型、附件、取消、历史按 `SessionRef` 归属；原生 ID 跨来源重复不混淆。
+- [x] 1 万会话/200 worktree/5 类来源渐进可用，10 万 pins 压力档缓存有界。实测（真实 headless Chromium、真实 IndexedDB、无 store mock、10 次运行 nearest-rank p95，运行时间 2026-10-16T20:58Z/21:00Z/21:08Z）：10k 档 warm tree 6.1ms、first selectable 26.3ms、index complete 658.2ms、renderer heap 1.57MiB、Vis 自有浏览器树额外 RSS 93.2MiB；100k 档 pins 覆盖率 100%（100000/100000）、heap 1.57MiB、额外 RSS 194.34MiB。计划规定的 200 worktree 与五类树形构成已播种并已评分（seed 090，树形维度在 harness 自有 IndexedDB 上逐维评分）；五个 UI-TREE 渲染指标在 store-substrate 层级评分（性能夹具驱动存储基底，未渲染运行中的 App.vue），不声称运行中应用渲染表现。
+- [x] Host Thread 跨 Harness 接力：参与者引用 SessionRef，NativeSubagent 与 Host Participant 分离；handoff checkpoint 最多 32KiB/8000 token，不转发密钥、不复制完整 transcript；delivery 状态：`checkpoint → attached → prepared → delivered → observed → active`。
+- [x] 任务/尝试/团队协作：task successful 必须 attempt 原生终态 + 验收/审查 accepted；默认四活动 attempts、单 mutation owner；Team DAG 检环、依赖失败显式策略、子任务级联取消；mailbox 32KiB、单任务默认 32 子任务/深度 4/1000 消息，超预算暂停并展示。
+- [x] 隔离改动与审查：writer 默认独立 worktree，base commit 与 lease 持久；产物支持 binary/untracked 并记录 hash 清单（预算 32MiB）；集成需干净目标 + HEAD 匹配 + 显式批准 artifact hash，串行 integration lease 下检查→apply→tests→durable record；失败不用 reset --hard/force push/自动 stash。
+- [x] 旧历史、草稿、收藏、辅助元数据完整迁移：迁移对旧来源只读（遍历前后每文件 SHA-256 不变）；身份不明数据保留为 unattached legacy namespace 待显式绑定；草稿逐条持久副本，按 client-origin revision 合并；卸载保留数据（卸载后 DB 字节完全一致，204,800B）。
+- [x] 打包产物：安装目录移走源码且 PATH 无 node 仍启动 store worker 与 PTY；空路径安装与更新成功；卸载保留数据。五 backend 专属文档保留，能力/版本实测矩阵见 [docs/runtime.md](docs/runtime.md)。
+- [x] 旧全局后端路由移除（task 48）：模块级“活动后端”单例与 `getActiveBackendAdapter`/`getActiveBackendKind`/`setActiveBackendKind` 退出生产路径，运行时消费者按连接作用域的 kind 显式解析 `getBackendAdapter(kind)`；全仓检索（排除 fixture 与 legacy 导出）无生产消费者，旧 SSE worker 入口经显式工厂创建适配器、不经过全局路由。被移除函数仅保留在 `app/backends/legacyGlobalRouting.ts` 供测试沿袭。
+
+### SSH 与 Slurm 远程执行
+
+- [x] SSH：宿主 system ssh/Git，不自动 agent forwarding；首次 host key 用户确认、变更拒绝；两跳 ProxyJump 两跳均固定真实 host key；真实网络断裂观测为失败，恢复后全新会话重连同一 target；连接就绪以目标 hello 判断。
+- [x] Slurm：`sbatch --parsable` batch owner 持有 compute Bridge；job UUID intent 先落盘，提交歧义经调度器查询 reconciling，不自动重提；detach 不 cancel、stop 仅 owned job、borrowed allocation 不取消、到期/抢占不自动 replacement。
+- [x] 两种通道实测：login→compute 应用 TCP 允许时认证 compute listener + login SSH forward；compute SSH 与应用 TCP 均禁掉时 batch-owned Bridge 监听本地 socket、`srun` 单任务 relay step 转发 framed bytes。资源参数来自冻结 profile：默认 computeCPU+1 CPU / computeMemoryMiB+128MiB、显式 GRES 不隐式 GPU。
+- [x] 断线保留与节点替换：compute step 占满节点全部预算（4/4 CPU、512/512 MiB、gpu:2）时，1 CPU / 128 MiB / gres:0 的 replacement relay 仍成功执行；store login 会话饱和前中后逐字节一致。持久化三层：login-local control DB、compute-local socket/cache、原生 Harness state 与 workspace persistent data；store 不可用停止新 mutation 并标记 reconciling。
+
+### 发布兼容与限制（逐字记录）
+
+- [x] 协议破坏性变更、废弃登录路径（登录页按后端选择与每后端直连地址，仍可用于本 alpha）、旧 Bridge 拒绝规则、direct 与 managed browser 差异、Slurm 持久化条件、不支持拓扑（多节点、`srun --parsable --async`、缺 exact/gres=none/reserve、Slurm 网络/step I/O 不可用）见 [docs/migration-v090.md](docs/migration-v090.md)。
+- [x] 平台限制：没有构建也没有声称任何 Windows 或 macOS 安装包产物（RPM/NSIS/PKG 仅验证生成文本与布局 13/13）；未走真实 GitHub-release 更新下载+校验路径（只应用本地 deb）；Electron 运行时只在 Linux 实测；无物理 GPU（GRES 经真实 generic-GRES 记账演练）；macOS/Windows live 腿只在 CI 工作流定义、未执行。
+- [x] 迁移状态为**部分完成**：旧全局后端路由（`useBackend*` 接缝与 `activeBackendKind` 全局单例）已移除——生产动作不再经过全局 backend 路由，改为按连接作用域显式解析 `getBackendAdapter(kind)`；被移除的全局函数仅保留在 legacy 导出模块（`app/backends/legacyGlobalRouting.ts`）供测试沿袭，无生产引用。App.vue 已接入新运行时 wire（真实 `/runtime` 连接与客户端、hello 后构建并 start 统一树、客户端交给会话动作/消息发送/交互模块）；未建立可用 runtime target（未绑定 bridge 地址，或 bridge 尚未回答 hello）时，会话动作沿用 per-backend 路径；未构建统一树时，侧栏沿用旧树；登录页按后端选择与每后端直连地址仍可用于本 alpha。
+
+---
+
 ## [v0.8.20-alpha.3 released]
 
 ### 文件链接与本地开发连接

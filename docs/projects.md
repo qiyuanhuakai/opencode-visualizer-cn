@@ -1,5 +1,18 @@
 # Projects & Sessions
 
+## Runtime v0.9 identity
+
+Under the v0.9.0-alpha unified runtime, the directory-first model above is
+carried by stable keys instead of raw paths. `WorkspaceKey` combines the
+target `environmentId` (a persistent UUID) with the remote canonical path and
+volume policy; `RepoKey` uses the canonical Git common-dir. Sources are never
+merged by remote URL, branch, native projectID, or a temporary tunnel port,
+and case, symlink, and Windows volume rules are decided by the target probe,
+not by the client's local path library. Sessions are addressed by
+`SessionRef = { environmentId, harnessInstanceId, nativeSessionId }`. See
+[runtime.md](./runtime.md) for the connection model and the per-source
+capability matrix.
+
 ## Data Model
 
 The session graph uses a **directory-first tree model**:
