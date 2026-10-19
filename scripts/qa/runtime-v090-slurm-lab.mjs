@@ -23,6 +23,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 export const LAB_NAME = 'vis-v090-slurm-lab';
 export const LAB_IMAGE = 'ubuntu:24.04';
@@ -69,22 +70,48 @@ export function labHostsFile() {
 const APT_PACKAGES = 'slurm-wlm munge openssh-server iproute2 util-linux procps libpmix2t64';
 
 /**
- * The whole lab, as one deterministic setup script. Kept as a single script so the
- * `docker` and `native` runtimes execute byte-identical daemon setup.
+ * This startup's completion-marker path.
+ *
+ * The path MUST carry the startup's token. The docker runtime gets a fresh container per
+ * run, so a fixed `/run/lab-setup-complete` was always this run's file there; the native
+ * runtime runs the setup script on the REUSED isolated runner, where the previous run's
+ * marker and its idle slurm daemons both survive. A fixed path therefore let a leftover
+ * marker answer "ready" for a startup whose own setup had barely begun — `awaitLabReady`
+ * polls from the moment `startLab` returns, long before the setup script reaches its own
+ * `rm -f`. A token makes that structurally impossible: only this run's setup writes this
+ * run's path, so a stale file can never be mistaken for this run's completion.
  */
-export function labSetupScript() {
+export function labSetupMarkerPath(setupToken) {
+  assert(typeof setupToken === 'string' && setupToken.length > 0, 'the setup token must be a non-empty string');
+  return `/run/lab-setup-complete-${setupToken}`;
+}
+
+/**
+ * The whole lab, as one deterministic setup script. Kept as a single script so the
+ * `docker` and `native` runtimes execute byte-identical daemon setup. `setupToken` names
+ * this startup's completion marker (see `labSetupMarkerPath`).
+ */
+export function labSetupScript(setupToken) {
   // Emit each node's real address/hostname as literals: the generated bash has no access
   // to the JS helpers, and every node must get its OWN address inside its OWN namespace.
   const nodeLines = LAB_NAMESPACES.map((namespace) => {
     const node = LAB_NODES[namespace];
     return `  ${namespace}) ip=${node.ip} host=${node.host} ;;`;
   }).join('\n');
+  const markerPath = labSetupMarkerPath(setupToken);
   return `#!/usr/bin/env bash
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 log() { printf '[lab] %s\\n' "$*" >&2; }
 fail() { printf '[lab] FATAL: %s\\n' "$*" >&2; exit 70; }
+
+# ---------------------------------------------------------------- 0. sweep stale markers
+# A reused native host still holds the PREVIOUS startup's completion markers. Sweep them
+# FIRST, before the install, so nothing from an earlier run can answer this run's readiness
+# while this run's daemons are still coming up. (The per-startup token already makes that
+# impossible; the sweep is what keeps a dead marker from lingering on the host at all.)
+rm -f /run/lab-setup-complete /run/lab-setup-complete-* || true
 
 # ---------------------------------------------------------------- 1. install
 # Every install lands inside this container/runner only. The user's production host is
@@ -279,13 +306,15 @@ done
 idle=$(sinfo -h -N -o '%N %t' 2>/dev/null | grep -c 'idle' || true)
 [ "$idle" -ge 2 ] || fail "compute nodes never reached idle (sinfo: $(sinfo -h -N -o '%N %t' 2>/dev/null | tr '\\n' ' '))"
 
-# The completion marker. Everything a QA lane depends on is proven ABOVE this line: both
+# The completion marker. Everything a QA lane depends on is proven BELOW this line: both
 # sshd listeners are listening, both compute nodes are idle, and the version record is
 # written. The Node-side readiness check requires this file, so "lab ready" can never again
 # be reported from the slurmctld/slurmd state alone while the login sshd is still starting
 # (that race made the first store login fail with a bare 'false !== true' assertion).
-rm -f /run/lab-setup-complete
-touch /run/lab-setup-complete
+# It is written LAST, after the version record it certifies: readLabDescriptor reads
+# /tmp/lab-versions.txt the instant readiness returns, so a marker that precedes those
+# writes leaves a window where the descriptor observes an empty or partial record.
+# Its path carries this startup's token, so only this run's setup can produce it.
 
 # ---------------------------------------------------------------- 9. version + target record (AC4)
 srun --version 2>/dev/null | head -1 > /tmp/lab-versions.txt || true
@@ -293,6 +322,10 @@ slurmctld --version >> /tmp/lab-versions.txt
 slurmd --version >> /tmp/lab-versions.txt
 munge --version >> /tmp/lab-versions.txt
 /usr/sbin/sshd -V 2>&1 | head -1 >> /tmp/lab-versions.txt
+
+# ---------------------------------------------------------------- 10. completion marker
+rm -f ${markerPath}
+touch ${markerPath}
 log "lab ready: $(sinfo -h -N -o '%N %t %c %m %G' | tr '\\n' ';')"
 
 # Keep the container alive; the QA driver talks to the lab over docker exec.
@@ -325,8 +358,12 @@ export async function startLab(options = {}) {
   const workdir = mkdtempSync(path.join(os.tmpdir(), 'vis-v090-lab-'));
   const hosts = path.join(workdir, 'hosts');
   const setup = path.join(workdir, 'lab-setup.sh');
+  // This startup's own completion-marker path. The native runtime reuses the host, so the
+  // token is what keeps a previous startup's marker from answering this startup's readiness.
+  const setupToken = randomUUID();
+  const markerPath = labSetupMarkerPath(setupToken);
   writeFileSync(hosts, labHostsFile());
-  writeFileSync(setup, labSetupScript(), { mode: 0o755 });
+  writeFileSync(setup, labSetupScript(setupToken), { mode: 0o755 });
   const startedAt = new Date().toISOString();
   let containerId = null;
   let setupChild = null;
@@ -359,27 +396,34 @@ export async function startLab(options = {}) {
     setupChild = spawn('bash', [setup], { detached: true, stdio: ['ignore', 'ignore', 'ignore'] });
     setupChild.unref();
   }
-  const lab = { runtime, workdir, containerId, setupChild, hostsFile: hosts, startedAt, descriptor: null };
+  const lab = { runtime, workdir, containerId, setupChild, hostsFile: hosts, startedAt, markerPath, descriptor: null };
   await awaitLabReady(lab, options.timeoutMs ?? 900000);
   lab.descriptor = await readLabDescriptor(lab);
   return lab;
 }
 
-async function awaitLabReady(lab, timeoutMs) {
+/**
+ * Waits until the lab is REALLY ready: two idle compute nodes AND this startup's own
+ * completion marker. `probe` is injectable so the readiness contract can be exercised on a
+ * host without a privileged lab (it defaults to the real `execLab`).
+ */
+export async function awaitLabReady(lab, timeoutMs, probe = execLab) {
   const deadline = Date.now() + timeoutMs;
   let last = '';
   let setupComplete = false;
   while (Date.now() < deadline) {
-    const probe = await execLab(lab, ['bash', '-c', 'sinfo -h -N -o "%N %t" 2>/dev/null | sort | tr "\\n" ";"']);
-    last = probe.stdout.trim();
+    const sinfo = await probe(lab, ['bash', '-c', 'sinfo -h -N -o "%N %t" 2>/dev/null | sort | tr "\\n" ";"']);
+    last = sinfo.stdout.trim();
     const idle = (last.match(/idle/g) ?? []).length;
     // The setup script's completion marker is written only AFTER it has proven both sshd
-    // listeners are listening and both compute nodes reached idle. Waiting for sinfo alone
-    // returned while the login namespace's sshd was still starting, so the very first store
-    // login raced the daemon and failed. The marker is the setup's own completion signal, so
-    // the ready condition is the setup's real end state rather than a parallel, weaker one.
-    setupComplete = (await execLab(lab, ['bash', '-c', 'test -f /run/lab-setup-complete && echo yes || echo no'])).stdout.trim() === 'yes';
-    if (probe.exitCode === 0 && idle >= 2 && setupComplete) return;
+    // listeners are listening, both compute nodes reached idle and the version record is
+    // written. Waiting for sinfo alone returned while the login namespace's sshd was still
+    // starting, so the very first store login raced the daemon and failed. The marker is the
+    // setup's own completion signal, so the ready condition is the setup's real end state
+    // rather than a parallel, weaker one. Its path carries THIS startup's token: on a reused
+    // native host a previous startup's marker is a different file, so it can never stand in.
+    setupComplete = (await probe(lab, ['bash', '-c', `test -f ${lab.markerPath} && echo yes || echo no`])).stdout.trim() === 'yes';
+    if (sinfo.exitCode === 0 && idle >= 2 && setupComplete) return;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   throw new Error(`lab did not become ready within ${timeoutMs}ms (last sinfo: ${last || '<none>'}; setup completion marker present: ${setupComplete})`);
@@ -435,6 +479,11 @@ export async function stopLab(lab) {
   } else if (lab.setupChild?.pid) {
     // The native lab runs the daemons as children of the setup script's process group.
     try { process.kill(-lab.setupChild.pid, 'SIGTERM'); } catch { /* already gone */ }
+  }
+  // Teardown removes THIS startup's completion marker. The native host is reused, so leaving
+  // it behind is exactly what let a later startup read "ready" from an earlier run's file.
+  if (typeof lab.markerPath === 'string') {
+    try { rmSync(lab.markerPath, { force: true }); } catch { /* not root / already gone */ }
   }
   if (!lab.keep) rmSync(lab.workdir, { recursive: true, force: true });
 }

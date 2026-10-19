@@ -59,6 +59,15 @@ jobs:
       - name: Windows installer QA failure-propagation smoke
         run: node --test scripts/qa/vis-bridge-installer-windows.test.mjs
 
+      # The Slurm lab's readiness must be THIS startup's completion, not the host's. The
+      # native runtime reuses the isolated runner, so a fixed /run/lab-setup-complete let a
+      # previous startup's marker answer "ready" while this startup's setup had barely begun.
+      # The marker path is per-startup, it is written after the version record it certifies,
+      # and teardown removes it — a privileged native restart is not available here, so this
+      # smoke asserts the structure and drives the readiness decision with a stubbed probe.
+      - name: Slurm lab per-startup readiness smoke
+        run: node --test scripts/qa/runtime-v090-slurm-lab.test.mjs
+
       - name: Build web app
         run: pnpm build
 
