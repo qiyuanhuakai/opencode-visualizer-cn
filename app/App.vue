@@ -583,6 +583,7 @@
     <ProjectPicker
       :open="isProjectPickerOpen"
       :home-path="projectPickerHomePath"
+      :backend-kind="activeBackendKind"
       @close="isProjectPickerOpen = false"
       @select="handleProjectDirectorySelect"
     />
@@ -638,6 +639,7 @@
       :open="!!editingProject"
       :project-id="editingProject?.projectId ?? ''"
       :worktree="editingProject?.worktree ?? ''"
+      :backend-kind="activeBackendKind"
       :name="editingProjectMeta?.name"
       :icon-color="editingProjectMeta?.icon?.color"
       :icon-override="editingProjectMeta?.icon?.override"
@@ -948,9 +950,7 @@ import {
   configureDshBackend,
   disconnectDshBackend as disconnectDshBackendAdapter,
   configureOpenCodeBackend,
-  getActiveBackendAdapter,
   getBackendAdapter,
-  setActiveBackendKind,
 } from './backends/registry';
 import { AcpAdapter } from './backends/acp/acpAdapter';
 import {
@@ -2062,7 +2062,12 @@ const providersFetchCount = ref(0);
 const agentsLoading = ref(false);
 const commandsLoading = ref(false);
 const serverState = useServerState();
-const openCodeApi = useOpenCodeApi(serverState.projects, t);
+// The per-connection backend kind. The retired module-global routing read a
+// registry singleton; every runtime consumer now resolves its adapter through
+// `getBackendAdapter(activeBackendKind.value)`, so this ref is the single
+// source of truth for which backend the app talks to.
+const activeBackendKind = ref<BackendKind>('opencode');
+const openCodeApi = useOpenCodeApi(serverState.projects, t, activeBackendKind);
 const codexApi = useCodexApi({
   onTaskCompleted: ({ sessionId, completionId }) => {
     if (activeBackendKind.value === 'codex') showBrowserNotification(CODEX_PROJECT_ID, sessionId, 'idle', completionId);
@@ -2488,7 +2493,6 @@ const loginUrl = ref(DEFAULT_OPENCODE_URL);
 const loginUsername = ref('');
 const loginPassword = ref('');
 const loginRequiresAuth = ref(false);
-const activeBackendKind = ref<BackendKind>('opencode');
 const connectedBridgeHealthUrl = computed(() => {
   if (!desktopApi || uiInitState.value !== 'ready') return '';
   return resolveDesktopBridgeHealthUrl({
@@ -2758,6 +2762,7 @@ const {
   fw,
   allowedSessionIds: allowedRequestSessionIds,
   activeDirectory,
+  activeBackendKind,
   ensureConnectionReady,
   sendReply: async (requestId, reply) => {
     if (activeBackendKind.value === 'codex' && requestId.startsWith('codex:')) {
@@ -2795,7 +2800,7 @@ const {
         return;
       }
     }
-    const replyPermission = getActiveBackendAdapter().replyPermission;
+    const replyPermission = getBackendAdapter(activeBackendKind.value).replyPermission;
     if (!replyPermission) throw new Error('Active backend does not support permission replies.');
     await replyPermission(requestId, {
       directory: activeDirectory.value.trim() || undefined,
@@ -2815,6 +2820,7 @@ const {
   fw,
   allowedSessionIds: allowedRequestSessionIds,
   activeDirectory,
+  activeBackendKind,
   ensureConnectionReady,
   getTextContent: (messageId: string) => msg.getTextContent(messageId) || '',
   sendReply: async (requestId, answers) => {
@@ -2849,7 +2855,7 @@ const {
         return;
       }
     }
-    const replyQuestion = getActiveBackendAdapter().replyQuestion;
+    const replyQuestion = getBackendAdapter(activeBackendKind.value).replyQuestion;
     if (!replyQuestion) throw new Error('Active backend does not support question replies.');
     await replyQuestion(requestId, {
       directory: activeDirectory.value.trim() || undefined,
@@ -2878,7 +2884,7 @@ const {
         return;
       }
     }
-    const rejectQuestion = getActiveBackendAdapter().rejectQuestion;
+    const rejectQuestion = getBackendAdapter(activeBackendKind.value).rejectQuestion;
     if (!rejectQuestion) throw new Error('Active backend does not support question rejection.');
     await rejectQuestion(requestId, activeDirectory.value.trim() || undefined);
   },
@@ -3223,7 +3229,7 @@ const {
   todoErrorBySessionId,
   normalizeTodoItems,
   reloadTodosForAllowedSessions,
-} = useTodos({ selectedSessionId, allowedSessionIds, activeDirectory });
+} = useTodos({ selectedSessionId, allowedSessionIds, activeDirectory, activeBackendKind });
 
 const {
   treeNodes,
@@ -3274,7 +3280,7 @@ const treeDirectoryName = computed(() => {
   return segments.at(-1) ?? '/';
 });
 
-const { runOneShotPtyCommand } = usePtyOneshot({ activeDirectory, translate: t });
+const { runOneShotPtyCommand } = usePtyOneshot({ activeDirectory, activeBackendKind, translate: t });
 const forgeAuxiliary = useForgeAuxiliary((command, args) =>
   runOneShotPtyCommand(command, Array.from(args)),
 );
@@ -8513,7 +8519,7 @@ function dshRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function dshBackend(): DshAdapter {
-  const adapter = getActiveBackendAdapter();
+  const adapter = getBackendAdapter(activeBackendKind.value);
   if (!(adapter instanceof DshAdapter)) throw new Error('dsh backend is not configured.');
   return adapter;
 }
@@ -9474,7 +9480,6 @@ watchEffect(() => {
         : configuredBackendKind;
   activeBackendKind.value = effectiveBackendKind;
   loginBackendKind.value = credentials.backendKind.value;
-  setActiveBackendKind(effectiveBackendKind);
   syncAcpMessageBridge(acpMessageBridge, effectiveBackendKind, configuredAcp);
 });
 
@@ -9492,7 +9497,7 @@ watch(
 );
 
 async function bootstrapAcpWorkspace() {
-  const adapter = getActiveBackendAdapter();
+  const adapter = getBackendAdapter(activeBackendKind.value);
   if (!(adapter instanceof AcpAdapter)) throw new Error('ACP backend is not configured.');
   acpMessageBridge.bind(adapter);
   await adapter.initialize();
@@ -9507,7 +9512,7 @@ async function bootstrapAcpWorkspace() {
 }
 
 async function bootstrapKimiWebWorkspace(isCurrent: () => boolean) {
-  const adapter = getActiveBackendAdapter();
+  const adapter = getBackendAdapter(activeBackendKind.value);
   if (!(adapter instanceof KimiWebAdapter)) throw new Error('Kimi Web backend is not configured.');
   disconnectKimiWebBackend();
   acpGitInfoByDirectory.value = {};
@@ -9573,7 +9578,7 @@ async function bootstrapKimiWebWorkspace(isCurrent: () => boolean) {
           // declaration the local set disagrees with asks the authoritative
           // lists to be re-read (it never fabricates or clears an item).
           if (activeBackendKind.value !== 'kimi-web') return;
-          if (!isCurrent() || getActiveBackendAdapter() !== adapter) return;
+          if (!isCurrent() || getBackendAdapter(activeBackendKind.value) !== adapter) return;
           applyKimiWebSessionEvent(serverState.projects, op, context.origin);
           if (op.phase === 'created') scheduleKimiTopPanelGitInfoHydration();
           if (op.sessionId !== selectedSessionId.value) return;
@@ -9616,7 +9621,7 @@ watch(selectedSessionId, () => {
 });
 
 function backend() {
-  return getActiveBackendAdapter();
+  return getBackendAdapter(activeBackendKind.value);
 }
 
 /**
@@ -12141,7 +12146,11 @@ const { startInitialization, abortInitialization } = useBackendActivation({
   serverState,
   t,
   toErrorMessage,
-  setActiveBackendKind,
+  setActiveBackendKind: (kind) => {
+    // The retired registry global is unwired: activation moves the
+    // per-connection kind ref the injected composables already read.
+    activeBackendKind.value = kind;
+  },
   configureCodexBackend,
   configureAcpBackend,
   configureKimiWebBackend,
