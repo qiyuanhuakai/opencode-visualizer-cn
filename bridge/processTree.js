@@ -1,6 +1,6 @@
-import { stopWindowsProcessTree } from './windowsProcessTree.js';
+import { stopWindowsProcessTree, taskkillProcessTree } from './windowsProcessTree.js';
 
-export { stopWindowsProcessTree } from './windowsProcessTree.js';
+export { stopWindowsProcessTree, taskkillProcessTree } from './windowsProcessTree.js';
 
 export function detachedProcessOptions() {
   return process.platform === 'win32' ? {} : { detached: true };
@@ -76,8 +76,20 @@ function waitForPosixProcessGroupExit(pid, timeoutMs) {
 export async function stopProcessTree(child, options = {}) {
   const graceMs = options.graceMs ?? 1_500;
   const forceMs = options.forceMs ?? 3_000;
+  let forceRequired = false;
   if (process.platform === 'win32' && child.pid) {
-    await stopWindowsProcessTree(child.pid, false);
+    try {
+      // Windows: `taskkill /T` alone is the graceful phase. A windowless
+      // console leader (every process the bridge spawns) cannot be stopped
+      // without `/F`, and the CIM sweep excludes the root, so a failed probe
+      // means the leader cannot exit on its own — escalate immediately instead
+      // of waiting out the grace period. The forced `taskkill /T /F` reaps the
+      // live tree; the sweep still runs in the forced path for an exited leader
+      // (the case taskkill cannot enumerate).
+      forceRequired = !(await taskkillProcessTree(child.pid, false));
+    } catch {
+      forceRequired = true;
+    }
   } else {
     signalProcessTree(child, 'SIGTERM');
   }
@@ -93,7 +105,7 @@ export async function stopProcessTree(child, options = {}) {
     }
     throw new Error(`Process tree did not stop (pid ${child.pid}).`);
   }
-  if (await waitForProcessExit(child, graceMs)) return;
+  if (!forceRequired && await waitForProcessExit(child, graceMs)) return;
   if (child.pid) await forceStopProcessTree(child.pid);
   else signalProcessTree(child, 'SIGKILL');
   if (!(await waitForProcessExit(child, forceMs))) {
