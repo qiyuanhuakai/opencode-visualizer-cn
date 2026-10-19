@@ -12,7 +12,7 @@ const registryMock = vi.hoisted(() => ({
 }));
 
 vi.mock('../backends/registry', () => ({
-  getActiveBackendAdapter: () => registryMock.getAdapter(),
+  getBackendAdapter: () => registryMock.getAdapter(),
 }));
 
 type ProviderModel = {

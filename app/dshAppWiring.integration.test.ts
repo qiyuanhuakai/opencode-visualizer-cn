@@ -425,7 +425,8 @@ describe('bootstrapDshWorkspace (Todo 33 dsh bridge construction)', () => {
         createDshPermissions,
         upsertPermissionEntry,
         removePermissionEntry,
-        getActiveBackendAdapter: () => adapter,
+        getBackendAdapter: () => adapter,
+        activeBackendKind: box('dsh'),
         DshAdapter: DshAdapterDouble,
         configureDshBackend: vi.fn(() => adapter),
         createDshMuxClient: vi.fn(() => {
@@ -643,8 +644,8 @@ function registryDouble(order: string[], DshAdapter: new () => unknown) {
   return {
     built,
     configureDshBackend,
-    getActiveBackendAdapter: vi.fn((): AdapterDouble => {
-      if (!current) throw new Error('Backend adapter is not registered: dsh');
+    getBackendAdapter: vi.fn((kind: string): AdapterDouble => {
+      if (kind !== 'dsh' || !current) throw new Error(`Backend adapter is not registered: ${kind}`);
       return current;
     }),
     disconnectDshBackend: vi.fn(() => {
@@ -698,7 +699,8 @@ describe('bootstrapDshWorkspace — adapter identity across the disposal (defect
         createDshPermissions,
         upsertPermissionEntry: vi.fn(),
         removePermissionEntry: vi.fn(),
-        getActiveBackendAdapter: registry.getActiveBackendAdapter,
+        getBackendAdapter: registry.getBackendAdapter,
+        activeBackendKind: box('dsh'),
         DshAdapter: DshAdapterDouble,
         configureDshBackend: registry.configureDshBackend,
         createDshMuxClient: vi.fn(() => {
@@ -837,7 +839,8 @@ describe('dshSendApi (Todo 25 send routing)', () => {
       transpile(`${DECLARATIONS}\n;({ dshSendApi, dshMessageBridge, dshMuxClient });`),
       {
         shallowRef: shallowRefDouble(),
-        getActiveBackendAdapter: () => adapter,
+        getBackendAdapter: () => adapter,
+        activeBackendKind: box('dsh'),
         DshAdapter: DshAdapterDouble,
         createDshRpcClient,
         deriveDshBridgeHttpUrl,
@@ -985,7 +988,8 @@ describe('dshSessionApi (Todo 27 session action routing)', () => {
         createDshPermissions,
         upsertPermissionEntry: vi.fn(),
         removePermissionEntry: vi.fn(),
-        getActiveBackendAdapter: () => adapter,
+        getBackendAdapter: () => adapter,
+        activeBackendKind: box('dsh'),
         DshAdapter: DshAdapterDouble,
         createDshRpcClient: vi.fn(() => ({ call: vi.fn(async () => ({})) })),
         deriveDshBridgeHttpUrl,
@@ -1168,7 +1172,7 @@ describe('dsh lifecycle wiring (Todo 33)', () => {
       parseKimiWebApprovalRequestId,
       replyKimiWebApproval: vi.fn(),
       dshPermissions,
-      getActiveBackendAdapter: () => ({ replyPermission: undefined }),
+      getBackendAdapter: () => ({ replyPermission: undefined }),
       activeDirectory: box('/repo'),
       codexApi: { serverRequests: { value: [] }, replyPermissionRequest: vi.fn() },
       encodeCodexDialogRequestId: (id: string) => id,

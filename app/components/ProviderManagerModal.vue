@@ -583,7 +583,7 @@
 import { computed, defineAsyncComponent, inject, ref, shallowRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
-import { getActiveBackendAdapter } from '../backends/registry';
+import { getBackendAdapter } from '../backends/registry';
 import { KimiWebAdapter } from '../backends/kimiWeb/kimiWebAdapter';
 import {
   createKimiWebProvidersClient,
@@ -680,7 +680,7 @@ type CustomProviderModelRow = {
 };
 
 function backend() {
-  return getActiveBackendAdapter();
+  return getBackendAdapter(props.backendKind);
 }
 
 function requireBackendMethod<T>(method: T | undefined, name: string): T {
@@ -750,12 +750,13 @@ const props = defineProps<{
   selectedModel: string;
   hiddenModels: string[];
   providerConfig: ProviderConfigState | null;
-  backendKind?: BackendKind;
+  backendKind: BackendKind;
   dshRpcClient?: DshRpcClient;
   /**
    * Task 23: the scope every backend-specific provider control is entered for —
-   * the CURRENT SESSION or an explicit Harness instance. Absent keeps the
-   * legacy global-adapter behaviour (the task-22 delegation seam pattern).
+   * the CURRENT SESSION or an explicit Harness instance. The kind is always
+   * supplied by the connection entry, so the adapter resolves explicitly and
+   * the retired global-adapter lookup is never consulted (task 48).
    */
   harnessScope?: ControlScope;
   /** The harness manifests visible to this modal; only the target instance resolves. */

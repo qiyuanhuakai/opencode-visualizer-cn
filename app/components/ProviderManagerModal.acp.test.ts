@@ -2,6 +2,7 @@ import { createApp, h, nextTick } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import i18n from '../i18n';
 import ProviderManagerModal from './ProviderManagerModal.vue';
+import { configureAcpBackend } from '../backends/registry';
 
 vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 
@@ -16,6 +17,14 @@ afterEach(() => {
 
 describe('ProviderManagerModal ACP setup', () => {
   it('emits the terminal-auth action from the ACP provider surface', async () => {
+    // Task 48: the modal resolves its adapter from the explicit kind, so the
+    // ACP surface needs its adapter registered the way production registers
+    // it before rendering — the retired global default no longer covers it.
+    configureAcpBackend({
+      bridgeUrl: 'ws://localhost:23004',
+      bridgeToken: '',
+      agentId: 'pi',
+    });
     const onOpen = vi.fn();
     const host = document.createElement('div');
     document.body.append(host);

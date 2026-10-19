@@ -186,7 +186,7 @@ import type { BackendKind } from '../backends/types';
 import {
   DEFAULT_KIMI_WEB_BRIDGE_URL,
   KIMI_WEB_CAPABILITIES,
-  getActiveBackendAdapter,
+  getBackendAdapter,
 } from '../backends/registry';
 import {
   kimiWebContextOnlyUsage,
@@ -306,7 +306,7 @@ const codexContextPercent = computed(() => {
 });
 
 function backend() {
-  return getActiveBackendAdapter();
+  return getBackendAdapter(props.activeBackendKind);
 }
 
 function requireBackendMethod<T extends (...args: never[]) => unknown>(method: T | undefined, name: string): T {

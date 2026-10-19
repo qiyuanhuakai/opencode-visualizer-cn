@@ -111,7 +111,8 @@
 <script setup lang="ts">
 import { ref, reactive, watch, computed } from 'vue';
 import { Icon } from '@iconify/vue';
-import { getActiveBackendAdapter } from '../backends/registry';
+import { getBackendAdapter } from '../backends/registry';
+import type { BackendKind } from '../backends/types';
 
 const COLOR_KEYS = ['pink', 'mint', 'orange', 'purple', 'cyan', 'lime'] as const;
 
@@ -128,6 +129,7 @@ const props = defineProps<{
   open: boolean;
   projectId: string;
   worktree: string;
+  backendKind: BackendKind;
   name?: string;
   iconColor?: string;
   iconOverride?: string;
@@ -210,7 +212,7 @@ watch(
 async function fetchPackageJsonName() {
   if (!props.worktree) return;
   try {
-    const readFileContent = getActiveBackendAdapter().readFileContent;
+    const readFileContent = getBackendAdapter(props.backendKind).readFileContent;
     if (!readFileContent) return;
     const result = (await readFileContent({
       directory: props.worktree,

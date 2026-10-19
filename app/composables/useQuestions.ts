@@ -1,7 +1,8 @@
 import { useI18n } from 'vue-i18n';
 import type { ComputedRef, Ref } from 'vue';
 import QuestionContent from '../components/ToolWindow/Question.vue';
-import { getActiveBackendAdapter } from '../backends/registry';
+import { getBackendAdapter } from '../backends/registry';
+import type { BackendKind } from '../backends/types';
 import type { QuestionInfo, QuestionOption, QuestionRequest } from '../types/sse';
 import { uniqueBy } from '../utils/array';
 import type { useFloatingWindows } from './useFloatingWindows';
@@ -16,6 +17,7 @@ export function useQuestions(options: {
   fw: ReturnType<typeof useFloatingWindows>;
   allowedSessionIds: ComputedRef<Set<string>>;
   activeDirectory: Ref<string>;
+  activeBackendKind: Ref<BackendKind>;
   ensureConnectionReady: (action: string) => boolean;
   getTextContent: (messageId: string) => string;
   sendReply?: (requestId: string, answers: QuestionAnswer[]) => Promise<void>;
@@ -40,7 +42,7 @@ export function useQuestions(options: {
         options.onReplied?.(requestId);
         return;
       }
-      const replyQuestion = getActiveBackendAdapter().replyQuestion;
+      const replyQuestion = getBackendAdapter(options.activeBackendKind.value).replyQuestion;
       if (!replyQuestion) throw new Error('Active backend does not support question replies.');
       await replyQuestion(requestId, {
         directory: options.activeDirectory.value.trim() || undefined,
@@ -60,7 +62,7 @@ export function useQuestions(options: {
         options.onRejected?.(requestId);
         return;
       }
-      const rejectQuestion = getActiveBackendAdapter().rejectQuestion;
+      const rejectQuestion = getBackendAdapter(options.activeBackendKind.value).rejectQuestion;
       if (!rejectQuestion) throw new Error('Active backend does not support question rejection.');
       await rejectQuestion(requestId, options.activeDirectory.value.trim() || undefined);
       options.onRejected?.(requestId);
@@ -195,7 +197,7 @@ export function useQuestions(options: {
 
   async function fetchPendingQuestions(directory?: string) {
     try {
-      const listPendingQuestions = getActiveBackendAdapter().listPendingQuestions;
+      const listPendingQuestions = getBackendAdapter(options.activeBackendKind.value).listPendingQuestions;
       if (!listPendingQuestions) return;
       const data = await listPendingQuestions(directory);
       if (!Array.isArray(data)) return;

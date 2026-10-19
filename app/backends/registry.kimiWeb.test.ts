@@ -6,12 +6,16 @@ import {
   DEFAULT_KIMI_WEB_BRIDGE_URL,
   KIMI_WEB_CAPABILITIES,
   configureKimiWebBackend,
-  getActiveBackendAdapter,
-  getActiveBackendKind,
   getBackendAdapter,
   kimiWebBridgeHttpUrl,
-  setActiveBackendKind,
 } from './registry';
+// The retired global routing is kept as the legacy export; these lineage tests
+// exercise exactly what production stopped using in task 48.
+import {
+  getActiveBackendAdapter,
+  getActiveBackendKind,
+  setActiveBackendKind,
+} from './legacyGlobalRouting';
 import { StorageKeys, storageRemove } from '../utils/storageKeys';
 
 describe('Kimi Web backend registry', () => {

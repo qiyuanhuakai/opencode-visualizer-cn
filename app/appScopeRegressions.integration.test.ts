@@ -43,7 +43,7 @@ const registryMock = vi.hoisted(() => ({
 }));
 
 vi.mock('./backends/registry', () => ({
-  getActiveBackendAdapter: () => registryMock.getAdapter(),
+  getBackendAdapter: () => registryMock.getAdapter(),
 }));
 
 const APP_SOURCE = readFileSync(join(process.cwd(), 'app', 'App.vue'), 'utf8');

@@ -8,7 +8,7 @@ vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 vi.mock('../backends/registry', () => ({
   getPersistedCodexBridgeToken: () => '',
   getPersistedCodexBridgeUrl: () => 'ws://localhost:23004/codex',
-  getActiveBackendAdapter: () => ({
+  getBackendAdapter: () => ({
     getGlobalHealth: async () => { throw new Error('unsupported'); },
     getMcpStatus: async () => { throw new Error('unsupported'); },
     getLspStatus: async () => { throw new Error('unsupported'); },
