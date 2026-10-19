@@ -785,6 +785,65 @@ export const FIXTURE = Object.freeze({
 });
 
 // ---------------------------------------------------------------------------
+// Draft DATASET IDENTITY: which contexts belong to which leg.
+//
+// The plain 2KiB single-`body`-part drafts leg and the large-body /
+// multi-part-attachment loads leg write into the SAME DraftStore + DraftCache
+// IndexedDB, so a namespace that merely shares a PREFIX cannot tell them apart.
+// That is precisely the defect this split closes: the load leg used to build its
+// contexts as `${prefix}-load-<label>-NNNNNN`, which starts with `${prefix}-`,
+// so the plain-draft coverage enumeration counted those 8 headers as well. The
+// exact-count coverage row then rejected a HEALTHY run: 10001 + 8 = 10009
+// against the frozen 10001 at the 10k scale, 100001 + 8 = 100009 against 100001
+// at the 100k scale (the reviewer reproduced both with the unmodified
+// runLoadsLeg + runCoverage over controlled responses). The row that was added
+// to stop a failed run from passing was itself failing a healthy one.
+//
+// The identity is therefore STRICT, not a prefix test: a context belongs to the
+// plain dataset only when it is the fixture's `${prefix}-NNNNNN` encoding — the
+// six-digit zero-padded ordinal `importDraftBatch` writes. Any other namespace
+// (the load leg's, or one added later) is a DIFFERENT dataset with its own
+// graded rows and is never folded into this one.
+//
+// This does NOT hide the load leg from coverage. `runLoadsLeg` still imports,
+// hash-verifies and offline-reads-back every part of every load profile, and
+// `evaluateThresholds` still emits one FAILING row per load profile that was
+// never measured. What changes is that each dataset is counted against its own
+// frozen expectation instead of being pooled behind a shared prefix.
+// ---------------------------------------------------------------------------
+
+/** The load leg's namespace segment. A child of the run prefix, never the run prefix itself. */
+export const LOAD_NAMESPACE = 'load';
+
+/** The prefix the load leg owns: `${prefix}-load`. */
+export const loadDraftPrefix = (prefix) => `${prefix}-${LOAD_NAMESPACE}`;
+
+/**
+ * One load draft's context. Lives beside `FIXTURE.draftContext` so the plain and
+ * load namespaces cannot drift apart, and so a regression can enumerate the real
+ * load-leg contexts without re-deriving them.
+ */
+export const loadDraftContext = (prefix, label, index) => FIXTURE.draftContext(`${prefix}-${label}`, index);
+
+/**
+ * The STRICT identity of the plain 2KiB single-body-part drafts dataset: the
+ * zero-based ordinal the drafts leg imported under `prefix`, or null when the
+ * context belongs to some other dataset (the load leg's, or an unknown one).
+ *
+ * `runCoverage` and `runDraftsLeg` classify in-page, because the contexts are
+ * paged inside the browser; both carry this same rule inline (a page closure
+ * cannot import a Node helper). The integration regression in
+ * app/runtimeV090Performance.test.ts drives the REAL runLoadsLeg -> runCoverage
+ * pair and is therefore the guard that the two copies still agree: if they
+ * diverge, the plain coverage count stops matching the frozen expectation.
+ */
+export const plainDraftOrdinal = (context, prefix) => {
+  if (typeof context !== 'string' || context.indexOf(`${prefix}-`) !== 0) return null;
+  const ordinal = context.slice(prefix.length + 1);
+  return /^\d{6}$/.test(ordinal) ? Number(ordinal) : null;
+};
+
+// ---------------------------------------------------------------------------
 // Scenario: baseline — empty-renderer first paint of the unchanged app surface.
 // Preserves the historical 'disconnected' empty-renderer baseline semantics.
 // ---------------------------------------------------------------------------
@@ -999,7 +1058,16 @@ export async function runCoverage(stack, { prefix, pins, drafts }) {
     for (;;) {
       const page = await window.perf.cachePageHeaders({ limit: 32, after: after || undefined });
       pages += 1; headers += page.count;
-      for (const context of page.contexts) if (context.indexOf(args.prefix + '-') === 0) contexts.add(context);
+      // STRICT plain-dataset identity, mirroring the Node-side `plainDraftOrdinal`
+      // this module exports: only the `${prefix}-NNNNNN` contexts the 2KiB
+      // single-body-part drafts leg imported count toward THIS row. The load
+      // leg's `${prefix}-load-<label>-NNNNNN` contexts share the prefix but are a
+      // different dataset graded by its own rows; counting them here made a
+      // healthy run fail its own exact expectation (10001 + 8 = 10009).
+      for (const context of page.contexts) {
+        const ordinal = context.indexOf(args.prefix + '-') === 0 ? context.slice(args.prefix.length + 1) : '';
+        if (/^\d{6}$/.test(ordinal)) contexts.add(context);
+      }
       maxLedger = Math.max(maxLedger, page.usage.residentBytes + page.usage.reservedBytes);
       maxEntries = Math.max(maxEntries, page.usage.entries);
       after = page.next == null ? null : page.next;
@@ -1163,7 +1231,13 @@ export async function runDraftsLeg(stack, { count, prefix, out }) {
     for (;;) {
       const page = await window.perf.cachePageHeaders({ limit: 32, after: after || undefined });
       pages += 1; headers += page.count;
-      for (const context of page.contexts) if (context.indexOf(args.prefix + '-') === 0) prefixHeaders += 1;
+      // Same STRICT plain-dataset identity as `runCoverage` (see the note there):
+      // only this leg's own `${prefix}-NNNNNN` imports count toward its coverage
+      // percentage, so a namespace added by another leg can never inflate it.
+      for (const context of page.contexts) {
+        const ordinal = context.indexOf(args.prefix + '-') === 0 ? context.slice(args.prefix.length + 1) : '';
+        if (/^\d{6}$/.test(ordinal)) prefixHeaders += 1;
+      }
       const usage = page.usage; maxLedger = Math.max(maxLedger, usage.residentBytes + usage.reservedBytes); maxEntries = Math.max(maxEntries, usage.entries);
       after = page.next == null ? null : page.next;
       if (!after) break;
@@ -1268,7 +1342,11 @@ export async function runLoadsLeg(stack, { prefix, out }) {
       // Each load profile owns its own context namespace: two profiles sharing
       // one prefix would commit DIFFERENT part sets under the same identity and
       // the store would (correctly) refuse the second header as a conflict.
-      const identity = { context: FIXTURE.draftContext(`${prefix}-${profile.label}`, index), clientOrigin: 'task44-perf-client', revision: 1 };
+      // `loadDraftContext` keeps that namespace inside `${prefix}-load-<label>`,
+      // which the STRICT plain-draft identity in `runCoverage` does not match —
+      // the load dimension is graded by its own rows, never pooled with the
+      // 2KiB single-body-part drafts.
+      const identity = { context: loadDraftContext(prefix, profile.label, index), clientOrigin: 'task44-perf-client', revision: 1 };
       const written = [];
       for (const part of profile.parts) {
         const result = await evaluate((args) => window.perf.writeDraftPart({ identity: args.identity, name: args.part.name, kind: args.part.kind, size: args.part.size, seed: args.part.seed }), { identity, part });
@@ -1314,7 +1392,7 @@ export async function runLoadsLeg(stack, { prefix, out }) {
     const profile = LOAD_PROFILES.find((candidate) => candidate.label === entry.label);
     let readBack = 0;
     for (let index = 0; index < profile.drafts; index += 1) {
-      const identity = { context: FIXTURE.draftContext(`${prefix}-${entry.label}`, index), clientOrigin: 'task44-perf-client', revision: 1 };
+      const identity = { context: loadDraftContext(prefix, entry.label, index), clientOrigin: 'task44-perf-client', revision: 1 };
       for (const part of profile.parts) {
         const result = await evaluate((args) => window.perf.cacheExportPart({ identity: args.identity, part: args.name }), { identity, name: part.name });
         if (result.digest === expectedPartHash(part.size, part.seed) && result.bytes === part.size) readBack += 1;

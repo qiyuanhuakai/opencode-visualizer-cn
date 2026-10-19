@@ -31,6 +31,7 @@ import {
   TREE,
   LOAD_PROFILES,
   RESTART_LEG_EXPECTED,
+  loadDraftPrefix,
 } from './runtime-v090-benchmark.mjs';
 
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
@@ -296,7 +297,14 @@ async function run() {
     // state the formal samples below are actually taken under, and a failed
     // verification throws instead of silently labelling unlimited-network
     // samples as remote.
-    loadsLeg = await runLoadsLeg(stack, { prefix: `${prefix}-load`, out });
+    // The load leg gets its OWN namespace (`${prefix}-load`) through the shared
+    // helper, so the plain-draft coverage enumeration's strict identity can tell
+    // the two datasets apart. Before this, the load leg's contexts started with
+    // `${prefix}-` and were counted as 2KiB single-body-part drafts, so the
+    // exact-count coverage row failed a healthy run (10001 + 8 = 10009 at the
+    // 10k scale, 100001 + 8 = 100009 at the 100k scale). The load dimension is
+    // still fully graded by its own rows — only its namespace moved.
+    loadsLeg = await runLoadsLeg(stack, { prefix: loadDraftPrefix(prefix), out });
     log('loads-leg-done', { profiles: loadsLeg.profiles.map((entry) => `${entry.label}:${entry.partsVerified}/${entry.partsExpected}`) });
     if (remote) {
       await stack.setNetwork(networkConditions(config));
