@@ -51,10 +51,13 @@ import type {
   ContextScope,
   EvidenceOrigin,
   EvidencePage,
+  EvidenceReader,
   EvidenceRecordView,
   EvidenceRef,
   EvidenceTarget,
+  TargetResolver,
 } from '../../shared/runtime/context.js';
+import type { EvidenceQueryPorts } from '../../bridge/runtime/threads/evidenceQuery.js';
 
 const THREAD_A = '11111111-1111-4111-8111-111111111111';
 const THREAD_B = '22222222-2222-4222-8222-222222222222';
@@ -961,6 +964,64 @@ describe('MCP-compatible read-only tool server', () => {
     });
     expect(page).toEqual({ available: false, unavailableReason: 'evidence_missing' });
   });
+
+  it('serves a published checkpoint page through the bridge service wired with the shared reader contract', () => {
+    const payload = 'diff --git a/src/page.ts b/src/page.ts\n+ctx\n';
+    const evidence = ref(evidenceHash(payload), byteLength(payload), targetOne);
+    const view = build([textEntry('goal', 'service goal', hostOrigin), evidenceEntry('diff', evidence)]);
+    const wire = serializeCheckpoint(view);
+    const live = { bytes: encoder.encode(payload), totalBytes: byteLength(payload) };
+    // The ports are wired with the SHARED reader/target contract: an object reader readEvidencePage
+    // accepts, or null for a missing artifact. This wiring is what the port declaration must
+    // accept, because the service hands both functions to the dispatcher unchanged.
+    const resolveTarget: TargetResolver = () => targetOne;
+    const readEvidence: EvidenceReader = () => live;
+    const ports: EvidenceQueryPorts = { resolveTarget, readEvidence };
+    const query = createEvidenceQuery(ports);
+    expect(query.publish(wire).checkpointId).toBe(view.checkpointId);
+
+    const page = query.callTool({
+      name: 'context.evidence.page',
+      arguments: { checkpointId: view.checkpointId, scope: scopeA, hash: evidence.hash },
+    }) as EvidencePage;
+    expect(page.available).toBe(true);
+    expect(new TextDecoder().decode(page.bytes)).toBe(payload);
+    expect(page.totalBytes).toBe(live.totalBytes);
+
+    // A null reader is the legal missing-artifact answer, not a runtime rejection.
+    const missing = createEvidenceQuery({ resolveTarget, readEvidence: () => null });
+    missing.publish(wire);
+    expect(missing.callTool({
+      name: 'context.evidence.page',
+      arguments: { checkpointId: view.checkpointId, scope: scopeA, hash: evidence.hash },
+    })).toEqual({ available: false, unavailableReason: 'evidence_missing' });
+
+    // The target moved since capture: the page is refused before the reader is ever called.
+    let served = 0;
+    const stale = createEvidenceQuery({
+      resolveTarget: () => targetTwo,
+      readEvidence: () => {
+        served += 1;
+        return live;
+      },
+    });
+    stale.publish(wire);
+    expect(rejectionOf(() => stale.callTool({
+      name: 'context.evidence.page',
+      arguments: { checkpointId: view.checkpointId, scope: scopeA, hash: evidence.hash },
+    }))).toEqual({ code: 'conflict', field: 'evidence_target_stale' });
+    expect(served).toBe(0);
+
+    // A reader answering with a string or raw bytes — the shape the old port declaration
+    // accepted — is refused at runtime, which is why the declaration must name the object
+    // reader contract instead of a byte-ish return type.
+    const raw = createEvidenceQuery({ resolveTarget, readEvidence: (() => '') as unknown as EvidenceReader });
+    raw.publish(wire);
+    expect(rejectionOf(() => raw.callTool({
+      name: 'context.evidence.page',
+      arguments: { checkpointId: view.checkpointId, scope: scopeA, hash: evidence.hash },
+    }))).toEqual({ code: 'invalid_request', field: 'evidence_reader' });
+  });
 });
 
 describe('serialization round-trip and integrity', () => {
@@ -1260,7 +1321,7 @@ describe('wire checkpoint capacity re-validation', () => {
 
     const service = createCheckpointService();
     expect(service.admit(serialized).checkpointId).toBe(view.checkpointId);
-    const query = createEvidenceQuery({ resolveTarget: () => ({ ok: true, target: targetOne }), readEvidence: () => '' });
+    const query = createEvidenceQuery({ resolveTarget: () => targetOne, readEvidence: () => null });
     expect(query.publish(serialized).checkpointId).toBe(view.checkpointId);
   });
 
@@ -1320,7 +1381,7 @@ describe('wire checkpoint capacity re-validation', () => {
     const service = createCheckpointService();
     expect(rejectionOf(() => service.admit(lyingSummary)))
       .toMatchObject({ code: 'conflict', field: 'checkpoint_tokens' });
-    const query = createEvidenceQuery({ resolveTarget: () => ({ ok: true, target: targetOne }), readEvidence: () => '' });
+    const query = createEvidenceQuery({ resolveTarget: () => targetOne, readEvidence: () => null });
     expect(rejectionOf(() => query.publish(lyingSummary)))
       .toMatchObject({ code: 'conflict', field: 'checkpoint_tokens' });
 

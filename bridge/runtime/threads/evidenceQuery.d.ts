@@ -1,13 +1,12 @@
-import type { ContextCheckpointView, EvidenceTool, EvidenceToolResult } from '../../../shared/runtime/context.js';
+import type { ContextCheckpointView, EvidenceReader, EvidenceTool, EvidenceToolResult, TargetResolver } from '../../../shared/runtime/context.js';
 
-/** The two injected ports an Evidence query reads through; both are re-verified per read. */
+/** The two injected ports an Evidence query reads through; both are re-verified per read. The
+ * service hands them to the shared dispatcher unchanged, so the ports ARE the shared reader and
+ * target contracts: an object reader (`{ bytes, totalBytes }`) or null for a missing artifact,
+ * never a raw string or byte array the runtime would reject. */
 export interface EvidenceQueryPorts {
-  readonly resolveTarget: (...args: readonly unknown[]) => unknown;
-  readonly readEvidence: (input: {
-    readonly target: unknown;
-    readonly hash: string;
-    readonly bytes: number;
-  }) => string | Uint8Array;
+  readonly resolveTarget: TargetResolver;
+  readonly readEvidence: EvidenceReader;
 }
 
 /** One canonical Evidence query service: a read-only tool server over published checkpoints. */
