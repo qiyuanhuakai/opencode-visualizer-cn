@@ -362,3 +362,126 @@ describe('App drives the real session tree from Locate, and back', () => {
     });
   });
 });
+
+describe('App reads a participant against the directory of its OWN sandbox, not the ambient one', () => {
+  async function openThreadOnSessionA(fixture: { host: HTMLElement; listSessionMessages: { mockResolvedValue: (value: unknown) => void } }) {
+    await selectSessionA(fixture);
+    const toggle = fixture.host.querySelector<HTMLElement>('[data-testid="host-thread-toggle"]');
+    toggle?.click();
+    await vi.waitFor(() => {
+      expect(fixture.host.querySelector('[data-testid="native-history-entry"]')?.textContent?.trim()).toBe(
+        'first-read-entry',
+      );
+    });
+    expect(fixture.listSessionMessages).toHaveBeenCalledWith('session-a', { directory: '/repo' });
+  }
+
+  it('refreshes an old participant against its OWN directory after the ambient directory moved', async () => {
+    // The participant owns session-a in the /repo sandbox. The user then switches the
+    // ambient directory to the OTHER sandbox of the SAME target and refreshes that
+    // participant: the ACP loader uses the caller's directory as the cwd of
+    // session/load and session/resume, overriding the session's own, so the ambient
+    // directory must never be handed over for a session that lives elsewhere.
+    const fixture = await mountHistoryApp([historyEntry('message-1', 'first-read-entry')], { otherDirectory: true });
+    mountedApps.push(fixture);
+    await openThreadOnSessionA(fixture);
+
+    await fixture.selectOtherDirectorySession?.();
+    await vi.waitFor(() => {
+      expect(fixture.readSetupBinding('selectedSessionId')).toBe('session-other');
+    });
+    // The ambient selection loads THAT session's own history through the same backend
+    // method; let it land before the participant's OWN re-read is issued, so the read
+    // under test is not confused with the ambient one.
+    await vi.waitFor(() => {
+      expect(fixture.listSessionMessages).toHaveBeenCalledWith('session-other', { directory: '/other-project' });
+    });
+
+    fixture.listSessionMessages.mockClear();
+    fixture.listSessionMessages.mockResolvedValue([historyEntry('message-2', 'reloaded-entry')]);
+    fixture.host.querySelector<HTMLElement>('[data-testid="browse-native-history"]')?.click();
+
+    // The re-read lands in the participant's OWN group...
+    await vi.waitFor(() => {
+      expect(fixture.host.querySelector('[data-testid="native-history-entry"]')?.textContent?.trim()).toBe(
+        'reloaded-entry',
+      );
+    });
+    // ...and it carried the participant's OWN directory, never the ambient one: the
+    // ACP loader would resume the session in the workspace the user happened to select.
+    expect(fixture.listSessionMessages).toHaveBeenCalledWith('session-a', { directory: '/repo' });
+    expect(fixture.listSessionMessages).not.toHaveBeenCalledWith('session-a', { directory: '/other-project' });
+  });
+
+  it('first-reads a participant that joins after the ambient directory moved against its OWN directory', async () => {
+    // Same target, same harness, different workspace: the not-yet-loaded participant is
+    // read the moment it joins, and that read must carry the participant's OWN directory.
+    const fixture = await mountHistoryApp([historyEntry('message-1', 'first-read-entry')], { otherDirectory: true });
+    mountedApps.push(fixture);
+    await openThreadOnSessionA(fixture);
+
+    await fixture.selectOtherDirectorySession?.();
+    await vi.waitFor(() => {
+      expect(fixture.readSetupBinding('selectedSessionId')).toBe('session-other');
+    });
+
+    const threadState = fixture.readSetupBinding('threadState') as RuntimeThreadState;
+    const owner = threadState.summary.value?.participants[0]?.session;
+    if (owner === undefined) throw new Error('the opened thread has no owner participant');
+    await threadState.joinThread(parseSessionRef({
+      environmentId: owner.environmentId,
+      harnessInstanceId: owner.harnessInstanceId,
+      nativeSessionId: 'session-b',
+    }));
+
+    await vi.waitFor(() => {
+      expect(fixture.listSessionMessages).toHaveBeenCalledWith('session-b', { directory: '/repo' });
+    });
+  });
+
+  it('marks a participant whose session the tree no longer holds unavailable instead of reading it ambiently', async () => {
+    // A participant whose session is no longer in the active target's tree has no OWN
+    // directory to read against — a session deleted server-side while the thread is
+    // open, say. Substituting the ambient one is the very override above, so the honest
+    // answer is an explicit unavailable group rather than a read in the wrong workspace.
+    const fixture = await mountHistoryApp([historyEntry('message-1', 'first-read-entry')], { otherDirectory: true });
+    mountedApps.push(fixture);
+    await openThreadOnSessionA(fixture);
+
+    const threadState = fixture.readSetupBinding('threadState') as RuntimeThreadState;
+    const ownerParticipant = threadState.summary.value?.participants[0];
+    const owner = ownerParticipant?.session;
+    if (owner === undefined || ownerParticipant === undefined) {
+      throw new Error('the opened thread has no owner participant');
+    }
+    const outputPanel = fixture.host.querySelector('.output-panel') as unknown as {
+      __vnode?: { props?: Record<string, unknown> };
+    };
+    const refresh = outputPanel?.__vnode?.props?.onRefreshNativeHistory as
+      | ((payload: { participantId: string; session: unknown }) => void)
+      | undefined;
+    expect(typeof refresh).toBe('function');
+
+    await fixture.selectOtherDirectorySession?.();
+    await vi.waitFor(() => {
+      expect(fixture.readSetupBinding('selectedSessionId')).toBe('session-other');
+    });
+    fixture.listSessionMessages.mockClear();
+    refresh?.({
+      participantId: ownerParticipant.participantId,
+      session: parseSessionRef({
+        environmentId: owner.environmentId,
+        harnessInstanceId: owner.harnessInstanceId,
+        nativeSessionId: 'session-vanished',
+      }),
+    });
+
+    await vi.waitFor(() => {
+      expect(fixture.host.querySelector('[data-testid="native-history-unavailable"]')).not.toBeNull();
+    });
+    expect(fixture.listSessionMessages).not.toHaveBeenCalled();
+    const unavailable = fixture.host.querySelector('[data-testid="native-history-unavailable"]');
+    expect(unavailable?.textContent?.trim()).toContain('unavailable');
+    expect(unavailable?.getAttribute('data-participant-id')).toBe(ownerParticipant.participantId);
+  });
+});

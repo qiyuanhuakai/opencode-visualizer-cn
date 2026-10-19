@@ -10338,6 +10338,25 @@ function nativeHistoryRequestCurrent(participantId: string, stamp: { readonly ge
 }
 
 /**
+ * The directory the session's OWN sandbox resolves to, or null when the active
+ * target does not hold the session in its tree.
+ *
+ * The session's own workspace is resolved from the sandbox that actually holds
+ * it, exactly like every other session operation (`resolveSessionOperationPayload`)
+ * resolves it — never from the ambient selection. That distinction is not
+ * cosmetic: `app/backends/acp/sessionHistory.ts` sends
+ * `cwd: options.directory ?? state.info.directory ?? ''` for `session/load` and
+ * `session/resume`, so a caller directory OVERRIDES the session's own known
+ * directory. Handing the ambient directory for a participant whose session lives
+ * in another workspace therefore resumes it in the wrong one.
+ */
+function resolveSessionOwnDirectory(sessionId: string): string | null {
+  const resolved = findSessionInProjects(sessionId);
+  if (resolved === null) return null;
+  return (resolved.sandbox.directory || '').trim();
+}
+
+/**
  * Read ONE participant's OWN native history through the real backend.
  *
  * The group is never merged with another participant's: each participant's
@@ -10350,6 +10369,12 @@ function nativeHistoryRequestCurrent(participantId: string, stamp: { readonly ge
  * here. The honest answer is then an explicit `unavailable` group — never the
  * ambient backend's bytes relabelled as this participant, and never a silent
  * empty history that hides the mismatch as "no messages".
+ *
+ * The directory is the participant's OWN, resolved from the sandbox that holds
+ * its session. The ambient directory is NOT a substitute: within one target the
+ * user can switch workspace freely while a thread keeps a participant of the
+ * previous one, and the backend would then load that participant's session in
+ * the workspace the user happens to have selected.
  */
 async function readParticipantNativeHistory(
   participantId: string,
@@ -10364,7 +10389,9 @@ async function readParticipantNativeHistory(
   ) {
     return unavailable;
   }
-  const directory = activeDirectory.value.trim() || undefined;
+  const ownDirectory = resolveSessionOwnDirectory(session.nativeSessionId);
+  if (ownDirectory === null) return unavailable;
+  const directory = ownDirectory || undefined;
   let raw: unknown;
   try {
     const listSessionMessages = requireBackendMethod(backend().listSessionMessages, 'session messages');
