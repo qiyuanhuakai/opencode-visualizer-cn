@@ -11,23 +11,35 @@ export function classifyFilesystem(platform, type) {
  * mount(1) prints "<source> on <mount point> (<type>, ...)" and either side may itself contain
  * " on ", so a single split of the line cannot identify the mount point: every split the printed
  * grammar allows is collected, only mount points covering canonicalPath compete, and covering
- * records that disagree refuse the probe instead of guessing a volume. */
+ * records that disagree refuse the probe instead of guessing a volume. Only the FIRST split is
+ * proven by the grammar — the mount point is the verbatim remainder after it — so a later split
+ * is a real mount point only when the source itself contains " on ". A later-split candidate
+ * that reaches deeper than a real mount point of ANOTHER record is the unprovable case: it is a
+ * pseudo suffix of its own record's longer, non-covering mount point, so the target's volume is
+ * ambiguous and the probe refuses rather than let an unrelated local volume override the real
+ * network one. */
 export function darwinMountType(mountOutput, canonicalPath) {
   const covering = [];
-  for (const line of mountOutput.split('\n')) {
-    const options = line.lastIndexOf(' (');
+  const lines = mountOutput.split('\n');
+  for (let line = 0; line < lines.length; line += 1) {
+    const options = lines[line].lastIndexOf(' (');
     if (options < 0) continue;
-    const type = /^\(([^,)]+)[,)]/.exec(line.slice(options + 1))?.[1];
+    const type = /^\(([^,)]+)[,)]/.exec(lines[line].slice(options + 1))?.[1];
     if (type === undefined) continue;
-    const record = line.slice(0, options);
+    const record = lines[line].slice(0, options);
+    let split = 0;
     for (let at = record.indexOf(' on '); at >= 0; at = record.indexOf(' on ', at + 4)) {
       const mountPoint = record.slice(at + 4);
-      if (mountPoint !== '' && (mountPoint === '/' || canonicalPath === mountPoint || canonicalPath.startsWith(`${mountPoint}/`))) covering.push({ mountPoint, type });
+      split += 1;
+      if (mountPoint !== '' && (mountPoint === '/' || canonicalPath === mountPoint || canonicalPath.startsWith(`${mountPoint}/`))) covering.push({ line, split, mountPoint, type });
     }
   }
   if (covering.length === 0) throw new StoreError('unsupported', 'unverified_local_filesystem');
   const deepest = Math.max(...covering.map((candidate) => candidate.mountPoint.length));
   const records = covering.filter((candidate) => candidate.mountPoint.length === deepest);
+  const ambiguous = records.some((candidate) => candidate.split > 1 && covering.some((other) =>
+    other.line !== candidate.line && other.mountPoint !== '/' && candidate.mountPoint.startsWith(`${other.mountPoint}/`)));
+  if (ambiguous) throw new StoreError('unsupported', 'unverified_local_filesystem');
   if (new Set(records.map((candidate) => candidate.type)).size > 1) throw new StoreError('unsupported', 'unverified_local_filesystem');
   return records[0].type;
 }

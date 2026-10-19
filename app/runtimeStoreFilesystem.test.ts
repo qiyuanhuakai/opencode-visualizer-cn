@@ -72,6 +72,23 @@ describe('runtime store local filesystem probe', () => {
     const contested = ['server:/a on /Volumes/Dup (apfs, local)', 'server:/b on /Volumes/Dup (nfs, nodev, nosuid)'].join('\n');
     expect(() => darwinMountType(contested, '/Volumes/Dup/state')).toThrow(expect.objectContaining(unsupported));
   });
+  it('refuses when an unrelated local record would override the real network mount with a longer pseudo suffix', () => {
+    // The real mount point of the local record is the verbatim remainder after the FIRST
+    // separator — `/Volumes/Backup on /Volumes/Network/State` — and it does NOT cover the
+    // target. The covering candidate `/Volumes/Network/State` only exists because the loop
+    // also split at the second separator, so it is a pseudo suffix of that record's own
+    // mount point; it must not out-deny the NFS record that genuinely covers the target.
+    const mixed = [
+      'server:/share on /Volumes/Network (nfs, nodev, nosuid)',
+      '/dev/disk2s1 on /Volumes/Backup on /Volumes/Network/State (hfs, local)',
+    ].join('\n');
+    expect(darwinMountType('server:/share on /Volumes/Network (nfs, nodev, nosuid)', '/Volumes/Network/State/runtime')).toBe('nfs');
+    expect(() => darwinMountType(mixed, '/Volumes/Network/State/runtime')).toThrow(expect.objectContaining(unsupported));
+    // The same local record WITHOUT the competing network mount still answers from its own
+    // covering candidate: nothing below it but the root, so the split is not contested.
+    const lone = '/dev/disk2s1 on /Volumes/Backup on /Volumes/Network/State (hfs, local)';
+    expect(darwinMountType(lone, '/Volumes/Network/State/runtime')).toBe('hfs');
+  });
   it('probes a macOS directory through the mount table instead of the file type', () => {
     asDarwin();
     const probe = probeLocalFilesystem('/tmp');
