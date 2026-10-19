@@ -24,6 +24,17 @@
  * the campaign plan + evidence tree, F3 needs the browser kernel and a real
  * browser); those are the lanes' business, not this smoke's.
  *
+ * The stacked-supply carve-out accepts a load failure ONLY when the error is a
+ * module-not-found, at least one path is ACTUALLY missing, and every missing
+ * path is one the stacked branch delivers. The review found the old bare
+ * `missing.every(...)` pair absorbing three classes it had no business
+ * explaining — an empty missing set (`[].every` is vacuously true, so a scan
+ * that found nothing reported success), a side-effect import the binding-form
+ * regex never collected, and a SyntaxError or top-level throw that is not a
+ * module-not-found at all — plus a masking fixture whose inverted flag left the
+ * existing controls unable to exercise the path they guard. The negative
+ * controls at the end of this file fail before that fix and pass after it.
+ *
  * Run: node --test scripts/qa/runtime-v090-verifiers.test.mjs
  */
 import test from 'node:test';
@@ -50,6 +61,17 @@ const STACKED_SUPPLY = new Set([
   'app/runtime/system.integration.test.ts',
 ]);
 /**
+ * The ONE load-failure shape the stacked-supply carve-out may explain.
+ *
+ * Anything else — a SyntaxError, a top-level throw, any other exception — is a
+ * broken registration, not a dependency the stacked branch delivers. The old
+ * acceptance tested nothing about the error at all: combined with an empty
+ * missing set (on which `every` is vacuously true) it absorbed a registration
+ * that could not load for a reason no whitelist entry covers, and reported the
+ * smoke green.
+ */
+const isModuleNotFound = (error) => error !== null && typeof error === 'object' && error.code === 'ERR_MODULE_NOT_FOUND';
+/**
  * EVERY static import a registration declares, resolved against the checkout —
  * enumerated by reading the source, NOT by evaluating the module.
  *
@@ -69,7 +91,18 @@ const STACKED_SUPPLY = new Set([
  * delivery gap this smoke can legitimately judge.
  */
 const staticImportsOf = (source) => {
-  const found = source.match(/^\s*(?:import|export)\s[^;]*?from\s+['"](\.[^'"]+)['"]/gm) ?? [];
+  // TWO statement shapes carry a literal relative specifier and BOTH must be
+  // collected. The binding form (`import … from '<spec>'`) was the only one the
+  // scan saw, so a side-effect import (`import '<spec>';`, no `from` clause) of
+  // an undelivered module was invisible: the module could not load, the scan
+  // reported nothing missing, and the vacuous `every` below accepted it as
+  // declared stacked supply. The side-effect form cannot match a dynamic
+  // `import(` call — it requires whitespace and then a quote — and a dynamic
+  // import() stays out of scope, because it cannot be resolved from source.
+  const found = [
+    ...(source.match(/^\s*(?:import|export)\s[^;]*?from\s+['"](\.[^'"]+)['"]/gm) ?? []),
+    ...(source.match(/^\s*import\s+['"](\.[^'"]+)['"]/gm) ?? []),
+  ];
   const specifiers = found.map((statement) => /['"](\.[^'"]+)['"]/.exec(statement)?.[1]).filter((specifier) => specifier !== undefined);
   return [...new Set(specifiers)];
 };
@@ -242,10 +275,20 @@ async function realityGapsOf(checkout) {
     if (registered) {
       assert.equal(typeof registered.run, 'function', `${verify} registration has no run()`);
       if (!Array.isArray(registered.sourceFiles) || registered.sourceFiles.length === 0) failures.push(`${verify}: registers no sourceFiles`);
-    } else if (missingImports.every((rel) => STACKED_SUPPLY.has(rel)) && missingSources.every((rel) => STACKED_SUPPLY.has(rel))) {
+    } else if (isModuleNotFound(loadError) && (missingImports.length > 0 || missingSources.length > 0) && missingImports.every((rel) => STACKED_SUPPLY.has(rel)) && missingSources.every((rel) => STACKED_SUPPLY.has(rel))) {
       // The module cannot load, and every reason we can see is a declared stacked
-      // supply: acceptable at this head, recorded as such.
-      stacked.push(`${verify}: cannot load in a clean checkout — ${loadError !== null && typeof loadError === 'object' && loadError.code === 'ERR_MODULE_NOT_FOUND' ? String(loadError.message).split('\n')[0] : (loadError instanceof Error ? loadError.message : String(loadError))}`);
+      // supply: acceptable at this head, recorded as such. The acceptance is
+      // constrained three ways, because the old bare `every` pair absorbed
+      // failures it had no business explaining:
+      //   * the error must be the module-not-found shape. A SyntaxError or a
+      //     top-level throw is a broken registration, never a dependency the
+      //     stacked branch delivers;
+      //   * at least one path must ACTUALLY be missing. Two empty arrays make
+      //     `every` vacuously true, so a scan that found nothing — including one
+      //     that could not see the dependency at all — used to report success;
+      //   * every missing path must be one the stacked branch delivers, which
+      //     was already true and stays true.
+      stacked.push(`${verify}: cannot load in a clean checkout — ${isModuleNotFound(loadError) ? String(loadError.message).split('\n')[0] : (loadError instanceof Error ? loadError.message : String(loadError))}`);
     } else {
       failures.push(`${verify}: cannot load in a clean checkout for a reason this stack does not supply — ${loadError instanceof Error ? loadError.message : String(loadError)}`);
     }
@@ -292,7 +335,7 @@ test('no verifier registration hardcodes a personal absolute path', () => {
 //
 // Both use the SAME synthetic registration as the detection test above, so the
 // only variable is which dependency is missing.
-function maskingCheckout({ allowlistedImportMissing, secondImportMissing, secondSourceMissing }) {
+function maskingCheckout({ allowlistedImportMissing, secondImportMissing, secondSourceMissing, f3Body }) {
   const checkout = path.join(temporaryDirectory(), 'masking');
   for (const rel of RUNNER_MODULES) {
     const destination = path.join(checkout, rel);
@@ -301,11 +344,21 @@ function maskingCheckout({ allowlistedImportMissing, secondImportMissing, second
   }
   const cases = path.join(checkout, 'scripts/qa/runtime-v090-cases');
   mkdirSync(cases, { recursive: true });
-  writeFileSync(path.join(cases, 'verify-F3.mjs'), [
+  writeFileSync(path.join(cases, 'verify-F3.mjs'), f3Body ?? [
     "import { artifact } from '../runtime-v090-evidence.mjs';",
     // The FIRST static import is the allowlisted stacked supply, exactly as the
     // real F3's first missing import is runtime-v090-faults.mjs.
-    ...(allowlistedImportMissing ? [] : ["import { runFaults } from '../runtime-v090-faults.mjs';"]),
+    //
+    // `allowlistedImportMissing` means THE MODULE IS ABSENT FROM THE CHECKOUT,
+    // which requires the import STATEMENT to be present — that is what makes
+    // Node's ERR_MODULE_NOT_FOUND name faults.mjs FIRST, the exact shape that
+    // used to short-circuit the scan and conceal whatever sat behind it. The
+    // inverted form (omitting the statement when the module is missing) let
+    // Node name the second dependency directly, so neither masking control
+    // could exercise the path they exist to guard: they passed against logic
+    // with and without the static scan alike. The checkout never copies
+    // faults.mjs, so a declared import is a genuinely missing module.
+    ...(allowlistedImportMissing ? ["import { runFaults } from '../runtime-v090-faults.mjs';"] : []),
     ...(secondImportMissing ? ["import { notDelivered } from '../second-undelivered-module.mjs';"] : []),
     "export const sourceFiles = ['package.json'",
     secondSourceMissing ? ", 'app/runtime/second-undelivered.test.ts'" : '',
@@ -316,6 +369,14 @@ function maskingCheckout({ allowlistedImportMissing, secondImportMissing, second
     const destination = path.join(checkout, rel);
     mkdirSync(path.dirname(destination), { recursive: true });
     cpSync(path.join(repoRoot, rel), destination);
+  }
+  // When the allowlisted module is NOT missing, the checkout delivers a
+  // self-contained stub for it (no imports of its own, so no further closure is
+  // needed). That keeps the control honest: with the statement present and the
+  // module delivered, nothing is missing, which is what "the synthetic
+  // registration is otherwise sound" means.
+  if (!allowlistedImportMissing) {
+    writeFileSync(path.join(checkout, 'scripts/qa/runtime-v090-faults.mjs'), 'export const runFaults = () => {};\n');
   }
   writeFileSync(path.join(checkout, 'package.json'), '{}\n');
   // The other three registrations are complete and deliverable, so the only gap
@@ -349,4 +410,98 @@ test('a second missing dependency behind an allowlisted one is NOT concealed', a
   try {
     assert.ok((await realityGapsOf(secondSource)).failures.some((gap) => gap.startsWith('F3:') && gap.includes('app/runtime/second-undelivered.test.ts')), 'a missing source file behind an allowlisted missing import must fail the smoke, not pass it');
   } finally { rmSync(path.dirname(secondSource), { recursive: true, force: true }); }
+});
+
+// ── the absorption negative controls ─────────────────────────────────────────
+// The masking controls above guard ONE facet: a gap hidden BEHIND an allowlisted
+// module-not-found. The review found three further classes the smoke still let
+// through, all of them the same root cause — the carve-out accepted a load
+// failure on `missing.every(...)` alone:
+//
+//   A. an EMPTY missing set. `[].every(...)` is vacuously true, so a scan that
+//      found nothing — including one that could not see the dependency at all —
+//      reported success;
+//   B. a side-effect import. `import './x.mjs';` has no `from` clause, so the
+//      binding-form-only regex never collected it and the set stayed empty;
+//   C. an unconstrained exception. A SyntaxError or a top-level throw is not a
+//      module-not-found at all, yet the carve-out explained it away as stacked
+//      supply;
+//   D. the masking fixture's own flag was inverted, so the controls above could
+//      not exercise the path they exist to guard.
+//
+// Each control below fails the smoke BEFORE the fix and passes after it. They
+// drive the SAME realityGapsOf the real test drives — a private copy would let
+// the controls pass while the production path regressed.
+test('a load failure the scan cannot explain does not pass on an empty every', async () => {
+  // A dynamic import() is deliberately outside the static scan (it cannot be
+  // resolved from source), so a missing dynamic dependency leaves BOTH missing
+  // sets EMPTY while the module genuinely cannot load.
+  const checkout = maskingCheckout({ f3Body: [
+    "import { artifact } from '../runtime-v090-evidence.mjs';",
+    "await import('../dynamically-undelivered.mjs');",
+    "export const sourceFiles = ['package.json'];",
+    'export async function run() { return { scenarios: [] }; }',
+  ].join('\n') });
+  try {
+    const { failures } = await realityGapsOf(checkout);
+    assert.ok(failures.some((gap) => gap.startsWith('F3:')), 'a registration that cannot load with nothing missing must FAIL the smoke — an empty set must not pass on a vacuous every');
+  } finally { rmSync(path.dirname(checkout), { recursive: true, force: true }); }
+});
+
+test('a side-effect import of an undelivered module is scanned', async () => {
+  const checkout = maskingCheckout({ f3Body: [
+    "import { artifact } from '../runtime-v090-evidence.mjs';",
+    "import '../side-effect-undelivered.mjs';",
+    "export const sourceFiles = ['package.json'];",
+    'export async function run() { return { scenarios: [] }; }',
+  ].join('\n') });
+  try {
+    const { failures } = await realityGapsOf(checkout);
+    assert.ok(failures.some((gap) => gap.startsWith('F3:') && gap.includes('side-effect-undelivered.mjs')), 'a side-effect import names a real dependency: the scan must collect it and the smoke must fail');
+  } finally { rmSync(path.dirname(checkout), { recursive: true, force: true }); }
+});
+
+test('a SyntaxError or a top-level throw is never absorbed by the carve-out', async () => {
+  // Neither leaves a missing path behind, so the old unconstrained acceptance
+  // explained both away as "declared stacked supply".
+  const broken = [
+    ['syntax-error', [
+      "import { artifact } from '../runtime-v090-evidence.mjs';",
+      "export const sourceFiles = ['package.json'];",
+      'export async function run() { return { scenarios: [] }; }',
+      'const broken = ;',
+    ].join('\n')],
+    ['top-level-throw', [
+      "import { artifact } from '../runtime-v090-evidence.mjs';",
+      "export const sourceFiles = ['package.json'];",
+      "throw new Error('a registration that throws at module scope is broken, not supplied by another branch');",
+      'export async function run() { return { scenarios: [] }; }',
+    ].join('\n')],
+  ];
+  for (const [label, body] of broken) {
+    const checkout = maskingCheckout({ f3Body: body });
+    try {
+      const { failures } = await realityGapsOf(checkout);
+      assert.ok(failures.some((gap) => gap.startsWith('F3:')), `a ${label} must FAIL the smoke — only a module-not-found for a declared stacked path may be accepted`);
+    } finally { rmSync(path.dirname(checkout), { recursive: true, force: true }); }
+  }
+});
+
+test('the masking fixture declares the allowlisted import while withholding its module', async () => {
+  // The flag means "the allowlisted MODULE is missing", which requires the
+  // import STATEMENT to be present and the FILE absent — the real F3 shape,
+  // where Node names faults.mjs FIRST. The inverted form omitted the statement,
+  // so Node named the second dependency directly and both masking controls
+  // passed against logic with and without the static scan alike.
+  const checkout = maskingCheckout({ allowlistedImportMissing: true });
+  try {
+    const registration = path.join(checkout, 'scripts/qa/runtime-v090-cases/verify-F3.mjs');
+    const source = readFileSync(registration, 'utf8');
+    assert.match(source, /import \{ runFaults \} from '\.\.\/runtime-v090-faults\.mjs';/, 'the allowlisted import must be DECLARED when its module is missing, or Node never names it first and the masking path is not exercised');
+    assert.ok(!existsSync(path.join(checkout, 'scripts/qa/runtime-v090-faults.mjs')), 'the allowlisted module must be ABSENT from the checkout for the masking path to exist');
+    let error = null;
+    try { await import(pathToFileURL(registration).href); } catch (thrown) { error = thrown; }
+    assert.ok(isModuleNotFound(error), 'the synthetic registration must fail to load with a module-not-found, or the masking path is not exercised');
+    assert.match(String(error.message), /runtime-v090-faults\.mjs/, 'Node must name the allowlisted module FIRST — that ordering is what used to let an accepted module-not-found conceal the gap behind it');
+  } finally { rmSync(path.dirname(checkout), { recursive: true, force: true }); }
 });
