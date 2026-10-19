@@ -356,4 +356,59 @@ describe('vis_bridge control-store process lifecycle', { timeout: 20_000 }, () =
     expect(code).toBe(0);
     expect((await readControlStoreFence(stateRoot)).released).toBe(true);
   });
+
+  // The SIGINT test above is the shape a supervisor uses, but its fence read
+  // between the ownership line and the signal gives the child a millisecond-scale
+  // head start. The defect this lane closes registered the signal handlers AFTER
+  // publishing ownership, so the tightest race — a signal delivered the instant
+  // ownership is observable — hit the default disposition and killed the process
+  // with the fence still held. CI reproduced it (the branch's own runs passed
+  // three times and failed once with `expected 'SIGINT' to be null`); a direct
+  // probe against the pre-fix code hard-killed 10 of 25 runs at this race.
+  // Killing in the SAME tick the line is observed removes that head start, so the
+  // regression cannot come back silently.
+  it('releases the fence on a SIGINT delivered in the same tick ownership is published', async () => {
+    const stateRoot = await mkdtemp(path.join(tmpdir(), 'vis-control-store-int-tight-'));
+    roots.push(stateRoot);
+    const child = spawnControlStore(stateRoot);
+    children.push(child);
+    const stdout = child.stdout;
+    if (!stdout) throw new Error('control-store child has no stdout pipe.');
+
+    const ownership = new Promise<void>((resolve) => {
+      let output = '';
+      const onData = (chunk: Buffer) => {
+        output += chunk.toString('utf8');
+        if (!output.includes('control-store owns')) return;
+        stdout.off('data', onData);
+        child.kill('SIGINT');
+        resolve();
+      };
+      stdout.on('data', onData);
+    });
+    await Promise.all([ownership, once(child, 'exit')]);
+    expect(child.exitCode).toBe(0);
+    expect(child.signalCode).toBeNull();
+    expect((await readControlStoreFence(stateRoot)).released).toBe(true);
+  });
+
+  // A repeat signal during the release must not terminate the process mid-write:
+  // with `once`, the second SIGINT restored the default disposition and killed the
+  // child before the fence was released (a direct probe against the pre-fix code
+  // orphaned the fence in 7 of 10 runs). The release absorbs repeats instead.
+  it('absorbs a repeat SIGINT during the release and still releases the fence', async () => {
+    const stateRoot = await mkdtemp(path.join(tmpdir(), 'vis-control-store-int-repeat-'));
+    roots.push(stateRoot);
+    const child = spawnControlStore(stateRoot);
+    children.push(child);
+
+    await waitForControlStoreOwnership(child);
+    child.kill('SIGINT');
+    child.kill('SIGINT');
+    child.kill('SIGINT');
+    const [code, signal] = (await once(child, 'exit')) as [number | null, NodeJS.Signals | null];
+    expect(signal).toBeNull();
+    expect(code).toBe(0);
+    expect((await readControlStoreFence(stateRoot)).released).toBe(true);
+  });
 });
