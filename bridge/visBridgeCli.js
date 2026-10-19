@@ -455,16 +455,36 @@ export async function runControlStoreCommand(options, dependencies = {}) {
     process.on('SIGTERM', () => {});
   };
 
-  const { createSlurmControlStore } = await import('./runtime/transports/slurmControlStore.js');
-  store = createSlurmControlStore({
-    root: stateRoot,
-    environmentId,
-    ownerInstanceId: dependencies.ownerInstanceId ?? `control-store-${process.pid}`,
-  });
-  const status = await store.open('owner');
-  console.log(
-    `vis_bridge control-store owns environment ${status.environmentId} at ${status.root} (epoch ${status.epoch}).`,
-  );
+  // The timer and the handlers above are registered BEFORE ownership is published — that
+  // ordering is what makes the signal fix work — so any failure in import/create/open must
+  // reclaim them. The referenced interval has a 2,147,483,647 ms period with no natural
+  // exit, and the rejection only reaches `main`'s catch (which sets `process.exitCode`), so
+  // it never trips the unhandledRejection release path: without this cleanup the CLI prints
+  // the error and then stays resident forever, leaving a supervisor with a process that has
+  // already errored but never exits. The fence was never published on this path, but
+  // `releaseFence` is the single reclamation rule for this phase — it clears the timer and
+  // closes a store that may have opened partially — and its own failure must not replace the
+  // original error the caller needs to see.
+  try {
+    const { createSlurmControlStore } = await import('./runtime/transports/slurmControlStore.js');
+    store = createSlurmControlStore({
+      root: stateRoot,
+      environmentId,
+      ownerInstanceId: dependencies.ownerInstanceId ?? `control-store-${process.pid}`,
+    });
+    const status = await store.open('owner');
+    console.log(
+      `vis_bridge control-store owns environment ${status.environmentId} at ${status.root} (epoch ${status.epoch}).`,
+    );
+  } catch (error) {
+    removeLivenessListeners();
+    try {
+      await releaseFence();
+    } catch {
+      // Reclaiming the timer and listeners must not mask the initialisation failure.
+    }
+    throw error;
+  }
 
   return {
     store,

@@ -2,10 +2,11 @@ import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import {
   collectStartupFailures,
@@ -246,6 +247,7 @@ describe('vis_bridge lifecycle commands', () => {
 
 const CONTROL_STORE_ENVIRONMENT = '11111111-1111-4111-8111-111111111111';
 const controlStoreCliPath = path.resolve(import.meta.dirname, '../vis_bridge.js');
+const controlStoreModulePath = path.resolve(import.meta.dirname, '../bridge/visBridgeCli.js');
 
 function spawnControlStore(stateRoot: string) {
   return spawn(
@@ -410,5 +412,163 @@ describe('vis_bridge control-store process lifecycle', { timeout: 20_000 }, () =
     expect(signal).toBeNull();
     expect(code).toBe(0);
     expect((await readControlStoreFence(stateRoot)).released).toBe(true);
+  });
+});
+
+// The liveness timer is deliberately created BEFORE the store opens, because the
+// signal handlers must be registered before ownership is published (the race the
+// tests above lock down). That ordering makes an initialisation failure dangerous:
+// the 2,147,483,647 ms interval is referenced, so nothing keeps the event loop from
+// draining — the CLI prints the error and then stays resident forever, and a
+// supervisor is left with a process that has already errored but never exits. A
+// direct probe against the pre-fix head survived a 4 s external timeout on BOTH a
+// real ENOTDIR and an initialisation rejection, while the pre-SIGINT-fix head
+// self-terminated with code=1 in under 100 ms on both.
+describe('vis_bridge control-store initialisation failure', { timeout: 30_000 }, () => {
+  const children: ChildProcess[] = [];
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    for (const child of children.splice(0)) {
+      if (child.exitCode === null && child.pid !== undefined) child.kill('SIGKILL');
+    }
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  /**
+   * Resolves with the child's exit once it happens, or null if it is still resident
+   * after `timeoutMs`. The caller is responsible for killing a resident child.
+   */
+  async function awaitExitWithin(
+    child: ChildProcess,
+    timeoutMs: number,
+  ): Promise<{ code: number | null; signal: NodeJS.Signals | null } | null> {
+    let timer: NodeJS.Timeout | undefined;
+    const timedOut = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), timeoutMs);
+    });
+    try {
+      return await Promise.race([
+        once(child, 'exit').then(([code, signal]) => ({ code, signal }) as {
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        }),
+        timedOut,
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function collectOutput(child: ChildProcess): Promise<{ stdout: string; stderr: string }> {
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
+    child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+    const exit = awaitExitWithin(child, 5_000);
+    const result = await exit;
+    if (result === null) {
+      child.kill('SIGKILL');
+      throw new Error(
+        `control-store stayed resident after initialisation failed; stdout=${JSON.stringify(stdout)} stderr=${JSON.stringify(stderr)}`,
+      );
+    }
+    return { stdout, stderr };
+  }
+
+  it('exits non-zero within a bounded time when the state root is not a directory', async () => {
+    // An ordinary file where a directory is expected: the real directory error path.
+    const root = await mkdtemp(path.join(tmpdir(), 'vis-control-store-enotdir-'));
+    roots.push(root);
+    await writeFile(path.join(root, 'not-directory'), 'not a directory\n');
+    const child = spawnControlStore(path.join(root, 'not-directory', 'child'));
+    children.push(child);
+
+    const { stderr } = await collectOutput(child);
+    expect(stderr).toContain('ENOTDIR');
+    expect(child.exitCode).toBe(1);
+    expect(child.signalCode).toBeNull();
+  });
+
+  it('exits non-zero within a bounded time when initialisation rejects', async () => {
+    // A live foreign fence makes `store.open` reject with a conflict — an
+    // initialisation rejection rather than a filesystem error, proving the
+    // residency defect is not specific to the ENOTDIR fixture. The foreign pid is
+    // this test process, which stays alive for the whole run.
+    const root = await mkdtemp(path.join(tmpdir(), 'vis-control-store-conflict-'));
+    roots.push(root);
+    await writeFile(
+      path.join(root, 'fence.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        environmentId: CONTROL_STORE_ENVIRONMENT,
+        ownerInstanceId: 'foreign-owner-not-this-process',
+        pid: process.pid,
+        epoch: 1,
+        released: false,
+        openedAt: new Date().toISOString(),
+      }),
+    );
+    const child = spawnControlStore(root);
+    children.push(child);
+
+    const { stderr } = await collectOutput(child);
+    expect(stderr).toContain('conflict');
+    expect(child.exitCode).toBe(1);
+    expect(child.signalCode).toBeNull();
+  });
+
+  // The exit tests above prove the timer was reclaimed (a referenced interval is the
+  // only thing holding the loop open), but a cleared timer alone would still leave the
+  // four process listeners attached. This runs the real command in an isolated child
+  // and reads the listener counts, so both halves of the cleanup are observable: the
+  // child must exit at all (timer cleared) and must report no leaked listeners.
+  it('clears the liveness timer and removes the process listeners when initialisation fails', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'vis-control-store-listeners-'));
+    roots.push(root);
+    await writeFile(path.join(root, 'not-directory'), 'not a directory\n');
+    const stateRoot = path.join(root, 'not-directory', 'child');
+
+    const scriptDirectory = await mkdtemp(path.join(tmpdir(), 'vis-control-store-probe-'));
+    roots.push(scriptDirectory);
+    const scriptPath = path.join(scriptDirectory, 'probe.mjs');
+    await writeFile(
+      scriptPath,
+      `import { runControlStoreCommand } from ${JSON.stringify(pathToFileURL(controlStoreModulePath).href)};
+const count = (event) => process.listenerCount(event);
+const events = ['SIGINT', 'SIGTERM', 'uncaughtException', 'unhandledRejection'];
+const before = Object.fromEntries(events.map((event) => [event, count(event)]));
+let thrown = null;
+try {
+  await runControlStoreCommand({ stateRoot: ${JSON.stringify(stateRoot)}, environmentId: ${JSON.stringify(CONTROL_STORE_ENVIRONMENT)} });
+} catch (error) {
+  thrown = error instanceof Error ? error.message : String(error);
+}
+const after = Object.fromEntries(events.map((event) => [event, count(event)]));
+console.log(JSON.stringify({ thrown, before, after }));
+`,
+    );
+
+    const child = spawn(process.execPath, [scriptPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+    children.push(child);
+    let stdout = '';
+    child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
+
+    const exited = await awaitExitWithin(child, 5_000);
+    if (exited === null) {
+      child.kill('SIGKILL');
+      throw new Error(
+        'the control-store probe child stayed resident after initialisation failed, so the liveness timer was not reclaimed',
+      );
+    }
+    expect(child.exitCode).toBe(0);
+
+    const report = JSON.parse(stdout.trim()) as {
+      thrown: string | null;
+      before: Record<string, number>;
+      after: Record<string, number>;
+    };
+    expect(report.thrown).toContain('ENOTDIR');
+    expect(report.after).toEqual(report.before);
   });
 });
