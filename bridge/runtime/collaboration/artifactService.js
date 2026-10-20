@@ -80,6 +80,83 @@ function sha256Of(payload) {
   return createHash('sha256').update(payload).digest('hex');
 }
 
+/**
+ * Refuse a symlinked ANCESTOR of a resolved apply path. mkdir, rm and writeFile all FOLLOW
+ * intermediate symlinks, so the string-level path check alone cannot contain a write: an
+ * artifact naming `link/victim`, where `link` inside the target points outside it, would
+ * otherwise be written through the link and land outside the apply root. The apply root itself
+ * may legitimately be a symlink (a worktree under a symlinked path); only the segments strictly
+ * INSIDE it are checked, and the final segment is the entry itself — removed and rewritten,
+ * never followed.
+ *
+ * `context` carries the two facts the disk cannot show yet: `createdSymlinks`, the paths this
+ * artifact itself turns into symlinks (a write under one of them would be written THROUGH a link
+ * the artifact created, which is the same escape by another route), and `retiring`, the deletions
+ * the first phase retires because their target is not a directory. A retired path is gone before
+ * any create runs, so it neither blocks a file -> directory transition nor counts as a symlinked
+ * ancestor; a retired ENTRY is likewise exempt from the created-symlink refusal, because its own
+ * deletion runs before the link exists and nothing is ever written through it. Every other entry
+ * keeps the refusal, every phase still re-checks the live disk as it executes, and an UNDECLARED
+ * file in the way is refused rather than silently clobbered.
+ */
+async function assertNoSymlinkAncestor(fsLike, resolved, applyRoot, context = EMPTY_CONTEXT) {
+  const relative = path.relative(applyRoot, resolved);
+  let current = applyRoot;
+  let blocker = null;
+  const symlinkAhead = !context.retiring.has(resolved);
+  for (const segment of relative.split(path.sep).slice(0, -1)) {
+    if (segment.length === 0) continue;
+    current = path.join(current, segment);
+    if (symlinkAhead && context.createdSymlinks.has(current)) {
+      throw new CollaborationError('invalid_request', 'artifact_path', {
+        path: relative,
+        reason: 'artifact_creates_symlink',
+      });
+    }
+    let info = null;
+    let code = null;
+    try {
+      info = await fsLike.lstat(current);
+    } catch (error) {
+      code = error?.code ?? null;
+      // ENOENT: not created yet, nothing to follow. ENOTDIR: an ANCESTOR is a plain file — the
+      // file -> directory transition; it is not a symlink, so it is never an escape.
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        throw new CollaborationError('invalid_request', 'artifact_path', { path: relative });
+      }
+    }
+    if (info === null) {
+      if (code === 'ENOTDIR') {
+        // The blocker is the deepest ancestor that DOES exist, not the path that failed to
+        // resolve; the artifact retires exactly that one when it records it as deleted.
+        if (blocker === null || !context.retiring.has(blocker)) {
+          throw new CollaborationError('invalid_request', 'artifact_path', {
+            path: relative,
+            reason: 'ancestor_is_file',
+          });
+        }
+      }
+      return;
+    }
+    blocker = current;
+    if (info.isSymbolicLink()) {
+      if (context.retiring.has(current)) return;
+      throw new CollaborationError('invalid_request', 'artifact_path', { path: relative });
+    }
+  }
+}
+
+const EMPTY_CONTEXT = Object.freeze({ createdSymlinks: new Set(), retiring: new Set() });
+
+/** The lstat of a path, or null when it does not exist. */
+async function lstatOrNull(fsLike, target) {  try {
+    return await fsLike.lstat(target);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw new CollaborationError('invalid_request', 'artifact_path', { path: target });
+  }
+}
+
 /* ------------------------------------------------------------------ the wire format */
 
 function headerLine(changeSet) {
@@ -450,7 +527,10 @@ async function readChangeSet(runGit, cwd, baseCommit) {
     try {
       info = await fs.lstat(absolute);
     } catch (error) {
-      if (error?.code !== 'ENOENT') {
+      // A tracked path that is gone arrives as either errno: ENOENT when the path itself was
+      // removed, ENOTDIR when an ANCESTOR was replaced by a file (the directory -> file
+      // transition). Both mean the tracked file no longer exists, so both record the deletion.
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
         throw new CollaborationError('source_unavailable', 'writer_entry', { path: wanted });
       }
       entries.push(Object.freeze({
@@ -465,7 +545,24 @@ async function readChangeSet(runGit, cwd, baseCommit) {
       }));
       continue;
     }
-    if (info.isDirectory()) continue;
+    if (info.isDirectory()) {
+      // Git tracks only FILES, so a tracked path that is now a directory has lost its file: the
+      // file -> directory transition must still record the deletion. Dropping it would leave the
+      // apply unable to replace the old file on the base — mkdir of the same name is EEXIST.
+      if (trackedSet.has(wanted)) {
+        entries.push(Object.freeze({
+          path: wanted,
+          kind: 'delete',
+          mode: 0,
+          target: null,
+          contentBytes: 0,
+          sha256: sha256Of(Buffer.alloc(0)),
+          tracked: true,
+          content: null,
+        }));
+      }
+      continue;
+    }
     if (info.isSymbolicLink()) {
       const target = await fs.readlink(absolute);
       entries.push(Object.freeze({
@@ -611,8 +708,11 @@ export function createArtifactService(options = {}) {
 
   /**
    * Reproduce an artifact inside a target directory. Every path is re-validated against the target
-   * as it is read off the wire, so a crafted object cannot reach outside it. Creates and overwrites
-   * run first, deletions last, so a path is never removed before its replacement is written.
+   * as it is read off the wire — including every symlinked ANCESTOR, because the write helpers
+   * follow intermediate symlinks — so a crafted object cannot reach outside it. Deletions whose
+   * target is still a file run FIRST, so a path replaced by a directory of the same name can be
+   * recreated; the remaining deletions run last, so a path is never removed before its
+   * replacement is written.
    */
   async function apply(input, target, options_) {
     assertOpen();
@@ -643,6 +743,23 @@ export function createArtifactService(options = {}) {
     // Validate EVERY path before touching the disk, so a refusal leaves the target untouched.
     const plan = parsed.entries.map((entry) =>
       Object.freeze({ entry, resolved: validateArtifactPath(entry.path, applyRoot) }));
+    // ...and no path may reach its target THROUGH a symlinked ancestor — including one this
+    // artifact creates itself, which the disk cannot show yet. The retiring deletions are the
+    // ones the first phase removes, so a file or symlink the artifact records as deleted neither
+    // blocks a create nor counts as an ancestor to follow.
+    const retiring = new Set();
+    for (const step of plan) {
+      if (step.entry.kind !== 'delete') continue;
+      const held = await lstatOrNull(fsLike, step.resolved);
+      if (held !== null && !held.isDirectory()) retiring.add(step.resolved);
+    }
+    const context = Object.freeze({
+      createdSymlinks: new Set(plan.filter((step) => step.entry.kind === 'symlink').map((step) => step.resolved)),
+      retiring,
+    });
+    for (const step of plan) {
+      await assertNoSymlinkAncestor(fsLike, step.resolved, applyRoot, context);
+    }
     if (dryRun) {
       stats.applies += 1;
       return Object.freeze({
@@ -658,9 +775,26 @@ export function createArtifactService(options = {}) {
           .map((step) => step.entry.path)),
       });
     }
+    // Phase 1 — the deletions that UNBLOCK a create. A tracked file replaced by a directory of
+    // the same name is recorded as a deletion (readChangeSet), and that file must be gone before
+    // the create phase can mkdir under its name: `mkdir('item')` over an existing file is EEXIST.
+    // Ordering by what the target actually HOLDS, not by entry kind, is what makes the
+    // file <-> directory type transitions replay in both directions. A deletion retired here is
+    // recorded, so the final phase never removes the directory the create phase then made.
+    const retired = new Set();
+    for (const step of plan) {
+      if (step.entry.kind !== 'delete') continue;
+      if (!retiring.has(step.resolved)) continue;
+      await assertNoSymlinkAncestor(fsLike, step.resolved, applyRoot);
+      await fsLike.rm(step.resolved, { force: true, recursive: true });
+      retired.add(step.resolved);
+    }
+    // Phase 2 — the creates and overwrites.
     for (const step of plan) {
       if (step.entry.kind === 'delete') continue;
+      await assertNoSymlinkAncestor(fsLike, step.resolved, applyRoot);
       if (step.entry.kind === 'symlink') {
+        await fsLike.mkdir(path.dirname(step.resolved), { recursive: true });
         await fsLike.rm(step.resolved, { force: true, recursive: true });
         await fsLike.symlink(step.entry.target, step.resolved);
         continue;
@@ -670,8 +804,11 @@ export function createArtifactService(options = {}) {
       await fsLike.writeFile(step.resolved, step.entry.content);
       await fsLike.chmod(step.resolved, step.entry.mode);
     }
+    // Phase 3 — the remaining deletions: directories, and paths already gone.
     for (const step of plan) {
       if (step.entry.kind !== 'delete') continue;
+      if (retired.has(step.resolved)) continue;
+      await assertNoSymlinkAncestor(fsLike, step.resolved, applyRoot);
       await fsLike.rm(step.resolved, { force: true, recursive: true });
     }
     stats.applies += 1;

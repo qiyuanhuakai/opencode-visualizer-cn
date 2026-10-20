@@ -37,7 +37,7 @@ export function createParticipantService({ resolveSession } = {}) {
     return participant;
   }
 
-  async function join({ thread, session, repoKey, role = 'participant', summary } = {}) {
+  async function join({ thread, session, repoKey, role = 'participant', summary, assertLive } = {}) {
     const target = requireThread(thread);
     const parsedRole = parseThreadRole(role);
     const ref = asSession(session);
@@ -49,6 +49,7 @@ export function createParticipantService({ resolveSession } = {}) {
       throw new ThreadError('conflict', 'participant_duplicate');
     }
     const resolved = summary ?? (await resolveSession(ref));
+    if (typeof assertLive === 'function') assertLive();
     if (resolved === null || resolved === undefined) throw new ThreadError('source_unavailable', 'participant_session_missing');
     if (resolved.archived === true) throw new ThreadError('conflict', 'participant_session_archived');
     const participant = {
@@ -61,6 +62,7 @@ export function createParticipantService({ resolveSession } = {}) {
       joinedAt: Date.now(),
       leftAt: null,
       orphanReason: null,
+      operation: 0,
     };
     target.participants.push(participant);
     target.revision += 1;
@@ -72,6 +74,7 @@ export function createParticipantService({ resolveSession } = {}) {
   function leave({ thread, participantId } = {}) {
     const target = requireThread(thread);
     const participant = requireParticipant(target, participantId);
+    participant.operation += 1;
     if (participant.state === 'left') return participant;
     participant.state = 'left';
     participant.leftAt = Date.now();
@@ -82,11 +85,15 @@ export function createParticipantService({ resolveSession } = {}) {
   }
 
   /** Resume rebinds the same native session; a vanished native session becomes an explicit orphan. */
-  async function resume({ thread, participantId } = {}) {
+  async function resume({ thread, participantId, assertLive } = {}) {
     const target = requireThread(thread);
     const participant = requireParticipant(target, participantId);
     if (participant.state === 'active') return participant;
+    participant.operation += 1;
+    const operation = participant.operation;
     const resolved = await resolveSession(participant.session);
+    if (typeof assertLive === 'function') assertLive();
+    if (participant.operation !== operation) return participant;
     if (resolved === null || resolved === undefined) {
       participant.state = 'orphaned';
       participant.orphanReason = 'participant_session_missing';

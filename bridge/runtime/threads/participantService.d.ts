@@ -20,6 +20,7 @@ export interface ParticipantRecord extends ParticipantView {
   readonly joinedAt: number;
   readonly leftAt: number | null;
   readonly orphanReason: string | null;
+  readonly operation: number;
 }
 /** Minimal mutable thread shape a participant service mutates. */
 export interface ParticipantThread {
@@ -34,11 +35,16 @@ export interface ParticipantJoinInput {
   readonly repoKey: string;
   readonly role?: ThreadRole;
   readonly summary?: ThreadSessionView | null;
+  readonly assertLive?: () => void;
 }
 export interface ParticipantService {
   join(input?: ParticipantJoinInput): Promise<ParticipantRecord>;
   leave(input: { readonly thread: ParticipantThread; readonly participantId: string }): ParticipantRecord;
-  resume(input: { readonly thread: ParticipantThread; readonly participantId: string }): Promise<ParticipantRecord>;
+  resume(input: {
+    readonly thread: ParticipantThread;
+    readonly participantId: string;
+    readonly assertLive?: () => void;
+  }): Promise<ParticipantRecord>;
   get(thread: ParticipantThread, participantId: string): ParticipantRecord;
   readonly state: { readonly joins: number; readonly leaves: number; readonly resumes: number; readonly orphans: number };
 }
