@@ -1,6 +1,7 @@
 <template>
   <section
     class="handoff-dialog"
+    data-runtime-ui
     data-testid="handoff-dialog"
     :data-state="handoff?.state ?? 'none'"
     :aria-label="'Handoff'"

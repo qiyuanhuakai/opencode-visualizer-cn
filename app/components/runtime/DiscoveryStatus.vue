@@ -1,5 +1,5 @@
 <template>
-  <div class="discovery-status" :data-sources-total="props.sources.length" :data-sources-error="errorCount">
+  <div class="discovery-status" data-runtime-ui :data-sources-total="props.sources.length" :data-sources-error="errorCount">
     <button
       type="button"
       class="discovery-status-summary"

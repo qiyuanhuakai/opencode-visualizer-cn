@@ -1,5 +1,5 @@
 <template>
-  <section class="participant-picker" data-testid="participant-picker" :aria-label="'Thread participants'">
+  <section class="participant-picker" data-runtime-ui data-testid="participant-picker" :aria-label="'Thread participants'">
     <header class="picker-header">
       <span class="section-title">Participants</span>
       <span class="picker-count" data-testid="participant-count">{{ participants.length }}</span>

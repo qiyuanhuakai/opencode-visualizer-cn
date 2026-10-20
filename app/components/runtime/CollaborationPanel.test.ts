@@ -199,6 +199,33 @@ function phaseOf(view: Mounted, taskId: string): string | null {
 // ---------------------------------------------------------------------------
 
 describe('task 42 — Agent finished / Task review pending / accepted are three distinct phases', () => {
+  it('creates a task with explicit criteria through the rendered form', async () => {
+    const services = buildServices();
+    const view = await mountPanel(services.ports);
+    const title = view.root.querySelector('.task-create input');
+    const criteria = view.root.querySelector('.task-create textarea');
+    const form = view.root.querySelector('.task-create');
+    const create = view.root.querySelector('[data-testid="create-task"]');
+    if (!(title instanceof HTMLInputElement) || !(criteria instanceof HTMLTextAreaElement) || !(form instanceof HTMLFormElement)) {
+      throw new Error('Expected the task creation form');
+    }
+    if (!(create instanceof HTMLButtonElement)) throw new Error('Expected the create task button');
+    expect(create.disabled).toBe(true);
+    title.value = 'Verify persisted session state';
+    title.dispatchEvent(new Event('input', { bubbles: true }));
+    criteria.value = 'Draft survives restart\nHistory remains unchanged';
+    criteria.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(create.disabled).toBe(false);
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    expect(view.state.tasks.value).toHaveLength(1);
+    expect(view.state.tasks.value[0]?.criteria.map((criterion) => criterion.text)).toEqual([
+      'Draft survives restart', 'History remains unchanged',
+    ]);
+    expect(view.state.tasks.value[0]?.phase).toBe('pending');
+  });
+
   it('renders Agent finished, review pending and accepted as three distinct phases derived only from the product', async () => {
     const services = buildServices();
     const view = await mountPanel(services.ports);
@@ -421,7 +448,18 @@ describe('task 42 — writer path, real posture and explicit apply-approve', () 
     await settle();
     const taskId = view.state.tasks.value[0]?.taskId ?? '';
     view.state.selectTask(taskId);
-    await view.state.allocateWriter(taskId, repoDir);
+    await settle();
+
+    const repository = view.root.querySelector('.repository-field input');
+    const allocation = view.root.querySelector('.writer-allocation');
+    if (!(repository instanceof HTMLInputElement) || !(allocation instanceof HTMLFormElement)) {
+      throw new Error('Expected the writer allocation form');
+    }
+    repository.value = repoDir;
+    repository.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    allocation.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(view.state.writer.value).not.toBeNull());
     await settle();
 
     const lease = writer!.lease(view.state.writer.value?.leaseId ?? '') as { worktree: string; nativeCwd: string; baseCommit: string } | null;
@@ -583,8 +621,16 @@ describe('task 42 — the eight PR #198 review findings', () => {
     expect(services.coordinator.task(taskId).review.state).toBe('approved');
     expect(phaseOf(view, taskId)).toBe('review-approved');
 
-    // Accept is ENABLED at the real review state, and clicking it reaches accepted.
     const accept = buttonOf(view, 'task-accept');
+    expect(accept.disabled).toBe(true);
+    const criteria = view.root.querySelectorAll('.acceptance-criteria input[type="checkbox"]');
+    expect(criteria.length).toBeGreaterThan(0);
+    for (const criterion of criteria) {
+      if (!(criterion instanceof HTMLInputElement)) throw new Error('Expected a criterion checkbox');
+      expect(criterion.checked).toBe(false);
+      criterion.click();
+    }
+    await settle();
     expect(accept.disabled).toBe(false);
     accept.click();
     await settle();

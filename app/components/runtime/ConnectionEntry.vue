@@ -2,6 +2,7 @@
   <dialog
     ref="dialogRef"
     class="modal-backdrop"
+    data-runtime-ui
     :open="open"
     @close="$emit('close')"
     @cancel.prevent

@@ -7,7 +7,7 @@
     records the task's REVIEW verdict — applying the reviewed change to the repository is not
     wired into this surface yet, and the note says so rather than implying an apply happened.
   -->
-  <section class="artifact-review" data-testid="artifact-review" :data-task-id="task.taskId" aria-label="Change review">
+  <section class="artifact-review" data-runtime-ui data-testid="artifact-review" :data-task-id="task.taskId" aria-label="Change review">
     <div class="section-title">Change review</div>
 
     <div v-if="writer" class="writer-block" data-testid="writer-block">
@@ -26,6 +26,14 @@
       </dl>
     </div>
     <p v-else class="empty-note" data-testid="writer-idle">No writer lease allocated for this task yet.</p>
+
+    <form v-if="!writer" class="writer-allocation" @submit.prevent="allocateWriter">
+      <label class="repository-field">
+        <span>Repository path</span>
+        <input v-model="repository" type="text" :disabled="busy" required autocomplete="off" />
+      </label>
+      <button class="action-button" type="submit" data-testid="allocate-writer" :disabled="busy || !repository.trim()">Allocate writer</button>
+    </form>
 
     <div v-if="writer" class="posture-block" data-testid="posture-block" :data-sandbox="String(postureSandbox(writer.posture))">
       <div class="section-title">Writer isolation posture</div>
@@ -61,13 +69,22 @@
 </template>
 
 <script setup lang="ts">
+import { ref, watch } from 'vue';
 import type { CollaborationTaskView, CollaborationWriterView } from '../../composables/useRuntimeCollaboration';
 
-defineProps<{
+const props = defineProps<{
   task: CollaborationTaskView;
   writer: CollaborationWriterView | null;
   busy?: boolean;
 }>();
+
+const repository = ref('');
+watch(() => props.task.taskId, () => { repository.value = ''; });
+
+function allocateWriter(): void {
+  if (props.busy || props.writer || repository.value.trim().length === 0) return;
+  emit('allocate-writer', { taskId: props.task.taskId, repository: repository.value.trim() });
+}
 
 const emit = defineEmits<{
   (event: 'allocate-writer', input: { taskId: string; repository: string }): void;
@@ -96,6 +113,26 @@ function shortId(value: string): string {
 </script>
 
 <style scoped>
+.writer-allocation,
+.repository-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.repository-field {
+  font-size: var(--type-sm);
+  color: var(--theme-text-primary);
+}
+
+.repository-field input {
+  border: 1px solid var(--ui-form-control-border);
+  border-radius: var(--radius-control);
+  min-height: 28px;
+  padding: 4px 8px;
+}
+
 .artifact-review {
   display: flex;
   flex-direction: column;

@@ -1,5 +1,5 @@
 <template>
-  <form class="ssh-host-form" data-testid="ssh-host-form" @submit.prevent="submit">
+  <form class="ssh-host-form" data-runtime-ui data-testid="ssh-host-form" @submit.prevent="submit">
     <header class="form-header">
       <span class="form-title">SSH host profile</span>
       <span v-if="!available" class="form-unavailable" data-testid="ssh-host-unavailable">

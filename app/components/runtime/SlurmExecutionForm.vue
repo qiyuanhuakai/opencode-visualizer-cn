@@ -1,5 +1,5 @@
 <template>
-  <form class="slurm-form" data-testid="slurm-execution-form" @submit.prevent="submit">
+  <form class="slurm-form" data-runtime-ui data-testid="slurm-execution-form" @submit.prevent="submit">
     <header class="form-header">
       <span class="form-title">Slurm execution</span>
       <span v-if="!available" class="form-unavailable" data-testid="slurm-form-unavailable">

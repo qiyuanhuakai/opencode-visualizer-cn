@@ -1,5 +1,5 @@
 <template>
-  <section class="remote-actions" data-testid="remote-bridge-actions" aria-label="Remote bridge actions">
+  <section class="remote-actions" data-runtime-ui data-testid="remote-bridge-actions" aria-label="Remote bridge actions">
     <header class="actions-header">
       <span class="actions-title">Remote bridge</span>
       <span v-if="plan" class="actions-plan" data-testid="remote-bridge-plan">

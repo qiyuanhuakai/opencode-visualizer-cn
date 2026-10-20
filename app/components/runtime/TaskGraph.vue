@@ -5,7 +5,7 @@
     review pending (submitted, awaiting a verdict), accepted (a reviewer approved it). The phase is
     never recomputed here and a native terminal event can never render as `accepted`.
   -->
-  <section class="task-graph" data-testid="task-graph" aria-label="Task graph">
+  <section class="task-graph" data-runtime-ui data-testid="task-graph" aria-label="Task graph">
     <div class="section-title">Tasks</div>
     <ul v-if="tasks.length > 0" class="task-list">
       <li
@@ -49,8 +49,8 @@
             type="button"
             class="action-button"
             data-testid="task-accept"
-            :disabled="task.phase !== 'review-approved'"
-            @click="emit('accept', { taskId: task.taskId, deliverableId: firstDeliverableId(task), acceptedBy: 'reviewer', criteria: task.criteria.map((c) => ({ id: c.id, met: true })) })"
+            :disabled="!canAccept(task)"
+            @click="acceptTask(task)"
           >
             Accept
           </button>
@@ -73,6 +73,18 @@
             Cancel
           </button>
         </div>
+        <fieldset v-if="task.phase === 'review-approved'" class="acceptance-criteria">
+          <legend>{{ t('verifyCriteria') }}</legend>
+          <label v-for="criterion in task.criteria" :key="criterion.id" class="criterion-row">
+            <input
+              type="checkbox"
+              :checked="isConfirmed(task.taskId, criterion.id)"
+              @change="setConfirmed(task.taskId, criterion.id, $event)"
+            />
+            <span>{{ criterion.text }}{{ criterion.required === false ? '' : ' *' }}</span>
+          </label>
+          <p v-if="!firstDeliverableId(task)" class="empty-note">{{ t('deliverableRequired') }}</p>
+        </fieldset>
       </li>
     </ul>
     <p v-else class="empty-note" data-testid="task-graph-empty">No tasks yet.</p>
@@ -80,6 +92,9 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { runtimeUiMessages } from '../../locales/runtimeUi';
 import type { CollaborationTaskView, TaskPhase } from '../../composables/useRuntimeCollaboration';
 
 defineProps<{
@@ -97,6 +112,7 @@ const emit = defineEmits<{
   (event: 'cancel', input: { taskId: string; reason?: string }): void;
 }>();
 
+const { t } = useI18n({ useScope: 'local', messages: runtimeUiMessages });
 const PHASE_LABELS: Readonly<Record<TaskPhase, string>> = Object.freeze({
   pending: 'Pending',
   dispatched: 'Dispatched',
@@ -116,9 +132,61 @@ function phaseLabel(phase: TaskPhase): string {
 function firstDeliverableId(task: CollaborationTaskView): string {
   return task.deliverables[0]?.deliverableId ?? '';
 }
+
+const confirmations = ref<Readonly<Record<string, Readonly<Record<string, boolean>>>>>({});
+
+function isConfirmed(taskId: string, criterionId: string): boolean {
+  return confirmations.value[taskId]?.[criterionId] === true;
+}
+
+function setConfirmed(taskId: string, criterionId: string, event: Event): void {
+  if (!(event.target instanceof HTMLInputElement)) return;
+  confirmations.value = {
+    ...confirmations.value,
+    [taskId]: { ...confirmations.value[taskId], [criterionId]: event.target.checked },
+  };
+}
+
+function canAccept(task: CollaborationTaskView): boolean {
+  return task.phase === 'review-approved' && firstDeliverableId(task) !== '' &&
+    task.criteria.every((criterion) => criterion.required === false || isConfirmed(task.taskId, criterion.id));
+}
+
+function acceptTask(task: CollaborationTaskView): void {
+  if (!canAccept(task)) return;
+  emit('accept', {
+    taskId: task.taskId,
+    deliverableId: firstDeliverableId(task),
+    acceptedBy: 'reviewer',
+    criteria: task.criteria.map((criterion) => ({ id: criterion.id, met: isConfirmed(task.taskId, criterion.id) })),
+  });
+}
 </script>
 
 <style scoped>
+.acceptance-criteria {
+  flex: 1 1 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--theme-border-default);
+  border-radius: var(--radius-control);
+  font-size: var(--type-sm);
+  color: var(--theme-text-primary);
+}
+
+.criterion-row {
+  display: flex;
+  align-items: start;
+  gap: 8px;
+  padding: 4px 0;
+  overflow-wrap: anywhere;
+}
+
+.criterion-row input {
+  accent-color: var(--theme-accent-primary);
+}
+
 .task-graph {
   display: flex;
   flex-direction: column;

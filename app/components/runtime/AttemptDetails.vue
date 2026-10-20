@@ -5,7 +5,7 @@
     only after the task is explicitly submitted. A native end alone never shows review-pending or
     accepted — those come from the acceptance path.
   -->
-  <section class="attempt-details" data-testid="attempt-details" :data-task-id="task.taskId" :data-phase="task.phase" aria-label="Attempt details">
+  <section class="attempt-details" data-runtime-ui data-testid="attempt-details" :data-task-id="task.taskId" :data-phase="task.phase" aria-label="Attempt details">
     <div class="section-title">Attempts · {{ phaseLabel(task.phase) }}</div>
 
     <p class="attempt-phase" data-testid="attempt-phase" :data-phase="task.phase">

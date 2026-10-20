@@ -7,6 +7,7 @@
     :is="variant === 'panel' ? 'dialog' : 'div'"
     ref="dialogRef"
     class="thread-root"
+    data-runtime-ui
     :class="variant === 'panel' ? 'modal-backdrop' : 'composer-root'"
     :open="variant === 'panel' ? open : undefined"
     data-testid="thread-view"

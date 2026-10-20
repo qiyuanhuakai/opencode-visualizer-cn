@@ -8,6 +8,7 @@
   <dialog
     ref="dialogRef"
     class="collab-root modal-backdrop"
+    data-runtime-ui
     data-testid="collaboration-panel"
     :data-thread-id="threadId ?? ''"
     :data-team-id="team?.teamId ?? ''"
@@ -36,6 +37,7 @@
         :budgets="budgets"
         :fanout="fanout"
         :busy="busy"
+        :available-members="availableMembers"
         @add-member="emit('add-member', $event)"
         @create-task="emit('create-task', $event)"
         @fan-out="emit('fan-out', $event)"
@@ -108,6 +110,7 @@ const props = defineProps<{
   writer: CollaborationWriterView | null;
   busy?: boolean;
   error?: string;
+  availableMembers?: readonly { participantId: string; session: SessionRef; harnessKind: string }[];
 }>();
 
 const emit = defineEmits<{

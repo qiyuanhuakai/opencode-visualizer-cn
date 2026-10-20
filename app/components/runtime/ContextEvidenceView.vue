@@ -1,5 +1,5 @@
 <template>
-  <section class="evidence-view" data-testid="context-evidence-view" :aria-label="'Context checkpoint and evidence'">
+  <section class="evidence-view" data-runtime-ui data-testid="context-evidence-view" :aria-label="'Context checkpoint and evidence'">
     <header class="evidence-header">
       <span class="section-title">Context checkpoint</span>
       <span v-if="checkpoint" class="checkpoint-id mono" data-testid="checkpoint-id" :title="checkpoint.checkpointId">

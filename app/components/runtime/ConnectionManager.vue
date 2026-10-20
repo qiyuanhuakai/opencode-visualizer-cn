@@ -2,18 +2,19 @@
   <dialog
     ref="dialogRef"
     class="modal-backdrop"
-    :open="open"
+    data-runtime-ui
+    aria-labelledby="connection-manager-title"
     data-testid="connection-manager"
     :data-client="client"
     :data-managed-transport="String(managedTransport)"
     @close="$emit('close')"
-    @cancel.prevent
+    @cancel.prevent="handleClose"
     @click.self="handleClose"
   >
     <div class="modal">
       <header class="modal-header">
-        <div class="modal-title">SSH / HPC connection</div>
-        <button type="button" class="modal-close-button" data-testid="connection-manager-close" @click="handleClose">
+        <div id="connection-manager-title" class="modal-title">{{ t('connections') }}</div>
+        <button type="button" class="modal-close-button" :aria-label="t('closeConnections')" data-testid="connection-manager-close" @click="handleClose">
           <Icon icon="lucide:x" :width="14" :height="14" />
         </button>
       </header>
@@ -238,6 +239,8 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { runtimeUiMessages } from '../../locales/runtimeUi';
 import { Icon } from '@iconify/vue';
 import type { ConnectionProfile } from '../../../shared/runtime/connectionProfile.js';
 import type {
@@ -310,6 +313,7 @@ const emit = defineEmits<{
   (event: 'challenge-answer', answer: Readonly<{ challengeId: string; accept: boolean; secret?: string }>): void;
 }>();
 
+const { t } = useI18n({ useScope: 'local', messages: runtimeUiMessages });
 const dialogRef = ref<HTMLDialogElement | null>(null);
 const composer = ref('');
 const secret = ref('');
@@ -324,9 +328,8 @@ const secret = ref('');
 const secretChallengeId = ref('');
 
 watch(
-  () => props.open,
-  (open) => {
-    const element = dialogRef.value;
+  [() => props.open, dialogRef],
+  ([open, element]) => {
     if (element === null) return;
     if (open) {
       if (!element.open) element.showModal();
@@ -334,6 +337,7 @@ watch(
       element.close();
     }
   },
+  { flush: 'post', immediate: true },
 );
 
 /**

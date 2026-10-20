@@ -1,5 +1,5 @@
 <template>
-  <section class="harness-settings" :aria-label="ariaLabel">
+  <section class="harness-settings" data-runtime-ui :aria-label="ariaLabel">
     <header class="harness-settings-header">
       <HarnessBadge class="harness-settings-badge" :harness="harnessKind" :detail="instanceLabel" />
       <div class="harness-settings-heading">

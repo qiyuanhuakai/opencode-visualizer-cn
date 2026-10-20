@@ -5,7 +5,7 @@
     the panel renders it verbatim and never claims a recipient succeeded when the service said
     `failed` or `ambiguous`.
   -->
-  <section class="team-editor" data-testid="team-editor" aria-label="Team">
+  <section class="team-editor" data-runtime-ui data-testid="team-editor" aria-label="Team">
     <div class="section-title">Team members</div>
     <ul v-if="team && team.members.length > 0" class="member-list">
       <li
@@ -23,6 +23,31 @@
       </li>
     </ul>
     <p v-else class="empty-note" data-testid="team-empty">No members yet.</p>
+
+    <form v-if="team && candidates.length" class="member-create" @submit.prevent="addMember">
+      <Dropdown v-model="selectedMember" :aria-label="t('member')" :placeholder="t('member')" auto-close :disabled="busy">
+        <DropdownItem v-for="candidate in candidates" :key="candidate.participantId" :value="candidate.participantId">
+          {{ candidate.harnessKind }} · {{ candidate.session.nativeSessionId }}
+        </DropdownItem>
+      </Dropdown>
+      <Dropdown v-model="memberRole" :aria-label="t('role')" auto-close :disabled="busy">
+        <DropdownItem value="worker">{{ t('worker') }}</DropdownItem>
+        <DropdownItem value="lead">{{ t('lead') }}</DropdownItem>
+      </Dropdown>
+      <button class="action-button" type="submit" data-testid="add-team-member" :disabled="busy || !selectedCandidate">{{ t('addMember') }}</button>
+    </form>
+
+    <form v-if="team" class="task-create" @submit.prevent="createTask">
+      <label class="task-field">
+        <span>{{ t('taskTitle') }}</span>
+        <input v-model="taskTitle" class="fanout-prompt" :disabled="busy" required />
+      </label>
+      <label class="task-field">
+        <span>{{ t('criteria') }}</span>
+        <textarea v-model="taskCriteria" class="fanout-prompt" rows="3" :disabled="busy" required />
+      </label>
+      <button type="submit" class="action-button" data-testid="create-task" :disabled="busy || !canCreateTask">{{ t('createTask') }}</button>
+    </form>
 
     <div v-if="budgets" class="budget-block" data-testid="budget-block">
       <div class="section-title">Concurrency budget</div>
@@ -93,6 +118,10 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { runtimeUiMessages } from '../../locales/runtimeUi';
+import Dropdown from '../Dropdown.vue';
+import DropdownItem from '../Dropdown/Item.vue';
 import type { SessionRef } from '../../../shared/runtime/identity.js';
 import type { CollaborationBudgetView, CollaborationFanoutView, CollaborationTeamView } from '../../composables/useRuntimeCollaboration';
 
@@ -101,6 +130,7 @@ const props = defineProps<{
   budgets: CollaborationBudgetView | null;
   fanout: CollaborationFanoutView | null;
   busy?: boolean;
+  availableMembers?: readonly { participantId: string; session: SessionRef; harnessKind: string }[];
 }>();
 
 const emit = defineEmits<{
@@ -109,8 +139,35 @@ const emit = defineEmits<{
   (event: 'fan-out', input: { prompt: string; targets: readonly { participantId: string; session: SessionRef; attachmentPath?: string }[] }): void;
 }>();
 
+const { t } = useI18n({ useScope: 'local', messages: runtimeUiMessages });
 const prompt = ref('');
+const selectedMember = ref<string>();
+const memberRole = ref('worker');
+const candidates = computed(() => (props.availableMembers ?? []).filter((candidate) =>
+  !props.team?.members.some((member) => member.participantId === candidate.participantId)));
+const selectedCandidate = computed(() => candidates.value.find((candidate) => candidate.participantId === selectedMember.value));
+
+function addMember(): void {
+  const candidate = selectedCandidate.value;
+  if (!candidate || props.busy || (memberRole.value !== 'lead' && memberRole.value !== 'worker')) return;
+  emit('add-member', { ...candidate, role: memberRole.value });
+  selectedMember.value = undefined;
+}
+const taskTitle = ref('');
+const taskCriteria = ref('');
+const criterionLines = computed(() => taskCriteria.value.split('\n').map((line) => line.trim()).filter(Boolean));
+const canCreateTask = computed(() => taskTitle.value.trim().length > 0 && criterionLines.value.length > 0);
 const hasMembers = computed(() => (props.team?.members.length ?? 0) > 0);
+
+function createTask(): void {
+  if (props.busy || !props.team || !canCreateTask.value) return;
+  emit('create-task', {
+    title: taskTitle.value.trim(),
+    criteria: criterionLines.value.map((text) => ({ id: crypto.randomUUID(), text, required: true })),
+  });
+  taskTitle.value = '';
+  taskCriteria.value = '';
+}
 
 /**
  * The explicit limit-key → used-key map. The coordinator's budgets() reports the LIMITS as
@@ -150,6 +207,32 @@ function shortId(value: string): string {
 </script>
 
 <style scoped>
+.task-create,
+.member-create,
+.task-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-field .fanout-prompt {
+  flex: none;
+  width: 100%;
+  min-height: 28px;
+  box-sizing: border-box;
+}
+
+.task-field textarea.fanout-prompt {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.task-field {
+  font-size: var(--type-sm);
+  color: var(--theme-text-primary);
+}
+
 .team-editor {
   display: flex;
   flex-direction: column;

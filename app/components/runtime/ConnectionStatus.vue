@@ -2,6 +2,7 @@
   <section
     v-if="identity || status || slurm"
     class="connection-status"
+    data-runtime-ui
     data-testid="connection-lifecycle"
     :data-environment-id="identity?.environmentId ?? ''"
     :data-target-kind="identity?.targetKind ?? ''"
