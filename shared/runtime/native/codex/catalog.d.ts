@@ -12,6 +12,7 @@ export interface CodexSummary {
   readonly source: JsonValue;
   readonly agentNickname: string | null;
   readonly agentRole: string | null;
+  readonly status?: 'busy' | 'retry' | 'idle' | null;
 }
 export interface CodexCatalog {
   readonly revision: number;

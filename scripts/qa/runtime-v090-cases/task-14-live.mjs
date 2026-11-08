@@ -250,12 +250,13 @@ export async function live(context) {
     client.close();
     await transport.close();
     await transport.exited;
-    requests = 0;
+    requests = 0; heldRequest = false;
     const startup = await startupCancellation({
       context,
       root,
       home,
       modelStarted: () => requests > 0,
+      heldStarted: () => heldRequest,
     });
     return {
       scenarios: [...scenarios, ...startup.scenarios],

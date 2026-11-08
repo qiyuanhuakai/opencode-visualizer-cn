@@ -114,7 +114,7 @@ export async function instanceFaults(context) {
   return { scenarios, artifacts: [artifact(evidence, 'worker-restart')] };
 }
 
-export async function startupCancellation({ context, root, home, modelStarted }) {
+export async function startupCancellation({ context, root, home, modelStarted, heldStarted }) {
   const environmentId = '11111111-1111-4111-8111-111111111111';
   const harnessInstanceId = '22222222-2222-4222-8222-222222222222';
   const epoch = '33333333-3333-4333-8333-333333333333';
@@ -206,7 +206,6 @@ export async function startupCancellation({ context, root, home, modelStarted })
       (entry) => entry.direction === 'client' && entry.message.method === 'turn/start',
     );
     assert.equal(sends.length, 1, 'no replay on early cancellation');
-    if (cancellation.code) assert(['invalid_request', 'conflict'].includes(cancellation.code));
     snapshots.push({
       before,
       modelHadStarted,
@@ -214,6 +213,9 @@ export async function startupCancellation({ context, root, home, modelStarted })
       terminal,
       nativeSendCount: sends.length,
     });
+    if (cancellation.code === 'reconcile_required') {
+      assert(['codex.cancel.owner', 'codex.cancel.lease'].includes(cancellation.field), 'only a proven terminal ownership race is allowed');
+    } else if (cancellation.code) assert(['invalid_request', 'conflict'].includes(cancellation.code));
     const forked = await driver.registration.driver.native.forkSession({
       ...base,
       session,
@@ -238,6 +240,18 @@ export async function startupCancellation({ context, root, home, modelStarted })
       }
     };
     assert.equal((await waitOperation(driver, forkSent.operationId)).outcome, 'completed');
+    const held = await core.send({ ...base, session: forkSession,
+      params: { idempotencyKey: 'busy-state-send', native: { input: [{ type: 'text', text: 'native hold' }] } } });
+    const heldDeadline = Date.now() + 15000;
+    while (!heldStarted()) { assert(Date.now() < heldDeadline, 'held model request deadline'); await delay(10); }
+    const busySummary = await core.getSession({ ...base, session: forkSession });
+    assert.equal(busySummary.status, 'busy', 'native active thread remains visibly busy in its summary');
+    await core.cancel({ ...base, session: forkSession, params: { operationId: held.operationId } });
+    assert.equal((await waitOperation(driver, held.operationId)).outcome, 'interrupted');
+    const idleSummary = await core.getSession({ ...base, session: forkSession });
+    assert.equal(idleSummary.status, 'idle', 'native cancellation restores idle summary');
+    snapshots.push({ nativeBusyStatus: busySummary.status, nativeIdleStatus: idleSummary.status });
+
     assert.equal(
       wire.filter(
         (entry) => entry.direction === 'client' && entry.message.method === 'thread/resume',
@@ -305,6 +319,10 @@ export async function startupCancellation({ context, root, home, modelStarted })
               observed: [terminal.phase, sends.length],
               expected: ['terminal', 1],
               passed: true,
+            },
+            {
+              name: 'native held turn is busy and becomes idle after cancellation',
+              observed: [busySummary.status, idleSummary.status], expected: ['busy', 'idle'], passed: true,
             },
           ],
         },
