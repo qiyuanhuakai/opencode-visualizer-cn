@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
+import { createServer as createHttpServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { createServer } from 'vite';
 import { createLegacyExportStorage } from '../../../electron/sessionStorage.js';
@@ -222,7 +223,9 @@ async function browserExercise(matrix) {
   return { assertions: safe, pages, secureContext: isSecureContext, subtleCryptoAvailable: Boolean(crypto.subtle), userAgent: navigator.userAgent };
 }
 async function browserScenario(context) {
-  const server = await createServer({ configFile: false, appType: 'custom', root: context.root, logLevel: 'error', server: { host: '127.0.0.1', port: 0, allowedHosts: ['vis-export-fixture.invalid'] } });
+  const http = createHttpServer();
+  const server = await createServer({ configFile: false, appType: 'custom', root: context.root, logLevel: 'error', server: { middlewareMode: true, hmr: { server: http }, allowedHosts: ['vis-export-fixture.invalid'] } });
+  http.on('request', server.middlewares);
   server.middlewares.use('/hash', async (request, response) => {
     const chunks = []; for await (const chunk of request) chunks.push(chunk); response.end(hash(Buffer.concat(chunks)));
   });
@@ -234,7 +237,8 @@ async function browserScenario(context) {
   };
   const artifacts = []; let closed = false;
   try {
-    await server.listen(); const address = server.httpServer.address(); assert(address && typeof address === 'object');
+    await new Promise((resolve, reject) => { http.once('error', reject); http.listen(0, '127.0.0.1', resolve); });
+    const address = http.address(); assert(address && typeof address === 'object');
     await command('open', `http://${context.case === 'failure' ? 'vis-export-fixture.invalid' : '127.0.0.1'}:${address.port}/task11`);
     const result = await command('eval', `(${browserExercise.toString()})((${credentialCases.toString()})())`, '--json');
     const envelope = JSON.parse(result.stdout); assert.equal(envelope.success, true);
@@ -246,8 +250,11 @@ async function browserScenario(context) {
     const screenshot = path.join(context.outDir, `${path.basename(context.out, '.json')}-browser.png`); await command('screenshot', screenshot); artifacts.push(artifact(screenshot, 'screenshot'));
     return { name: 'real isolated browser IDB localStorage quota and resume', assertions: value.assertions, artifacts };
   } finally {
-    try { await command('close'); closed = true; } finally { await server.close(); }
-    const receipt = path.join(context.outDir, `${path.basename(context.out, '.json')}-browser-cleanup.json`); writeJson(receipt, { browserClosed: closed, serverClosed: !server.httpServer?.listening, isolatedProfile: true }); artifacts.push(artifact(receipt, 'resource-cleanup'));
+    try { await command('close'); closed = true; } finally {
+      try { http.closeAllConnections(); await new Promise(resolve => http.close(resolve)); }
+      finally { await server.close(); }
+    }
+    const receipt = path.join(context.outDir, `${path.basename(context.out, '.json')}-browser-cleanup.json`); writeJson(receipt, { browserClosed: closed, serverClosed: !http.listening, isolatedProfile: true }); artifacts.push(artifact(receipt, 'resource-cleanup'));
   }
 }
 async function packagingScenario(context) {

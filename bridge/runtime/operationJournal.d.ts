@@ -51,6 +51,17 @@ export interface OperationJournal {
     scope: OperationScope,
     outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted',
   ): Promise<Operation>;
+  /**
+   * Finishes an operation whose process generation the Runtime has superseded and
+   * releases its session lease in the same mutation. `currentScope` must be the live
+   * generation; its currency is the Runtime's confirmation that the recorded
+   * generation's process has exited.
+   */
+  terminalSuperseded(
+    id: string,
+    currentScope: OperationScope,
+    outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted',
+  ): Promise<Operation>;
   reconcile(id: string, scope: OperationScope): Promise<Operation>;
 }
 export function createOperationJournal(options: {

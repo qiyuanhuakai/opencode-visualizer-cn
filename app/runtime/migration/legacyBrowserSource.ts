@@ -4,9 +4,13 @@ import { legacyDigest } from '../../../shared/runtime/migration/legacyExport.js'
 import type { LegacySource, LegacyPiece } from '../../../shared/runtime/migration/legacyExport.js';
 
 const databases = [['opencode.codexAuxiliaryHistory', 'snapshots'], ['opencode.backendHistory', 'histories']] as const;
+// The renderer writes backend-history keys as state.backendHistory.v1.<scope32hex>.<session>;
+// older SQLite-backed exports carry the opencode. prefix, so accept both spellings.
+const backendHistoryKey = /^(?:opencode\.)?state\.backendHistory\.v1\.([a-f0-9]{32})\./u;
+const backendHistoryPrefix = /^(?:opencode\.)?state\.backendHistory\.v1\./u;
 function namespaceFor(key: string): string {
-  const match = /^opencode\.state\.backendHistory\.v1\.([a-f0-9]{32})\./u.exec(key);
-  if (key.startsWith('opencode.state.backendHistory.v1.') && !match) throw new LegacyExportError('unknown_namespace');
+  const match = backendHistoryKey.exec(key);
+  if (backendHistoryPrefix.test(key) && !match) throw new LegacyExportError('unknown_namespace');
   return match ? `backend-history-v1:${match[1]}` : 'unattached-legacy-local';
 }
 function openExisting(factory: IDBFactory, name: string): Promise<IDBDatabase> {
