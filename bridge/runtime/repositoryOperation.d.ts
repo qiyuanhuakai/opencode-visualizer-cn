@@ -21,6 +21,13 @@ export interface RepositoryAcceptance {
 }
 export interface RepositoryJournal {
   readonly leases: WorktreeLease;
+  lookup(input: {
+    readonly repoKey: RepoKey;
+    readonly workspace: WorkspaceRef;
+    readonly idempotencyKey: string;
+    readonly method: string;
+    readonly payload: Json;
+  }): Promise<RepositoryOperation | null>;
   accept(input: {
     readonly repoKey: RepoKey;
     readonly workspace: WorkspaceRef;
