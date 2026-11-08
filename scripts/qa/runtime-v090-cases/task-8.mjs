@@ -543,9 +543,12 @@ export async function run(context) {
       const timedQueue = createAdmissionQueue();
       const releaseTimed = Promise.withResolvers();
       deferreds.push(releaseTimed);
+      let startedTimed = 0;
       const timedWork = Array.from({ length: 256 }, () =>
-        timedQueue.run({ deadlineMs: 1 }, () => releaseTimed.promise).catch((error) => error.code),
+        timedQueue.run({ deadlineMs: 100 }, () => { startedTimed++; return releaseTimed.promise; }).catch((error) => error.code),
       );
+      await new Promise(resolve => setImmediate(resolve));
+      check('all timeout-accounting work actually began before its deadline', startedTimed, 256);
       check(
         'all timed-out requests return explicit timeout',
         [...new Set(await Promise.all(timedWork))],
@@ -755,8 +758,11 @@ export async function run(context) {
         'conflict',
         'stale_owner',
       );
-      const paused = open('paused', { requestTimeoutMs: 100 });
+      // This timeout tests a deliberately stopped READY worker, not cold process
+      // startup. Keep enough bootstrap headroom without changing the product limit.
+      const paused = open('paused', { requestTimeoutMs: 1000 });
       await paused.ready;
+      check('worker timeout probe initialized before deliberate suspension', Boolean(paused.pid), true);
       process.kill(paused.pid, 'SIGSTOP');
       await failure(
         'actual worker timeout explicitly requires reconciliation',

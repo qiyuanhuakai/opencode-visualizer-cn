@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
@@ -86,6 +87,26 @@ describe('ACP client method handler', () => {
       ),
     ).rejects.toThrow('outside the ACP session roots');
   });
+
+  it('refuses a reverse read of a non-regular file instead of blocking the shutdown on it', async () => {
+    const workspace = await createWorkspace();
+    const fifo = path.join(workspace, 'pipe.fifo');
+    execFileSync('mkfifo', [fifo]);
+    const handler = createAcpClientMethodHandler();
+    registerSession(handler, workspace);
+
+    // A FIFO inside the granted root has no writer and no EOF, so a plain read
+    // never settles: the reverse handler must refuse it rather than hold the
+    // service's close() open on an in-flight request that cannot be cancelled.
+    const settled = await Promise.race([
+      handler(
+        { id: 40, method: 'fs/read_text_file', params: { sessionId: 'session-1', path: fifo } },
+        { agentId: 'echo' },
+      ).then(() => 'resolved', (error: Error) => `rejected: ${error.message}`),
+      new Promise((resolve) => setTimeout(() => resolve('PENDING'), 2000)),
+    ]);
+    expect(settled).toMatch(/^rejected: /);
+  }, 30000);
 
   it('rejects writes through a final symlink that escapes the session root', async () => {
     const workspace = await createWorkspace();
