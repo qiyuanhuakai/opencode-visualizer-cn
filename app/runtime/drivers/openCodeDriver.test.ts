@@ -114,7 +114,7 @@ async function controlledNative() {
   const address = server.address(); if (!address || typeof address === 'string') throw new TypeError('missing fixture address');
   const store = createRuntimeStore({ stateDirectory: path.join(dir, 'runtime'), environmentId, ownerId, epoch }); await store.ready;
   const runtime = createRuntimeHost({ environmentId, role: 'local' }); runtime.start();
-  const options = { environmentId, harnessInstanceId, epoch, processGeneration: 1, endpoint: `http://127.0.0.1:${address.port}`, store, runtime, currentProcess: () => ({ epoch, processGeneration: generation }) };
+  const options = { environmentId, harnessInstanceId, epoch, processGeneration: 1, endpoint: `http://127.0.0.1:${address.port}`, store, runtime, currentProcess: () => ({ epoch, processGeneration: generation }), disconnectStreams() { for (const stream of streams) stream.end(); } };
   return { options, store, calls, publish, get connections() { return connections; }, setGeneration(value: number) { generation = value; }, setHealthy(value: boolean) { healthy = value; }, gate(value: Promise<void> | undefined) { responseGate = value; }, async close() { await runtime.stop(); for (const stream of streams) stream.end(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); await store.close(); } };
 }
 
@@ -206,6 +206,45 @@ describe('OpenCode discovery fences', () => {
 });
 
 describe('OpenCode instance intent authority', () => {
+  it('keeps concurrent driver closes behind the durable process release barrier', async () => {
+    const fixture = await controlledNative();
+    const driver = await createOpenCodeDriver(fixture.options);
+    const release = Promise.withResolvers<void>();
+    const mutate = fixture.store.mutateControl.bind(fixture.store);
+    let releasing = false;
+    fixture.store.mutateControl = async input => {
+      if (input.changes.some(change => change.key.startsWith('opencode-process:') && change.value && typeof change.value === 'object' && !Array.isArray(change.value) && 'alive' in change.value && change.value.alive === false)) {
+        releasing = true; await release.promise;
+      }
+      return mutate(input);
+    };
+    let first: Promise<void> | undefined;
+    try {
+      first = driver.close();
+      await expect(driver.registration.driver.core.subscribe?.(input())).rejects.toMatchObject({ code: 'source_unavailable', field: 'opencode.closed' });
+      await expect.poll(() => releasing).toBe(true);
+      let completed = false;
+      const second = driver.close().then(() => { completed = true; });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(completed).toBe(false);
+      release.resolve(); await Promise.all([first, second]);
+    } finally { release.resolve(); fixture.store.mutateControl = mutate; await first?.catch(() => undefined); await driver.close(); await fixture.close(); }
+  });
+
+  it('retries driver cleanup after a durable process release failure', async () => {
+    const fixture = await controlledNative();
+    const driver = await createOpenCodeDriver(fixture.options);
+    const mutate = fixture.store.mutateControl.bind(fixture.store);
+    try {
+      fixture.store.mutateControl = async () => { throw new Error('owned release failed'); };
+      await expect(driver.close()).rejects.toThrow('owned release failed');
+      fixture.store.mutateControl = mutate;
+      await driver.close();
+      const process = await fixture.store.getControl({ collection: 'operations', key: `opencode-process:${fingerprint([environmentId, harnessInstanceId])}` });
+      expect(process?.value).toMatchObject({ alive: false });
+    } finally { fixture.store.mutateControl = mutate; await driver.close(); await fixture.close(); }
+  });
+
   it.each([false, true])('does not release a replacement process claim when old close is retried after acknowledgement loss=%s', async lost => {
     const fixture = await controlledNative();
     const scope = { environmentId, harnessInstanceId, epoch, processGeneration: 1 };
@@ -522,3 +561,26 @@ describe('OpenCode cancellation retains the original durable session lease', () 
     } finally { await fixture.close(); }
   });
 });
+
+  it('recovers a lost SSE subscription without replaying native mutations', async () => {
+    const fixture = await controlledNative();
+    try {
+      const driver = await createOpenCodeDriver(fixture.options);
+      const first = await driver.registration.driver.core.subscribe?.(input());
+      if (!first || typeof first !== 'object' || !('next' in first) || typeof first.next !== 'function') throw new TypeError('missing subscription');
+      const lost = first.next();
+      const rejected = expect(lost).rejects.toMatchObject({ code: 'reconcile_required' });
+      fixture.options.disconnectStreams();
+      await rejected;
+      const registry = createHarnessRegistry(); registry.register(driver.registration);
+      await expect.poll(async () => registry.invoke({ ...input(), channel: 'core', operation: 'inspect' })).toMatchObject({ state: 'failed' });
+      const second = await driver.registration.driver.core.subscribe?.(input());
+      if (!second || typeof second !== 'object' || !('next' in second) || typeof second.next !== 'function') throw new TypeError('missing recovered subscription');
+      const next = second.next();
+      fixture.publish('session.updated', { info: { ...nativeSession, title: 'Recovered' } });
+      await expect(next).resolves.toMatchObject({ done: false, value: { type: 'session.updated' } });
+      expect(fixture.connections).toBe(2);
+      expect(fixture.calls.filter(call => call.method !== 'GET')).toEqual([]);
+      await driver.close();
+    } finally { await fixture.close(); }
+  });
