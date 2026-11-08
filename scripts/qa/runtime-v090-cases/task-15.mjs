@@ -7,6 +7,9 @@ import { artifact, writeJson } from '../runtime-v090-evidence.mjs';
 import { runInstalledNative } from './task-15-native.mjs';
 import { runAcpFaults } from './task-15-faults.mjs';
 export const sourceFiles = [
+  'app/runtime/drivers/acpRpcLifecycle.test.ts',
+  'app/runtime/drivers/acpDriverLifecycle.test.ts',
+  'app/runtime/drivers/acpPr177.test.ts',
   'bridge/acpProcessManager.js',
   'bridge/acpProcessManager.d.ts',
   'bridge/acpProcessProtocol.js',

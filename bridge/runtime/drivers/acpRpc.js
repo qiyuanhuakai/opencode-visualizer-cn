@@ -19,8 +19,28 @@ export function createAcpRpc({
   let active = true;
   let attachment;
   const nativeRequests = new Set();
-  let closing = Promise.resolve();
-  let shutdownError;
+  let closing;
+  function closeAttachment() {
+    if (closing) return closing;
+    // Publish the barrier before exit callbacks can reenter close(). Keep
+    // admission fenced, but permit a failed resource release to be retried.
+    const completion = Promise.withResolvers();
+    closing = completion.promise;
+    void closing.catch(() => {});
+    Promise.resolve()
+      .then(() => attachment?.close())
+      .then(
+        () => {
+          socket.removeAllListeners();
+          completion.resolve();
+        },
+        (error) => {
+          if (closing === completion.promise) closing = undefined;
+          completion.reject(error);
+        },
+      );
+    return completion.promise;
+  }
   const expire = (id) => {
     tombstones.add(id);
     if (tombstones.size > 256) tombstones.delete(tombstones.values().next().value);
@@ -89,6 +109,7 @@ export function createAcpRpc({
   socket.close = () => {
     if (!active) return;
     active = false;
+    closeAttachment();
     for (const [id, waiter] of pending) {
       clearTimeout(waiter.timer);
       expire(id);
@@ -98,10 +119,6 @@ export function createAcpRpc({
     nativeRequests.clear();
     socket.emit('close');
     onExit();
-    closing = attachment?.close() ?? Promise.resolve();
-    void closing.catch((error) => {
-      shutdownError = error;
-    });
   };
   attachment = manager.attach(agentId, socket, { runtime: true });
   if (!attachment) throw new StoreError('source_unavailable', 'runtime_attachment');
@@ -140,11 +157,9 @@ export function createAcpRpc({
     },
     processGeneration: attachment.processGeneration,
     pid: attachment.pid,
-    async close() {
+    close() {
       socket.close();
-      await closing;
-      socket.removeAllListeners();
-      if (shutdownError) throw shutdownError;
+      return closeAttachment();
     },
   };
 }

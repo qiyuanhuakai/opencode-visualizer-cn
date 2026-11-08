@@ -30,8 +30,32 @@ export async function createAcpDriver(options) {
   if (inspection.environment !== target || inspection.epoch !== epoch)
     throw new StoreError('conflict', 'store_target');
   let sessions, interactions, mutations, reverse, subscriptions;
-  let exitWork = Promise.resolve();
-  let lifecycleError;
+  let cleanupWork;
+  let closing;
+  const released = new WeakSet();
+  function closeResources() {
+    if (cleanupWork) return cleanupWork;
+    const completion = Promise.withResolvers();
+    cleanupWork = completion.promise;
+    void cleanupWork.catch(() => {});
+    const jobs = [mutations, reverse]
+      .filter((resource) => resource && !released.has(resource))
+      .map(async (resource) => {
+        await resource.close();
+        released.add(resource);
+      });
+    jobs.push(closeAuthTerminals());
+    Promise.allSettled(jobs).then((results) => {
+      cleanupWork = undefined;
+      const errors = results
+        .filter((result) => result.status === 'rejected')
+        .map((result) => result.reason);
+      if (errors.length)
+        completion.reject(new AggregateError(errors, 'ACP resource cleanup failed'));
+      else completion.resolve();
+    });
+    return completion.promise;
+  }
   const active = new Map();
   const authTerminals = new Set();
   async function closeAuthTerminals() {
@@ -69,20 +93,26 @@ export async function createAcpDriver(options) {
     onResult: (message) => reverse?.observeAgentMessage(message),
     onExit: () => {
       subscriptions?.emit({ type: 'process.invalidated' });
-      exitWork = Promise.all([mutations?.close(), reverse?.close(), closeAuthTerminals()]).catch(
-        (error) => {
-          lifecycleError = error;
-        },
-      );
+      void closeResources().catch(() => {});
     },
     ...(options.deadlineMs ? { deadlineMs: options.deadlineMs } : {}),
   });
-  async function close() {
-    await rpc.close();
-    await exitWork;
-    await closeAuthTerminals();
-    subscriptions?.close();
-    if (lifecycleError) throw lifecycleError;
+  function close() {
+    if (closing) return closing;
+    const completion = Promise.withResolvers();
+    closing = completion.promise;
+    void closing.catch(() => {});
+    Promise.allSettled([rpc.close(), closeResources()]).then((results) => {
+      subscriptions?.close();
+      const errors = results
+        .filter((result) => result.status === 'rejected')
+        .map((result) => result.reason);
+      if (errors.length) {
+        closing = undefined;
+        completion.reject(new AggregateError(errors, 'ACP driver cleanup failed'));
+      } else completion.resolve();
+    });
+    return completion.promise;
   }
   try {
     mutations = await createAcpMutations({
