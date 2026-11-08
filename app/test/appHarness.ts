@@ -1,5 +1,5 @@
 import { createApp, defineComponent, h, nextTick } from 'vue';
-import { vi } from 'vitest';
+import { onTestFinished, vi } from 'vitest';
 import type { CodexPromptInput, CodexPromptResult } from '../backends/codex/codexAdapter';
 import type { CodexJsonRpcNotification } from '../backends/codex/jsonRpcClient';
 import type { BackendAdapter, BackendCapabilities, BackendKind } from '../backends/types';
@@ -570,9 +570,23 @@ async function mountApp(
   }
   if (pauseInitialization) harness.pauseConnection();
   const host = document.createElement('div');
+  const lifetime = new AbortController();
+  let mountedApp: ReturnType<typeof createApp> | undefined;
+  function unmount() {
+    if (lifetime.signal.aborted) return;
+    lifetime.abort();
+    mountedApp?.unmount();
+    host.remove();
+    harness.resetConnection();
+    window.localStorage.clear();
+    vi.unstubAllGlobals();
+  }
+  onTestFinished(unmount);
   document.body.append(host);
   const { default: App } = await import('../App.vue');
+  lifetime.signal.throwIfAborted();
   const app = createApp(App);
+  mountedApp = app;
   app.use(i18n);
   app.mount(host);
   if (!seedOpenCodeCredentials) {
@@ -589,6 +603,7 @@ async function mountApp(
     });
   }
   await nextTick();
+  lifetime.signal.throwIfAborted();
   const instance = Reflect.get(app, '_instance');
   const setupState =
     instance && typeof instance === 'object' ? Reflect.get(instance, 'setupState') : undefined;
@@ -642,13 +657,7 @@ async function mountApp(
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       await nextTick();
     },
-    unmount() {
-      app.unmount();
-      host.remove();
-      harness.resetConnection();
-      window.localStorage.clear();
-      vi.unstubAllGlobals();
-    },
+    unmount,
   };
 }
 
