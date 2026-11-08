@@ -23,6 +23,10 @@ export type Chunk = { readonly channelId: number; readonly offset: number; reado
 export type BinaryInput = { readonly channelId: number; readonly offset: number; readonly data: Uint8Array };
 export type BinaryChunk = Chunk & { readonly data: Uint8Array };
 export function parseBinding(input: unknown): Binding;
+/** Validates a canonical entity identity key (WorkspaceKey, RepoKey or SessionKey) by decoding
+ * it through the identity codecs; the generic 1024-character text limit cannot express that
+ * contract, because real keys grow with the target path. */
+export function entityKeyValue(value: unknown, field: string): string;
 /** Returns a deeply frozen JSON value; both encode and decode call this validator. */
 export function validateFrame(input: unknown): Frame;
 export function encodeFrame(input: unknown): string;
