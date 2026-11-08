@@ -1,3 +1,4 @@
+import { confirmLegacyWrite, legacyEditingPaused, retainFrozenLegacyWrite } from '../runtime/migration/writerFreeze';
 const STORAGE_PREFIX = 'opencode.';
 const LOCAL_STORAGE_OWNED_KEYS = new Set([
   'opencode.global.dat:model',
@@ -62,6 +63,7 @@ function migrateLocalStorageToElectronStorage(
   localStorage: Storage,
 ) {
   if (hasMigratedElectronStorage) return true;
+  if (legacyEditingPaused()) return false;
   const now = Date.now();
   if (now < nextElectronStorageMigrationAttemptAt) return false;
   try {
@@ -243,23 +245,21 @@ export function storageRead(key: string): StorageReadResult {
 }
 
 export function storageSet(key: string, value: string) {
+  if (retainFrozenLegacyWrite({ channel: 'storage', key: storageKey(key), value })) return true;
   const storage = resolveStorageBackend();
   if (!storage) return false;
-  try {
-    return storage.setItem(storageKey(key), value) !== false;
-  } catch {
-    return false;
-  }
+  let saved = false;
+  try { saved = storage.setItem(storageKey(key), value) !== false; } catch { saved = false; }
+  return confirmLegacyWrite(saved);
 }
 
 export function storageRemove(key: string) {
+  if (retainFrozenLegacyWrite({ channel: 'storage', key: storageKey(key), value: null })) return true;
   const storage = resolveStorageBackend();
   if (!storage) return false;
-  try {
-    return storage.removeItem(storageKey(key)) !== false;
-  } catch {
-    return false;
-  }
+  let saved = false;
+  try { saved = storage.removeItem(storageKey(key)) !== false; } catch { saved = false; }
+  return confirmLegacyWrite(saved);
 }
 
 export function storageGetJSON<T>(key: string): T | null {

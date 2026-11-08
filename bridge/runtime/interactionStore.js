@@ -106,7 +106,7 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
     const key = keyFor(scope, nativeRequestId);
     const prepared = preparePayload(clean, `payload:${key}:${fingerprint(clean)}`);
     return admission.run({ size: prepared.ref.bytes }, async (signal) => {
-      const { token, record } = await authority(scope, false);
+      const { token } = await authority(scope, false);
       const value = {
         kind: 'interaction',
         scope,
@@ -125,23 +125,11 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
       await writePayload(store, 'interactions', prepared, false, signal);
       if (!token.active || signal.aborted)
         throw new StoreError('reconcile_required', 'stale_generation');
+      // The process row is a read-only authority precondition: including it in this
+      // mutation would expire the revision unrelated concurrent requests validated
+      // against, making distinct permission requests fail on each other's commit.
       try {
-        await compareRecord(
-          store,
-          'interactions',
-          key,
-          null,
-          value,
-          [
-            {
-              collection: 'operations',
-              key: processKey(scope),
-              expectedRevision: record.revision,
-              value: record.value,
-            },
-          ],
-          false,
-        );
+        await compareRecord(store, 'interactions', key, null, value, [], false);
       } catch (error) {
         if (!isRevisionConflict(error)) throw error;
         const duplicate = await readRecord(store, 'interactions', key);
@@ -193,7 +181,7 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
     let claimedByThisCall = false;
     return admission
       .run({ reserved: true, deadlineMs, size: prepared.ref.bytes }, async (signal) => {
-        const { token, record: process } = await authority(scope);
+        const { token } = await authority(scope);
         const prior = await readRecord(store, 'interactions', key);
         if (!prior || fingerprint(prior.value.scope) !== fingerprint(scope))
           throw new StoreError('conflict', 'scope_fence');
@@ -204,21 +192,22 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
         await writePayload(store, 'interactions', prepared, true, signal);
         if (!token.active || signal.aborted)
           throw new StoreError('reconcile_required', 'stale_generation');
-        const claimed = await compareRecord(
-          store,
-          'interactions',
-          key,
-          prior,
-          { ...prior.value, phase: 'replying', answerRef: prepared.ref },
-          [
-            {
-              collection: 'operations',
-              key: processKey(scope),
-              expectedRevision: process.revision,
-              value: process.value,
-            },
-          ],
-        );
+        // The process row is a read-only authority precondition: including it in this
+        // mutation would expire the revision unrelated concurrent replies validated
+        // against, so only one of two distinct permission requests would be submitted.
+        let claimed;
+        try {
+          claimed = await compareRecord(store, 'interactions', key, prior, {
+            ...prior.value,
+            phase: 'replying',
+            answerRef: prepared.ref,
+          });
+        } catch (error) {
+          // This interaction row is the only change in the mutation, so a revision
+          // conflict can only mean another window claimed this same request.
+          if (!isRevisionConflict(error)) throw error;
+          throw new StoreError('conflict', 'interaction_claimed');
+        }
         claimedByThisCall = true;
         try {
           if (!token.active || signal.aborted)

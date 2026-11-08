@@ -11,6 +11,7 @@ directories:
 files:
   - "dist/**/*"
   - "electron/**/*"
+  - "shared/runtime/migration/**/*"
   - "bridge/update*.js"
   - "package.json"
   - "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}"
@@ -29,6 +30,8 @@ asar: true
 asarUnpack:
   - "**/*.node"
   - "electron/sessionDatabaseWorker.mjs"
+  - "electron/legacyExportSource.mjs"
+  - "shared/runtime/migration/**/*"
 
 extraResources:
   - from: build/icon.png

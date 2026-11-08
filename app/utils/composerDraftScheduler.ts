@@ -1,8 +1,10 @@
+import { registerLegacyWriter } from '../runtime/migration/writerFreeze';
 export type ComposerDraftScheduler = {
   readonly pending: boolean;
   schedule: (task?: () => void) => void;
   flush: () => void;
   cancel: () => void;
+  dispose: () => void;
 };
 
 export function createComposerDraftScheduler(
@@ -13,36 +15,34 @@ export function createComposerDraftScheduler(
   let pendingTask: (() => void) | null = null;
 
   function cancel() {
-    if (timer === null) return;
-    clearTimeout(timer);
+    if (timer !== null) clearTimeout(timer);
     timer = null;
     pendingTask = null;
   }
 
   function flush() {
-    if (timer === null) return;
+    if (pendingTask === null) return;
     const task = pendingTask ?? persist;
     cancel();
-    task();
+    try { task(); } catch (error) { pendingTask = task; throw error; }
   }
 
   function schedule(task = persist) {
     cancel();
     pendingTask = task;
     timer = setTimeout(() => {
-      const pending = pendingTask ?? persist;
-      timer = null;
-      pendingTask = null;
-      pending();
+      flush();
     }, delayMs);
   }
 
+  const unregister = registerLegacyWriter(flush);
   return {
     get pending() {
-      return timer !== null;
+      return pendingTask !== null;
     },
     schedule,
     flush,
     cancel,
+    dispose() { flush(); unregister(); },
   };
 }
