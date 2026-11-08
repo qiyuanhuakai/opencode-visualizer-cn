@@ -334,3 +334,59 @@ test('loss after native enqueue stays reconciling and cannot resend', () =>
     ).rejects.toMatchObject({ reason: 'operation_phase' });
     expect(sends).toBe(1);
   }));
+
+test('history retention floor never moves behind an oversized omitted update', () =>
+  withStore(async (store) => {
+    const { createAcpRpc } = await import('../../../bridge/runtime/drivers/acpRpc.js');
+    const { createAcpSessions } = await import('../../../bridge/runtime/drivers/acpSessions.js');
+    const { inspectCapabilities } =
+      await import('../../../shared/runtime/native/acp/capabilities.js');
+    const rpc = createAcpRpc({
+      manager: {
+        async reconcile() {
+          return [];
+        },
+        getStatus() {
+          return [];
+        },
+        async stopAll() {},
+        attach() {
+          return { processGeneration: 1, pid: 42, setRawTap() {}, async close() {} };
+        },
+      },
+      agentId: 'owned',
+      async onRequest() {},
+      onNotification() {},
+      onExit() {},
+    });
+    try {
+      const mutations = await createAcpMutations({
+        store,
+        ...binding,
+        assertCurrent: rpc.assertCurrent,
+      });
+      const sessions = createAcpSessions({
+        rpc,
+        mutations,
+        capabilities: inspectCapabilities({ protocolVersion: 1 }),
+        queue: async (action) => action(),
+        cwd: '/workspace',
+        emit() {},
+      });
+      const update = (value: string) =>
+        sessions.update({
+          sessionId: session.nativeSessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: value } },
+        });
+      update('old');
+      update('x'.repeat(262144));
+      expect(sessions.history({ session }).floor).toBe(2);
+      for (let index = 0; index < 128; index++) update(`later-${index}`);
+      const retained = sessions.history({ session });
+      expect(retained.floor).toBe(2);
+      expect(retained.items).toHaveLength(128);
+      expect(retained.through).toBe(130);
+    } finally {
+      await rpc.close();
+    }
+  }));

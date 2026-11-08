@@ -9,6 +9,7 @@ import { runAcpFaults } from './task-15-faults.mjs';
 export const sourceFiles = [
   'app/runtime/drivers/acpRpcLifecycle.test.ts',
   'app/runtime/drivers/acpDriverLifecycle.test.ts',
+  'app/runtime/drivers/acpDriver.test.ts',
   'app/runtime/drivers/acpPr177.test.ts',
   'bridge/acpProcessManager.js',
   'bridge/acpProcessManager.d.ts',

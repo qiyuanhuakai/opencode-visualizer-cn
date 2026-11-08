@@ -58,7 +58,9 @@ export async function createAcpDriver(options) {
   }
   const active = new Map();
   const authTerminals = new Set();
+  const authCreations = new Set();
   async function closeAuthTerminals() {
+    await Promise.allSettled(authCreations);
     const results = await Promise.allSettled(
       [...authTerminals].map(async (terminal) => {
         await terminal.close();
@@ -261,21 +263,32 @@ export async function createAcpDriver(options) {
       agentId: options.agentId,
       ...(options.createAuthTerminal
         ? {
-            createAuthTerminal: async (method) => {
+            createAuthTerminal: (method) => {
               rpc.assertCurrent();
-              const terminal = await options.createAuthTerminal({
-                binding: mutations.binding,
-                method,
-              });
-              authTerminals.add(terminal);
-              try {
+              // Register before invoking user code: creation itself can trigger
+              // process exit, and shutdown must drain that in-flight resource.
+              const creation = Promise.resolve().then(async () => {
                 rpc.assertCurrent();
-                return { terminalId: text(terminal.terminalId) };
-              } catch (error) {
-                await terminal.close();
-                authTerminals.delete(terminal);
-                throw error;
-              }
+                const terminal = await options.createAuthTerminal({
+                  binding: mutations.binding,
+                  method,
+                });
+                authTerminals.add(terminal);
+                try {
+                  rpc.assertCurrent();
+                  return { terminalId: text(terminal.terminalId) };
+                } catch (error) {
+                  await terminal.close();
+                  authTerminals.delete(terminal);
+                  throw error;
+                }
+              });
+              authCreations.add(creation);
+              void creation.then(
+                () => authCreations.delete(creation),
+                () => authCreations.delete(creation),
+              );
+              return creation;
             },
           }
         : {}),

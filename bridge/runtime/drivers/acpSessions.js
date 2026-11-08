@@ -122,7 +122,7 @@ export function createAcpSessions({ rpc, mutations, capabilities, queue, cwd, em
     while (history.items.length > 128 || history.bytes > 1048576) {
       const removed = history.items.shift();
       history.bytes -= Buffer.byteLength(JSON.stringify(removed.update));
-      history.floor = removed.seq;
+      history.floor = Math.max(history.floor, removed.seq);
     }
     histories.set(session.nativeSessionId, history);
     if (histories.size > 128) histories.delete(histories.keys().next().value);
