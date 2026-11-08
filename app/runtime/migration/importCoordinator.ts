@@ -25,9 +25,12 @@ export function createImportCoordinator(options: ImportCoordinatorOptions) {
   return {
     async run(): Promise<ImportResult> {
       assertTarget();
+      // Archive/checkpoint failures pause this same store even when the global
+      // writer gate remains frozen. Recover it before replaying the gate's sink.
+      if (local.paused) await local.retry();
       switch (legacyWriterPhase()) {
         case 'legacy': await freezeLegacyWriters({ clientOrigin, persist: write => persistPendingLegacyWrite(local, write) }); break;
-        case 'paused': await local.retry(); await retryFrozenLegacyWrites(); break;
+        case 'paused': await retryFrozenLegacyWrites(); break;
         case 'frozen': case 'cutover': break;
         case 'draining': throw new ImportCoordinatorError('incomplete_import');
         default: throw new ImportCoordinatorError('incomplete_import');

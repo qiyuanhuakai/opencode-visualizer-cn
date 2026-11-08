@@ -13,7 +13,7 @@ import { legacyDigest } from './legacyExport';
 
 afterEach(() => { vi.resetModules(); });
 
-it.each([false, true])('imports escaped=%s history through the real receiver and restores identical bytes after restart', async escaped => {
+it.each([[false, false], [true, false], [false, true], [true, true]])('imports escaped=%s history after checkpoint failure=%s and restores identical bytes after restart', async (escaped, failCheckpoint) => {
   const root = await mkdtemp(path.join(tmpdir(), 'vis-import-batch-'));
   const environmentId = '11111111-1111-4111-8111-111111111111';
   const harnessInstanceId = '22222222-2222-4222-8222-222222222222';
@@ -42,12 +42,20 @@ it.each([false, true])('imports escaped=%s history through the real receiver and
     // receiver, validation, verification and restart are production code.
     const headers = new Map<string, DraftHeader>(), checkpoints = new Map<string, unknown>();
     const parts = new Map<string, Uint8Array[]>();
+    let paused = false, retries = 0, shouldFail = failCheckpoint;
+    let pendingCheckpoint: { key: string; value: unknown } | undefined;
     const local = {
+      get paused() { return paused; },
+      async retry() { retries++; paused = false; if (pendingCheckpoint) { checkpoints.set(pendingCheckpoint.key, pendingCheckpoint.value); pendingCheckpoint = undefined; } },
       async writeChunk(identity: { context: string }, part: { index: number; bytes: Uint8Array }) {
         const values = parts.get(identity.context) ?? []; values[part.index] = part.bytes.slice(); parts.set(identity.context, values);
       },
       async commit(header: DraftHeader) { headers.set(header.context, header); },
-      async checkpoint(key: string, value: unknown) { checkpoints.set(key, value); },
+      async checkpoint(key: string, value: unknown) {
+        if (paused) throw new Error('archive paused');
+        if (shouldFail && key === 'migration-active') { shouldFail = false; paused = true; pendingCheckpoint = { key, value }; throw new Error('archive checkpoint failed'); }
+        checkpoints.set(key, value);
+      },
       async readCheckpoint(key: string) { return checkpoints.get(key); },
       async page({ after }: { after?: string }) { return { headers: [...headers.values()].filter(header => !after || header.context > after), next: null }; },
       async *readPart(header: DraftHeader) { yield* parts.get(header.context) ?? []; },
@@ -55,10 +63,13 @@ it.each([false, true])('imports escaped=%s history through the real receiver and
     const service = createImportService({ store, environmentId });
     const batches: ImportBatch[] = [];
     const { createImportCoordinator } = await import('./importCoordinator');
-    const result = await createImportCoordinator({ source, local, clientOrigin: 'test-origin', currentEnvironment: () => environmentId,
+    const coordinator = createImportCoordinator({ source, local, clientOrigin: 'test-origin', currentEnvironment: () => environmentId,
       mappings: [{ environmentId, harnessInstanceId, profileId, nativeSessionId: 'native', scopeFingerprint: 'proven-source', evidence: 'user-confirmed' }],
       target: { environmentId, service: { ...service, async accept(batch) { batches.push(batch); return service.accept(batch); } } },
-    }).run();
+    });
+    if (failCheckpoint) await expect(coordinator.run()).rejects.toThrow('archive checkpoint failed');
+    const result = await coordinator.run();
+    expect(retries).toBe(failCheckpoint ? 1 : 0);
     expect(result).toMatchObject({ phase: 'cutover', records: 1, boundRecords: 1, chunks: chunks.length });
     expect(batches.every(batch => Buffer.byteLength(JSON.stringify(batch)) <= 900000)).toBe(true);
     expect(batches.every(batch => batch.chunks.length <= 8)).toBe(true);
