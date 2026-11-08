@@ -15,7 +15,7 @@ async function resolveRoot(value) {
   return fs.realpath(requiredPath(value, 'File root'));
 }
 
-async function resolveReadablePath(filePath, rootPath) {
+export async function resolveReadablePath(filePath, rootPath) {
   const root = await resolveRoot(rootPath);
   const requested = requiredPath(filePath, 'File path');
   if (!isWithin(requested, root)) throw new Error('File path is outside the allowed root.');
@@ -24,7 +24,7 @@ async function resolveReadablePath(filePath, rootPath) {
   return { root, requested, resolved };
 }
 
-async function resolveWritablePath(filePath, rootPath) {
+export async function resolveWritablePath(filePath, rootPath) {
   const root = await resolveRoot(rootPath);
   const requested = requiredPath(filePath, 'File path');
   if (!isWithin(requested, root)) throw new Error('File path is outside the allowed root.');
