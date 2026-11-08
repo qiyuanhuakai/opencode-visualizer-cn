@@ -16,3 +16,11 @@ export interface SessionStorage {
   close(): Promise<void>;
 }
 export function createSessionStorage(filePath: string): SessionStorage;
+
+export interface LegacyExportStorage {
+  exportBinding(request: Readonly<{ sourceKey: string }>): Promise<import('../app/runtime/migration/legacyBinding').LocalBindingHint>;
+  exportOpen(): Promise<import('../shared/runtime/migration/legacyExport.js').LegacyExportToken>;
+  exportPage(request: import('../shared/runtime/migration/legacyExport.js').LegacyPageRequest): Promise<import('../shared/runtime/migration/legacyExport.js').LegacyExportPage>;
+  close(): Promise<void>;
+}
+export function createLegacyExportStorage(filePath: string): LegacyExportStorage;

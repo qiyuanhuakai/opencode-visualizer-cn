@@ -11,7 +11,7 @@ import {
 } from './localApplicationApproval.js';
 import { createLocalFileEditor } from './localFileEditor.js';
 import { closeOwnedLocalFileSession } from './localFileSessionOwnership.js';
-import { createSessionStorage } from './sessionStorage.js';
+import { createSessionStorage, createLegacyExportStorage } from './sessionStorage.js';
 import { registerSessionDatabaseIpc } from './sessionDatabaseIpc.js';
 import { registerPersistentStorageIpc } from './persistentStorageIpc.js';
 import {
@@ -408,6 +408,7 @@ registerPersistentStorageIpc({
 });
 
 registerSessionDatabaseIpc({
+  getLegacyExportStorage: () => createLegacyExportStorage(persistentStorageFilePath()),
   ipcMain,
   assertTrustedRenderer,
   getStorage: getPersistentStorage,

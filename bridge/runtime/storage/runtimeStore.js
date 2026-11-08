@@ -22,6 +22,7 @@ export function createRuntimeStore(input) {
   function failAll(error) { stopped = true; for (const id of pending.keys()) settle(id, error); }
   worker.on('error', () => { failAll(new StoreError('source_unavailable', 'worker_exit')); worker.kill('SIGKILL'); });
   worker.on('exit', (code, signal) => { failAll(new StoreError('reconcile_required', 'worker_exit')); resolveExit({ code, signal, pid: worker.pid }); });
+  worker.on('close', () => resolveExit({ code: null, signal: null, pid: worker.pid }));
   worker.on('message', (message) => { if (message.ok) settle(message.id, null, message.result); else settle(message.id, new StoreError(message.error.code, message.error.reason)); });
   function request(method, params, reserved = false) {
     if (stopped) return Promise.reject(new StoreError('source_unavailable', 'store_closed'));
