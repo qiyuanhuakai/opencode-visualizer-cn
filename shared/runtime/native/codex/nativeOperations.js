@@ -145,10 +145,23 @@ export function createCodexNativeOperations({
         typeof payload.enabled === 'boolean' && typeof payload.modelId === 'string',
         'codex.fast.params',
       );
-      const models = await request('model/list', { limit: 200 });
-      const model = models.data.find(
-        (entry) => entry.id === payload.modelId || entry.model === payload.modelId,
-      );
+      let model, cursor, cursorBytes = 0;
+      const cursors = new Set();
+      for (;;) {
+        const models = await request('model/list', { limit: 200, ...(cursor ? { cursor } : {}) });
+        requireValue(models && Array.isArray(models.data) && models.data.length <= 200
+          && models.data.every(entry => entry && typeof entry.id === 'string'), 'codex.models.page');
+        model = models.data.find(entry => entry.id === payload.modelId || entry.model === payload.modelId);
+        if (model) break;
+        const next = models.nextCursor ?? null;
+        if (next === null) break;
+        requireValue(typeof next === 'string' && next.length > 0 && next.length <= 16384
+          && !cursors.has(next), 'codex.models.cursor', 'reconcile_required');
+        cursorBytes += next.length * 2;
+        requireValue(cursors.size < 8192 && cursorBytes <= 8 * 1024 * 1024,
+          'codex.models.cursor_budget', 'reconcile_required');
+        cursors.add(next); cursor = next;
+      }
       const tier = model?.serviceTiers?.find((entry) => /^(fast|priority)$/i.test(entry.id));
       requireValue(!payload.enabled || tier, 'codex.fast.unavailable', 'unsupported');
       payload = {
