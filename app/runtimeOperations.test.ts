@@ -5,10 +5,10 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createRuntimeStore } from '../bridge/runtime/storage/runtimeStore.js';
 import type { RuntimeStore, Json } from '../bridge/runtime/storage/runtimeStore.js';
-import { createOperationJournal } from '../bridge/runtime/operationJournal.js';
+import { createOperationJournal, fingerprint } from '../bridge/runtime/operationJournal.js';
 import { createInteractionStore } from '../bridge/runtime/interactionStore.js';
 import { createAdmissionQueue } from '../bridge/runtime/admissionQueue.js';
-import { parseSessionRef } from '../shared/runtime/identity.js';
+import { encodeSessionKey, parseSessionRef } from '../shared/runtime/identity.js';
 
 const environmentId = '11111111-1111-4111-8111-111111111111';
 const ownerId = '22222222-2222-4222-8222-222222222222';
@@ -348,6 +348,173 @@ describe('trusted runtime store scope binding', () => {
         });
       expect((await store.inspect()).revision).toBe(revision);
       expect(nativeCalls).toBe(0);
+    }));
+});
+
+describe('runtime generation handover', () => {
+  const leaseRow = (store: RuntimeStore, session: typeof scope.session) =>
+    store.getControl({
+      collection: 'operations',
+      key: `lease:${fingerprint(encodeSessionKey(session))}`,
+    });
+  it('terminates and releases the lease of an operation whose process generation was superseded', () =>
+    withStore(async (store) => {
+      // Given a generation-1 operation that already reached the native boundary.
+      let current = 1;
+      const journal = createOperationJournal({
+        store,
+        isProcessCurrent: (candidate) => candidate.processGeneration === current,
+      });
+      const operation = await journal.accept({
+        scope,
+        idempotencyKey: 'superseded',
+        method: 'send',
+        payload: null,
+      });
+      await journal.execute(operation.operationId, scope, () => 'turn-1');
+      expect((await journal.get(operation.operationId)).phase).toBe('observed');
+      expect((await leaseRow(store, scope.session))?.value).toMatchObject({
+        operationId: operation.operationId,
+      });
+
+      // When its native process exits and the Runtime restores generation 2.
+      current = 2;
+      const generation2 = { ...scope, processGeneration: 2 };
+      await expect(
+        journal.terminal(operation.operationId, scope, 'interrupted'),
+      ).rejects.toMatchObject({ code: 'reconcile_required', reason: 'stale_generation' });
+      await expect(
+        journal.terminal(operation.operationId, generation2, 'interrupted'),
+      ).rejects.toMatchObject({ code: 'conflict', reason: 'scope_fence' });
+      await expect(journal.reconcile(operation.operationId, scope)).resolves.toMatchObject({
+        phase: 'reconciling',
+      });
+      await expect(journal.cancel(operation.operationId, scope)).resolves.toMatchObject({
+        phase: 'reconciling',
+      });
+      expect((await leaseRow(store, scope.session))?.value).toMatchObject({
+        operationId: operation.operationId,
+      });
+
+      // Then the current Runtime finishes the orphaned operation and frees its lease.
+      await expect(
+        journal.terminalSuperseded(operation.operationId, generation2, 'interrupted'),
+      ).resolves.toMatchObject({ phase: 'terminal', outcome: 'interrupted' });
+      expect((await leaseRow(store, scope.session))?.value ?? null).toBeNull();
+
+      // And a generation-2 operation on the same session can be accepted and executed.
+      const next = await journal.accept({
+        scope: generation2,
+        idempotencyKey: 'superseded-next',
+        method: 'send',
+        payload: null,
+      });
+      let sends = 0;
+      await expect(
+        journal.execute(next.operationId, generation2, () => {
+          sends++;
+          return 'turn-2';
+        }),
+      ).resolves.toMatchObject({ phase: 'native-executed', result: 'turn-2' });
+      expect(sends).toBe(1);
+      expect((await leaseRow(store, scope.session))?.value).toMatchObject({
+        operationId: next.operationId,
+      });
+    }));
+  it('refuses to finish an operation on a scope that does not supersede it', () =>
+    withStore(async (store) => {
+      // Given a generation-2 operation that already reached the native boundary.
+      let current = 2;
+      const journal = createOperationJournal({
+        store,
+        isProcessCurrent: (candidate) => candidate.processGeneration === current,
+      });
+      const generation2 = { ...scope, processGeneration: 2 };
+      const operation = await journal.accept({
+        scope: generation2,
+        idempotencyKey: 'fenced',
+        method: 'send',
+        payload: null,
+      });
+      await journal.execute(operation.operationId, generation2, () => 'turn-1');
+      // When the Runtime has since moved on to generation 3.
+      current = 3;
+      const live = { ...scope, processGeneration: 3 };
+      // Then only the live generation is authorised at all.
+      for (const generation of [1, 2, 4])
+        await expect(
+          journal.terminalSuperseded(
+            operation.operationId,
+            { ...scope, processGeneration: generation },
+            'interrupted',
+          ),
+          `generation ${generation}`,
+        ).rejects.toMatchObject({ code: 'reconcile_required', reason: 'stale_generation' });
+      // And a live scope that misattributes the session or the epoch is fenced.
+      for (const [name, misattributed] of [
+        [
+          'session',
+          { ...live, session: parseSessionRef({ ...scope.session, nativeSessionId: 'other' }) },
+        ],
+        ['epoch', { ...live, epoch: ownerId }],
+      ] as const) {
+        await expect(
+          journal.terminalSuperseded(operation.operationId, misattributed, 'interrupted'),
+          name,
+        ).rejects.toMatchObject({ code: 'conflict', reason: 'scope_fence' });
+      }
+      // And a live scope that does not supersede the recorded generation is fenced,
+      // because a current-generation operation must be finished by terminal().
+      current = 2;
+      await expect(
+        journal.terminalSuperseded(operation.operationId, generation2, 'interrupted'),
+      ).rejects.toMatchObject({ code: 'conflict', reason: 'scope_fence' });
+      current = 3;
+      // The outcome arrives across a protocol boundary, so it is validated at runtime.
+      await expect(
+        journal.terminalSuperseded(operation.operationId, live, JSON.parse('"unknown"')),
+      ).rejects.toMatchObject({ code: 'invalid_request', reason: 'outcome' });
+      // And the operation is untouched, still holding its lease.
+      expect((await journal.get(operation.operationId)).phase).toBe('observed');
+      expect((await leaseRow(store, scope.session))?.value).toMatchObject({
+        operationId: operation.operationId,
+      });
+      // And the live generation can still finish it correctly.
+      current = 3;
+      await expect(
+        journal.terminalSuperseded(operation.operationId, live, 'interrupted'),
+      ).resolves.toMatchObject({ phase: 'terminal', outcome: 'interrupted' });
+      expect((await leaseRow(store, scope.session))?.value ?? null).toBeNull();
+    }));
+  it('answers two distinct concurrent permission requests without a process revision conflict', () =>
+    withStore(async (store) => {
+      // Given one live native process holding two distinct permission requests.
+      const interactions = createInteractionStore({ store });
+      await interactions.bindProcess(scope);
+      // When both requests are registered concurrently.
+      const [first, second] = await Promise.all([
+        interactions.pending({ scope, nativeRequestId: '1', payload: { question: 'allow a?' } }),
+        interactions.pending({ scope, nativeRequestId: '2', payload: { question: 'allow b?' } }),
+      ]);
+      expect(first).not.toBe(second);
+
+      // Then both replies submit to the native process exactly once each.
+      let submissions = 0;
+      const replies = await Promise.all([
+        interactions.reply(first, scope, { ok: true }, () => {
+          submissions++;
+        }),
+        interactions.reply(second, scope, { ok: true }, () => {
+          submissions++;
+        }),
+      ]);
+      expect(replies).toEqual([
+        { phase: 'native-executed', interactionId: first },
+        { phase: 'native-executed', interactionId: second },
+      ]);
+      expect(submissions).toBe(2);
+      expect((await interactions.get(first)).phase).toBe('replied');
+      expect((await interactions.get(second)).phase).toBe('replied');
     }));
 });
 

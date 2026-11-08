@@ -1,3 +1,4 @@
+import { registerLegacyWriter, retainFrozenLegacyWrite } from '../../runtime/migration/writerFreeze';
 type Entry = {
   readonly info: Record<string, unknown> & { readonly id: string };
   readonly parts: readonly (Record<string, unknown> & { readonly id: string })[];
@@ -122,7 +123,9 @@ export function writeNativeAuxiliarySnapshot(threadId: string, snapshot: unknown
   const database = nativeAuxiliaryDatabase();
   if (!database) return;
   if (!isRecord(snapshot) || !Array.isArray(snapshot.entries)) throw new TypeError('Invalid native auxiliary snapshot');
-  const history = histories.get(threadId) ?? new Map<string, Entry>();
+  // Merge into a copy: the published map must not be mutated before the write is admitted,
+  // or a diff refused by the freeze budget would already be visible to a later retry.
+  const history = new Map<string, Entry>(histories.get(threadId));
   const changed: Entry[] = [];
   for (const value of snapshot.entries) {
     const incoming = parseEntry(value);
@@ -138,19 +141,26 @@ export function writeNativeAuxiliarySnapshot(threadId: string, snapshot: unknown
       history.set(merged.info.id, mergeEntry(previous, committed));
     }
   }
+  // Admit before publishing: a diff refused by the freeze budget must leave the cache
+  // untouched, or an identical retry would compute an empty diff and drop the update.
+  let retained = false;
+  if (changed.length) retained = retainFrozenLegacyWrite({ channel: 'native-history', key: threadId, value: JSON.stringify({ entries: changed }) });
   histories.set(threadId, history);
-  if (changed.length) enqueue(threadId, () => database.upsertHistory({ threadId, entries: changed }));
+  if (changed.length && !retained) enqueue(threadId, () => database.upsertHistory({ threadId, entries: changed }));
 }
 
 export function clearNativeAuxiliaryHistory(threadId: string) {
   const database = nativeAuxiliaryDatabase();
   if (!database) return;
+  // Admit before dropping local state: a clear refused by the freeze budget must leave the
+  // cache intact, because the durable delete it guards never happened.
+  const retained = retainFrozenLegacyWrite({ channel: 'native-history', key: threadId, value: null });
   for (const operation of operations) {
     if (operation.threadId === threadId) operations.delete(operation);
   }
   histories.set(threadId, null);
   reads.delete(threadId);
-  enqueue(threadId, () => database.clearHistory({ threadId }));
+  if (!retained) enqueue(threadId, () => database.clearHistory({ threadId }));
 }
 
 export async function flushNativeAuxiliaryStorage() {
@@ -164,5 +174,7 @@ export async function flushNativeAuxiliaryStorage() {
   if (failure) throw failure;
   await nativeAuxiliaryDatabase()?.flush();
 }
+
+registerLegacyWriter(flushNativeAuxiliaryStorage);
 
 if (import.meta.hot) import.meta.hot.dispose(() => { unsubscribe?.(); listeners.clear(); });
