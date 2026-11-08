@@ -206,6 +206,33 @@ describe('OpenCode discovery fences', () => {
 });
 
 describe('OpenCode instance intent authority', () => {
+  it.each([false, true])('does not release a replacement process claim when old close is retried after acknowledgement loss=%s', async lost => {
+    const fixture = await controlledNative();
+    const scope = { environmentId, harnessInstanceId, epoch, processGeneration: 1 };
+    const make = () => createInstanceOperations({ store: fixture.store, scope, current: () => ({ epoch, processGeneration: 1 }), fingerprint, randomUUID });
+    const old = make();
+    const mutate = fixture.store.mutateControl.bind(fixture.store);
+    try {
+      await old.ready;
+      if (lost) {
+        let first = true;
+        fixture.store.mutateControl = async input => {
+          const result = await mutate(input);
+          if (first) { first = false; throw new Error('lost close acknowledgement'); }
+          return result;
+        };
+        await expect(old.close()).rejects.toThrow('lost close acknowledgement');
+        fixture.store.mutateControl = mutate;
+      } else await old.close();
+      const replacement = make();
+      try {
+        await replacement.ready;
+        await old.close();
+        await expect(replacement.assertCurrent()).resolves.toMatchObject({ value: { alive: true } });
+      } finally { await replacement.close(); }
+    } finally { fixture.store.mutateControl = mutate; await old.close(); await fixture.close(); }
+  });
+
   it('failure fences a foreign store even when the caller current predicate is permissive', async () => {
     const fixture = await controlledNative();
     try {

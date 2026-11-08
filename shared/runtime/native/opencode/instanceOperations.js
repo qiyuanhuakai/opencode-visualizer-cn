@@ -10,7 +10,10 @@ export function createInstanceOperations({ store, scope: input, current, fingerp
   const processKey = `opencode-process:${fingerprint([scope.environmentId, scope.harnessInstanceId])}`;
   const encoder = new TextEncoder();
   let active = true;
+  let closing;
+  const claimId = randomUUID();
   const matching = (value) => value?.epoch === scope.epoch && value?.processGeneration === scope.processGeneration;
+  const owns = (value) => matching(value) && value.claimId === claimId;
   // A claim this instance already released - a failed init or a completed close - is not a concurrent
   // upstream, so the same epoch and generation may bind again. A live claim, and any same-or-newer
   // generation row that is still alive, keeps fencing the bind.
@@ -31,14 +34,14 @@ export function createInstanceOperations({ store, scope: input, current, fingerp
   async function authority() {
     await target(); local();
     const process = await read(processKey);
-    local(); requireValue(process?.value?.alive === true && matching(process.value), 'opencode.process_fence', 'reconcile_required');
+    local(); requireValue(process?.value?.alive === true && owns(process.value), 'opencode.process_fence', 'reconcile_required');
     return process;
   }
   const ready = (async () => {
     await target(); local();
     const prior = await read(processKey); local();
     requireValue(!prior?.value || released(prior.value) || prior.value.epoch !== scope.epoch || prior.value.processGeneration < scope.processGeneration, 'opencode.duplicate_upstream', 'conflict');
-    await change(processKey, prior, { ...scope, alive: true }); local();
+    await change(processKey, prior, { ...scope, claimId, alive: true }); local();
   })();
   // Consumers await ready; the attached handler also makes construction safe before their first call.
   let startupError;
@@ -148,10 +151,15 @@ export function createInstanceOperations({ store, scope: input, current, fingerp
     reconcile,
     async close() {
       active = false;
-      try { await ready; } catch (error) { if (error instanceof Error) return; throw error; }
-      await target();
-      const prior = await read(processKey);
-      if (prior?.value?.alive && matching(prior.value)) await change(processKey, prior, { ...prior.value, alive: false });
+      closing ??= (async () => {
+        try { await ready; } catch (error) { if (error instanceof Error) return; throw error; }
+        await target();
+        const prior = await read(processKey);
+        // A replacement may reuse epoch/generation after our release, including
+        // after a lost close acknowledgement. Only release this exact claim.
+        if (prior?.value?.alive && owns(prior.value)) await change(processKey, prior, { ...prior.value, alive: false });
+      })().catch(error => { closing = undefined; throw error; });
+      return closing;
     },
   };
 }
