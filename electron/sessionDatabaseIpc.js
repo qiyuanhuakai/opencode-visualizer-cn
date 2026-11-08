@@ -1,5 +1,5 @@
 export function registerSessionDatabaseIpc({ ipcMain, assertTrustedRenderer, getStorage, getLegacyExportStorage, broadcastHistoryChange }) {
-  if (getLegacyExportStorage) for (const method of ['exportOpen', 'exportPage']) {
+  if (getLegacyExportStorage) for (const method of ['exportOpen', 'exportPage', 'exportBinding']) {
     ipcMain.handle(`session-database-${method}`, async (event, payload) => {
       assertTrustedRenderer(event);
       const exporter = getLegacyExportStorage();

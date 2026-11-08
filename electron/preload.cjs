@@ -119,6 +119,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   sessionDatabase: {
     exportOpen: () => ipcRenderer.invoke('session-database-exportOpen'),
+    exportBinding: (payload) => ipcRenderer.invoke('session-database-exportBinding', payload),
     exportPage: (payload) => ipcRenderer.invoke('session-database-exportPage', payload),
     readHistory: (payload) => ipcRenderer.invoke('session-database-readHistory', payload),
     upsertHistory: (payload) => ipcRenderer.invoke('session-database-upsertHistory', payload),
