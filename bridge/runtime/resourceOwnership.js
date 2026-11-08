@@ -2,16 +2,18 @@ import { ProtocolError } from '../../shared/runtime/protocol.js';
 
 export function createResourceOwnership() {
   const resources = new Map();
+  let closed = false;
   let releasePromise;
   return {
     register(id, ownership, release) {
-      if (releasePromise) throw new ProtocolError('cancelled', 'resources.closed');
+      if (closed) throw new ProtocolError('cancelled', 'resources.closed');
       if (resources.has(id)) throw new ProtocolError('conflict', 'resources.id');
       if (ownership !== 'owned' && ownership !== 'borrowed')
         throw new ProtocolError('invalid_request', 'resources.ownership');
       resources.set(id, { ownership, release });
     },
     release() {
+      closed = true;
       if (!releasePromise) {
         const attempt = (async () => {
           const failures = [];
