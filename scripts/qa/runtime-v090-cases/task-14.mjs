@@ -11,6 +11,7 @@ export const sourceFiles = [
   ),
   'app/runtime/drivers/codexDriver.test.ts',
   'app/runtime/drivers/codexFastPaging.test.ts',
+  'app/runtime/drivers/codexSubscriptions.test.ts',
   'app/kimiWebHttpProxy.boundaries.test.ts',
   'scripts/qa/runtime-v090-cases/task-14.mjs',
   'scripts/qa/runtime-v090-cases/task-14-fixture.mjs',
