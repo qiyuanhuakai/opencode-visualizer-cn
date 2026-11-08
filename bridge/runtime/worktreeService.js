@@ -7,6 +7,23 @@ import { gitLine } from './gitOutputParser.js';
 export function createWorktreeService({ command, git, store, assertCurrent }) {
   const journal = createRepositoryOperation({ store, assertCurrent });
   const running = new Map();
+  // Native jobs own process streams and buffers. Keep them only while work is
+  // unsettled; durable operations remain queryable without a process owner.
+  const failures = new Map();
+  function rememberFailure(id, error) {
+    const bounded = error instanceof GitCommandError
+      ? new GitCommandError(String(error.reason).slice(0, 128), {
+          stdout: String(error.result?.stdout ?? '').slice(0, 4096),
+          stderr: String(error.result?.stderr ?? '').slice(0, 4096),
+          exitCode: error.result?.exitCode ?? null,
+          signal: error.result?.signal ?? null,
+        })
+      : new Error(String(error?.message ?? error).slice(0, 4096));
+    // Never retain a native result/cause/stack through an arbitrary error object.
+    bounded.message = bounded.message.slice(0, 4096);
+    failures.set(id, bounded);
+    while (failures.size > 8) failures.delete(failures.keys().next().value);
+  }
   async function launch(accepted, request, retainWorkspace, authorizeDestination) {
     const job = await journal.launch(accepted.operationId, async () => {
       // Pre-send re-verification runs after the durable sent marker but before
@@ -26,6 +43,7 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
         throw error;
       }
     });
+    let retainJob = false;
     const completion = (async () => {
       try {
         await journal.observed(accepted.operationId);
@@ -40,15 +58,27 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
         git.invalidate(terminal.repoKey);
         return terminal;
       } catch (error) {
+        // A failed observation/acknowledgement does not prove native exit.
+        // Drain the process before releasing its owner; keep it retryable if
+        // physical cancellation itself fails.
+        let failure = error;
+        try { await job.cancel(); }
+        catch (stopError) { retainJob = true; failure = stopError; }
         const operation = await journal.get(accepted.operationId);
         if (operation.phase !== 'terminal') await journal.reconcile(accepted.operationId);
-        throw error;
+        throw failure;
       }
     })().then(
       (value) => ({ value }),
       (error) => ({ error }),
     );
-    running.set(accepted.operationId, { job, completion });
+    running.set(accepted.operationId, { job, completion, get retainJob() { return retainJob; } });
+    void completion.then(result => {
+      if (!retainJob) {
+        running.delete(accepted.operationId);
+        if (result.error) rememberFailure(accepted.operationId, result.error);
+      }
+    });
     return accepted;
   }
   return {
@@ -194,17 +224,25 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
           if (result.error) throw result.error;
           return result.value;
         } finally {
-          running.delete(id);
+          if (!active.retainJob) running.delete(id);
+          failures.delete(id);
         }
       }
+      const failure = failures.get(id);
+      if (failure) { failures.delete(id); throw failure; }
       const operation = await journal.get(id);
       requireValue(operation.phase === 'terminal', 'git.reconcile', 'reconcile_required');
       return operation;
     },
     async cancel(id) {
       const active = running.get(id);
-      requireValue(active, 'git.reconcile', 'reconcile_required');
+      if (!active) {
+        const operation = await journal.get(id);
+        requireValue(operation.phase === 'terminal', 'git.reconcile', 'reconcile_required');
+        return operation;
+      }
       await active.job.cancel();
+      running.delete(id);
       const result = await active.completion;
       if (result.error && !(result.error instanceof GitCommandError)) throw result.error;
       return journal.get(id);
@@ -213,7 +251,10 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
       await journal.leases.release(encodeWorkspaceKey(workspace), owner);
     },
     async close() {
-      await Promise.all([...running.keys()].map((id) => this.cancel(id)));
+      const results = await Promise.allSettled([...running.keys()].map((id) => this.cancel(id)));
+      failures.clear();
+      const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+      if (errors.length) throw new AggregateError(errors, 'Git operation shutdown failed');
       running.clear();
     },
   };

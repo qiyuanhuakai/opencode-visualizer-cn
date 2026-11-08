@@ -908,6 +908,81 @@ describe('repository mutation races', () => {
   });
 });
 
+describe('completed Git job retention', () => {
+  it('retains native ownership after an observation failure until cancellation actually drains', async () => {
+    const f = await fixture();
+    const cancelled = Promise.withResolvers<void>();
+    let cancelling = false;
+    const command: TargetGitCommand = { ...f.command, async start(request) {
+      const job = await f.command.start(request);
+      return { ...job, async cancel() {
+        cancelling = true;
+        await job.cancel();
+        await cancelled.promise;
+      } };
+    } };
+    const service = authorizedService(f.store, command);
+    service.journal.observed = async () => { throw new Error('observation failed'); };
+    try {
+      const accepted = await service.create({ workspace: f.workspace, parent: f.ref(f.root), name: 'observation-failure', idempotencyKey: 'observation-failure' });
+      await expect.poll(() => cancelling).toBe(true);
+      let closed = false;
+      const closing = service.close().then(() => { closed = true; }, () => { closed = true; });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(closed).toBe(false);
+      cancelled.resolve();
+      await closing;
+      expect((await service.journal.get(accepted.operationId)).phase).toBe('reconciling');
+      await expect(service.journal.launch(accepted.operationId, async () => { throw new Error('must not resend'); })).rejects.toMatchObject({ code: 'reconcile_required' });
+    } finally { cancelled.resolve(); await service.close(); }
+  });
+
+  it('releases completed native jobs even when the caller never consumes wait', async () => {
+    const f = await fixture();
+    let cancellations = 0;
+    const command: TargetGitCommand = { ...f.command, async start(request) {
+      const job = await f.command.start(request);
+      return { ...job, async cancel() { cancellations++; await job.cancel(); } };
+    } };
+    const service = authorizedService(f.store, command);
+    const accepted = await service.create({ workspace: f.workspace, parent: f.ref(f.root), name: 'unconsumed', idempotencyKey: 'unconsumed' });
+    await expect.poll(async () => (await service.journal.get(accepted.operationId)).phase).toBe('terminal');
+    await new Promise<void>(resolve => setImmediate(resolve));
+    await service.close();
+    expect(cancellations).toBe(0);
+    // Completion is durable, so dropping process ownership must not lose a late read.
+    await expect(service.wait(accepted.operationId)).resolves.toMatchObject({ phase: 'terminal', outcome: 'completed' });
+  });
+
+  it('bounds unconsumed failures without retaining native job output or replaying uncertain sends', async () => {
+    const f = await fixture();
+    const command: TargetGitCommand = { ...f.command, async start(request) {
+      const job = await f.command.start(request);
+      if (request.args[0] !== 'worktree' || request.args[1] !== 'add') return job;
+      return { ...job, async wait() { await job.wait(); throw new Error('lost acknowledgement ' + 'x'.repeat(4097)); } };
+    } };
+    const service = authorizedService(f.store, command);
+    const ids: string[] = [];
+    try {
+    for (let index = 0; index < 9; index++) {
+      const repo = path.join(f.root, `repository-${index}`);
+      f.gitExec(['clone', '--quiet', '--', f.repo, repo]);
+      const accepted = await service.create({ workspace: f.ref(repo), parent: f.ref(f.root), name: `uncertain-${index}`, idempotencyKey: `uncertain-${index}` });
+      ids.push(accepted.operationId);
+      await expect.poll(async () => (await service.journal.get(accepted.operationId)).phase).toBe('reconciling');
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    await expect(service.wait(ids[0]!)).rejects.toMatchObject({ code: 'reconcile_required' });
+    const error = await service.wait(ids.at(-1)!).then(() => undefined, (error: Error) => error);
+    expect(error?.message).toContain('lost acknowledgement');
+    expect(error!.message.length).toBeLessThanOrEqual(4096);
+    expect((await service.journal.get(ids[0]!)).phase).toBe('reconciling');
+    } finally {
+      await Promise.allSettled(ids.map(id => service.wait(id)));
+    }
+  });
+});
+
 describe('worktree mutations across separate roots', () => {
   type Permission = 'read' | 'write' | 'command';
   // Given one main repository, two linked worktrees, and a destination parent as separate grant roots.
