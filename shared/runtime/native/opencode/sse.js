@@ -4,23 +4,43 @@ import { OPEN_CODE_LIMITS } from './protocol.js';
 /** Incremental UTF-8 SSE decoder. CRLF may split across reads; incomplete frames stay bounded. */
 export function createSseDecoder(maxBytes = OPEN_CODE_LIMITS.frame) {
   const decoder = new TextDecoder('utf-8', { fatal: true });
-  const encoder = new TextEncoder();
   let buffer = '';
+  let frameBytes = 0, previous = -1, beforePrevious = -1;
+  requireValue(Number.isSafeInteger(maxBytes) && maxBytes > 0 && maxBytes <= OPEN_CODE_LIMITS.producer, 'opencode.sse_limit');
+  function scan(bytes, boundary) {
+    let size = frameBytes, last = previous, prior = beforePrevious;
+    for (let index = 0; index < bytes.byteLength; index++) {
+      const byte = bytes[index];
+      requireValue(++size <= maxBytes, 'opencode.sse_frame', 'reconcile_required');
+      if (byte === 10 && (last === 10 || (last === 13 && prior === 10))) {
+        boundary?.(index + 1);
+        size = 0; last = -1; prior = -1;
+      } else { prior = last; last = byte; }
+    }
+    return { size, last, prior };
+  }
   return {
     push(bytes) {
-      buffer += decoder.decode(bytes, { stream: true });
-      requireValue(encoder.encode(buffer).byteLength <= maxBytes, 'opencode.sse_frame', 'reconcile_required');
+      // Check the producer read and every raw frame before decoding any of this
+      // read. Multiple legal frames may share a chunk; the frame budget is not
+      // a budget on their combined size. A second scan avoids a boundary array
+      // proportional to a hostile producer's number of tiny frames.
+      requireValue(bytes instanceof Uint8Array && bytes.byteLength <= OPEN_CODE_LIMITS.producer, 'opencode.sse_chunk', 'reconcile_required');
+      const next = scan(bytes);
       const frames = [];
-      for (;;) {
-        const match = /\r?\n\r?\n/.exec(buffer);
-        if (!match) break;
-        const frame = buffer.slice(0, match.index); buffer = buffer.slice(match.index + match[0].length);
+      let offset = 0;
+      scan(bytes, end => {
+        buffer += decoder.decode(bytes.subarray(offset, end), { stream: true });
+        offset = end;
+        const frame = buffer.replace(/\r?\n\r?\n$/, ''); buffer = '';
         const data = frame.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).replace(/^ /, '')).join('\n');
         if (data) {
           try { frames.push(JSON.parse(data)); }
           catch (error) { if (error instanceof SyntaxError) throw new ProtocolError('reconcile_required', 'opencode.sse_json'); throw error; }
         }
-      }
+      });
+      if (offset < bytes.byteLength) buffer += decoder.decode(bytes.subarray(offset), { stream: true });
+      frameBytes = next.size; previous = next.last; beforePrevious = next.prior;
       return frames;
     },
     finish() { buffer += decoder.decode(); requireValue(!buffer.trim(), 'opencode.sse_truncated', 'reconcile_required'); },
