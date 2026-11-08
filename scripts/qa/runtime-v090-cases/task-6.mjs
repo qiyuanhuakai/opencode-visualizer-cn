@@ -4,11 +4,12 @@ import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { generateFixture, checkFixture } from '../runtime-v090-fixtures.mjs';
 import { encodeFrame, decodeFrame } from '../../../shared/runtime/protocol.js';
+import { encodeSessionKey } from '../../../shared/runtime/identity.js';
 import { browserScenario } from '../runtime-v090-browser.mjs';
 import { artifact, digest, legacyContract, normalizeVitest, sourceSnapshot, writeJson } from '../runtime-v090-evidence.mjs';
 import { captureProcess } from '../runtime-v090-process.mjs';
 
-export const sourceFiles = ['shared/runtime/protocol.js', 'shared/runtime/protocolState.js', 'shared/runtime/capabilities.js', 'shared/runtime/identity.js', 'scripts/qa/runtime-v090-fixtures.mjs', 'app/dev/runtime-v090/fixtures/inventory.mjs', 'app/dev/runtime-v090/fixtures/seed090.json'];
+export const sourceFiles = ['shared/runtime/protocol.js', 'shared/runtime/protocolState.js', 'shared/runtime/capabilities.js', 'shared/runtime/identity.js', 'scripts/qa/runtime-v090-fixtures.mjs', 'app/dev/runtime-v090/fixtures/inventory.mjs', 'app/dev/runtime-v090/fixtures/seed090.json', 'app/utils/themeTokens.ts', 'app/utils/themeRegistry.ts', 'app/utils/regionTheme.ts', 'app/utils/themeFileValidation.ts', 'app/utils/colorValue.ts', 'app/utils/floatingWindowTheme.ts', 'app/utils/storageKeys.ts'];
 
 export async function run(context) {
   const temporary = await mkdtemp(path.join(context.temporaryRoot, 'fixture-owner-'));
@@ -22,7 +23,9 @@ export async function run(context) {
       const checked = await checkFixture(directory);
       check('fixture API verifies seed090 native inventory', [checked.verified, checked.sessions, checked.worktrees, checked.sources], [true, 10000, 200, 5]);
       const row = JSON.parse((await readFile(path.join(directory, 'summaries.ndjson'), 'utf8')).split('\n')[0]);
-      const frame = { kind: 'event', version: 1, target: '11111111-1111-4111-8111-111111111111', epoch: 'qa-6', generation: 1, seq: 1, entityRevision: 1, scope: 'session', type: 'fixture', payload: row };
+      const target = '11111111-1111-4111-8111-111111111111';
+      const scope = encodeSessionKey({ environmentId: target, harnessInstanceId: '22222222-2222-4222-8222-222222222222', nativeSessionId: row.nativeSessionId });
+      const frame = { kind: 'event', version: 1, target, epoch: 'qa-6', generation: 1, seq: 1, entityRevision: 1, scope, type: 'fixture', payload: row };
       check('production protocol roundtrip of actual fixture row', decodeFrame(encodeFrame(frame)), frame);
       const browser = await browserScenario(context, frame);
       scenarios.push(...browser.scenarios); artifacts.push(...browser.artifacts);

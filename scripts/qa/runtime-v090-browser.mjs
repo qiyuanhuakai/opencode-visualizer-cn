@@ -1,17 +1,22 @@
 import assert from 'node:assert/strict';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { artifact, writeJson } from './runtime-v090-evidence.mjs';
 
 export async function browserScenario(context, frame) {
-  const server = await createServer({ configFile: false, root: context.root, server: { host: '127.0.0.1', port: 0, strictPort: false }, logLevel: 'error' });
+  // Bind the actual owned listener to port zero; do not probe/release/rebind
+  // wildcard ports before opening a loopback-only QA server.
+  const http = createHttpServer();
+  const server = await createServer({ configFile: false, root: context.root, server: { middlewareMode: true, hmr: { server: http } }, logLevel: 'error' });
+  http.on('request', server.middlewares);
   let browser;
   const artifacts = [];
   const scenarios = [];
   const lifecycle = { serverPort: null, browserClosed: false, serverClosed: false };
   try {
-    await server.listen();
-    const address = server.httpServer.address();
+    await new Promise((resolve, reject) => { http.once('error', reject); http.listen(0, '127.0.0.1', resolve); });
+    const address = http.address();
     assert(address && typeof address === 'object', 'server must bind a private port');
     lifecycle.serverPort = address.port;
     browser = await chromium.launch({ headless: true });
@@ -34,15 +39,38 @@ export async function browserScenario(context, frame) {
         const screenshot = `${context.out}.${context.case}-${variant.expected}-${colorScheme}-${width}.png`;
         await page.screenshot({ path: screenshot, fullPage: true }); artifacts.push(artifact(screenshot, 'screenshot'));
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'horizontal overflow');
+        await page.getByLabel('Protocol frame').focus();
+        await page.keyboard.press('Tab');
+        const style = await page.evaluate(() => {
+          const button = document.querySelector('#validate'), input = document.querySelector('#frame');
+          return { mode: document.documentElement.style.colorScheme, page: getComputedStyle(document.body).backgroundColor,
+            input: getComputedStyle(input).backgroundColor, button: getComputedStyle(button).backgroundColor,
+            targetHeight: button.getBoundingClientRect().height, keyboardFocus: document.activeElement === button && getComputedStyle(button).outlineStyle !== 'none' };
+        });
+        assert.equal(style.mode, colorScheme); assert(style.targetHeight >= 44); assert(style.keyboardFocus);
+        scenarios.push({ name: `Vis ${variant.expected} ${colorScheme} ${width}`, assertions: [{ name: 'Vis theme and keyboard target', observed: [style.mode, style.targetHeight >= 44, style.keyboardFocus], expected: [colorScheme, true, true], passed: true }] });
       }
     }
+    await page.evaluate(() => {
+      localStorage.setItem('opencode.settings.themeTokens.v2', JSON.stringify({ version: 2, preset: null, overrides: { 'surface-page': '#112233', 'form-control-bg': '#223344', 'action-button-bg': '#334455' } }));
+      dispatchEvent(new StorageEvent('storage', { key: 'opencode.settings.themeTokens.v2' }));
+    });
+    await page.mouse.move(0, 0);
+    const probe = await page.evaluate(() => [getComputedStyle(document.body).backgroundColor, getComputedStyle(document.querySelector('#frame')).backgroundColor, getComputedStyle(document.querySelector('#validate')).backgroundColor]);
+    assert.deepEqual(probe, ['rgb(17, 34, 51)', 'rgb(34, 51, 68)', 'rgb(51, 68, 85)']);
+    scenarios.push({ name: 'Vis resolved custom theme', assertions: [{ name: 'semantic overrides reach page form and action', observed: probe, expected: ['rgb(17, 34, 51)', 'rgb(34, 51, 68)', 'rgb(51, 68, 85)'], passed: true }] });
+    const themedScreenshot = `${context.out}.${context.case}-custom-theme-390.png`;
+    await page.screenshot({ path: themedScreenshot, fullPage: true }); artifacts.push(artifact(themedScreenshot, 'screenshot'));
     assert.deepEqual(errors, []);
     scenarios.push({ name: 'browser rendering health', assertions: [{ name: 'page errors', observed: errors, expected: [], passed: true }] });
     const trace = `${context.out}.${context.case}-browser-trace.zip`;
     await browserContext.tracing.stop({ path: trace }); artifacts.push(artifact(trace, 'trace'));
     return { scenarios, artifacts, versions: { chromium: browser.version() } };
   } finally {
-    try { await browser?.close(); lifecycle.browserClosed = true; } finally { await server.close(); lifecycle.serverClosed = true; }
+    try { await browser?.close(); lifecycle.browserClosed = true; } finally {
+      try { http.closeAllConnections(); await new Promise(resolve => http.close(resolve)); }
+      finally { await server.close(); lifecycle.serverClosed = true; }
+    }
     const file = `${context.out}.${context.case}-browser-cleanup.json`;
     writeJson(file, lifecycle); artifacts.push(artifact(file, 'resource-cleanup'));
   }
