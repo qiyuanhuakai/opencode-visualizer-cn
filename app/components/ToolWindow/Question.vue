@@ -51,7 +51,7 @@
             type="button"
             class="option-item"
             :class="{ selected: isSelected(index, option.label) }"
-            :disabled="isSubmitting"
+            :disabled="migrationStoragePaused || isSubmitting"
             @click="toggleOption(index, option.label, !!item.multiple)"
           >
             <span class="option-label">{{ option.label }}</span>
@@ -65,7 +65,7 @@
             class="custom-input"
             type="password"
             :value="customAnswers[index] ?? ''"
-            :disabled="isSubmitting"
+            :disabled="migrationStoragePaused || isSubmitting"
             :placeholder="$t('toolWindow.question.customAnswer')"
             autocomplete="off"
             @input="updateCustom(index, $event)"
@@ -75,7 +75,7 @@
             class="custom-input"
             rows="3"
             :value="customAnswers[index] ?? ''"
-            :disabled="isSubmitting"
+            :disabled="migrationStoragePaused || isSubmitting"
             :placeholder="$t('toolWindow.question.customAnswer')"
             @input="updateCustom(index, $event)"
           ></textarea>
@@ -89,7 +89,7 @@
       <button
         type="button"
         class="question-button is-reject"
-        :disabled="isSubmitting"
+        :disabled="migrationStoragePaused || isSubmitting"
         @click="emitReject"
       >
         {{ $t('toolWindow.question.reject') }}
@@ -97,7 +97,7 @@
       <button
         type="button"
         class="question-button is-reply"
-        :disabled="isSubmitting || !canReply"
+        :disabled="migrationStoragePaused || isSubmitting || !canReply"
         @click="emitReply"
       >
         {{ $t('toolWindow.question.reply') }}
@@ -108,6 +108,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, onBeforeUnmount } from 'vue';
+import { assertLegacyEditAdmission, legacyEditingPaused, onLegacyWriterPhase, registerLegacyWriter } from '../../runtime/migration/writerFreeze';
 import MessageViewer from '../MessageViewer.vue';
 import { StorageKeys, storageGetJSON, storageSetJSON } from '../../utils/storageKeys';
 import { resolveSyntaxTheme } from '../../utils/themeTokens';
@@ -132,6 +133,8 @@ const emit = defineEmits<{
   (event: 'reject', requestId: string): void;
 }>();
 
+const migrationStoragePaused = ref(legacyEditingPaused());
+const stopMigrationPhase = onLegacyWriterPhase(() => { migrationStoragePaused.value = legacyEditingPaused(); });
 const selectedAnswers = ref<string[][]>([]);
 const { themeStorage } = useSettings();
 const syntaxTheme = computed(() => resolveSyntaxTheme(themeStorage.value));
@@ -186,20 +189,24 @@ function restoreDraft(): boolean {
 }
 
 let draftTimer: ReturnType<typeof setTimeout> | null = null;
-
+let draftDirty = false;
+function flushDraftSave() {
+  if (draftTimer !== null) clearTimeout(draftTimer);
+  draftTimer = null;
+  if (!draftDirty) return;
+  saveDraft();
+  draftDirty = false;
+}
 function scheduleDraftSave() {
   if (draftTimer !== null) clearTimeout(draftTimer);
-  draftTimer = setTimeout(() => {
-    draftTimer = null;
-    saveDraft();
-  }, 400);
+  draftDirty = true;
+  draftTimer = setTimeout(flushDraftSave, 400);
 }
-
+const stopDraftDrain = registerLegacyWriter(flushDraftSave);
 onBeforeUnmount(() => {
-  if (draftTimer !== null) {
-    clearTimeout(draftTimer);
-    saveDraft();
-  }
+  flushDraftSave();
+  stopDraftDrain();
+  stopMigrationPhase();
 });
 
 // --- Answers ---
@@ -223,6 +230,7 @@ function isSelected(index: number, label: string) {
 }
 
 function toggleOption(index: number, label: string, multiple: boolean) {
+  assertLegacyEditAdmission();
   const current = selectedAnswers.value[index] ?? [];
   if (multiple) {
     if (current.includes(label)) {
@@ -244,6 +252,7 @@ function toggleOption(index: number, label: string, multiple: boolean) {
 }
 
 function updateCustom(index: number, event: Event) {
+  assertLegacyEditAdmission();
   const target = event.target;
   if (!(target instanceof HTMLTextAreaElement) && !(target instanceof HTMLInputElement)) return;
   customAnswers.value[index] = target.value;
@@ -262,6 +271,7 @@ function buildAnswers() {
 const canReply = computed(() => buildAnswers().every((answer) => answer.length > 0));
 
 function emitReply() {
+  assertLegacyEditAdmission();
   if (!canReply.value) return;
   clearDraft();
   emit('reply', {
@@ -271,6 +281,7 @@ function emitReply() {
 }
 
 function emitReject() {
+  assertLegacyEditAdmission();
   clearDraft();
   emit('reject', props.request.id);
 }

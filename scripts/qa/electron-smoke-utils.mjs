@@ -22,7 +22,7 @@ export const EXPECTED_PRELOAD_SCHEMA = {
   clipboard: ['readText', 'writeText'],
   desktop: ['check', 'configure', 'download', 'getState', 'install', 'notify', 'onNotificationClick', 'onState', 'reportBridgeVersion'],
   persistentStorage: ['getItem', 'migrate', 'removeItem', 'setItem', 'setItemAsync'],
-  sessionDatabase: ['clearHistory', 'flush', 'onHistoryChanged', 'readHistory', 'upsertHistory'],
+  sessionDatabase: ['clearHistory', 'exportBinding', 'exportOpen', 'exportPage', 'flush', 'onHistoryChanged', 'readHistory', 'upsertHistory'],
   localFile: [
     'clearApplication',
     'close',
