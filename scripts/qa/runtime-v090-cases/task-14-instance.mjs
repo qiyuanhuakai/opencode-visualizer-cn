@@ -142,24 +142,23 @@ export async function startupCancellation({ context, root, home, modelStarted })
     (raw) => wire.push({ direction: 'native', message: JSON.parse(raw) }),
     () => {},
   );
-  const driver = await createCodexDriver({
-    environmentId,
-    harnessInstanceId,
-    epoch,
-    processGeneration: 1,
-    runtime,
-    store,
-    workspace,
-    allowedWorkspaces: [workspace.workspaces[0].key],
-    transport,
-    isProcessCurrent: () => true,
-  });
   const base = { environmentId, harnessInstanceId };
-  const core = driver.registration.driver.core;
   const snapshots = [];
-  let restarted;
-  let restartedTransport;
+  let driver, restarted, restartedTransport;
   try {
+    driver = await createCodexDriver({
+      environmentId,
+      harnessInstanceId,
+      epoch,
+      processGeneration: 1,
+      runtime,
+      store,
+      workspace,
+      allowedWorkspaces: [workspace.workspaces[0].key],
+      transport,
+      isProcessCurrent: () => true,
+    });
+    const core = driver.registration.driver.core;
     const created = await core.createSession({
       ...base,
       params: {
@@ -246,7 +245,8 @@ export async function startupCancellation({ context, root, home, modelStarted })
       0,
       'created and forked threads are already loaded in this generation',
     );
-    await driver.close();
+    await driver?.close();
+    await transport.close();
     await transport.exited;
     await assert.rejects(async () => core.inspect(base));
     restartedTransport = createCodexProcess({
@@ -319,7 +319,8 @@ export async function startupCancellation({ context, root, home, modelStarted })
     off();
     if (restarted) await restarted.close();
     if (restartedTransport) await restartedTransport.close();
-    await driver.close();
+    await driver?.close();
+    await transport.close();
     await transport.exited;
     await workspace.close();
     await store.close();
