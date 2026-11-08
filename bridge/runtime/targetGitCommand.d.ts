@@ -19,7 +19,9 @@ export interface GitRequest {
 export interface TargetGitCommand {
   policyFor(canonicalPath: string): Promise<PathPolicy>;
   authorize(workspace: WorkspaceRef, permission?: 'command' | 'write'): Promise<WorkspaceRef>;
+  destinationRef(parent: WorkspaceRef, name: string): Promise<WorkspaceRef>;
   destination(parent: WorkspaceRef, name: string): Promise<WorkspaceRef>;
+  authorizeCommonDirectory(workspace: WorkspaceRef): Promise<void>;
   start(request: GitRequest): Promise<GitJob>;
   run(request: GitRequest): Promise<GitResult>;
   close(): Promise<void>;

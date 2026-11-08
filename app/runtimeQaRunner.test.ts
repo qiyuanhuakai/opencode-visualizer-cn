@@ -109,3 +109,40 @@ describe('runtime QA evidence binding', () => {
     ]) expect(() => validateEvidence({ ...value, ...changed }, repository)).toThrow();
   });
 });
+
+describe('runtime QA artifact isolation', () => {
+  function runTask(task: number, out: string) {
+    const result = spawnSync(process.execPath, ['scripts/qa/runtime-v090.mjs', '--task', String(task), '--case', 'happy', '--out', out], { cwd: repository, encoding: 'utf8', timeout: 120000 });
+    expect(result.status, `${out}: ${result.stderr}`).toBe(0);
+    return JSON.parse(readFileSync(out, 'utf8'));
+  }
+  function vitestReportPaths(manifest: { artifacts: { kind: string; path: string }[] }) {
+    return manifest.artifacts.filter((entry) => entry.kind === 'vitest-report').map((entry) => entry.path);
+  }
+  it('keeps serial runs with different --out in one directory independently verifiable', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'runtime-qa-serial-'));
+    try {
+      const first = runTask(1, path.join(directory, 'task1.json'));
+      const second = runTask(2, path.join(directory, 'task2.json'));
+      expect(vitestReportPaths(first)).not.toEqual(vitestReportPaths(second));
+      expect(validateEvidence(first, repository)).toBe(first);
+      expect(validateEvidence(second, repository)).toBe(second);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 120000);
+  it('keeps parallel runs with different --out in one directory independently verifiable', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'runtime-qa-parallel-'));
+    try {
+      const first = spawn(process.execPath, ['scripts/qa/runtime-v090.mjs', '--task', '1', '--case', 'happy', '--out', path.join(directory, 'task1.json')], { cwd: repository, stdio: 'ignore' });
+      const second = spawn(process.execPath, ['scripts/qa/runtime-v090.mjs', '--task', '2', '--case', 'happy', '--out', path.join(directory, 'task2.json')], { cwd: repository, stdio: 'ignore' });
+      const exits = await Promise.all([first, second].map((child) => new Promise<number | null>((resolve) => child.once('close', (code) => resolve(code)))));
+      expect(exits).toEqual([0, 0]);
+      const manifests = [path.join(directory, 'task1.json'), path.join(directory, 'task2.json')].map((file) => JSON.parse(readFileSync(file, 'utf8')));
+      expect(vitestReportPaths(manifests[0])).not.toEqual(vitestReportPaths(manifests[1]));
+      for (const manifest of manifests) expect(validateEvidence(manifest, repository)).toBe(manifest);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 120000);
+});
