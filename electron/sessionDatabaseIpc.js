@@ -1,4 +1,12 @@
-export function registerSessionDatabaseIpc({ ipcMain, assertTrustedRenderer, getStorage, broadcastHistoryChange }) {
+export function registerSessionDatabaseIpc({ ipcMain, assertTrustedRenderer, getStorage, getLegacyExportStorage, broadcastHistoryChange }) {
+  if (getLegacyExportStorage) for (const method of ['exportOpen', 'exportPage']) {
+    ipcMain.handle(`session-database-${method}`, async (event, payload) => {
+      assertTrustedRenderer(event);
+      const exporter = getLegacyExportStorage();
+      try { return await exporter[method](payload); }
+      finally { await exporter.close(); }
+    });
+  }
   for (const method of ['readHistory', 'upsertHistory', 'clearHistory', 'flush']) {
     ipcMain.handle(`session-database-${method}`, async (event, payload) => {
       assertTrustedRenderer(event);

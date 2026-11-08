@@ -78,3 +78,35 @@ export function createSessionStorage(filePath, createWorker = (filename, options
     },
   };
 }
+
+export function createLegacyExportStorage(filePath) {
+  const workerPath = fileURLToPath(new URL('./sessionDatabaseWorker.mjs', import.meta.url)).replace(/app\.asar([/\\])/u, 'app.asar.unpacked$1');
+  const worker = new Worker(workerPath, { workerData: { filePath, mode: 'legacy-export' } });
+  const requests = new Map();
+  let sequence = 0;
+  let closed = false;
+  let failure;
+  const fail = (error) => { failure = error; for (const request of requests.values()) request.reject(error); requests.clear(); };
+  worker.on('error', () => fail(new Error('source_unavailable')));
+  worker.on('exit', () => { if (!closed) fail(new Error('source_unavailable')); });
+  worker.on('message', (response) => {
+    const request = requests.get(response.id);
+    if (!request) return;
+    requests.delete(response.id);
+    if (response.ok) request.resolve(response.value);
+    else request.reject(Object.assign(new Error(response.error.message), { code: response.error.code }));
+  });
+  function send(method, payload) {
+    if (closed || failure) return Promise.reject(failure ?? new Error('source_unavailable'));
+    return new Promise((resolve, reject) => {
+      const id = ++sequence; requests.set(id, { resolve, reject });
+      try { worker.postMessage({ id, method, payload }); }
+      catch (error) { requests.delete(id); reject(error); }
+    });
+  }
+  return {
+    exportOpen: () => send('exportOpen'),
+    exportPage: (request) => send('exportPage', request),
+    async close() { closed = true; fail(new Error('source_unavailable')); await worker.terminate(); },
+  };
+}
