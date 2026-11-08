@@ -1,4 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -8,6 +10,17 @@ const target = '11111111-1111-4111-8111-111111111111';
 const foreign = '22222222-2222-4222-8222-222222222222';
 const temporary: string[] = [];
 afterEach(async () => { await Promise.all(temporary.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+function processesWithMarker(marker: string): number[] {
+  if (process.platform !== 'linux') return [];
+  const found: number[] = [];
+  for (const entry of readdirSync('/proc')) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      if (readFileSync(`/proc/${entry}/cmdline`, 'utf8').includes(marker)) found.push(Number(entry));
+    } catch {}
+  }
+  return found;
+}
 async function fixture() {
   const root = await mkdtemp(path.join(tmpdir(), 'runtime-workspace-test-'));
   temporary.push(root);
@@ -123,6 +136,62 @@ describe('runtime attachment lifetime', () => {
       await expect(stale.read({ workspaceKey: f.workspaceKey, path: 'anything' })).rejects.toThrow('stale generation');
     } finally { await f.service.close(); }
   });
+});
+
+describe('runtime reverse terminal lifetime', () => {
+  it.each([1, 2])('failure reclaims a terminal whose creation races owner shutdown (round %i)', async (round) => {
+    // Given a registered reverse owner with one established session.
+    const f = await fixture();
+    const owner = f.client.reverse.register({
+      workspaceKey: f.workspaceKey,
+      harnessInstanceId: '22222222-2222-4222-8222-222222222222',
+      processGeneration: 1,
+      agentId: 'kimi-code',
+      assertProcessCurrent() {},
+    });
+    owner.observeClientMessage({ id: 1, method: 'session/new', params: { cwd: f.root } });
+    owner.observeAgentMessage({ id: 1, result: { sessionId: 'session-1' } });
+    const marker = `reverse-race-${round}-${process.pid}`;
+    const script = `setInterval(() => {}, 1000) // ${marker}`;
+    // When a terminal creation with an explicit cwd is still resolving during shutdown.
+    const creating = owner.handle({ method: 'terminal/create', params: { sessionId: 'session-1', cwd: f.root, command: process.execPath, args: ['-e', script] } });
+    const closed = f.service.close();
+    // Then the in-flight creation is reclaimed instead of publishing a live process.
+    await expect(creating).rejects.toThrow(/not active/);
+    await closed;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(processesWithMarker(marker), 'orphaned terminal process outlived shutdown').toEqual([]);
+  });
+});
+
+describe('runtime reverse file lifetime', () => {
+  it('failure closes the service while a FIFO inside the granted root is being read', async () => {
+    // Given a registered reverse owner with one established session over a legal workspace root.
+    const f = await fixture();
+    const owner = f.client.reverse.register({
+      workspaceKey: f.workspaceKey,
+      harnessInstanceId: '22222222-2222-4222-8222-222222222222',
+      processGeneration: 1,
+      agentId: 'kimi-code',
+      assertProcessCurrent() {},
+    });
+    owner.observeClientMessage({ id: 1, method: 'session/new', params: { cwd: f.root } });
+    owner.observeAgentMessage({ id: 1, result: { sessionId: 'session-1' } });
+    const fifo = path.join(f.root, 'pipe.fifo');
+    execFileSync('mkfifo', [fifo]);
+
+    // When an established session reads that FIFO through the public owner handle: with no
+    // writer and no EOF the read can never settle, so the request is refused instead of
+    // becoming an in-flight request the shutdown would wait on forever.
+    const reading = owner.handle({ method: 'fs/read_text_file', params: { sessionId: 'session-1', path: fifo } });
+    await expect(reading).rejects.toThrow(/not a regular file/);
+
+    // Then the service closes without any external writer helping it.
+    await expect(Promise.race([
+      f.service.close(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('service close did not settle')), 5000)),
+    ])).resolves.toBeUndefined();
+  }, 30000);
 });
 
 describe('runtime repeated interruption', () => {
