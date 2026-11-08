@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, mkdir, copyFile } from 'node:fs/promises';
 import path from 'node:path';
 import { generateFixture, checkFixture } from '../runtime-v090-fixtures.mjs';
 import { encodeFrame, decodeFrame } from '../../../shared/runtime/protocol.js';
@@ -50,14 +50,21 @@ export async function run(context) {
       catch (error) { if (!(error instanceof assert.AssertionError)) throw error; rejected = true; }
       check(`reject ${name}`, rejected, true);
     }
-    for (const [name, args] of [
+    // Later implementation legitimately registers task48/F4. Test missing
+    // registration in an owned runner copy, never execute those real tasks as
+    // an expected-failure probe in a fully implemented checkout.
+    const missing = path.join(temporary, 'missing-registration');
+    await mkdir(path.join(missing, 'scripts', 'qa'), { recursive: true });
+    await writeFile(path.join(missing, 'package.json'), JSON.stringify({ type: 'module' }));
+    for (const name of ['runtime-v090.mjs', 'runtime-v090-evidence.mjs', 'runtime-v090-legacy.mjs', 'runtime-v090-process.mjs']) await copyFile(path.join(context.root, 'scripts', 'qa', name), path.join(missing, 'scripts', 'qa', name));
+    for (const [name, args, executionRoot] of [
       ['unknown task', ['--task', '49', '--case', 'happy']], ['unknown case', ['--task', '6', '--case', 'pretend']],
-      ['unregistered task', ['--task', '48', '--case', 'happy']], ['unimplemented verifier', ['--verify', 'F4']],
+      ['unregistered task', ['--task', '48', '--case', 'happy'], missing], ['unimplemented verifier', ['--verify', 'F4'], missing],
       ['mutually exclusive selectors', ['--task', '6', '--verify', 'F1']], ['malformed argument', ['--task', '6; echo PASS', '--case', 'happy']],
       ['long command injection', ['--task', `$(touch ${temporary}/injected)${'x'.repeat(16000)}`, '--case', 'happy']],
     ]) {
       const log = `${context.out}.failure-${name.replaceAll(' ', '-')}.log`;
-      const child = await captureProcess([process.execPath, 'scripts/qa/runtime-v090.mjs', ...args, '--out', path.join(temporary, 'rejected.json')], { root: context.root, log, env: { ...process.env, VIS_RUNTIME_QA_WORKER: '0' } });
+      const child = await captureProcess([process.execPath, 'scripts/qa/runtime-v090.mjs', ...args, '--out', path.join(temporary, 'rejected.json')], { root: executionRoot ?? context.root, log, env: { ...process.env, VIS_RUNTIME_QA_WORKER: '0' } });
       check(`subprocess rejects ${name}`, child.exitCode, 1);
       writeJson(`${log}.receipt.json`, { ...child, sourceHashes: receipt.sourceHashes, scenarioCount: 1 });
       artifacts.push(artifact(`${log}.receipt.json`, 'negative-execution-receipt'));
