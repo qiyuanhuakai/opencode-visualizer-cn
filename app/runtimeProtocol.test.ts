@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { decodeFrame, encodeFrame, encodeBinary, decodeBinary, ProtocolError, createProtocolState, entityKeyValue } from '../shared/runtime/protocol.js';
 import { parseCapabilities, authorizeExtension } from '../shared/runtime/capabilities.js';
 import { encodeSessionKey, encodeWorkspaceKey, parseEnvironmentId, parseHarnessInstanceId } from '../shared/runtime/identity.js';
@@ -15,6 +15,19 @@ function rejects(value: unknown, code = 'invalid_request') {
   expect(() => encodeFrame(value)).toThrow(expect.objectContaining({ code }));
 }
 describe('runtime protocol', () => {
+  it('rejects an oversized raw frame before UTF-8 allocation or JSON parsing', () => {
+    const raw = ' '.repeat(1048577);
+    const encode = vi.spyOn(TextEncoder.prototype, 'encode');
+    const parse = vi.spyOn(JSON, 'parse');
+    try {
+      expect(() => decodeFrame(raw)).toThrow(expect.objectContaining({ code: 'invalid_request', field: 'json.size' }));
+      expect(encode.mock.calls.length).toBe(0);
+      expect(parse.mock.calls.length).toBe(0);
+    } finally {
+      encode.mockRestore();
+      parse.mockRestore();
+    }
+  });
   it('roundtrips request, accepted/executed result, event and hello with shared validators', () => {
     for (const frame of [request, accepted, executed, event, hello]) expect(decodeFrame(encodeFrame(frame))).toEqual(frame);
     expect(() => decodeFrame('{')).toThrow(ProtocolError);

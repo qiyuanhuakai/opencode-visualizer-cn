@@ -106,7 +106,11 @@ export function validateFrame(input) {
 }
 export function encodeFrame(value) { return JSON.stringify(validateFrame(value)); }
 export function decodeFrame(text) {
-  requireValue(typeof text === 'string' && encoder.encode(text).byteLength <= LIMITS.jsonBytes, 'json.size');
+  // UTF-8 uses at least one byte per UTF-16 code unit. Reject an impossible
+  // frame before allocating its encoded copy; the byte check still handles
+  // multibyte input whose code-unit length fits the limit.
+  requireValue(typeof text === 'string' && text.length <= LIMITS.jsonBytes
+    && encoder.encode(text).byteLength <= LIMITS.jsonBytes, 'json.size');
   let value;
   try { value = JSON.parse(text); }
   catch (error) { if (error instanceof SyntaxError) throw new ProtocolError('invalid_request', 'json'); throw error; }
