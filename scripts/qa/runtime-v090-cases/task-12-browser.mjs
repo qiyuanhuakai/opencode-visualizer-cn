@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { createServer } from 'vite';
+import { createServer as createHttpServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { createRuntimeStore } from '../../../bridge/runtime/storage/runtimeStore.js';
 import { createImportService } from '../../../bridge/runtime/migration/importService.js';
@@ -139,7 +140,8 @@ export async function browserScenario(context) {
   const lifecycle = path.join(context.outDir, `${context.case}-browser-resources.json`); writeJson(lifecycle, resources);
   const store = createRuntimeStore({ stateDirectory: resources.workerDirectory, environmentId, ownerId: profileId, epoch: harnessInstanceId }); resources.workerPid = store.pid; writeJson(lifecycle, resources);
   const service = createImportService({ store, environmentId }); const uploads = []; const verificationFaults = [];
-  const server = await createServer({ configFile: false, appType: 'custom', root: context.root, logLevel: 'error', server: { host: '127.0.0.1', port: 0 } });
+  const server = await createServer({ configFile: false, appType: 'custom', root: context.root, logLevel: 'error', server: { middlewareMode: true, hmr: false } });
+  const httpServer = createHttpServer(server.middlewares);
   const completions = new Map(); let evaluation = 0;
   const stages = [];
   server.middlewares.use('/stage', async (request, response) => { let text = ''; for await (const chunk of request) text += chunk; stages.push(JSON.parse(text)); writeJson(path.join(context.outDir, `${context.case}-stages.json`), stages); response.end('received'); });
@@ -192,7 +194,9 @@ export async function browserScenario(context) {
   };
   const artifacts = []; let result;
   try {
-    await store.ready; await server.listen(); const address = server.httpServer.address(); assert(address && typeof address === 'object'); resources.port = address.port; writeJson(lifecycle, resources);
+    await store.ready;
+    await new Promise((resolve, reject) => { httpServer.once('error', reject); httpServer.listen(0, '127.0.0.1', () => { httpServer.removeListener('error', reject); resolve(); }); });
+    const address = httpServer.address(); assert(address && typeof address === 'object'); resources.port = address.port; writeJson(lifecycle, resources);
     const url = `http://127.0.0.1:${address.port}/task12`; const opened = await command('open', url, '--json');
     const location = await command('get', 'url', '--json');
     writeJson(path.join(context.outDir, `${context.case}-navigation.json`), { opened: JSON.parse(opened.stdout), location: JSON.parse(location.stdout), expected: url });
@@ -268,7 +272,10 @@ export async function browserScenario(context) {
     const receipt = path.join(context.outDir, `${context.case}-browser.json`); writeJson(receipt, { ...result, uploads }); artifacts.push(artifact(receipt, 'real-browser-idb-import'));
     const screenshot = path.join(context.outDir, `${context.case}-browser.png`); await command('screenshot', screenshot); artifacts.push(artifact(screenshot, 'screenshot'));
   } finally {
-    try { await command('close'); resources.browserClosed = true; } finally { await server.close(); resources.serverClosed = true; await store.terminate(); resources.workerClosed = true; writeJson(lifecycle, resources); }
+    try { await command('close'); resources.browserClosed = true; } finally { try {
+      if (httpServer.listening) await new Promise((resolve, reject) => httpServer.close(error => error ? reject(error) : resolve()));
+      await server.close(); resources.serverClosed = true;
+    } finally { await store.terminate(); resources.workerClosed = true; writeJson(lifecycle, resources); } }
   }
   artifacts.push(artifact(lifecycle, 'resource-cleanup')); return { name: 'actual isolated browser IndexedDB import and lazy draft persistence', assertions: result.assertions, artifacts };
 }
