@@ -87,6 +87,21 @@ describe('Kimi Web driver session reclamation', () => {
   const pendingInteractions = async () => (await store.page({ collection: 'interactions', limit: 100 })).items.filter((item) => isRecord(item.value) && item.value.phase === 'pending');
   const sendOperations = async (): Promise<{ readonly [key: string]: Json }[]> => (await store.page({ collection: 'operations', limit: 200 })).items.map((item) => item.value).filter((value): value is { readonly [key: string]: Json } => isRecord(value) && value.method === 'send');
 
+  it('binds only the owned modern prompt and turn before accepting its terminal', async () => {
+    const operations = driver.operations;
+    if (!operations) throw new Error('Missing operations');
+    const captured = { target: environmentId, epoch, processGeneration: 1, session: sessionRef(sessionId(0)) };
+    const sent = await operations.send(captured, { content: [{ type: 'text', text: 'owned modern operation' }] }, 'modern-identity');
+    const own = { kind: 'turn', turnId: 't0', triggerPromptId: sent.promptId!, state: 'running' };
+    expect(await operations.syncTranscript(captured, [{ ...own, triggerPromptId: 'external-prompt', state: 'completed' }])).toBeNull();
+    expect(await operations.syncTranscript(captured, [own])).toBeNull();
+    await expect(operations.syncTranscript(captured, [{ ...own, turnId: 'wrong-turn', state: 'completed' }])).rejects.toThrow('native_turn_identity');
+    expect((await operations.journal.get(sent.operationId)).phase).not.toBe('terminal');
+    const ended = await operations.syncTranscript(captured, [{ ...own, state: 'cancelled' }]);
+    expect(ended).toEqual({ operationId: sent.operationId, turnId: 't0', reason: 'cancelled' });
+    expect(await operations.journal.get(sent.operationId)).toMatchObject({ phase: 'terminal', outcome: 'cancelled' });
+  });
+
   it('reclaims every session slot once the last subscription of a session is released', async () => {
     // Given 33 distinct idle sessions opened and closed one after another.
     const peak = { selected: 0, historySessions: 0 };

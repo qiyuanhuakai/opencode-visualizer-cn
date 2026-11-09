@@ -7,7 +7,7 @@ import { createAdmissionQueue } from '../admissionQueue.js';
 
 function clean(value) { return JSON.parse(JSON.stringify(jsonValue(value))); }
 function fail(code, reason) { throw new ProtocolError(code, reason); }
-export function createKimiWebOperations({ store, transport, isCurrent, admission = createAdmissionQueue() }) {
+export function createKimiWebOperations({ store, transport, isCurrent, promptAbort = () => false, admission = createAdmissionQueue() }) {
   const journal = createOperationJournal({ store, admission, isProcessCurrent: isCurrent });
   const interactions = createInteractionStore({ store, admission });
   const bound = new Map();
@@ -85,7 +85,7 @@ export function createKimiWebOperations({ store, transport, isCurrent, admission
     if (!binding || fingerprint(binding.value.scope) !== fingerprint(scope) || binding.value.promptId !== payload.promptId) return;
     if (typeof payload.turnId !== 'string' && !Number.isSafeInteger(payload.turnId)) fail('invalid_request', 'native_turn_id');
     fence(scope);
-    await compareRecord(store, 'operations', key, binding, { ...binding.value, turnId: payload.turnId });
+    if (binding.value.turnId !== payload.turnId) await compareRecord(store, 'operations', key, binding, { ...binding.value, turnId: payload.turnId });
   }
   async function parent(scope, operationId) {
     nativeText(operationId, 'parent_operation', 512);
@@ -137,7 +137,15 @@ export function createKimiWebOperations({ store, transport, isCurrent, admission
   }
   async function cancel(scope, operationId, idempotencyKey) {
     scope = clean(scope);
-    const prepared = await transport.prepare('POST', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}:abort`);
+    let pathname = `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}:abort`;
+    if (promptAbort()) {
+      await parent(scope, operationId);
+      const binding = await readRecord(store, 'operations', `kimi-native:${operationId}`);
+      if (!binding || fingerprint(binding.value.scope) !== fingerprint(scope)) fail('conflict', 'cancel_prompt_scope');
+      const promptId = nativeText(binding.value.promptId, 'native_prompt_id', 512);
+      pathname = `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/prompts/${encodeURIComponent(promptId)}:abort`;
+    }
+    const prepared = await transport.prepare('POST', pathname);
     return control(scope, operationId, 'cancel', {}, idempotencyKey, prepared);
   }
   async function pending(scope, kind, nativeRequestId, payload) {
@@ -179,6 +187,22 @@ export function createKimiWebOperations({ store, transport, isCurrent, admission
     await journal.terminal(lease.value.operationId, scope, payload.reason);
     return { operationId: lease.value.operationId, turnId: payload.turnId };
   }
+  async function syncTranscript(scope, turns) {
+    fence(scope);
+    const lease = await readRecord(store, 'operations', leaseKey(scope));
+    if (!lease?.value?.operationId) return null;
+    const binding = await readRecord(store, 'operations', `kimi-native:${lease.value.operationId}`);
+    if (!binding || fingerprint(binding.value.scope) !== fingerprint(scope)) return null;
+    const owned = turns.filter(turn => turn?.kind === 'turn' && turn.triggerPromptId === binding.value.promptId);
+    if (!owned.length) return null;
+    const identities = new Set(owned.map(turn => nativeText(turn.turnId, 'native_turn_id', 512)));
+    if (identities.size !== 1 || binding.value.turnId !== undefined && !identities.has(binding.value.turnId)) fail('reconcile_required', 'native_turn_identity');
+    const turn = owned.at(-1);
+    await started(scope, { promptId: binding.value.promptId, turnId: turn.turnId, agentId: 'main' });
+    if (!['completed', 'failed', 'cancelled'].includes(turn.state)) return null;
+    const ended = await terminal(scope, { turnId: turn.turnId, reason: turn.state, agentId: 'main' });
+    return ended ? { ...ended, reason: turn.state } : null;
+  }
   // The live main-task operation of a session, or null when none has to be reconciled: only a task that reached the durable SENT marker (or whose acknowledgement cannot be accounted for) still owns the session. A failed read throws: the caller must not read an unreadable state as an idle session.
   async function liveTask(scope) {
     scope = clean(scope);
@@ -198,7 +222,7 @@ export function createKimiWebOperations({ store, transport, isCurrent, admission
     }
     if (failed) throw failed.error;
   }
-  return { instance, send, started, cancel, pending, reply, terminal, liveTask, journal, interactions, admission,
+  return { instance, send, started, cancel, pending, reply, terminal, syncTranscript, liveTask, journal, interactions, admission,
     async invalidate(scope) { await interactions.processExited(scope); },
     close,
   };

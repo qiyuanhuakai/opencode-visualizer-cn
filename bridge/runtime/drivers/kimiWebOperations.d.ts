@@ -13,9 +13,10 @@ export interface KimiWebOperations {
   cancel(scope: OperationScope, operationId: string, idempotencyKey: string): Promise<KimiExecution>;
   pending(scope: OperationScope, kind: 'approval' | 'question', nativeRequestId: string, payload: Json): Promise<string>;
   reply(scope: OperationScope, interactionId: string, answer: Json, idempotencyKey: string): Promise<KimiExecution>;
+  syncTranscript(scope: OperationScope, turns: readonly Readonly<Record<string, Json>>[]): Promise<{ readonly operationId: string; readonly turnId: Json; readonly reason: string } | null>;
   terminal(scope: OperationScope, payload: Readonly<Record<string, Json>>): Promise<{ readonly operationId: string; readonly turnId: Json } | null>;
   liveTask(scope: OperationScope): Promise<string | null>;
   invalidate(scope: OperationScope): Promise<void>; close(): Promise<void>;
   readonly journal: OperationJournal; readonly interactions: InteractionStore; readonly admission: AdmissionQueue;
 }
-export function createKimiWebOperations(options: { readonly store: RuntimeStore; readonly transport: KimiWebTransport; readonly isCurrent: (scope: OperationScope | KimiInstanceScope) => boolean; readonly admission?: AdmissionQueue }): KimiWebOperations;
+export function createKimiWebOperations(options: { readonly store: RuntimeStore; readonly transport: KimiWebTransport; readonly promptAbort?: () => boolean; readonly isCurrent: (scope: OperationScope | KimiInstanceScope) => boolean; readonly admission?: AdmissionQueue }): KimiWebOperations;

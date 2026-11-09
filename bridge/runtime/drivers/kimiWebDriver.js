@@ -185,7 +185,7 @@ export async function createKimiWebDriver(options) {
       candidate.epoch === current.epoch && candidate.processGeneration === current.processGeneration;
   }
   function fence(candidate) { if (!isCurrent(candidate)) throw new ProtocolError('reconcile_required', 'stale_generation'); }
-  const operations = transport ? createKimiWebOperations({ store: options.store, transport, isCurrent, admission }) : undefined;
+  const operations = transport ? createKimiWebOperations({ store: options.store, transport, isCurrent, promptAbort: () => capabilities.promptAbort, admission }) : undefined;
   const history = transport ? createKimiWebHistory({ transport, legacySnapshot: () => capabilities.snapshot, onRecovered(sessionId, result) {
     stats.recoveries++; emit({ type: 'resynchronized', session: { ...scope, nativeSessionId: sessionId }, ...result }, sessionId);
   } }) : undefined;
@@ -216,6 +216,7 @@ export async function createKimiWebDriver(options) {
     }
     const session = { ...scope, nativeSessionId: sessionId };
     const captured = Object.freeze({ target: scope.environmentId, ...authority(), session });
+    if (capabilities.promptAbort && !capabilities.snapshot) onModernLifecycle(frame, captured);
     try {
       if (!history.receive(frame, connection)) return;
     } catch (error) {
@@ -236,6 +237,26 @@ export async function createKimiWebDriver(options) {
     } else if (frame.type.startsWith('event.session.')) {
       emit({ type: 'catalog_changed', session }, sessionId);
     }
+  }
+  function onModernLifecycle(frame, captured) {
+    const sessionId = captured.session.nativeSessionId;
+    if (!selected.has(sessionId)) return;
+    const payload = frame.payload ?? {};
+    if ((payload.agent_id ?? payload.agentId ?? 'main') !== 'main') return;
+    if (frame.type === 'event.session.work_changed' && typeof payload.busy === 'boolean') {
+      emit({ type: 'session.activity', session: captured.session, status: payload.busy ? 'running' : 'idle' }, sessionId);
+      return;
+    }
+    if (!Number.isSafeInteger(payload.seq) || payload.seq < 0) return;
+    const turns = frame.type === 'transcript.reset' ? payload.snapshot?.items : frame.type === 'transcript.ops' ? payload.ops?.filter(op => op.op === 'turn.upsert').map(op => op.turn) : undefined;
+    if (!Array.isArray(turns) || !turns.length) return;
+    scheduled(async () => {
+      const ended = await operations.syncTranscript(captured, turns);
+      if (!ended) return;
+      noteEndedTask(sessionId, ended.operationId); releaseTask(sessionId, ended.operationId);
+      uncertain.delete(sessionId); forgetRecheck(sessionId); reclaim(sessionId);
+      emit({ type: 'turn.ended', session: captured.session, reason: ended.reason }, sessionId);
+    }, Buffer.byteLength(JSON.stringify(frame)));
   }
   function onLifecycle(frame) {
     stats.lifecycleFrames++;
@@ -496,7 +517,7 @@ export async function createKimiWebDriver(options) {
     getSession: capabilities.snapshot || capabilities.sessionRead, readHistoryPage: supportsHistory(),
     createSession: capabilities.create,
     subscribe: supportsHistory(),
-    send: capabilities.send && capabilities.subscribeV2 && capabilities.subscribe && capabilities.snapshot,
+    send: capabilities.send && supportsHistory() && (capabilities.snapshot || capabilities.promptAbort),
     cancel: capabilities.cancel, respondInteraction: capabilities.approvals || capabilities.questions,
   };
   const extensions = [

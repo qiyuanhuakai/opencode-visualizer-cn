@@ -88,3 +88,12 @@ it('recovers modern transcript cursors per agent without reading or fabricating 
   history.receive(frame, 1);
   expect(history.inspect('modern-session').snapshot.items).toHaveLength(1);
 });
+
+it('limits the modern prompt abort alias to the verified dispatcher profile', () => {
+  const spec = { paths: { '/api/v1/sessions/{session_id}/prompts/{tail}': { post: { operationId: 'promptAction' } } } };
+  const ws = { components: { messages: {} } };
+  expect(parseNativeCapabilities({ backend: 'v2', server_version: '2.5.2' }, spec, ws).promptAbort).toBe(true);
+  expect(parseNativeCapabilities({ backend: 'v2', server_version: '2.5.3' }, spec, ws).promptAbort).toBe(false);
+  expect(parseNativeCapabilities({ backend: 'v2', server_version: '2.5.2' }, { paths: {} }, ws).promptAbort).toBe(false);
+  expect(parseNativeCapabilities({ backend: 'v2', server_version: '2.5.2' }, { paths: { '/api/v1/sessions/{session_id}/prompts/{tail}': { post: { operationId: 'otherAction' } } } }, ws).promptAbort).toBe(false);
+});
