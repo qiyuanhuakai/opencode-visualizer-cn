@@ -197,6 +197,63 @@ export async function run(context) {
       sql(nativeStore.directory);
       await nativeDriver.close();
     } else {
+      const closingEnvironment = await fixtureSetup('close-retry');
+      const closingCore = closingEnvironment.core;
+      await closingCore.listSessionPage(ctx({ limit: 200 }));
+      const closingObserver = closingCore.subscribe(ctx({}, session));
+      await closingObserver.ready;
+      const closingStart = raw.events.length;
+      closingEnvironment.fixture.installedGateway.waterfall();
+      await waitUntil(() => pendingFor(closingStart), 'pending approval before close fault');
+      const closingInteraction = pendingFor(closingStart).interactionId;
+      const originalControl = closingEnvironment.store.mutateControl.bind(closingEnvironment.store);
+      let blockInvalidation = true, invalidationAttempted = false, rejectedClose = false;
+      closingEnvironment.store.mutateControl = async (input) => {
+        if (blockInvalidation && input.changes.some((change) => change.collection === 'interactions' && change.value?.phase === 'invalidated')) {
+          invalidationAttempted = true;
+          throw Object.assign(new Error('controlled invalidation storage failure'), { code: 'source_unavailable' });
+        }
+        return originalControl(input);
+      };
+      try {
+        const firstClose = closingEnvironment.driver.close();
+        const concurrentClose = closingEnvironment.driver.close();
+        check('concurrent close shares one cleanup completion', firstClose === concurrentClose, true);
+        try { await firstClose; } catch { rejectedClose = true; }
+        blockInvalidation = false;
+        await closingEnvironment.driver.close();
+        const finalInteraction = await closingEnvironment.store.getControl({ collection: 'interactions', key: closingInteraction });
+        check('close retries failed durable interaction invalidation', { attempted: invalidationAttempted, phase: finalInteraction?.value?.phase }, { attempted: true, phase: 'invalidated' });
+        check('close reports durable cleanup failure instead of successful shutdown', rejectedClose, true);
+        let observerEnded = false;
+        for (let count = 0; count < 10; count++) {
+          let timer;
+          const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('closed observer did not end')), 2000); });
+          try { if ((await Promise.race([closingObserver.next(), timeout])).done) { observerEnded = true; break; } }
+          finally { clearTimeout(timer); }
+        }
+        check('retried close ends already attached observers', observerEnded, true);
+      } finally {
+        blockInvalidation = false;
+        closingEnvironment.store.mutateControl = originalControl;
+        await closingObserver.return();
+      }
+      const cleanClosing = await fixtureSetup('normal-close');
+      await cleanClosing.core.listSessionPage(ctx({ limit: 200 }));
+      const cleanObserver = cleanClosing.core.subscribe(ctx({}, session));
+      await cleanObserver.ready;
+      await cleanClosing.driver.close();
+      let closeEvent = false, cleanEnded = false;
+      for (let count = 0; count < 10; count++) {
+        let timer;
+        const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('normal closed observer did not end')), 2000); });
+        try {
+          const next = await Promise.race([cleanObserver.next(), timeout]);
+          if (next.done) { cleanEnded = true; break; }
+          if (next.value?.type === 'source-closed') closeEvent = true;
+        } finally { clearTimeout(timer); }
+      }
+      check('normal close delivers source-closed before ending observers', { closeEvent, cleanEnded }, { closeEvent: true, cleanEnded: true });
       const { fixture, driver, core, store, directory, inspection } = await fixtureSetup('failure');
       await core.listSessionPage(ctx()); await core.getSession(ctx({}, session));
       await rejects('ambiguous native provider+model rejected before selection', () => driver.driver.native['dsh.models.select'](ctx({ model: 'shared-model', idempotencyKey: 'ambiguous' }, session)), ['invalid_request']);

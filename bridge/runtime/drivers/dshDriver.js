@@ -26,6 +26,8 @@ export function createDshDriver(options) {
   const operations = createDshOperations({ ...options, ...identity, transport });
   const snapshots = new Map(), selected = new Map(), deliveries = new Map(), observers = new Set(), known = new Set();
   let mux, connecting, clientId, liveGeneration = 0, closed = false, reconnectTimer, reconnectAttempt = 0, retryBlocked = false;
+  let closing;
+  const invalidations = new Set();
   const pendingWork = new Set();
   const now = options.now ?? Date.now;
   let retainSeq = 0;
@@ -92,6 +94,7 @@ export function createDshDriver(options) {
     if (closed || generation !== liveGeneration || boundClient !== clientId || !mux) fail('reconcile_required', 'stale_client');
   }
   async function invalidate(delivery) {
+    invalidations.add(delivery);
     delivery.live = false;
     if (delivery.key) {
       const prior = await readRecord(options.store, 'interactions', delivery.key);
@@ -100,6 +103,7 @@ export function createDshDriver(options) {
         catch (error) { if (error?.reason !== 'entity_revision') throw error; }
       }
     }
+    invalidations.delete(delivery);
   }
   async function receiveEvent(frame, generation) {
     record(frame);
@@ -329,16 +333,35 @@ export function createDshDriver(options) {
     }, async return() { ended = true; release(); observers.delete(observer); queue.length = 0; bytes = 0; wake?.(); return { value: undefined, done: true }; },
     [Symbol.asyncIterator]() { return this; } };
   }
-  async function close() {
-    if (closed) return;
-    closed = true; clearTimeout(reconnectTimer); reconnectTimer = undefined;
-    mux?.close(); mux = undefined; clientId = undefined;
-    transport.close();
-    for (const entry of selected.values()) entry.reject?.(new DshError('cancelled', 'dsh.closed'));
-    for (const delivery of deliveries.values()) await invalidate(delivery);
-    deliveries.clear(); snapshots.clear(); selected.clear(); known.clear(); retained.clear();
-    await Promise.allSettled(pendingWork);
-    publish({ type: 'source-closed' }); for (const observer of observers) observer.stop(); observers.clear();
+  function close() {
+    if (closing) return closing;
+    const completion = Promise.withResolvers();
+    closing = completion.promise;
+    void closing.catch(() => {});
+    // Install the barrier before closing the mux: its callbacks can reenter
+    // shutdown and start durable invalidations that this close must drain.
+    (async () => {
+      closed = true; clearTimeout(reconnectTimer); reconnectTimer = undefined;
+      mux?.close(); mux = undefined; clientId = undefined;
+      transport.close();
+      for (const entry of selected.values()) entry.reject?.(new DshError('cancelled', 'dsh.closed'));
+      await Promise.allSettled(pendingWork);
+      const pending = new Set([...deliveries.values(), ...invalidations]);
+      const results = await Promise.allSettled([...pending].map(invalidate));
+      deliveries.clear(); snapshots.clear(); selected.clear(); known.clear(); retained.clear();
+      const failures = results.filter((result) => result.status === 'rejected').map((result) => result.reason);
+      try {
+        if (failures.length) throw new AggregateError(failures, 'DSH interaction cleanup failed');
+        publish({ type: 'source-closed' });
+      } finally {
+        for (const observer of observers) observer.stop();
+        observers.clear();
+      }
+    })().then(completion.resolve, (error) => {
+      closing = undefined;
+      completion.reject(error);
+    });
+    return completion.promise;
   }
   const core = {
     inspect(input) { context(input); const state = options.getOwnedEndpoint()?.state ?? 'missing'; return { state: closed ? 'disabled' : state, protocolVersion: 1 }; },
