@@ -34,6 +34,13 @@ export function createAdmissionQueue({ connectionOnly = false } = {}) {
     )
       return Promise.reject(new StoreError('source_unavailable', 'queue_full'));
     const controller = new AbortController();
+    const expiresAt = performance.now() + deadlineMs;
+    function assertDeadline() {
+      if (controller.signal.aborted || performance.now() >= expiresAt) {
+        controller.abort();
+        throw new StoreError('timeout', 'deadline');
+      }
+    }
     const entry = { controller, size };
     entries.add(entry);
     bytes += size;
@@ -45,18 +52,22 @@ export function createAdmissionQueue({ connectionOnly = false } = {}) {
         reject(new StoreError('timeout', 'deadline'));
       }, deadlineMs);
       Promise.resolve()
-        .then(() =>
-          action(controller.signal, (nextSize) => {
+        .then(() => {
+          assertDeadline();
+          return action(controller.signal, (nextSize) => {
             if (!Number.isSafeInteger(nextSize) || nextSize < 0)
               throw new StoreError('invalid_request', 'admission');
-            if (controller.signal.aborted) throw new StoreError('timeout', 'deadline');
+            assertDeadline();
             if (bytes - entry.size + nextSize > 16777216 - (reserved ? 0 : 1048576))
               throw new StoreError('source_unavailable', 'queue_full');
             bytes += nextSize - entry.size;
             entry.size = nextSize;
-          }),
-        )
-        .then(resolve, reject)
+          });
+        })
+        .then(value => {
+          try { assertDeadline(); resolve(value); }
+          catch (error) { reject(error); }
+        }, reject)
         .finally(() => {
           clearTimeout(timer);
           entries.delete(entry);

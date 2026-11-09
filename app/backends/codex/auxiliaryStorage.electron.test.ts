@@ -23,3 +23,21 @@ it('reads the newest local snapshot while native persistence is pending', async 
   await storage.flushCodexAuxiliaryStorage();
   expect(setItemAsync).toHaveBeenCalledTimes(2);
 });
+
+it('blocks source freeze until failed auxiliary writes are durably retried', async () => {
+  const setItemAsync = vi.fn().mockResolvedValue(false);
+  vi.stubGlobal('window', { electronAPI: { persistentStorage: { setItemAsync } } });
+  const storage = await import('./auxiliaryStorage');
+  const freeze = await import('../../runtime/migration/writerFreeze');
+  const snapshot = { text: 'accepted-before-quota' };
+  storage.writeCodexAuxiliarySnapshot('thread', snapshot);
+  snapshot.text = 'mutated-after-admission';
+  await expect(freeze.freezeLegacyWriters({ clientOrigin: 'test', persist: async () => {} })).rejects.toThrow();
+  expect(freeze.legacyWriterPhase()).toBe('paused');
+  expect(storage.readCodexAuxiliarySnapshot('thread')).toEqual({ text: 'accepted-before-quota' });
+  await expect(freeze.retryFrozenLegacyWrites()).rejects.toThrow();
+  setItemAsync.mockResolvedValue(true);
+  await freeze.retryFrozenLegacyWrites();
+  expect(freeze.legacyWriterPhase()).toBe('frozen');
+  expect(setItemAsync.mock.calls.every(([, value]) => value === JSON.stringify({ text: 'accepted-before-quota' }))).toBe(true);
+});

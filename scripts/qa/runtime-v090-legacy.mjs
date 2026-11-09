@@ -40,7 +40,7 @@ export async function runLegacy(context) {
     references.push(artifact(reportFile, 'historical-report-reference'));
     origin = { mode: 'controlled-rerun', reason: 'historical receipt lacks report binding or source hashes', reportFile };
   }
-  const reportFile = path.join(context.outDir, `${context.case}.vitest.json`);
+  const reportFile = `${context.out}.${context.case}.vitest.json`;
   const invocation = [process.execPath, path.join(context.root, 'node_modules/vitest/vitest.mjs'), 'run', test, ...(context.case === 'failure' ? ['--testNamePattern', 'failure'] : []), '--reporter=json', `--outputFile=${reportFile}`];
   const execution = await captureProcess(invocation, { root: context.root, log: `${reportFile}.log` });
   const raw = existsSync(reportFile) ? readFileSync(reportFile, 'utf8') : '';
