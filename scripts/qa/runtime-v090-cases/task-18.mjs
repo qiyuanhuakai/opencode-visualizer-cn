@@ -27,7 +27,7 @@ export const sourceFiles = [...new Set([
   ...['sessionIndex', 'discoveryScheduler', 'eventBus', 'snapshots', 'replayLog', 'sessionSummaries', 'indexDiscovery', 'indexMutations', 'nativeEventIntake', 'eventObservers'].flatMap((name) => [`bridge/runtime/${name}.js`, `bridge/runtime/${name}.d.ts`]),
   ...['discoveryScheduler', 'runtimeSnapshot', 'sessionIndex', 'runtimeEventBus'].map((name) => `app/runtime/${name}.test.ts`),
   'bridge/runtime/storage/storeQueries.js', 'bridge/runtime/storage/storeProtocol.js', 'bridge/runtime/storage/runtimeStore.d.ts', 'bridge/runtime/storage/schema.js',
-  'bridge/runtime/workspaceCatalog.js', 'bridge/runtime/ptyService.js', 'bridge/ptyManager.js', 'bridge/processTree.js',
+  'bridge/runtime/workspaceCatalog.js', 'bridge/runtime/workspaceCatalog.d.ts', 'app/runtime/acpSessionPages.test.ts', 'bridge/runtime/ptyService.js', 'bridge/ptyManager.js', 'bridge/processTree.js',
   'scripts/qa/runtime-v090-cases/task-18.mjs', 'scripts/qa/runtime-v090-cases/task-18-fixture.mjs', 'scripts/qa/runtime-v090-cases/task-18-native.mjs',
   ...sources13, ...sources14, ...sources15, ...sources16, ...sources17,
 ])];
@@ -223,7 +223,7 @@ export async function run(context) {
       check('canonical SQL deletion fence rejects in-flight old native page', fixture.sql().summaries.find((item) => item.key === tombstoneKey).value, null);
       const originalPath = path.join(context.root, 'bridge/runtime/indexMutations.js');
       const original = await readFile(originalPath, 'utf8');
-      const guard = "          if (prior && prior.value === null && prior.revision > scan.startRevision) return undefined;";
+      const guard = "          if (prior && prior.value === null && prior.revision > scan.startRevision) continue;";
       assert.equal(original.split(guard).length, 2, 'single targeted deletion guard');
       const mutant = original.replace(guard, '').replace(/from '([^']+)'/g, (_match, name) => `from '${new URL(name, pathToFileURL(originalPath)).href}'`);
       const mutantPath = path.join(context.temporaryRoot, 'deletion-guard-mutant.mjs');
