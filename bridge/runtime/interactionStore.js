@@ -42,6 +42,20 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
     if (previous) previous.active = false;
     live.set(key, token);
   }
+  // Trusted recovery only: the Runtime atomically migrated this persisted process
+  // together with its task. Recreate the local token without a second generation claim.
+  async function resumeProcess(input) {
+    const scope = parseOperationScope(input);
+    await assertStoreScope(scope);
+    const key = processKey(scope);
+    const prior = await readRecord(store, 'operations', key);
+    if (!prior?.value.alive || prior.value.epoch !== scope.epoch || prior.value.generation !== scope.processGeneration)
+      throw new StoreError('reconcile_required', 'stale_generation');
+    await compareRecord(store, 'operations', key, prior, prior.value);
+    const previous = live.get(key);
+    if (previous) previous.active = false;
+    live.set(key, { scope, active: true });
+  }
   async function authority(scope, reserved = true) {
     await assertStoreScope(scope);
     const token = live.get(processKey(scope));
@@ -137,6 +151,32 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
       }
       if (!token.active) throw new StoreError('reconcile_required', 'stale_generation');
       return key;
+    });
+  }
+  // A native resolution can retire an unclaimed prompt, but cannot steal a reply
+  // already admitted by this process (its own native ACK may arrive before HTTP).
+  async function invalidatePending(input, nativeRequestId) {
+    const scope = parseOperationScope(input);
+    const key = keyFor(scope, nativeRequestId);
+    await assertStoreScope(scope);
+    const existing = await readRecord(store, 'interactions', key, false);
+    if (!existing || existing.value.kind !== 'interaction' || existing.value.phase !== 'pending') return;
+    return admission.run({ reserved: true }, async (signal) => {
+      const { token } = await authority(scope);
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const prior = await readRecord(store, 'interactions', key);
+        if (!prior || prior.value.phase !== 'pending') return;
+        if (fingerprint(prior.value.scope) !== fingerprint(scope)) throw new StoreError('conflict', 'scope_fence');
+        if (!token.active || signal.aborted) throw new StoreError('reconcile_required', 'stale_generation');
+        try {
+          // The key includes epoch/generation: even a late retirement cannot touch a successor's interaction.
+          await compareRecord(store, 'interactions', key, prior, { ...prior.value, phase: 'invalidated' });
+          return;
+        } catch (error) {
+          if (!isRevisionConflict(error)) throw error;
+        }
+      }
+      throw new StoreError('conflict', 'concurrent_update');
     });
   }
   async function get(key) {
@@ -238,5 +278,5 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
         throw error;
       });
   }
-  return { bindProcess, processExited, pending, get, reply };
+  return { bindProcess, resumeProcess, processExited, pending, invalidatePending, get, reply };
 }

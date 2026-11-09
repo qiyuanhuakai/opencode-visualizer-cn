@@ -9,12 +9,15 @@ export interface Interaction {
 }
 export interface InteractionStore {
   bindProcess(scope: OperationScope): Promise<void>;
+  /** Recreate a local token for an atomically reconciled live process record. */
+  resumeProcess(scope: OperationScope): Promise<void>;
   processExited(scope: OperationScope): Promise<void>;
   pending(input: {
     readonly scope: OperationScope;
     readonly nativeRequestId: string | number;
     readonly payload: Json;
   }): Promise<string>;
+  invalidatePending(scope: OperationScope, nativeRequestId: string | number): Promise<void>;
   get(key: string): Promise<Interaction>;
   reply(
     key: string,
