@@ -1,3 +1,4 @@
+import type { KimiTranscript } from '../../../shared/runtime/native/kimiWeb/transcript.js';
 import type { Json } from '../storage/runtimeStore.js';
 import type { RuntimeStore } from '../storage/runtimeStore.js';
 import type { OperationScope, OperationJournal } from '../operationJournal.js';
@@ -12,6 +13,8 @@ export interface KimiWebOperations {
   started(scope: OperationScope, payload: Readonly<Record<string, Json>>): Promise<void>;
   cancel(scope: OperationScope, operationId: string, idempotencyKey: string): Promise<KimiExecution>;
   pending(scope: OperationScope, kind: 'approval' | 'question', nativeRequestId: string, payload: Json): Promise<string>;
+  modernInteraction(scope: OperationScope, frame: Readonly<Record<string, Json>>): Promise<{ readonly interactionId: string; readonly payload: Json } | null>;
+  recoverModernInteractions(scope: OperationScope, page: KimiTranscript, onPending?: (pending: { readonly interactionId: string; readonly payload: Json }, kind: 'question' | 'approval') => void): Promise<void>;
   reply(scope: OperationScope, interactionId: string, answer: Json, idempotencyKey: string): Promise<KimiExecution>;
   syncTranscript(scope: OperationScope, turns: readonly Readonly<Record<string, Json>>[]): Promise<{ readonly operationId: string; readonly turnId: Json; readonly reason: string } | null>;
   terminal(scope: OperationScope, payload: Readonly<Record<string, Json>>): Promise<{ readonly operationId: string; readonly turnId: Json } | null>;

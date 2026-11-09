@@ -21,7 +21,7 @@ async function fixture(legacy: boolean) {
   const epoch = randomUUID();
   const store = createRuntimeStore({ stateDirectory: directory, environmentId, ownerId: randomUUID(), epoch });
   await store.ready;
-  const state = { replyGate: undefined as Promise<void> | undefined, replyEntered: undefined as (() => void) | undefined, interactions: [] as Record<string, unknown>[], answers: [] as Record<string, unknown>[], legacy, gate: undefined as Promise<void> | undefined, entered: undefined as (() => void) | undefined, seq: 1, turn: undefined as Record<string, unknown> | undefined, prompts: 0, historyGate: undefined as Promise<void> | undefined, historyEntered: undefined as (() => void) | undefined };
+  const state = { historyReads: 0, aborts: 0, replyGate: undefined as Promise<void> | undefined, replyEntered: undefined as (() => void) | undefined, interactions: [] as Record<string, unknown>[], answers: [] as Record<string, unknown>[], legacy, gate: undefined as Promise<void> | undefined, entered: undefined as (() => void) | undefined, seq: 1, turn: undefined as Record<string, unknown> | undefined, prompts: 0, historyGate: undefined as Promise<void> | undefined, historyEntered: undefined as (() => void) | undefined };
   const sockets = new Set<import('node:net').Socket>();
   const peers = new Set<ReturnType<typeof createRawWebSocketPeer>>();
   const controls: Record<string, unknown>[] = [];
@@ -49,6 +49,7 @@ async function fixture(legacy: boolean) {
       return reply(snapshot ? { session: value, epoch: 'native-review', as_of_seq: state.seq } : value);
     }
     if (url.pathname.endsWith('/transcript')) {
+      state.historyReads++;
       if (url.searchParams.get('agent_id') === 'child' && state.historyGate) {
         state.historyEntered?.(); await state.historyGate;
         res.writeHead(500); res.end('{}'); return;
@@ -63,11 +64,12 @@ async function fixture(legacy: boolean) {
       send({ type: 'transcript.ops', session_id: session.nativeSessionId, payload: { agent_id: 'main', seq: state.seq, ops: [{ op: 'turn.upsert', turn: state.turn }] } });
       return reply({ prompt_id: body.prompt_id });
     }
+    if (url.pathname.endsWith(':abort') && req.method === 'POST') { state.aborts++; return reply({ aborted: true }); }
     if (url.pathname.includes('/interactions/') && req.method === 'POST') {
       const parts = []; for await (const part of req) parts.push(part);
       const answer = JSON.parse(Buffer.concat(parts).toString()); state.answers.push(answer);
       state.replyEntered?.(); if (state.replyGate) await state.replyGate;
-      return reply({ outcome: answer.kind === 'approval' ? answer.decision : 'answered', ended_at: '2026-11-09T00:00:00Z' });
+      return reply({ outcome: answer.kind === 'approval' ? answer.decision : answer.dismissed ? 'dismissed' : 'answered', ended_at: '2026-11-09T00:00:00Z' });
     }
     reply({});
   });
@@ -80,7 +82,7 @@ async function fixture(legacy: boolean) {
       const frame = JSON.parse(text); controls.push(frame);
       if (frame.type === 'pong') return;
       // A successful resume at the current seq does not replay an already-read terminal.
-      peer.send(JSON.stringify({ type: 'ack', id: frame.id, code: 0, payload: { accepted: [session.nativeSessionId], not_found: [], resync_required: [] } }));
+      peer.send(JSON.stringify({ type: 'ack', id: frame.id, code: 0, payload: { accepted: [frame.payload?.session_id ?? session.nativeSessionId], not_found: [], resync_required: [] } }));
     });
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -173,8 +175,8 @@ it.each([false, true])('persists and answers a modern question only after provin
     expect(pending).toBeDefined();
     await f.driver.flush();
     const canonical = await f.driver.operations!.interactions.get(pending!.key);
-    await expect(f.driver.operations!.interactions.invalidatePending({ ...canonical.scope, epoch: randomUUID() }, 'question-1')).rejects.toMatchObject({ code: 'reconcile_required' });
-    await expect(f.driver.operations!.interactions.invalidatePending({ ...canonical.scope, processGeneration: canonical.scope.processGeneration + 1 }, 'question-1')).rejects.toMatchObject({ code: 'reconcile_required' });
+    await expect(f.driver.operations!.interactions.invalidatePending({ ...canonical.scope, epoch: randomUUID() }, 'question-1')).resolves.toBeUndefined();
+    await expect(f.driver.operations!.interactions.invalidatePending({ ...canonical.scope, processGeneration: canonical.scope.processGeneration + 1 }, 'question-1')).resolves.toBeUndefined();
     expect(await f.driver.operations!.interactions.get(pending!.key)).toMatchObject({ phase: 'pending' });
     const answer: Record<string, JsonValue> = dismiss ? { dismiss: true } : { answers: { q_0: { kind: 'single', option_id: 'opt_0' } } };
     const params = { interactionId: pending!.key, answer, idempotencyKey: 'question-reply' };
@@ -242,7 +244,7 @@ it.each(['reconnect', 'resync'].flatMap(mode => [['question', mode], ['approval'
   } finally { await f.close(); }
 });
 
-it.each(['live', 'reconnect', 'unproven-ended', 'own-reply'].flatMap(mode => [['question', mode], ['approval', mode]]))('synchronizes a native %s resolution without stealing a reply (%s)', async (kind, mode) => {
+it.each(['live', 'reconnect', 'unproven-ended', 'own-reply', 'stale-generation'].flatMap(mode => [['question', mode], ['approval', mode]]))('synchronizes a native %s resolution without stealing a reply (%s)', async (kind, mode) => {
   const f = await fixture(false);
   const gate = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>();
   try {
@@ -270,10 +272,20 @@ it.each(['live', 'reconnect', 'unproven-ended', 'own-reply'].flatMap(mode => [['
       await entered.promise;
     }
     if (mode !== 'unproven-ended') f.state.interactions[0] = { ...f.state.interactions[0], state: kind === 'approval' ? 'rejected' : 'answered' };
+    if (mode === 'stale-generation') {
+      const canonical = await f.driver.operations!.interactions.get(row!.key);
+      await f.driver.operations!.interactions.bindProcess({ ...canonical.scope, processGeneration: canonical.scope.processGeneration + 1 });
+    }
     const before = f.driver.diagnostics().nativeFrames;
     if (mode === 'reconnect') await f.driver.reconnect();
     else f.send({ ...event, status: 'ended', outcome: kind === 'approval' ? 'rejected' : 'answered' });
     for (let i = 0; i < 100 && f.driver.diagnostics().nativeFrames === before; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    if (mode === 'stale-generation') {
+      await expect(f.driver.flush()).rejects.toMatchObject({ code: 'reconcile_required' });
+      expect(await f.store.get({ collection: 'interactions', key: row!.key })).toMatchObject({ value: { phase: 'pending' } });
+      expect(f.state.answers).toHaveLength(0);
+      return;
+    }
     await f.driver.flush();
     if (mode === 'own-reply') {
       try { expect(await f.driver.operations!.interactions.get(row!.key)).toMatchObject({ phase: 'replying' }); }
@@ -317,4 +329,84 @@ it.each(['approved', 'rejected'])('persists a verified modern approval and repli
     await expect(core.respondInteraction!({ ...context, params })).rejects.toBeDefined();
     expect(f.state.answers).toHaveLength(1);
   } finally { await f.close(); }
+});
+
+it.each([1, 256, 1000].flatMap(count => [false, true].flatMap(owned => ['question', 'approval', 'mixed'].map(family => ({ count, owned, family })))) )('ignores $count historical $family interactions (owned=$owned) and keeps the task cancellable', async ({ count, owned, family }) => {
+  const f = await fixture(false);
+  try {
+    const core = f.driver.registration.driver.core;
+    const sent = await core.send!({ ...context, params: { content: [{ type: 'text', text: 'Keep task controllable' }], idempotencyKey: 'history-isolation-send' } }) as { operationId: string };
+    await f.driver.flush();
+    f.state.interactions = Array.from({ length: count }, (_, i) => {
+      const kind = family === 'mixed' ? i % 2 ? 'approval' : 'question' : family;
+      return { interactionId: `historical-${i}`, interactionKind: kind, toolCallId: `old-tool-${i}`, state: kind === 'approval' ? i % 2 ? 'rejected' : 'approved' : 'answered', request: { session_id: 'read-only-session', sessionId: 'read-only-session', toolName: 'Bash', questions: [] } };
+    });
+    const readSession = owned ? session : { ...session, nativeSessionId: 'read-only-session' };
+    const operation = await f.driver.operations!.journal.get(sent.operationId);
+    await expect(f.driver.operations!.interactions.invalidatePending({ ...operation.scope, session: readSession }, 'not-a-local-interaction')).resolves.toBeUndefined();
+    const before = f.state.historyReads;
+    if (owned) await f.driver.reconnect();
+    await expect(core.readHistoryPage!({ ...context, session: readSession, params: { limit: 100 } })).resolves.toMatchObject({ completeness: 'complete' });
+    await expect(f.driver.flush()).resolves.toBeUndefined();
+    expect(f.driver.diagnostics().lastEventError).toBeNull();
+    // Modern subscriptions read before/after attach and once for the requested page; no per-interaction reread.
+    expect(f.state.historyReads - before).toBeLessThanOrEqual(3);
+    await f.driver.reconnect();
+    await expect(core.cancel!({ ...context, params: { operationId: sent.operationId, idempotencyKey: 'history-isolation-cancel' } })).resolves.toMatchObject({ phase: 'native-executed' });
+    expect(f.state.aborts).toBe(1);
+    expect((await f.store.page({ collection: 'operations', limit: 100 })).items.filter(row => row.key.startsWith('process:'))).toHaveLength(1);
+    expect((await f.store.page({ collection: 'interactions', limit: 100 })).items).toHaveLength(0);
+  } finally { await f.close(); }
+});
+
+it('recovers the owned pending tool among 1000 historical interactions without rereading every item', async () => {
+  const f = await fixture(false);
+  try {
+    const core = f.driver.registration.driver.core;
+    await core.send!({ ...context, params: { content: [{ type: 'text', text: 'Recover only current tool' }], idempotencyKey: 'large-owned-send' } });
+    await f.driver.flush();
+    f.state.turn = { ...f.state.turn, steps: [{ frames: [{ kind: 'tool', toolCallId: 'current-tool', name: 'AskUserQuestion' }] }] };
+    f.state.interactions = Array.from({ length: 1000 }, (_, i) => ({ interactionId: `old-${i}`, interactionKind: 'question', toolCallId: `past-tool-${i}`, state: 'answered', request: { session_id: session.nativeSessionId, questions: [] } }));
+    f.state.interactions.push({ interactionId: 'current-question', interactionKind: 'question', toolCallId: 'current-tool', state: 'pending', request: { session_id: session.nativeSessionId, questions: [] } });
+    const before = f.state.historyReads;
+    await f.driver.reconnect(); await f.driver.flush();
+    const rows = (await f.store.page({ collection: 'interactions', limit: 100 })).items.filter(row => row.value && typeof row.value === 'object' && !Array.isArray(row.value) && 'kind' in row.value && row.value.kind === 'interaction');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].value).toMatchObject({ nativeRequestId: 'current-question', phase: 'pending' });
+    expect(f.state.historyReads - before).toBeLessThanOrEqual(2);
+    await expect(core.respondInteraction!({ ...context, params: { interactionId: rows[0].key, answer: { dismiss: true }, idempotencyKey: 'large-owned-reply' } })).resolves.toMatchObject({ phase: 'native-executed' });
+    expect(f.state.answers).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
+it('does not lose an HTTP recovery arriving while the prior batch is running', async () => {
+  const f = await fixture(false);
+  const gate = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>();
+  const operations = f.driver.operations!;
+  const recover = operations.recoverModernInteractions;
+  let calls = 0, reconnecting: Promise<void> | undefined;
+  try {
+    const core = f.driver.registration.driver.core;
+    await core.send!({ ...context, params: { content: [{ type: 'text', text: 'Recover newest snapshot' }], idempotencyKey: 'coalesced-send' } });
+    await f.driver.flush();
+    operations.recoverModernInteractions = async (...args: Parameters<typeof recover>) => {
+      if (++calls === 1) { entered.resolve(); await gate.promise; }
+      return recover(...args);
+    };
+    f.send({ type: 'resync_required', session_id: session.nativeSessionId });
+    await entered.promise;
+    f.state.turn = { ...f.state.turn, steps: [{ frames: [{ kind: 'tool', toolCallId: 'new-tool', name: 'AskUserQuestion' }] }] };
+    f.state.interactions = [{ interactionId: 'new-question', interactionKind: 'question', toolCallId: 'new-tool', state: 'pending', request: { session_id: session.nativeSessionId, questions: [] } }];
+    reconnecting = f.driver.reconnect(); void reconnecting.catch(() => {});
+    for (let i = 0; i < 100; i++) {
+      if (f.driver.history(session.nativeSessionId).snapshot.interactions.some(item => item.interactionId === 'new-question')) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(f.driver.history(session.nativeSessionId).snapshot.interactions).toHaveLength(1);
+    gate.resolve(); await reconnecting; await f.driver.flush();
+    expect(calls).toBeGreaterThanOrEqual(2);
+    const rows = (await f.store.page({ collection: 'interactions', limit: 100 })).items.filter(row => row.value && typeof row.value === 'object' && !Array.isArray(row.value) && 'kind' in row.value && row.value.kind === 'interaction');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].value).toMatchObject({ nativeRequestId: 'new-question', phase: 'pending' });
+  } finally { gate.resolve(); await reconnecting?.catch(() => {}); operations.recoverModernInteractions = recover; await f.close(); }
 });

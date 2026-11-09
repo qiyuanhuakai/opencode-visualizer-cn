@@ -189,31 +189,25 @@ export async function createKimiWebDriver(options) {
   const history = transport ? createKimiWebHistory({ transport, legacySnapshot: () => capabilities.snapshot, onRecovered(sessionId, result) {
     stats.recoveries++; emit({ type: 'resynchronized', session: { ...scope, nativeSessionId: sessionId }, ...result }, sessionId);
     if (capabilities.promptAbort && !capabilities.snapshot && selected.has(sessionId)) {
-      const snapshot = history.inspect(sessionId);
-      const turns = snapshot.snapshot.items.filter(turn => turn.kind === 'turn' && typeof turn.triggerPromptId === 'string').map(turn => ({ kind: 'turn', turnId: turn.turnId, triggerPromptId: turn.triggerPromptId, state: turn.state }));
-      const captured = Object.freeze({ target: scope.environmentId, ...authority(), session: { ...scope, nativeSessionId: sessionId } });
-      settleModernTurns(captured, turns);
-      if (capabilities.modernQuestions || capabilities.modernApprovals) for (const interaction of snapshot.snapshot.interactions ?? []) {
-        const kind = interaction.interactionKind;
-        if (!(kind === 'question' && capabilities.modernQuestions || kind === 'approval' && capabilities.modernApprovals) || !['pending', 'answered', 'dismissed', 'cancelled', 'approved', 'rejected'].includes(interaction.state)) continue;
-        settleModernInteraction(captured, { type: 'interaction', agent_id: 'main', kind, status: interaction.state === 'pending' ? 'pending' : 'ended', interaction_id: interaction.interactionId, tool_call_id: interaction.toolCallId });
-      }
+      settleModernRecovery(Object.freeze({ target: scope.environmentId, ...authority(), session: { ...scope, nativeSessionId: sessionId } }));
     }
   } }) : undefined;
   function requireCapability(name) { if (!capabilities[name]) throw new ProtocolError('unsupported', `kimi_${name}`); }
+  const modernRecoveryWork = new Map();
   function scheduled(action, bytes = 0) {
     if (eventCount >= 256 || eventBytes + bytes > 4194304) {
       lastEventError = { code: 'replay_required', reason: 'producer_backpressure' };
       emit({ type: 'replay_required', reason: 'producer_backpressure' });
       for (const sessionId of selected.keys()) invalidated.add(sessionId);
       void transport.disconnect(); void lifecycleTransport.disconnect();
-      return;
+      return false;
     }
     eventCount++; eventBytes += bytes;
     eventWork = eventWork.then(action).catch((error) => {
       lastEventError = { code: error?.code ?? 'source_unavailable', reason: error?.field ?? error?.reason ?? 'native_event' };
       emit({ type: 'source_error', ...lastEventError });
     }).finally(() => { eventCount--; eventBytes -= bytes; });
+    return true;
   }
   function onFrame(frame, connection) {
     stats.nativeFrames++;
@@ -266,6 +260,41 @@ export async function createKimiWebDriver(options) {
     const turns = frame.type === 'transcript.reset' ? payload.snapshot?.items : frame.type === 'transcript.ops' ? payload.ops?.filter(op => op.op === 'turn.upsert').map(op => op.turn) : undefined;
     if (!Array.isArray(turns) || !turns.length) return;
     settleModernTurns(captured, turns, Buffer.byteLength(JSON.stringify(frame)));
+  }
+  function settleModernRecovery(captured) {
+    const sessionId = captured.session.nativeSessionId;
+    const key = JSON.stringify([captured.epoch, captured.processGeneration, sessionId]);
+    const existing = modernRecoveryWork.get(key);
+    if (existing) { existing.dirty = true; return; }
+    const entry = { dirty: true };
+    modernRecoveryWork.set(key, entry);
+    if (!scheduled(async () => {
+      try {
+        // Coalesce updates without losing a recovery that arrives during a pass.
+        // Yield the event lane after two passes so other sessions can progress.
+        for (let pass = 0; pass < 2; pass++) {
+          entry.dirty = false;
+          const attachments = [...(selected.get(sessionId)?.values() ?? [])].map(item => item.work ?? item);
+          await Promise.allSettled(attachments);
+          if (!selected.has(sessionId)) return;
+          const snapshot = history.inspect(sessionId).snapshot;
+          await operations.recoverModernInteractions(captured, snapshot, (pending, kind) => {
+            emit({ type: 'interaction.pending', session: captured.session, interactionId: pending.interactionId, kind, payload: pending.payload }, sessionId);
+          });
+          const turns = snapshot.items.filter(turn => turn.kind === 'turn' && typeof turn.triggerPromptId === 'string');
+          const ended = await operations.syncTranscript(captured, turns);
+          if (ended) {
+            noteEndedTask(sessionId, ended.operationId); releaseTask(sessionId, ended.operationId);
+            uncertain.delete(sessionId); forgetRecheck(sessionId); reclaim(sessionId);
+            emit({ type: 'turn.ended', session: captured.session, reason: ended.reason }, sessionId);
+          }
+          if (!entry.dirty) break;
+        }
+      } finally {
+        modernRecoveryWork.delete(key);
+        if (entry.dirty && selected.has(sessionId) && isCurrent(captured)) settleModernRecovery(captured);
+      }
+    })) modernRecoveryWork.delete(key);
   }
   function settleModernInteraction(captured, frame) {
     const sessionId = captured.session.nativeSessionId;

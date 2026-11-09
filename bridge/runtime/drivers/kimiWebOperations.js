@@ -165,16 +165,16 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     if (!prior) await compareRecord(store, 'operations', metadataKey, null, value);
     return key;
   }
-  async function modernInteraction(scope, frame) {
+  async function modernInteraction(scope, frame, recovery) {
     scope = clean(scope);
     fence(scope);
     if (frame.agent_id !== 'main' || !['question', 'approval'].includes(frame.kind) || !['pending', 'ended'].includes(frame.status)) return null;
     const kind = frame.kind;
     const nativeRequestId = nativeText(frame.interaction_id, 'native_request_id', 512);
     const toolCallId = nativeText(frame.tool_call_id, 'native_tool_call_id', 512);
-    const page = record(await transport.request('GET', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/transcript?agent_id=main&page_size=100`));
+    const page = recovery?.page ?? record(await transport.request('GET', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/transcript?agent_id=main&page_size=100`));
     fence(scope);
-    const item = page.interactions?.find(item => item.interactionId === nativeRequestId && item.interactionKind === kind && item.toolCallId === toolCallId);
+    const item = recovery?.item ?? page.interactions?.find(item => item.interactionId === nativeRequestId && item.interactionKind === kind && item.toolCallId === toolCallId);
     if (!item) return null;
     if ((kind === 'question' ? ['answered', 'dismissed', 'cancelled'] : ['approved', 'rejected', 'cancelled']).includes(item.state)) {
       await interactions.invalidatePending(scope, nativeRequestId);
@@ -182,6 +182,7 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     }
     if (item.state !== 'pending' || frame.status !== 'pending') return null;
     const lease = await readRecord(store, 'operations', leaseKey(scope));
+    if (recovery && lease?.value?.operationId !== recovery.operationId) return null;
     if (!lease?.value?.operationId) fail('reconcile_required', 'interaction_parent_unknown');
     const binding = await readRecord(store, 'operations', `kimi-native:${lease.value.operationId}`);
     if (!binding || fingerprint(binding.value.scope) !== fingerprint(scope)) fail('reconcile_required', 'interaction_parent_unknown');
@@ -189,11 +190,40 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     await syncTranscript(scope, turns);
     const request = record(item.request);
     const toolName = kind === 'question' ? 'AskUserQuestion' : nativeText(request.tool_name ?? request.toolName, 'native_tool_name', 512);
-    const turn = turns.find(turn => turn.state === 'running' && turn.steps?.some(step => step.frames?.some(frame => frame.kind === 'tool' && frame.toolCallId === toolCallId && frame.name === toolName)));
+    const proof = recovery?.tools.get(toolCallId);
+    const turn = turns.find(turn => turn.state === 'running' && (recovery ? proof?.turnId === turn.turnId && proof.name === toolName : turn.steps?.some(step => step.frames?.some(frame => frame.kind === 'tool' && frame.toolCallId === toolCallId && frame.name === toolName))));
     if (!turn || (request.session_id ?? request.sessionId) !== scope.session.nativeSessionId || (request.agent_id ?? request.agentId ?? 'main') !== 'main') fail('reconcile_required', 'interaction_turn_unknown');
     const payload = { ...request, ...(kind === 'approval' ? { tool_name: toolName, ...(request.display ? { tool_input_display: request.display } : {}) } : {}), turnId: turn.turnId, turn_id: turn.turnId };
     const interactionId = await pending(scope, kind, nativeRequestId, payload, true);
-    return { interactionId, payload };
+    const canonical = await readRecord(store, 'interactions', interactionId, false);
+    return canonical?.value.phase === 'pending' ? { interactionId, payload } : null;
+  }
+  async function recoverModernInteractions(scope, page, onPending = () => {}) {
+    fence(scope);
+    // Browsing native history does not acquire a task or a process binding.
+    if (!bound.has(fingerprint(scope))) return;
+    const lease = await readRecord(store, 'operations', leaseKey(scope));
+    if (!lease?.value?.operationId) return;
+    const binding = await readRecord(store, 'operations', `kimi-native:${lease.value.operationId}`);
+    if (!binding || fingerprint(binding.value.scope) !== fingerprint(scope)) return;
+    const owned = page.items.filter(turn => turn.kind === 'turn' && turn.triggerPromptId === binding.value.promptId);
+    const tools = new Map();
+    for (const turn of owned) for (const step of turn.steps ?? []) for (const frame of step.frames ?? []) {
+      if (frame.kind !== 'tool') continue;
+      const prior = tools.get(frame.toolCallId);
+      if (prior && (prior.turnId !== turn.turnId || prior.name !== frame.name)) fail('reconcile_required', 'native_tool_identity');
+      tools.set(frame.toolCallId, { turnId: turn.turnId, name: frame.name });
+    }
+    const recovery = { page, operationId: lease.value.operationId, tools };
+    let handled = 0;
+    for (const item of page.interactions ?? []) {
+      if (!tools.has(item.toolCallId) || !['question', 'approval'].includes(item.interactionKind) || !['pending', 'answered', 'dismissed', 'cancelled', 'approved', 'rejected'].includes(item.state)) continue;
+      fence(scope);
+      const pending = await modernInteraction(scope, { agent_id: 'main', kind: item.interactionKind, status: item.state === 'pending' ? 'pending' : 'ended', interaction_id: item.interactionId, tool_call_id: item.toolCallId }, { ...recovery, item });
+      if (pending) onPending(pending, item.interactionKind);
+      // A large owned turn remains incremental; control requests can interleave.
+      if (++handled % 16 === 0) await new Promise(resolve => setImmediate(resolve));
+    }
   }
   async function reply(scope, interactionId, answer, idempotencyKey) {
     scope = clean(scope); answer = clean(answer);
@@ -254,7 +284,7 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     }
     if (failed) throw failed.error;
   }
-  return { instance, send, started, cancel, pending, modernInteraction, reply, terminal, syncTranscript, liveTask, journal, interactions, admission,
+  return { instance, send, started, cancel, pending, modernInteraction, recoverModernInteractions, reply, terminal, syncTranscript, liveTask, journal, interactions, admission,
     async invalidate(scope) { await interactions.processExited(scope); },
     close,
   };

@@ -144,6 +144,9 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
   async function invalidatePending(input, nativeRequestId) {
     const scope = parseOperationScope(input);
     const key = keyFor(scope, nativeRequestId);
+    await assertStoreScope(scope);
+    const existing = await readRecord(store, 'interactions', key, false);
+    if (!existing || existing.value.kind !== 'interaction' || existing.value.phase !== 'pending') return;
     return admission.run({ reserved: true }, async (signal) => {
       const { token } = await authority(scope);
       for (let attempt = 0; attempt < 4; attempt++) {
