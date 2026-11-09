@@ -9,6 +9,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createAcpSessions } from '../../bridge/runtime/drivers/acpSessions.js';
+import { createIndexMutations } from '../../bridge/runtime/indexMutations.js';
+import { createWorkspaceCatalog } from '../../bridge/runtime/workspaceCatalog.js';
 import { createIndexDiscovery } from '../../bridge/runtime/indexDiscovery.js';
 import { createDiscoveryScheduler } from '../../bridge/runtime/discoveryScheduler.js';
 import { sourceIdentity } from '../../bridge/runtime/sessionSummaries.js';
@@ -83,12 +85,12 @@ function nativeAnswer(prefix: string, count: number, nextCursor: string | null =
     ...(nextCursor === null ? {} : { nextCursor }),
   } as unknown as JsonValue;
 }
-async function withStore(run: (store: Awaited<ReturnType<typeof createRuntimeStore>>) => Promise<void>) {
+async function withStore(run: (store: Awaited<ReturnType<typeof createRuntimeStore>>, directory: string) => Promise<void>) {
   const directory = await mkdtemp(path.join(tmpdir(), 'acp-session-pages-'));
   const store = createRuntimeStore({ stateDirectory: directory, environmentId, ownerId: randomUUID(), epoch: instanceId });
   try {
     await store.ready;
-    await run(store);
+    await run(store, directory);
   } finally {
     await store.close();
     await rm(directory, { recursive: true, force: true });
@@ -108,6 +110,56 @@ function drain(adapter: ReturnType<typeof createAcpSessions>) {
 }
 
 describe('ACP session pages', () => {
+  it.each(['shared', 'distinct'] as const)('durably indexes all 1000 summaries with %s directories through slow production SQLite mutations', async mode => {
+    await withStore(async (store, stateDirectory) => {
+      const mutate = store.mutate.bind(store);
+      store.mutate = async input => {
+        // Exercise real worker transactions under a controlled fsync-latency envelope.
+        await new Promise(resolve => setTimeout(resolve, 80));
+        return mutate(input);
+      };
+      const answer = { sessions: Array.from({ length: 1000 }, (_, index) => ({ sessionId: `durable-${index}`, cwd: mode === 'shared' ? '/repo' : `/repo-${index}`, title: `durable-${index}` })) };
+      const { rpc, requests } = acpRpc([answer]);
+      const adapter = createAcpSessions({ rpc, mutations: acpMutations(), capabilities: acpCapabilities(), queue: acpQueue(), cwd: '/repo', emit: () => {} });
+      const scheduler = createDiscoveryScheduler();
+      const catalog = createWorkspaceCatalog({ store, git: { async probe() { return unavailable('background Git probe'); } } });
+      const mutations = createIndexMutations({ store, catalog, resolveWorkspace: async ({ directory }) => ({ environmentId, canonicalPath: directory, pathPolicy: { platform: 'posix', caseSensitive: true, volumeId: 'test-volume' } }) });
+      const discovery = createIndexDiscovery({ store, scheduler, mutations });
+      try {
+        const result = await discovery.discover({
+          identity: sourceIdentity({ kind: 'acp', environmentId, harnessInstanceId }),
+          authority: () => ({ epoch: instanceId, processGeneration: 1 }), serial: () => 0, assertCurrent() {},
+          list: params => adapter.list(typeof params.cursor === 'string' ? { cursor: params.cursor } : {}),
+        });
+        expect(result).toMatchObject({ status: 'complete', count: 1000 });
+        let cursor: string | null = null;
+        const ids: string[] = [];
+        do {
+          const page = await store.page({ collection: 'session_summaries', limit: 200, cursor });
+          for (const item of page.items) {
+            const value = item.value as { session: { nativeSessionId: string } };
+            ids.push(value.session.nativeSessionId);
+          }
+          cursor = page.cursor;
+        } while (cursor !== null);
+        expect(new Set(ids).size).toBe(1000);
+        expect(requests).toHaveLength(1);
+        await store.close();
+        const reopened = createRuntimeStore({ stateDirectory, environmentId, ownerId: randomUUID(), epoch: instanceId });
+        try {
+          await reopened.ready;
+          let resumed: string | null = null;
+          let count = 0;
+          do {
+            const page = await reopened.page({ collection: 'session_summaries', limit: 200, cursor: resumed });
+            count += page.items.length;
+            resumed = page.cursor;
+          } while (resumed !== null);
+          expect(count).toBe(1000);
+        } finally { await reopened.close(); }
+      } finally { await scheduler.close(); }
+    });
+  }, 60000);
   it('pages every legal native answer of 201-1000 summaries into index-sized pages', async () => {
     for (const count of [0, 200, 201, 202, 399, 400, 401, 599, 600, 601, 799, 800, 801, 999, 1000]) {
       const { rpc, requests } = acpRpc([nativeAnswer('acp', count)]);

@@ -18,6 +18,27 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
     workspaces.set(cacheKey, key);
     return key;
   }
+  async function workspaceBatch(scan, items) {
+    const resolved = new Map([[null, null]]), pending = [];
+    for (const { directory } of items) {
+      if (resolved.has(directory)) continue;
+      const cacheKey = JSON.stringify([scan.source.environmentId, scan.source.harnessInstanceId, scan.authority, directory]);
+      if (workspaces.has(cacheKey)) { resolved.set(directory, workspaces.get(cacheKey)); continue; }
+      const workspace = await resolveWorkspace({ source: scan.source, directory });
+      scan.assertCurrent();
+      if (workspace.environmentId !== scan.source.environmentId) throw new StoreError('unauthorized', 'index_workspace_target');
+      pending.push({ directory, cacheKey, workspace });
+      resolved.set(directory, null);
+    }
+    const keys = await catalog.registerMany(pending.map(({ workspace }) => ({ workspace, harnessInstanceId: scan.source.harnessInstanceId, harness: scan.source.kind === 'kimi-web' ? 'kimi' : scan.source.kind })));
+    scan.assertCurrent();
+    pending.forEach(({ directory, cacheKey }, index) => {
+      const key = keys[index];
+      if (workspaces.size >= 512) workspaces.delete(workspaces.keys().next().value);
+      workspaces.set(cacheKey, key); resolved.set(directory, key);
+    });
+    return resolved;
+  }
   async function replace(key, build, assertCurrent) {
     for (let attempt = 0; attempt < 8; attempt++) {
       assertCurrent();
@@ -38,22 +59,39 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
   }
   return {
     async apply(scan, items) {
-      let applied = 0;
-      for (const summary of items) {
+      if (!Array.isArray(items) || items.length > (scan.source.kind === 'acp' ? 1000 : 200)) throw new StoreError('invalid_request', 'index_page_budget');
+      const summaries = new Map();
+      async function flush() {
+      for (let attempt = 0; attempt < 8; attempt++) {
         scan.assertCurrent();
-        if (!matchesScope(summary, scan.scope)) continue;
-        const workspaceKey = await workspaceFor(scan.source, scan.authority, summary.directory, scan.assertCurrent);
-        let newlyObserved = false;
-        const changed = await replace(encodeSessionKey(summary.session), (prior) => {
-          if (prior && prior.value === null && prior.revision > scan.startRevision) return undefined;
-          newlyObserved = !prior?.value?._index?.seen?.includes(scan.id);
+        const changes = [];
+        let applied = 0;
+        for (const [key, { summary, workspaceKey }] of summaries) {
+          const prior = await store.get({ collection: 'session_summaries', key });
+          scan.assertCurrent();
+          if (prior && prior.value === null && prior.revision > scan.startRevision) continue;
+          if (!prior?.value?._index?.seen?.includes(scan.id)) applied++;
           const seen = [...(prior?.value?._index?.seen ?? []).filter((id) => id !== scan.id), scan.id].slice(-8);
-          if (prior?.value && prior.revision > scan.startRevision && prior.value._index?.scanId !== scan.id) {
-            return { ...prior.value, _index: { ...prior.value._index, seen } };
-          }
-          return { ...summary, workspaceKey, _index: { authority: scan.authority, scanId: scan.id, seen } };
-        }, scan.assertCurrent);
-        if (changed && newlyObserved) applied++;
+          const value = prior?.value && prior.revision > scan.startRevision && prior.value._index?.scanId !== scan.id
+            ? { ...prior.value, _index: { ...prior.value._index, seen } }
+            : { ...summary, workspaceKey, _index: { authority: scan.authority, scanId: scan.id, seen } };
+          changes.push({ collection: 'session_summaries', key, expectedRevision: prior?.revision ?? 0, value });
+        }
+        if (!changes.length) return 0;
+        try {
+          await store.mutate({ intentId: randomUUID(), changes });
+          onCommit(); scan.assertCurrent(); return applied;
+        } catch (error) { if (error?.code !== 'conflict') throw error; }
+      }
+      throw new StoreError('conflict', 'index_contention');
+      }
+      let applied = 0;
+      const matching = items.filter(summary => matchesScope(summary, scan.scope));
+      for (let offset = 0; offset < matching.length; offset += 20) {
+        scan.assertCurrent();
+        const chunk = matching.slice(offset, offset + 20), resolved = await workspaceBatch(scan, chunk);
+        for (const summary of chunk) summaries.set(encodeSessionKey(summary.session), { summary, workspaceKey: resolved.get(summary.directory) });
+        applied += await flush(); summaries.clear();
       }
       return applied;
     },

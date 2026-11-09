@@ -5,10 +5,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createRuntimeStore } from '../../bridge/runtime/storage/runtimeStore.js';
+import { createWorkspaceCatalog } from '../../bridge/runtime/workspaceCatalog.js';
 import { createSessionIndex } from '../../bridge/runtime/sessionIndex.js';
 import { createHarnessRegistry, CORE_OPERATIONS, unsupported } from '../../shared/runtime/harnessContract.js';
 import type { HarnessKind, HarnessManifest, CoreOperation, HarnessContext } from '../../shared/runtime/harnessContract.js';
-import { encodeWorkspaceKey, parseEnvironmentId, parseHarnessInstanceId, parseSessionRef, encodeSessionKey } from '../../shared/runtime/identity.js';
+import { parseEnvironmentId, parseHarnessInstanceId, parseSessionRef, encodeSessionKey } from '../../shared/runtime/identity.js';
 import { nativePage, sourceIdentity } from '../../bridge/runtime/sessionSummaries.js';
 import { createNativeEventIntake } from '../../bridge/runtime/nativeEventIntake.js';
 
@@ -30,16 +31,7 @@ async function fixture(list: (context: HarnessContext) => Promise<unknown>, run:
   registry.register({ manifest: manifest(kind), driver: { core: { listSessionPage: list }, native: {} } });
   const directories: string[] = [];
   const generation = { value: 1 };
-  const index = createSessionIndex({ store, registry, catalog: {
-    async register({ workspace }) {
-      const key = encodeWorkspaceKey(workspace);
-      const prior = await store.get({ collection: 'workspaces', key });
-      await store.mutate({ intentId: randomUUID(), changes: [{ collection: 'workspaces', key, expectedRevision: prior?.revision ?? 0, value: { workspace } }] });
-      return key;
-    },
-    page: (input = {}) => store.page({ ...input, collection: 'workspaces' }),
-    async probe() { throw new Error('background Git probe'); },
-  }, resolveWorkspace: async ({ directory: canonicalPath }) => {
+  const index = createSessionIndex({ store, registry, catalog: createWorkspaceCatalog({ store, git: { async probe() { throw new Error('background Git probe'); } } }), resolveWorkspace: async ({ directory: canonicalPath }) => {
     directories.push(canonicalPath);
     return { environmentId, canonicalPath, pathPolicy: { platform: 'posix', caseSensitive: true, volumeId: 'test-volume' } };
   } });
