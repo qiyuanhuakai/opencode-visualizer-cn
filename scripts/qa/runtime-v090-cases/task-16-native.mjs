@@ -30,7 +30,7 @@ async function released(port) {
   await new Promise((resolve) => server.close(resolve)); return true;
 }
 export async function startNativeKimi({ temporaryRoot, recordResource }) {
-  const binary = path.join(homedir(), '.kimi-code/bin/kimi');
+  const binary = process.env.VIS_KIMI_QA_BINARY ? path.resolve(process.env.VIS_KIMI_QA_BINARY) : path.join(homedir(), '.kimi-code/bin/kimi');
   const binaryBytes = await readFile(binary);
   const binaryHash = createHash('sha256').update(binaryBytes).digest('hex');
   const resolver = binaryBytes.indexOf('function getDataDir()');
@@ -46,7 +46,7 @@ export async function startNativeKimi({ temporaryRoot, recordResource }) {
   await writeFile(path.join(data, 'config.toml'), 'telemetry = false\nauto_session_title = false\nmerge_all_available_skills = false\n');
   const env = { PATH: process.env.PATH, HOME: root, KIMI_CODE_HOME: data, XDG_CONFIG_HOME: path.join(root, 'config'), XDG_DATA_HOME: path.join(root, 'xdg'), TERM: 'dumb' };
   const version = spawnSync(binary, ['--version'], { env, cwd: workspace, encoding: 'utf8', timeout: 15000 });
-  assert.equal(version.status, 0); assert.match(version.stdout, /2\.1\.1/u, 'actual compatibility profile');
+  assert.equal(version.status, 0); assert.equal(version.stdout.trim(), '2.1.1', 'actual compatibility profile');
   const listing = spawnSync(binary, ['session', 'list', '--all', '--json'], { env, cwd: workspace, encoding: 'utf8', timeout: 15000 });
   assert.equal(listing.status, 0); assert.deepEqual(JSON.parse(listing.stdout), [], 'private native CLI inventory starts empty');
   const provider = createKimiWebTokenProvider({ tokenPath: path.join(data, 'server.token') });
