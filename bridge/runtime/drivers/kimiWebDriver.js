@@ -188,6 +188,11 @@ export async function createKimiWebDriver(options) {
   const operations = transport ? createKimiWebOperations({ store: options.store, transport, isCurrent, promptAbort: () => capabilities.promptAbort, admission }) : undefined;
   const history = transport ? createKimiWebHistory({ transport, legacySnapshot: () => capabilities.snapshot, onRecovered(sessionId, result) {
     stats.recoveries++; emit({ type: 'resynchronized', session: { ...scope, nativeSessionId: sessionId }, ...result }, sessionId);
+    if (capabilities.promptAbort && !capabilities.snapshot && selected.has(sessionId)) {
+      const snapshot = history.inspect(sessionId);
+      const turns = snapshot.snapshot.items.filter(turn => turn.kind === 'turn' && typeof turn.triggerPromptId === 'string').map(turn => ({ kind: 'turn', turnId: turn.turnId, triggerPromptId: turn.triggerPromptId, state: turn.state }));
+      settleModernTurns(Object.freeze({ target: scope.environmentId, ...authority(), session: { ...scope, nativeSessionId: sessionId } }), turns);
+    }
   } }) : undefined;
   function requireCapability(name) { if (!capabilities[name]) throw new ProtocolError('unsupported', `kimi_${name}`); }
   function scheduled(action, bytes = 0) {
@@ -250,13 +255,20 @@ export async function createKimiWebDriver(options) {
     if (!Number.isSafeInteger(payload.seq) || payload.seq < 0) return;
     const turns = frame.type === 'transcript.reset' ? payload.snapshot?.items : frame.type === 'transcript.ops' ? payload.ops?.filter(op => op.op === 'turn.upsert').map(op => op.turn) : undefined;
     if (!Array.isArray(turns) || !turns.length) return;
+    settleModernTurns(captured, turns, Buffer.byteLength(JSON.stringify(frame)));
+  }
+  function settleModernTurns(captured, turns, bytes = 0) {
+    if (!turns.length) return;
+    const sessionId = captured.session.nativeSessionId;
+    const attachments = [...(selected.get(sessionId)?.values() ?? [])].map(entry => entry.work ?? entry);
     scheduled(async () => {
+      await Promise.all(attachments);
       const ended = await operations.syncTranscript(captured, turns);
       if (!ended) return;
       noteEndedTask(sessionId, ended.operationId); releaseTask(sessionId, ended.operationId);
       uncertain.delete(sessionId); forgetRecheck(sessionId); reclaim(sessionId);
       emit({ type: 'turn.ended', session: captured.session, reason: ended.reason }, sessionId);
-    }, Buffer.byteLength(JSON.stringify(frame)));
+    }, bytes || Buffer.byteLength(JSON.stringify(turns)));
   }
   function onLifecycle(frame) {
     stats.lifecycleFrames++;
@@ -381,11 +393,12 @@ export async function createKimiWebDriver(options) {
     },
     async getSession(context) {
       const captured = capture(context, true);
-      requireCapability(capabilities.snapshot ? 'snapshot' : 'sessionRead');
+      const useSnapshot = capabilities.snapshot;
+      requireCapability(useSnapshot ? 'snapshot' : 'sessionRead');
       const path = `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}`;
-      const value = record(await transport.request('GET', capabilities.snapshot ? `${path}/snapshot` : path));
+      const value = record(await transport.request('GET', useSnapshot ? `${path}/snapshot` : path));
       fence(captured);
-      return sessionSummary(capabilities.snapshot ? value.session : value, scope);
+      return sessionSummary(useSnapshot ? value.session : value, scope);
     },
     async readHistoryPage(context) {
       const captured = capture(context, true); requireCapability('transcript');

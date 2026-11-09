@@ -19,7 +19,7 @@ export const sourceFiles = [
   'bridge/runtime/storage/schema.js', 'bridge/runtime/storage/storeProtocol.js', 'bridge/runtime/storage/storeQueries.js', 'bridge/runtime/storage/localFilesystem.js',
   'bridge/kimiWebToken.js', 'bridge/webSocketFrames.js', 'bridge/codexWebSocketProxy.js', 'bridge/bridgeHttp.js',
   'app/runtime/drivers/kimiWebDriver.test.ts',
-  'app/runtime/drivers/kimiWebSessionRelease.test.ts',
+  'app/runtime/drivers/kimiWebSessionRelease.test.ts', 'app/runtime/drivers/kimiWebReviewRecovery.test.ts',
 ];
 const scope = { environmentId: '11111111-1111-4111-8111-111111111111', harnessInstanceId: '22222222-2222-4222-8222-222222222222' };
 const epoch = '33333333-3333-4333-8333-333333333333';
