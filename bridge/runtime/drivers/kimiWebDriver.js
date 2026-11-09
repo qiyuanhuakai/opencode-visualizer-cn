@@ -186,7 +186,7 @@ export async function createKimiWebDriver(options) {
   }
   function fence(candidate) { if (!isCurrent(candidate)) throw new ProtocolError('reconcile_required', 'stale_generation'); }
   const operations = transport ? createKimiWebOperations({ store: options.store, transport, isCurrent, admission }) : undefined;
-  const history = transport ? createKimiWebHistory({ transport, onRecovered(sessionId, result) {
+  const history = transport ? createKimiWebHistory({ transport, legacySnapshot: () => capabilities.snapshot, onRecovered(sessionId, result) {
     stats.recoveries++; emit({ type: 'resynchronized', session: { ...scope, nativeSessionId: sessionId }, ...result }, sessionId);
   } }) : undefined;
   function requireCapability(name) { if (!capabilities[name]) throw new ProtocolError('unsupported', `kimi_${name}`); }
@@ -310,12 +310,14 @@ export async function createKimiWebDriver(options) {
     }
     return { state, protocolVersion: 1 };
   }
+  function supportsHistory() { return capabilities.transcript && capabilities.subscribeV2 && (capabilities.snapshot ? capabilities.subscribe : capabilities.sessionRead); }
+  function requireHistory() { if (!supportsHistory()) throw new ProtocolError('unsupported', 'kimi.history'); }
   async function connect() {
-    requireCapability('subscribeV2'); requireCapability('subscribe');
+    requireCapability('subscribeV2'); if (capabilities.snapshot) requireCapability('subscribe');
     await transport.open(onFrame, () => { stats.sourceDisconnects++; if (!closed) emit({ type: 'source_disconnected' }); });
   }
   async function subscribeSession(sessionId, agentId = 'main') {
-    requireCapability('subscribeV2'); requireCapability('snapshot'); requireCapability('transcript');
+    requireHistory();
     history.selected(sessionId, agentId);
     let pending = selected.get(sessionId);
     if (!pending) { pending = new Map(); selected.set(sessionId, pending); }
@@ -324,11 +326,13 @@ export async function createKimiWebDriver(options) {
     const work = (async () => {
       if (!history.cursor(sessionId)) await history.recover(sessionId);
       await connect();
-      await subscribeLifecycle(sessionId);
-      const cursor = history.cursor(sessionId);
-      const replay = await transport.control('subscribe', { session_ids: [sessionId], ...(cursor ? { cursors: { [sessionId]: cursor } } : {}) });
-      if (replay.payload.not_found?.includes(sessionId)) throw new ProtocolError('source_unavailable', 'native_session_missing');
-      if (replay.resync.includes(sessionId)) await history.recover(sessionId);
+      if (capabilities.snapshot) {
+        await subscribeLifecycle(sessionId);
+        const cursor = history.cursor(sessionId);
+        const replay = await transport.control('subscribe', { session_ids: [sessionId], ...(cursor ? { cursors: { [sessionId]: cursor } } : {}) });
+        if (replay.payload.not_found?.includes(sessionId)) throw new ProtocolError('source_unavailable', 'native_session_missing');
+        if (replay.resync.includes(sessionId)) await history.recover(sessionId);
+        }
       const since = history.transcriptCursors(sessionId);
       const grades = Object.fromEntries([...new Set([...pending.keys()].map((entry) => entry.slice(entry.indexOf(':') + 1)).concat(agentId))].map((id) => [id, 'delta']));
       const attached = await transport.control('subscribe_v2', { session_id: sessionId, transcript: grades, ...(Object.keys(since).length ? { transcript_since: since } : {}) });
@@ -489,9 +493,9 @@ export async function createKimiWebDriver(options) {
   const denied = unsupported('native capability not verified');
   const support = {
     inspect: true, close: true, listSessionPage: capabilities.catalogV2,
-    getSession: capabilities.snapshot || capabilities.sessionRead, readHistoryPage: capabilities.transcript && capabilities.subscribeV2 && capabilities.snapshot,
+    getSession: capabilities.snapshot || capabilities.sessionRead, readHistoryPage: supportsHistory(),
     createSession: capabilities.create,
-    subscribe: capabilities.subscribeV2 && capabilities.subscribe && capabilities.snapshot,
+    subscribe: supportsHistory(),
     send: capabilities.send && capabilities.subscribeV2 && capabilities.subscribe && capabilities.snapshot,
     cancel: capabilities.cancel, respondInteraction: capabilities.approvals || capabilities.questions,
   };

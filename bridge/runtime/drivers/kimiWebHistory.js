@@ -5,7 +5,7 @@ import { transcriptPage, transcriptSnapshot, applyTranscriptOps, mergeOlderTrans
 const MAX_BYTES = 16777216;
 const MAX_RECOVERY_BYTES = 4194304;
 const empty = () => transcriptSnapshot({ items: [], tasks: [], meta: {} });
-export function createKimiWebHistory({ transport, onRecovered = () => {} }) {
+export function createKimiWebHistory({ transport, legacySnapshot = () => true, onRecovered = () => {} }) {
   const sessions = new Map();
   function selected(sessionId, agentId = 'main') {
     nativeText(sessionId, 'session_id', 512);
@@ -99,9 +99,9 @@ export function createKimiWebHistory({ transport, onRecovered = () => {} }) {
     if (session.recovering) return session.recovering;
     session.buffer = []; session.bytes = 0; session.failure = undefined;
     session.recovering = (async () => {
-      const snapshot = record(await transport.request('GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/snapshot`), 'native_snapshot');
-      const epoch = nativeText(snapshot.epoch, 'native_epoch', 512);
-      const seq = nativeInteger(snapshot.as_of_seq, 'native_sequence');
+      const snapshot = legacySnapshot() ? record(await transport.request('GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/snapshot`), 'native_snapshot') : undefined;
+      const epoch = snapshot ? nativeText(snapshot.epoch, 'native_epoch', 512) : undefined;
+      const seq = snapshot ? nativeInteger(snapshot.as_of_seq, 'native_sequence') : undefined;
       const pages = [];
       for (const [agentId] of session.agents) {
         const query = new URLSearchParams({ agent_id: agentId, page_size: '100' });
@@ -109,17 +109,17 @@ export function createKimiWebHistory({ transport, onRecovered = () => {} }) {
         pages.push([agentId, page]);
       }
       if (session.failure) throw session.failure;
-      if (session.buffer.some(({ frame }) => frame.epoch && frame.epoch !== epoch)) throw new ProtocolError('replay_required', 'recovery_epoch_changed');
+      if (snapshot && session.buffer.some(({ frame }) => frame.epoch && frame.epoch !== epoch)) throw new ProtocolError('replay_required', 'recovery_epoch_changed');
       const prior = new Map([...session.agents].map(([key, agent]) => [key, { snapshot: agent.snapshot, seq: agent.seq }]));
       for (const [agentId, page] of pages) { const agent = session.agents.get(agentId); agent.snapshot = transcriptSnapshot(page); agent.seq = page.seq; agent.offsets.clear(); }
       try { budget(); } catch (error) { for (const [key, value] of prior) Object.assign(session.agents.get(key), value); throw error; }
-      session.cursor = { epoch, seq };
+      session.cursor = snapshot ? { epoch, seq } : undefined;
       const buffered = session.buffer;
-      const recovered = recoverSnapshotFrames(snapshot, buffered.map(({ frame }) => frame));
+      const recovered = snapshot ? recoverSnapshotFrames(snapshot, buffered.map(({ frame }) => frame)) : buffered.map(({ frame }) => frame);
       for (const frame of recovered) receive(frame, buffered.at(-1)?.connection ?? 0, true);
       session.version++;
-      onRecovered(sessionId, { cursor: session.cursor, buffered: buffered.length });
-      return { cursor: session.cursor, recovered: true };
+      onRecovered(sessionId, { cursor: session.cursor ?? null, buffered: buffered.length });
+      return { cursor: session.cursor ?? null, recovered: true };
     })();
     try { return await session.recovering; }
     finally { session.recovering = undefined; session.buffer = []; session.bytes = 0; }
