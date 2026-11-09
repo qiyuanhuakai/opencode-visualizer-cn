@@ -246,6 +246,15 @@ export async function createKimiWebDriver(options) {
   function onModernLifecycle(frame, captured) {
     const sessionId = captured.session.nativeSessionId;
     if (!selected.has(sessionId)) return;
+    if (capabilities.modernQuestions && frame.type === 'interaction' && frame.agent_id === 'main' && frame.kind === 'question' && frame.status === 'pending') {
+      const attachments = [...(selected.get(sessionId)?.values() ?? [])].map(entry => entry.work ?? entry);
+      scheduled(async () => {
+        await Promise.allSettled(attachments);
+        const pending = await operations.modernQuestion(captured, frame);
+        if (pending) emit({ type: 'interaction.pending', session: captured.session, interactionId: pending.interactionId, kind: 'question', payload: pending.payload }, sessionId);
+      }, Buffer.byteLength(JSON.stringify(frame)));
+      return;
+    }
     const payload = frame.payload ?? {};
     if ((payload.agent_id ?? payload.agentId ?? 'main') !== 'main') return;
     if (frame.type === 'event.session.work_changed' && typeof payload.busy === 'boolean') {

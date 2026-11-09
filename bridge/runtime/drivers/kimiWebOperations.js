@@ -148,7 +148,7 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     const prepared = await transport.prepare('POST', pathname);
     return control(scope, operationId, 'cancel', {}, idempotencyKey, prepared);
   }
-  async function pending(scope, kind, nativeRequestId, payload) {
+  async function pending(scope, kind, nativeRequestId, payload, modern = false) {
     scope = clean(scope); payload = clean(payload);
     await bind(scope);
     const lease = await readRecord(store, 'operations', leaseKey(scope));
@@ -160,10 +160,32 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     const key = await interactions.pending({ scope, nativeRequestId, payload: { kind, nativeRequestId, details: payload } });
     const metadataKey = `kimi-interaction:${key}`;
     const prior = await readRecord(store, 'operations', metadataKey);
-    const value = { scope, kind, nativeRequestId, parentOperationId: lease.value.operationId };
+    const value = { scope, kind, nativeRequestId, parentOperationId: lease.value.operationId, ...(modern ? { modern: true } : {}) };
     if (prior && fingerprint(prior.value) !== fingerprint(value)) fail('conflict', 'interaction_parent_changed');
     if (!prior) await compareRecord(store, 'operations', metadataKey, null, value);
     return key;
+  }
+  async function modernQuestion(scope, frame) {
+    scope = clean(scope);
+    fence(scope);
+    if (frame.agent_id !== 'main' || frame.kind !== 'question' || frame.status !== 'pending') return null;
+    const nativeRequestId = nativeText(frame.interaction_id, 'native_request_id', 512);
+    const toolCallId = nativeText(frame.tool_call_id, 'native_tool_call_id', 512);
+    const page = record(await transport.request('GET', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/transcript?agent_id=main&page_size=100`));
+    fence(scope);
+    const item = page.interactions?.find(item => item.interactionId === nativeRequestId && item.interactionKind === 'question' && item.state === 'pending' && item.toolCallId === toolCallId);
+    if (!item) return null;
+    const lease = await readRecord(store, 'operations', leaseKey(scope));
+    if (!lease?.value?.operationId) fail('reconcile_required', 'interaction_parent_unknown');
+    const binding = await readRecord(store, 'operations', `kimi-native:${lease.value.operationId}`);
+    if (!binding || fingerprint(binding.value.scope) !== fingerprint(scope)) fail('reconcile_required', 'interaction_parent_unknown');
+    const turns = (page.items ?? []).filter(turn => turn.kind === 'turn' && turn.triggerPromptId === binding.value.promptId);
+    await syncTranscript(scope, turns);
+    const turn = turns.find(turn => turn.state === 'running' && turn.steps?.some(step => step.frames?.some(frame => frame.kind === 'tool' && frame.toolCallId === toolCallId && frame.name === 'AskUserQuestion')));
+    if (!turn || item.request?.session_id !== scope.session.nativeSessionId) fail('reconcile_required', 'interaction_turn_unknown');
+    const payload = { ...record(item.request), turnId: turn.turnId, turn_id: turn.turnId };
+    const interactionId = await pending(scope, 'question', nativeRequestId, payload, true);
+    return { interactionId, payload };
   }
   async function reply(scope, interactionId, answer, idempotencyKey) {
     scope = clean(scope); answer = clean(answer);
@@ -171,7 +193,9 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     if (!metadata || fingerprint(metadata.value.scope) !== fingerprint(scope)) fail('conflict', 'interaction_scope');
     const { kind, nativeRequestId, parentOperationId } = metadata.value;
     if (kind !== 'approval' && kind !== 'question') fail('invalid_request', 'interaction_kind');
-    const prepared = await transport.prepare('POST', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/${kind === 'approval' ? 'approvals' : 'questions'}/${encodeURIComponent(nativeRequestId)}`, answer);
+    const prepared = metadata.value.modern === true
+      ? await transport.prepare('POST', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/interactions/${encodeURIComponent(nativeRequestId)}`, answer.dismiss === true ? { kind, dismissed: true } : { ...answer, kind })
+      : await transport.prepare('POST', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/${kind === 'approval' ? 'approvals' : 'questions'}/${encodeURIComponent(nativeRequestId)}`, answer);
     return control(scope, parentOperationId, 'respondInteraction', { interactionId, answer }, idempotencyKey, prepared,
       (enqueue) => interactions.reply(interactionId, scope, answer, ({ signal }) => enqueue(signal)));
   }
@@ -222,7 +246,7 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     }
     if (failed) throw failed.error;
   }
-  return { instance, send, started, cancel, pending, reply, terminal, syncTranscript, liveTask, journal, interactions, admission,
+  return { instance, send, started, cancel, pending, modernQuestion, reply, terminal, syncTranscript, liveTask, journal, interactions, admission,
     async invalidate(scope) { await interactions.processExited(scope); },
     close,
   };

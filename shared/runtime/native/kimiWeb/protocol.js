@@ -95,6 +95,7 @@ export function parseNativeCapabilities(metaValue, openapiValue, asyncapiValue) 
   const promptAbort = v2 && meta.server_version === '2.5.2' && paths['/api/v1/sessions/{session_id}/prompts/{tail}']?.post?.operationId === 'promptAction';
   return Object.freeze({
     promptAbort,
+    modernQuestions: promptAbort && route('/api/v1/sessions/{session_id}/interactions/{interaction_id}', 'post'),
     catalogV2: v2 && route('/api/v2/sessions'),
     transcript: route('/api/v1/sessions/{session_id}/transcript'),
     snapshot: route('/api/v1/sessions/{session_id}/snapshot'),
@@ -105,7 +106,7 @@ export function parseNativeCapabilities(metaValue, openapiValue, asyncapiValue) 
     send: route('/api/v1/sessions/{session_id}/prompts', 'post'),
     cancel: route('/api/v1/sessions/{session_id}:abort', 'post') || knownAbortDispatcher || promptAbort,
     approvals: route('/api/v1/sessions/{session_id}/approvals/{approval_id}', 'post'),
-    questions: route('/api/v1/sessions/{session_id}/questions/{tail}', 'post'),
+    questions: route('/api/v1/sessions/{session_id}/questions/{tail}', 'post') || (promptAbort && route('/api/v1/sessions/{session_id}/interactions/{interaction_id}', 'post')),
     models: route('/api/v1/models'),
     agents: route('/api/v1/sessions/{session_id}/agents'),
     status: route('/api/v1/sessions/{session_id}/status'),

@@ -10,6 +10,7 @@ export interface KimiFrame {
 }
 export interface KimiCapabilities {
   readonly promptAbort: boolean;
+  readonly modernQuestions: boolean;
   readonly catalogV2: boolean; readonly transcript: boolean; readonly snapshot: boolean; readonly sessionRead: boolean;
   readonly subscribeV2: boolean; readonly subscribe: boolean; readonly create: boolean;
   readonly send: boolean; readonly cancel: boolean; readonly approvals: boolean;
