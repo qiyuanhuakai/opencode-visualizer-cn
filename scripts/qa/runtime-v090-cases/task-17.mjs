@@ -31,6 +31,7 @@ const session = { ...identity, nativeSessionId: 'native-1' };
 const ctx = (params = {}, ref) => ({ ...identity, ...(ref ? { session: ref } : {}), params });
 
 export async function run(context) {
+  const implementationStatusBefore = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: context.root, encoding: 'utf8' });
   const prefix = `${context.case}-${Date.now()}-${process.pid}`;
   const raw = { registrations: [], cleanup: [], wire: [], events: [], native: [], sql: [], errors: [] }, scenarios = [], artifacts = [];
   const evidence = (suffix) => path.join(context.outDir, `${prefix}-${suffix}.json`);
@@ -339,10 +340,10 @@ export async function run(context) {
       sql(replacement.directory); fixture.state.afterRpc = undefined;
     }
     const dirty = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: context.root, encoding: 'utf8' });
-    check('dirty implementation worktree retained for review without commit', dirty.includes('bridge/runtime/drivers/dshDriver.js'), true);
+    check('runtime QA preserves implementation worktree status', dirty, implementationStatusBefore);
     raw.dirtyWorktree = dirty;
     const sourceAfter = Object.fromEntries(await Promise.all(sourceFiles.map(async (file) => [file, digest(await readFile(path.join(context.root, file)))])));
-    check('runtime QA leaves dirty source bytes and unrelated uncommitted file intact', { sourceHashes: sourceAfter, fileHash: digest(await readFile(dirtyPath)), status: execFileSync('git', ['status', '--porcelain'], { cwd: dirtyDirectory, encoding: 'utf8' }).trim() },
+    check('runtime QA leaves source bytes and unrelated uncommitted file intact', { sourceHashes: sourceAfter, fileHash: digest(await readFile(dirtyPath)), status: execFileSync('git', ['status', '--porcelain'], { cwd: dirtyDirectory, encoding: 'utf8' }).trim() },
       { sourceHashes: sourceBefore, fileHash: dirtyHash, status: '?? uncommitted-user-note.txt' });
   } catch (error) {
     raw.errors.push({ fatal: true, message: error.message, stack: error.stack });
