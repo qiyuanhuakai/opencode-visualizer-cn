@@ -10,7 +10,7 @@ import { CORE_OPERATIONS, unsupported } from '../../../shared/runtime/harnessCon
 import { readRecord, compareRecord, fingerprint } from '../operationJournal.js';
 
 const supported = Object.freeze({ state: 'supported' });
-const SELECTED_SLOTS = 4, SNAPSHOT_SLOTS = 3, SNAPSHOT_TTL_MS = 60000, SNAPSHOT_BUDGET_BYTES = 33554432;
+const SELECTED_SLOTS = 4, SNAPSHOT_SLOTS = 3, SNAPSHOT_TTL_MS = 60000, SNAPSHOT_BUDGET_BYTES = 33554432, NATIVE_EVENT_LIMIT = 256;
 const EXTENSIONS = Object.freeze({
   'dsh.providers.list': { method: 'session/modelCatalog', scope: 'instance' },
   'dsh.models.list': { method: 'session/modelCatalog', scope: 'instance' },
@@ -28,6 +28,8 @@ export function createDshDriver(options) {
   let mux, connecting, clientId, liveGeneration = 0, closed = false, reconnectTimer, reconnectAttempt = 0, retryBlocked = false;
   let closing;
   const invalidations = new Set();
+  const receiving = new Set();
+  let invalidationDrain;
   const pendingWork = new Set();
   const now = options.now ?? Date.now;
   let retainSeq = 0;
@@ -96,14 +98,43 @@ export function createDshDriver(options) {
   async function invalidate(delivery) {
     invalidations.add(delivery);
     delivery.live = false;
-    if (delivery.key) {
-      const prior = await readRecord(options.store, 'interactions', delivery.key);
-      if (prior && ['pending', 'replying'].includes(prior.value.phase)) {
-        try { await compareRecord(options.store, 'interactions', delivery.key, prior, { ...prior.value, phase: 'invalidated' }); }
-        catch (error) { if (error?.reason !== 'entity_revision') throw error; }
+    try {
+      if (delivery.key) {
+        const prior = await readRecord(options.store, 'interactions', delivery.key);
+        if (prior && ['pending', 'replying'].includes(prior.value.phase)) {
+          try { await compareRecord(options.store, 'interactions', delivery.key, prior, { ...prior.value, phase: 'invalidated' }); }
+          catch (error) { if (error?.reason !== 'entity_revision') throw error; }
+        }
       }
+    } catch (error) {
+      // Freeze native delivery before another client can accumulate stale rows.
+      mux?.close();
+      throw error;
     }
     invalidations.delete(delivery);
+  }
+  function receive(frame, generation) {
+    if (closed || generation !== liveGeneration) return Promise.resolve();
+    if (receiving.size >= NATIVE_EVENT_LIMIT) {
+      retryBlocked = true;
+      publish({ type: 'source-error', code: 'source_unavailable', reason: 'native-event-budget' });
+      mux?.close();
+      return Promise.reject(new DshError('source_unavailable', 'native_event_budget'));
+    }
+    const work = receiveEvent(frame, generation);
+    receiving.add(work);
+    void work.then(() => receiving.delete(work), () => receiving.delete(work));
+    return work;
+  }
+  async function flushInvalidations() {
+    if (invalidationDrain) return invalidationDrain;
+    if (!invalidations.size) return;
+    const work = Promise.allSettled([...invalidations].map(invalidate)).then((results) => {
+      if (results.some((result) => result.status === 'rejected'))
+        fail('reconcile_required', 'interaction_cleanup');
+    });
+    invalidationDrain = work.finally(() => { invalidationDrain = undefined; });
+    return invalidationDrain;
   }
   async function receiveEvent(frame, generation) {
     record(frame);
@@ -118,7 +149,7 @@ export function createDshDriver(options) {
     if (frame.type !== 'waterfall') fail('invalid_request', 'events_frame');
     const eventId = text(frame.eventId), boundClient = text(clientId), nativeSessionId = text(frame.agentId);
     if (deliveries.has(eventId)) return;
-    if (deliveries.size >= 256) { retryBlocked = true; publish({ type: 'source-error', code: 'source_unavailable', reason: 'interaction-budget' }); mux?.close(); return; }
+    if (deliveries.size + invalidations.size >= NATIVE_EVENT_LIMIT) { retryBlocked = true; publish({ type: 'source-error', code: 'source_unavailable', reason: 'interaction-budget' }); mux?.close(); return; }
     const delivery = { generation, clientId: boundClient, eventId, live: true, key: undefined };
     deliveries.set(eventId, delivery);
     const guard = () => { leaseCurrent(generation, boundClient); if (!delivery.live || deliveries.get(eventId) !== delivery) fail('conflict', 'interaction_cancelled'); };
@@ -199,11 +230,15 @@ export function createDshDriver(options) {
   }
   async function ensureMux() {
     if (closed) fail('source_unavailable', 'closed');
+    await Promise.allSettled(receiving);
+    await flushInvalidations();
+    if (closed) fail('source_unavailable', 'closed');
     if (mux) return mux;
     if (connecting) return connecting;
     connecting = (async () => {
       const generation = ++liveGeneration;
       const connection = await transport.connect({ onDisconnect: (error) => disconnected(error, generation) });
+      try { await flushInvalidations(); } catch (error) { connection.close(); throw error; }
       if (closed || generation !== liveGeneration) { connection.close(); fail('reconcile_required', 'connection_changed'); }
       mux = connection;
       try {
@@ -215,10 +250,10 @@ export function createDshDriver(options) {
               if (readySeen) fail('invalid_request', 'duplicate_ready');
               try { clientId = text(frame.clientId); readySeen = true; clearTimeout(timer); resolve(); }
               catch (error) { clearTimeout(timer); reject(error); throw error; }
-            } else background(receiveEvent(frame, generation));
+            } else background(receive(frame, generation));
           }, onEnd(error) { clearTimeout(timer); reject(error ?? new DshError('source_unavailable', 'dsh.events_ended')); connection.close(); } });
         });
-        leaseCurrent(generation, clientId); reconnectAttempt = 0;
+        leaseCurrent(generation, clientId); reconnectAttempt = 0; retryBlocked = false;
         for (const entry of selected.values()) openFollow(entry);
         return connection;
       } catch (error) { connection.close(); throw error; }

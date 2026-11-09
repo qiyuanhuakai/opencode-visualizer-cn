@@ -254,6 +254,86 @@ export async function run(context) {
         } finally { clearTimeout(timer); }
       }
       check('normal close delivers source-closed before ending observers', { closeEvent, cleanEnded }, { closeEvent: true, cleanEnded: true });
+      const disconnectedEnvironment = await fixtureSetup('disconnect-invalidation');
+      await disconnectedEnvironment.core.listSessionPage(ctx({ limit: 200 }));
+      const disconnectedObserver = disconnectedEnvironment.core.subscribe(ctx({}, session));
+      await disconnectedObserver.ready;
+      const invalidationStart = raw.events.length;
+      disconnectedEnvironment.fixture.installedGateway.waterfall();
+      await waitUntil(() => pendingFor(invalidationStart), 'approval before durable disconnect failure');
+      const priorInteraction = pendingFor(invalidationStart).interactionId;
+      const disconnectedControl = disconnectedEnvironment.store.mutateControl.bind(disconnectedEnvironment.store);
+      let refuseInvalidation = true, invalidationFaultSeen = false;
+      disconnectedEnvironment.store.mutateControl = async (input) => {
+        if (refuseInvalidation && input.changes.some((change) => change.collection === 'interactions' && change.value?.phase === 'invalidated')) {
+          invalidationFaultSeen = true;
+          throw Object.assign(new Error('controlled disconnect cleanup failure'), { code: 'source_unavailable' });
+        }
+        return disconnectedControl(input);
+      };
+      try {
+        disconnectedEnvironment.fixture.disconnect();
+        await waitUntil(() => invalidationFaultSeen, 'durable disconnect cleanup refused');
+        let rejectedReconnects = 0;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          try { await disconnectedEnvironment.core.getSession(ctx({}, session)); } catch { rejectedReconnects++; }
+        }
+        const staleRows = await disconnectedEnvironment.store.page({ collection: 'interactions', limit: 200 });
+        check('reconnect waits for failed old-client interaction invalidation',
+          { rejectedReconnects, nativeClients: disconnectedEnvironment.fixture.installedGateway.snapshot().clients.length,
+            pendingRows: staleRows.items.filter((item) => item.value?.kind === 'interaction' && item.value.phase === 'pending').length },
+          { rejectedReconnects: 4, nativeClients: 0, pendingRows: 1 });
+        refuseInvalidation = false;
+        const redeliveryStart = raw.events.length;
+        await disconnectedEnvironment.core.getSession(ctx({}, session));
+        await waitUntil(() => pendingFor(redeliveryStart), 'native redelivery after durable cleanup recovery');
+        const oldInteraction = await disconnectedEnvironment.store.getControl({ collection: 'interactions', key: priorInteraction });
+        check('recovered reconnect invalidates old durable row and receives a distinct current delivery',
+          { oldPhase: oldInteraction?.value?.phase, distinct: pendingFor(redeliveryStart).interactionId !== priorInteraction },
+          { oldPhase: 'invalidated', distinct: true });
+      } finally {
+        refuseInvalidation = false;
+        disconnectedEnvironment.store.mutateControl = disconnectedControl;
+        await disconnectedObserver.return();
+      }
+      const floodedEnvironment = await fixtureSetup('cancel-flood');
+      await floodedEnvironment.core.listSessionPage(ctx({ limit: 200 }));
+      const floodedObserver = floodedEnvironment.core.subscribe(ctx({}, session));
+      await floodedObserver.ready;
+      const floodStart = raw.events.length;
+      floodedEnvironment.fixture.installedGateway.waterfall();
+      await waitUntil(() => pendingFor(floodStart), 'approval before repeated cancel frames');
+      const floodedKey = pendingFor(floodStart).interactionId;
+      const floodedEventId = floodedEnvironment.fixture.installedGateway.snapshot().pending[0];
+      const originalRead = floodedEnvironment.store.getControl.bind(floodedEnvironment.store);
+      const floodGate = deferred(); releases.push(floodGate.resolve);
+      let holdReads = true, blockedReads = 0;
+      floodedEnvironment.store.getControl = async (input) => {
+        if (holdReads && input.collection === 'interactions' && input.key === floodedKey) {
+          blockedReads++;
+          await floodGate.promise;
+        }
+        return originalRead(input);
+      };
+      try {
+        const eventStream = [...floodedEnvironment.fixture.streams].find((entry) => entry.endpoint === '$events');
+        assert(eventStream, 'owned native event stream');
+        for (let index = 0; index < 1000; index++) eventStream.send({ type: 'item', streamId: eventStream.streamId, value: { type: 'cancel', eventId: floodedEventId } });
+        eventStream.send({ type: 'item', streamId: eventStream.streamId, value: { type: 'emit', event: 'qa/flood-end', args: {} } });
+        await waitUntil(() => raw.events.slice(floodStart).some((event) => event.reason === 'native-event-budget' || event.type === 'native-emit' && event.event === 'qa/flood-end'), 'cancel flood admitted or bounded');
+        raw.native.push({ kind: 'repeated-cancel-receiver', sentFrames: 1000, blockedReads });
+        check('repeated native cancellation frames have bounded in-flight durable work', blockedReads > 0 && blockedReads <= 257, true);
+      } finally {
+        holdReads = false; floodGate.resolve();
+        floodedEnvironment.store.getControl = originalRead;
+        await floodedObserver.return();
+      }
+      await floodedEnvironment.core.getSession(ctx({}, session));
+      const afterManualRecovery = raw.events.length;
+      floodedEnvironment.fixture.disconnect();
+      await waitUntil(() => raw.events.slice(afterManualRecovery).some((event) => event.type === 'session-snapshot'), 'automatic reconnect after manual overload recovery', 5000);
+      check('manual overload recovery restores later automatic reconnect',
+        floodedEnvironment.fixture.installedGateway.snapshot().clients.length, 1);
       const { fixture, driver, core, store, directory, inspection } = await fixtureSetup('failure');
       await core.listSessionPage(ctx()); await core.getSession(ctx({}, session));
       await rejects('ambiguous native provider+model rejected before selection', () => driver.driver.native['dsh.models.select'](ctx({ model: 'shared-model', idempotencyKey: 'ambiguous' }, session)), ['invalid_request']);
