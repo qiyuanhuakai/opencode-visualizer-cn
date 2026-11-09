@@ -443,6 +443,9 @@ describe('Kimi Web driver session reclamation', () => {
     // the re-read must carry the full session scope rather than a flat session identifier.
     await stream.return();
     await until(async () => driver.diagnostics().selected === 0, 'uncertain session reclaimed');
+    // Local reclamation precedes asynchronous transport control; prove the native boundary
+    // independently rather than treating the local cache deletion as a wire-delivery barrier.
+    await until(async () => nativeFrames('unsubscribe_v2').length === 1 && nativeFrames('unsubscribe').length === 1, 'uncertain session native unsubscribe pair');
     expect({ observers: driver.diagnostics().observers, selected: driver.diagnostics().selected, historySessions: driver.diagnostics().historySessions, lifecycleSubscriptions: driver.diagnostics().lifecycleSubscriptions }).toEqual({ observers: 0, selected: 0, historySessions: 0, lifecycleSubscriptions: 0 });
     expect(nativeFrames('unsubscribe_v2').length).toBe(1);
     expect(nativeFrames('unsubscribe').length).toBe(1);
