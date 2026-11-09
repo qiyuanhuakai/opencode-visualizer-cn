@@ -6,5 +6,5 @@ export function createKimiWebRecovery(options: {
   readonly isCurrent: (scope: OperationScope) => boolean;
 }): {
   adopt(scope: OperationScope, page: KimiTranscript): Promise<OperationScope | null>;
-  retire(scope: OperationScope, previous: OperationScope, nativeRequestId: string, operationId: string): Promise<void>;
+  retire(scope: OperationScope, previous: OperationScope, nativeRequestId: string, operationId: string, nativeState?: string, parentScope?: OperationScope, processAuthority?: { readonly epoch: string; readonly processGeneration: number }): Promise<void>;
 };

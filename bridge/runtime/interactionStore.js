@@ -42,6 +42,20 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
     if (previous) previous.active = false;
     live.set(key, token);
   }
+  // Trusted recovery only: the Runtime atomically migrated this persisted process
+  // together with its task. Recreate the local token without a second generation claim.
+  async function resumeProcess(input) {
+    const scope = parseOperationScope(input);
+    await assertStoreScope(scope);
+    const key = processKey(scope);
+    const prior = await readRecord(store, 'operations', key);
+    if (!prior?.value.alive || prior.value.epoch !== scope.epoch || prior.value.generation !== scope.processGeneration)
+      throw new StoreError('reconcile_required', 'stale_generation');
+    await compareRecord(store, 'operations', key, prior, prior.value);
+    const previous = live.get(key);
+    if (previous) previous.active = false;
+    live.set(key, { scope, active: true });
+  }
   async function authority(scope, reserved = true) {
     await assertStoreScope(scope);
     const token = live.get(processKey(scope));
@@ -264,5 +278,5 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
         throw error;
       });
   }
-  return { bindProcess, processExited, pending, invalidatePending, get, reply };
+  return { bindProcess, resumeProcess, processExited, pending, invalidatePending, get, reply };
 }

@@ -394,7 +394,11 @@ export async function runLeaseOracle({ driverRoot, stateRoot, report }) {
     result.reopened = await store.ready;
     driver = await createDriver({ ...driverOptions, store });
     const nativeCount = fixture.calls.filter((item) => item.path.endsWith('/prompts')).length;
-    await assert.rejects(send('current'), (caught) => caught.code === 'conflict' && caught.reason === 'stale_generation');
+    result.restartProcessBefore = (await store.page({ collection: 'operations', limit: 100 })).items.filter(row => row.key.startsWith('process:'));
+    // Refuse at the existing task lease before trying to bind a new process owner.
+    await assert.rejects(send('current'), (caught) => caught.code === 'conflict' && caught.field === 'session_busy');
+    result.restartProcessAfter = (await store.page({ collection: 'operations', limit: 100 })).items.filter(row => row.key.startsWith('process:'));
+    assert.deepEqual(result.restartProcessAfter, result.restartProcessBefore, 'busy restart rewrote old process ownership');
     await driver.operations.journal.reconcile(current.operationId, result.parents.current.scope);
     result.restart = { nativeCountBefore: nativeCount, nativeCountAfter: fixture.calls.filter((item) => item.path.endsWith('/prompts')).length, operation: await driver.operations.journal.get(current.operationId) };
     assert.equal(result.restart.nativeCountAfter, nativeCount, 'restart replayed uncertain send');

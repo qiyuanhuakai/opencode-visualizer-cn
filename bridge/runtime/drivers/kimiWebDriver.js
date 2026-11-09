@@ -69,6 +69,9 @@ export async function createKimiWebDriver(options) {
   const invalidated = new Set();
   let eventWork = Promise.resolve(), eventCount = 0, eventBytes = 0;
   let lastEventError;
+  let startupWork = Promise.resolve();
+  let startupGeneration = 0;
+  const startupRecovery = { state: 'idle', scanned: 0, restored: 0, failures: 0 };
   const stats = { recoveries: 0, nativeFrames: 0, lifecycleFrames: 0, sourceDisconnects: 0, reclaimed: 0, rechecks: 0 };
   // A session is retained while an observer watches it, while a read or send is in flight, or while a submitted turn still has to be observed to completion.
   function retain(sessionId) {
@@ -534,7 +537,11 @@ export async function createKimiWebDriver(options) {
       const detach = () => { if (detached) return; detached = true; observers.delete(entry); release?.(); };
       entry.stream = observer(detach); observers.add(entry);
       try {
-        if (captured.session && sessionId !== undefined) await subscribeSession(sessionId, params.agentId ?? 'main'); else await connect();
+        if (captured.session && sessionId !== undefined) {
+          const live = await operations.liveTask(captured);
+          if (live) registerTask(sessionId, live);
+          await subscribeSession(sessionId, params.agentId ?? 'main');
+        } else await connect();
         fence(captured); return entry.stream;
       } catch (error) { await entry.stream.return(); throw error; }
     },
@@ -561,9 +568,62 @@ export async function createKimiWebDriver(options) {
       const value = await transport.request('GET', `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}/status`); fence(captured); return value;
     },
   };
+  function queueStartupRecovery() {
+    const generation = ++startupGeneration;
+    startupWork = startupWork.then(() => new Promise(resolve => setImmediate(resolve))).then(() => restoreOwnedTasks(generation));
+  }
+  async function restoreOwnedTasks(generation) {
+    const stopped = () => closed || generation !== startupGeneration;
+    if (stopped()) return;
+    if (state !== 'ready' || capabilities.snapshot || !capabilities.promptAbort) { startupRecovery.state = 'idle'; return; }
+    Object.assign(startupRecovery, { state: 'scanning', scanned: 0, restored: 0, failures: 0 });
+    let cursor = null;
+    try {
+      do {
+        if (stopped()) return;
+        const page = await options.store.page({ collection: 'operations', limit: 100, cursor });
+        for (const row of page.items) {
+          if (stopped()) return;
+          startupRecovery.scanned++;
+          const value = row.value;
+          if (!value || value.kind !== 'operation' || value.method !== 'send' || !['sent', 'observed', 'reconciling'].includes(value.phase)) continue;
+          const session = value.scope?.session;
+          if (session?.environmentId !== scope.environmentId || session?.harnessInstanceId !== scope.harnessInstanceId) continue;
+          // New sends already register their own monitor. Only old Runtime tasks (or an
+          // interrupted adoption from one) require startup restoration.
+          if (value.scope.epoch === authority().epoch && !value.recoveredFrom) continue;
+          try {
+            const captured = capture({ ...scope, session }, true);
+            const operationId = await operations.liveTask(captured);
+            if (operationId !== row.key) continue;
+            if (!selected.has(session.nativeSessionId) && selected.size >= 32) throw new ProtocolError('source_unavailable', 'selected_session_limit');
+            registerTask(session.nativeSessionId, operationId);
+            await subscribeSession(session.nativeSessionId, 'main', 'restored');
+            await eventWork;
+            if (stopped()) return;
+            fence(captured);
+            const restored = await operations.journal.get(operationId);
+            if (restored.scope.epoch !== captured.epoch || restored.scope.processGeneration !== captured.processGeneration) throw new ProtocolError('reconcile_required', 'startup_task_unreconciled');
+            startupRecovery.restored++;
+          } catch (error) {
+            if (stopped()) return;
+            startupRecovery.failures++;
+            reportEventError(error);
+          }
+        }
+        if (page.cursor !== null && page.cursor === cursor) throw new ProtocolError('reconcile_required', 'startup_cursor_cycle');
+        cursor = page.cursor;
+        // One bounded store page and one attachment at a time; normal commands can interleave.
+        await new Promise(resolve => setImmediate(resolve));
+      } while (cursor !== null);
+      startupRecovery.state = startupRecovery.failures ? 'partial' : 'complete';
+    } catch (error) {
+      if (!stopped()) { startupRecovery.state = 'partial'; startupRecovery.failures++; reportEventError(error); }
+    } finally { if (closed) startupRecovery.state = 'stopped'; }
+  }
   async function close() {
     if (closing) return closing;
-    closed = true;
+    closed = true; startupGeneration++; startupRecovery.state = 'stopped';
     closing = (async () => {
       const errors = [];
       const attempt = async action => { try { await action(); } catch (error) { errors.push(error); } };
@@ -571,6 +631,7 @@ export async function createKimiWebDriver(options) {
         attempt(() => transport?.close()),
         attempt(() => lifecycleTransport?.close()),
       ]);
+      await attempt(() => startupWork);
       await attempt(() => eventWork);
       await attempt(() => operations?.close());
       await Promise.all([...observers].map(entry => attempt(() => entry.stream.return())));
@@ -607,11 +668,14 @@ export async function createKimiWebDriver(options) {
     },
     driver: { core: Object.fromEntries(Object.entries(methods).filter(([name]) => support[name])), native: Object.fromEntries(extensions.filter(({ enabled }) => enabled).map(({ name }) => [name, native[name]])) },
   });
+  if (state === 'ready' && !capabilities.snapshot && capabilities.promptAbort) queueStartupRecovery();
   return {
     registration, close,
     async reconnect() {
       if (closed) throw new ProtocolError('source_unavailable', 'driver_closed');
+      startupGeneration++; startupRecovery.state = 'paused';
       await transport.disconnect(); await lifecycleTransport.disconnect();
+      await startupWork;
       lifecycleSubscriptions.clear();
       await inspectNative();
       if (state !== 'ready') throw new ProtocolError('source_unavailable', 'native_reconnect');
@@ -620,9 +684,10 @@ export async function createKimiWebDriver(options) {
       await connect();
       for (const [sessionId, agentIds] of sessions) for (const agentId of agentIds) await subscribeSession(sessionId, agentId);
       await eventWork;
+      queueStartupRecovery();
     },
     async flush() { await eventWork; if (lastEventError) throw new ProtocolError(lastEventError.code, lastEventError.reason); },
-    diagnostics() { return { state, capabilities, ...stats, heartbeats: transport?.heartbeats ?? { pings: 0, pongs: 0 }, observers: observers.size, selected: selected.size, historySessions: history?.resident() ?? 0, lifecycleSubscriptions: lifecycleSubscriptions.size, connected: transport?.connected ?? false, nativeConnections: Number(transport?.connected ?? false) + Number(lifecycleTransport?.connected ?? false), eventQueue: eventCount, lastEventError: lastEventError ?? null }; },
+    diagnostics() { return { state, capabilities, ...stats, startupRecovery: { ...startupRecovery }, heartbeats: transport?.heartbeats ?? { pings: 0, pongs: 0 }, observers: observers.size, selected: selected.size, historySessions: history?.resident() ?? 0, lifecycleSubscriptions: lifecycleSubscriptions.size, connected: transport?.connected ?? false, nativeConnections: Number(transport?.connected ?? false) + Number(lifecycleTransport?.connected ?? false), eventQueue: eventCount, lastEventError: lastEventError ?? null }; },
     history: (sessionId, agentId) => history.inspect(sessionId, agentId),
     operations,
   };

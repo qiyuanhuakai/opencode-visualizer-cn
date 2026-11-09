@@ -48,17 +48,19 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
       }
     });
   }
-  async function bind(scope) {
+  async function bind(scope, resumed = false) {
     fence(scope);
     const key = fingerprint(scope);
     if (bound.has(key)) return bound.get(key).promise;
-    const promise = interactions.bindProcess(scope);
+    const promise = resumed ? interactions.resumeProcess(scope) : interactions.bindProcess(scope);
     bound.set(key, { scope, promise });
     try { await promise; } catch (error) { bound.delete(key); throw error; }
   }
   async function send(scope, payload, idempotencyKey) {
     scope = clean(scope); payload = clean(payload);
     nativeText(idempotencyKey, 'idempotency_key', 512);
+    // A rejected new send must not overwrite a prior Runtime task's process proof.
+    if (!bound.has(fingerprint(scope)) && (await readRecord(store, 'operations', leaseKey(scope), false))?.value?.operationId) fail('conflict', 'session_busy');
     const promptId = `vis-${fingerprint([scope, idempotencyKey])}`;
     payload = { ...payload, prompt_id: promptId };
     fence(scope);
@@ -206,7 +208,7 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
   async function recoverModernInteractions(scope, page, onPending = () => {}) {
     fence(scope);
     const recoveredFrom = await recoveryAuthority.adopt(scope, page);
-    if (recoveredFrom && !bound.has(fingerprint(scope))) await bind(scope);
+    if (recoveredFrom && !bound.has(fingerprint(scope))) await bind(scope, true);
     // Browsing unowned native history does not acquire a task or process binding.
     if (!bound.has(fingerprint(scope))) return;
     const lease = await readRecord(store, 'operations', leaseKey(scope));
@@ -226,7 +228,7 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     for (const item of page.interactions ?? []) {
       if (!tools.has(item.toolCallId) || !['question', 'approval'].includes(item.interactionKind) || !['pending', 'answered', 'dismissed', 'cancelled', 'approved', 'rejected'].includes(item.state)) continue;
       fence(scope);
-      if (recoveredFrom) await recoveryAuthority.retire(scope, recoveredFrom, item.interactionId, lease.value.operationId);
+      if (recoveredFrom) await recoveryAuthority.retire(scope, recoveredFrom, item.interactionId, lease.value.operationId, item.state);
       const pending = await modernInteraction(scope, { agent_id: 'main', kind: item.interactionKind, status: item.state === 'pending' ? 'pending' : 'ended', interaction_id: item.interactionId, tool_call_id: item.toolCallId }, { ...recovery, item });
       if (pending) onPending(pending, item.interactionKind);
       // A large owned turn remains incremental; control requests can interleave.

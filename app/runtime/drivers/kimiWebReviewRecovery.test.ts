@@ -9,6 +9,8 @@ import path from 'node:path';
 import { expect, it } from 'vitest';
 import type { JsonValue, ProtocolError } from '../../../shared/runtime/capabilities.js';
 import { createKimiWebDriver } from '../../../bridge/runtime/drivers/kimiWebDriver.js';
+import { createOperationJournal, fingerprint } from '../../../bridge/runtime/operationJournal.js';
+import { encodeSessionKey } from '../../../shared/runtime/identity.js';
 import { createRuntimeStore } from '../../../bridge/runtime/storage/runtimeStore.js';
 import { createRawWebSocketPeer, createWebSocketAccept } from '../../../bridge/webSocketFrames.js';
 import { parseEnvironmentId, parseHarnessInstanceId, parseSessionRef } from '../../../shared/runtime/identity.js';
@@ -20,7 +22,7 @@ const environmentId = parseEnvironmentId('11111111-1111-4111-8111-111111111111')
 const harnessInstanceId = parseHarnessInstanceId('22222222-2222-4222-8222-222222222222');
 const session = parseSessionRef({ environmentId, harnessInstanceId, nativeSessionId: 'review-session' });
 const context = { environmentId, harnessInstanceId, session, params: {} };
-async function fixture(legacy: boolean) {
+async function fixture(legacy: boolean, prepare?: (store: ReturnType<typeof createRuntimeStore>, epoch: string) => Promise<void>) {
   const directory = await mkdtemp(path.join(tmpdir(), 'kimi-review-'));
   const epoch = randomUUID();
   const store = createRuntimeStore({ stateDirectory: directory, environmentId, ownerId: randomUUID(), epoch });
@@ -91,6 +93,7 @@ async function fixture(legacy: boolean) {
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('No fixture address');
+  await prepare?.(store, epoch);
   const driver = await createKimiWebDriver({ environmentId, harnessInstanceId, store, endpoint: `http://127.0.0.1:${address.port}`, getAuthorization: () => 'Bearer owned-review', getAuthority: () => ({ epoch, processGeneration: 1 }), ownership: 'borrowed' });
   return { driver, store, state, controls, send,
     async close() { state.gate = undefined; await driver.close(); for (const socket of sockets) socket.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); await store.close(); await rm(directory, { recursive: true, force: true }); },
@@ -472,4 +475,128 @@ it.each(['question', 'approval'].flatMap(kind => ['queue-full', 'stale-pending',
     await expect(core.send!({ ...context, params: { content: [{ type: 'text', text: 'Next after fault' }], idempotencyKey: 'independent-terminal-next' } })).resolves.toMatchObject({ phase: 'native-executed' });
     expect(f.state.prompts).toBe(2);
   } finally { f.store.get = read; await stream?.return?.(); await watching; await globalStream?.return?.(); await globalWatching; await f.close(); }
+});
+
+it('restores only owned active tasks across paged startup state without any observer', async () => {
+  const oldEpoch = randomUUID();
+  const f = await fixture(false, async store => {
+    const scope = { target: environmentId, session, epoch: oldEpoch, processGeneration: 1 };
+    const journal = createOperationJournal({ store, isProcessCurrent: () => true });
+    const op = await journal.accept({ scope, method: 'send', payload: { prompt_id: 'startup-owned' }, idempotencyKey: 'startup-original' });
+    await journal.execute(op.operationId, scope, async () => ({ prompt_id: 'startup-owned' }));
+    await store.mutateControl({ intentId: randomUUID(), changes: [
+      { collection: 'operations', key: `kimi-native:${op.operationId}`, value: { scope, operationId: op.operationId, promptId: 'startup-owned', turnId: 'startup-turn' } },
+      { collection: 'operations', key: `process:${fingerprint(encodeSessionKey(session))}`, value: { epoch: oldEpoch, generation: 1, alive: false } },
+    ] });
+    await store.mutate({ intentId: randomUUID(), changes: [
+      ...Array.from({ length: 150 }, (_, index) => ({ collection: 'operations' as const, key: `000-history-${index}`, value: { kind: 'operation', method: 'send', phase: 'terminal' } })),
+      { collection: 'operations', key: 'bad-task', value: { kind: 'operation', method: 'send', phase: 'observed', scope: { ...scope, session: { ...session, nativeSessionId: '' } } } },
+      { collection: 'operations', key: 'foreign-task', value: { kind: 'operation', method: 'send', phase: 'observed', scope: { ...scope, session: { ...session, harnessInstanceId: '44444444-4444-4444-8444-444444444444' } } } },
+    ] });
+  });
+  try {
+    f.state.turn = { kind: 'turn', turnId: 'startup-turn', triggerPromptId: 'startup-owned', state: 'running', steps: [{ frames: [{ kind: 'tool', toolCallId: 'startup-tool', name: 'AskUserQuestion' }] }] };
+    f.state.interactions = [{ interactionId: 'startup-question', interactionKind: 'question', toolCallId: 'startup-tool', state: 'pending', request: { session_id: session.nativeSessionId, questions: [] } }];
+    await expect.poll(() => f.driver.diagnostics().startupRecovery.state, { timeout: 10000 }).toBe('partial');
+    expect(f.driver.diagnostics()).toMatchObject({ observers: 0, selected: 1, startupRecovery: { restored: 1, failures: 1 } });
+    expect(f.driver.diagnostics().startupRecovery.scanned).toBeGreaterThan(150);
+    const rows = (await f.store.page({ collection: 'interactions', limit: 100 })).items;
+    expect(rows.some(row => row.value && typeof row.value === 'object' && !Array.isArray(row.value) && 'nativeRequestId' in row.value && row.value.nativeRequestId === 'startup-question')).toBe(true);
+    expect(f.state.prompts).toBe(0);
+    expect(f.controls.filter(frame => frame.type === 'subscribe_v2').map(frame => (frame.payload as Record<string, unknown>).session_id)).toEqual([session.nativeSessionId]);
+  } finally { await f.close(); }
+});
+it('joins an in-flight startup page when closing and creates no observer or subscription', async () => {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const f = await fixture(false, async store => {
+    const page = store.page.bind(store);
+    store.page = async input => { entered.resolve(); await release.promise; return page(input); };
+  });
+  try {
+    await entered.promise;
+    const closing = f.driver.close();
+    release.resolve();
+    await closing;
+    expect(f.driver.diagnostics()).toMatchObject({ observers: 0, selected: 0, startupRecovery: { state: 'stopped' } });
+    expect(f.controls.filter(frame => frame.type === 'subscribe_v2')).toHaveLength(0);
+  } finally { release.resolve(); await f.close(); }
+});
+it('restarts a failed startup scan on explicit reconnect without carrying old failure counts', async () => {
+  const f = await fixture(false, async store => {
+    const page = store.page.bind(store); let failed = false;
+    store.page = async input => { if (!failed) { failed = true; throw new StoreError('source_unavailable', 'runtime.store.queue_full'); } return page(input); };
+  });
+  try {
+    await expect.poll(() => f.driver.diagnostics().startupRecovery.state).toBe('partial');
+    await f.driver.reconnect();
+    await expect.poll(() => f.driver.diagnostics().startupRecovery.state).toBe('complete');
+    expect(f.driver.diagnostics()).toMatchObject({ observers: 0, selected: 0, startupRecovery: { restored: 0, failures: 0 } });
+  } finally { await f.close(); }
+});
+
+async function seedRestartTask(store: ReturnType<typeof createRuntimeStore>, oldEpoch: string) {
+  const scope = { target: environmentId, session, epoch: oldEpoch, processGeneration: 1 };
+  const journal = createOperationJournal({ store, isProcessCurrent: () => true });
+  const op = await journal.accept({ scope, method: 'send', payload: { prompt_id: 'restart-proof' }, idempotencyKey: 'restart-proof' });
+  await journal.execute(op.operationId, scope, async () => ({ prompt_id: 'restart-proof' }));
+  await store.mutateControl({ intentId: randomUUID(), changes: [
+    { collection: 'operations', key: `kimi-native:${op.operationId}`, value: { scope, operationId: op.operationId, promptId: 'restart-proof', turnId: 'restart-turn' } },
+    { collection: 'operations', key: `process:${fingerprint(encodeSessionKey(session))}`, value: { epoch: oldEpoch, generation: 1, alive: false } },
+  ] });
+  return op.operationId;
+}
+it.each([{ kind: 'question', sendFirst: true }, { kind: 'approval', sendFirst: true }, { kind: 'question', sendFirst: false }, { kind: 'approval', sendFirst: false }])('keeps an adopted $kind monitored after its last observer closes (sendFirst=$sendFirst)', async ({ kind, sendFirst }) => {
+  const oldEpoch = randomUUID(); let operationId = '', epoch = '';
+  const startupEntered = Promise.withResolvers<void>(), releaseStartup = Promise.withResolvers<void>();
+  const f = await fixture(false, async (store, current) => {
+    epoch = current; operationId = await seedRestartTask(store, oldEpoch);
+    const page = store.page.bind(store);
+    store.page = async input => { if (input.collection === 'operations') { startupEntered.resolve(); await releaseStartup.promise; } return page(input); };
+  });
+  try {
+    f.state.turn = { kind: 'turn', turnId: 'restart-turn', triggerPromptId: 'restart-proof', state: 'running', steps: [{ frames: [{ kind: 'tool', toolCallId: 'restart-tool', name: kind === 'question' ? 'AskUserQuestion' : 'Bash' }] }] };
+    f.state.interactions = [{ interactionId: 'restart-pending', interactionKind: kind, toolCallId: 'restart-tool', state: 'pending', request: kind === 'question' ? { session_id: session.nativeSessionId, questions: [] } : { sessionId: session.nativeSessionId, toolName: 'Bash' } }];
+    await startupEntered.promise;
+    const core = f.driver.registration.driver.core;
+    if (sendFirst) await expect(core.send!({ ...context, params: { content: [{ type: 'text', text: 'first action after restart' }], idempotencyKey: 'restart-racing-send' } })).rejects.toMatchObject({ code: 'conflict' });
+    const observation = await core.subscribe!(context) as { return(): Promise<unknown> };
+    await f.driver.flush();
+    expect((await f.store.getControl({ collection: 'operations', key: operationId }))?.value).toMatchObject({ scope: { epoch } });
+    expect((await f.store.getControl({ collection: 'operations', key: `process:${fingerprint(encodeSessionKey(session))}` }))?.value).toMatchObject({ epoch, generation: 1, alive: true });
+    expect(f.state.prompts).toBe(0);
+    await observation.return();
+    expect(f.driver.diagnostics()).toMatchObject({ observers: 0, selected: 1 });
+    f.state.interactions = f.state.interactions.map(item => ({ ...item, state: kind === 'question' ? 'answered' : 'rejected' }));
+    f.state.turn = { ...f.state.turn, state: 'completed' };
+    f.send({ type: 'transcript.ops', session_id: session.nativeSessionId, payload: { agent_id: 'main', seq: ++f.state.seq, ops: [{ op: 'turn.upsert', turn: f.state.turn }] } });
+    await expect.poll(async () => await f.store.getControl({ collection: 'operations', key: operationId })).toMatchObject({ value: { phase: 'terminal', outcome: 'completed' } });
+    await expect.poll(() => f.driver.diagnostics().selected).toBe(0);
+    await expect(core.send!({ ...context, params: { content: [{ type: 'text', text: 'next task' }], idempotencyKey: 'after-recovered-terminal' } })).resolves.toMatchObject({ phase: 'native-executed' });
+    expect(f.state.prompts).toBe(1);
+  } finally { releaseStartup.resolve(); await f.close(); }
+});
+it('preserves a replied/answered old interaction and recovers a following pending question over HTTP', async () => {
+  const oldEpoch = randomUUID(); let epoch = '';
+  const f = await fixture(false, async (store, current) => {
+    epoch = current;
+    const operationId = await seedRestartTask(store, oldEpoch);
+    const scope = { target: environmentId, session, epoch: oldEpoch, processGeneration: 1 };
+    const key = `interaction:${fingerprint([encodeSessionKey(session), oldEpoch, 1, 'already-answered'])}`;
+    await store.mutateControl({ intentId: randomUUID(), changes: [{ collection: 'interactions', key, value: { kind: 'interaction', scope, nativeRequestId: 'already-answered', parentOperationId: operationId, phase: 'replied' } }] });
+  });
+  try {
+    f.state.turn = { kind: 'turn', turnId: 'restart-turn', triggerPromptId: 'restart-proof', state: 'running', steps: [{ frames: [{ kind: 'tool', toolCallId: 'old-tool', name: 'AskUserQuestion' }, { kind: 'tool', toolCallId: 'new-tool', name: 'AskUserQuestion' }] }] };
+    f.state.interactions = [
+      { interactionId: 'already-answered', interactionKind: 'question', toolCallId: 'old-tool', state: 'answered' },
+      { interactionId: 'new-pending', interactionKind: 'question', toolCallId: 'new-tool', state: 'pending', request: { session_id: session.nativeSessionId, questions: [] } },
+    ];
+    await expect.poll(() => f.driver.diagnostics().startupRecovery.state).toBe('complete');
+    const rows = (await f.store.page({ collection: 'interactions', limit: 100 })).items;
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ value: expect.objectContaining({ nativeRequestId: 'already-answered', phase: 'replied', scope: expect.objectContaining({ epoch: oldEpoch }) }) }),
+      expect.objectContaining({ value: expect.objectContaining({ nativeRequestId: 'new-pending', phase: 'pending', scope: expect.objectContaining({ epoch }) }) }),
+    ]));
+    expect(f.driver.diagnostics().lastEventError).toBeNull();
+    expect(f.state.prompts).toBe(0);
+  } finally { await f.close(); }
 });
