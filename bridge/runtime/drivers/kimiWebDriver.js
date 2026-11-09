@@ -355,10 +355,12 @@ export async function createKimiWebDriver(options) {
       return { ...page, items: page.items.map((item) => sessionSummary(item, scope)) };
     },
     async getSession(context) {
-      const captured = capture(context, true); requireCapability('snapshot');
-      const snapshot = record(await transport.request('GET', `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}/snapshot`));
+      const captured = capture(context, true);
+      requireCapability(capabilities.snapshot ? 'snapshot' : 'sessionRead');
+      const path = `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}`;
+      const value = record(await transport.request('GET', capabilities.snapshot ? `${path}/snapshot` : path));
       fence(captured);
-      return sessionSummary(snapshot.session, scope);
+      return sessionSummary(capabilities.snapshot ? value.session : value, scope);
     },
     async readHistoryPage(context) {
       const captured = capture(context, true); requireCapability('transcript');
@@ -480,7 +482,7 @@ export async function createKimiWebDriver(options) {
   const denied = unsupported('native capability not verified');
   const support = {
     inspect: true, close: true, listSessionPage: capabilities.catalogV2,
-    getSession: capabilities.snapshot, readHistoryPage: capabilities.transcript && capabilities.subscribeV2 && capabilities.snapshot,
+    getSession: capabilities.snapshot || capabilities.sessionRead, readHistoryPage: capabilities.transcript && capabilities.subscribeV2 && capabilities.snapshot,
     createSession: capabilities.create,
     subscribe: capabilities.subscribeV2 && capabilities.subscribe && capabilities.snapshot,
     send: capabilities.send && capabilities.subscribeV2 && capabilities.subscribe && capabilities.snapshot,

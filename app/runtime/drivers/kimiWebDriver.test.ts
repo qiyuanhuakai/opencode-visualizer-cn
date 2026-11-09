@@ -51,3 +51,13 @@ describe('Kimi Runtime protocol boundaries', () => {
       .toBe(false);
   });
 });
+
+it('requires the native GET session route for modern session reads', () => {
+  const meta = { backend: 'v2', server_version: '2.5.2' };
+  const ws = { components: { messages: {} } };
+  expect(parseNativeCapabilities(meta, { paths: {} }, ws).sessionRead).toBe(false);
+  expect(parseNativeCapabilities(meta, { paths: { '/api/v1/sessions/{session_id}': { post: {} } } }, ws).sessionRead).toBe(false);
+  const capabilities = parseNativeCapabilities(meta, { paths: { '/api/v1/sessions/{session_id}': { get: {} } } }, ws);
+  expect(capabilities.sessionRead).toBe(true);
+  expect(capabilities.snapshot).toBe(false);
+});

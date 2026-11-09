@@ -9,7 +9,7 @@ export interface KimiFrame {
   readonly session_id?: string; readonly volatile?: boolean; readonly payload?: NativeRecord;
 }
 export interface KimiCapabilities {
-  readonly catalogV2: boolean; readonly transcript: boolean; readonly snapshot: boolean;
+  readonly catalogV2: boolean; readonly transcript: boolean; readonly snapshot: boolean; readonly sessionRead: boolean;
   readonly subscribeV2: boolean; readonly subscribe: boolean; readonly create: boolean;
   readonly send: boolean; readonly cancel: boolean; readonly approvals: boolean;
   readonly questions: boolean; readonly models: boolean; readonly agents: boolean; readonly status: boolean;

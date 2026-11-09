@@ -96,6 +96,7 @@ export function parseNativeCapabilities(metaValue, openapiValue, asyncapiValue) 
     catalogV2: v2 && route('/api/v2/sessions'),
     transcript: route('/api/v1/sessions/{session_id}/transcript'),
     snapshot: route('/api/v1/sessions/{session_id}/snapshot'),
+    sessionRead: route('/api/v1/sessions/{session_id}'),
     subscribeV2: meta.capabilities?.websocket === true && messages.subscribe_v2?.name === 'subscribe_v2',
     subscribe: meta.capabilities?.websocket === true && messages.subscribe?.name === 'subscribe',
     create: route('/api/v1/sessions', 'post'),
