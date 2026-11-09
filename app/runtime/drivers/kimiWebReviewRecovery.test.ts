@@ -19,7 +19,7 @@ async function fixture(legacy: boolean) {
   const epoch = randomUUID();
   const store = createRuntimeStore({ stateDirectory: directory, environmentId, ownerId: randomUUID(), epoch });
   await store.ready;
-  const state = { legacy, gate: undefined as Promise<void> | undefined, entered: undefined as (() => void) | undefined, seq: 1, turn: undefined as Record<string, unknown> | undefined, prompts: 0 };
+  const state = { legacy, gate: undefined as Promise<void> | undefined, entered: undefined as (() => void) | undefined, seq: 1, turn: undefined as Record<string, unknown> | undefined, prompts: 0, historyGate: undefined as Promise<void> | undefined, historyEntered: undefined as (() => void) | undefined };
   const sockets = new Set<import('node:net').Socket>();
   const peers = new Set<ReturnType<typeof createRawWebSocketPeer>>();
   const controls: Record<string, unknown>[] = [];
@@ -45,7 +45,13 @@ async function fixture(legacy: boolean) {
       const value = { id: session.nativeSessionId, title: 'Captured response', workspace_id: 'review-workspace', busy: false };
       return reply(snapshot ? { session: value, epoch: 'native-review', as_of_seq: state.seq } : value);
     }
-    if (url.pathname.endsWith('/transcript')) return reply({ items: state.turn ? [state.turn] : [], agents: [], interactions: [], attachments: [], prompts: [], has_more: false, seq: state.seq });
+    if (url.pathname.endsWith('/transcript')) {
+      if (url.searchParams.get('agent_id') === 'child' && state.historyGate) {
+        state.historyEntered?.(); await state.historyGate;
+        res.writeHead(500); res.end('{}'); return;
+      }
+      return reply({ items: state.turn ? [state.turn] : [], agents: [], interactions: [], attachments: [], prompts: [], has_more: false, seq: state.seq });
+    }
     if (url.pathname.endsWith('/prompts') && req.method === 'POST') {
       const parts = []; for await (const part of req) parts.push(part);
       const body = JSON.parse(Buffer.concat(parts).toString());
@@ -112,4 +118,30 @@ it.each(['reconnect', 'resync'] as const)('settles owned modern completion recov
     await expect(send({ ...context, params: { content: [{ type: 'text', text: 'next' }], idempotencyKey: 'second' } })).resolves.toMatchObject({ phase: 'native-executed' });
     expect(f.state.prompts).toBe(2);
   } finally { await f.close(); }
+});
+
+it('settles a proven main terminal after a different agent attachment fails', async () => {
+  const f = await fixture(false); const gate = Promise.withResolvers<void>(); const entered = Promise.withResolvers<void>();
+  try {
+    const observed = await f.driver.registration.driver.core.subscribe!({ ...context }) as AsyncIterator<unknown>;
+    const send = f.driver.registration.driver.core.send!;
+    const sent = await send({ ...context, params: { content: [{ type: 'text', text: 'owned' }], idempotencyKey: 'first' } }) as { operationId: string };
+    await f.driver.flush();
+    f.state.historyGate = gate.promise; f.state.historyEntered = entered.resolve;
+    const attaching = Promise.resolve(f.driver.registration.driver.core.subscribe!({ ...context, params: { agentId: 'child' } })).then(value => ({ value, error: undefined }), error => ({ value: undefined, error }));
+    await entered.promise;
+    f.state.turn = { ...f.state.turn, state: 'completed' }; f.state.seq = 7;
+    f.send({ type: 'transcript.ops', session_id: session.nativeSessionId, payload: { agent_id: 'main', seq: 7, ops: [{ op: 'turn.upsert', turn: f.state.turn }] } });
+    const deadline = Date.now() + 3000;
+    while (f.driver.diagnostics().eventQueue === 0 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(f.driver.diagnostics().eventQueue).toBeGreaterThan(0);
+    gate.resolve();
+    expect((await attaching).error).toMatchObject({ code: 'source_unavailable', field: 'native_http' });
+    await expect(f.driver.flush()).resolves.toBeUndefined();
+    expect(await f.driver.operations!.journal.get(sent.operationId)).toMatchObject({ phase: 'terminal', outcome: 'completed' });
+    await observed.return?.();
+    expect(f.driver.diagnostics()).toMatchObject({ selected: 0, historySessions: 0 });
+    await expect(send({ ...context, params: { content: [{ type: 'text', text: 'next' }], idempotencyKey: 'second' } })).resolves.toMatchObject({ phase: 'native-executed' });
+    expect(f.state.prompts).toBe(2);
+  } finally { gate.resolve(); f.state.historyGate = undefined; await f.close(); }
 });

@@ -262,7 +262,8 @@ export async function createKimiWebDriver(options) {
     const sessionId = captured.session.nativeSessionId;
     const attachments = [...(selected.get(sessionId)?.values() ?? [])].map(entry => entry.work ?? entry);
     scheduled(async () => {
-      await Promise.all(attachments);
+      // Attachment failure must not discard an independently confirmed main terminal.
+      await Promise.allSettled(attachments);
       const ended = await operations.syncTranscript(captured, turns);
       if (!ended) return;
       noteEndedTask(sessionId, ended.operationId); releaseTask(sessionId, ended.operationId);
