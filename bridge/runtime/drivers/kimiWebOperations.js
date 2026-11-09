@@ -47,6 +47,7 @@ export function createKimiWebOperations({ store, transport, isCurrent, admission
     });
   }
   async function bind(scope) {
+    fence(scope);
     const key = fingerprint(scope);
     if (bound.has(key)) return bound.get(key).promise;
     const promise = interactions.bindProcess(scope);
@@ -187,11 +188,15 @@ export function createKimiWebOperations({ store, transport, isCurrent, admission
     return ['sent', 'observed', 'reconciling'].includes(operation.phase) ? lease.value.operationId : null;
   }
   async function close() {
-    for (const { scope, promise } of bound.values()) {
-      await promise;
-      await interactions.processExited(scope);
+    let failed;
+    for (const [key, entry] of bound) {
+      try {
+        await entry.promise;
+        await interactions.processExited(entry.scope);
+        if (bound.get(key) === entry) bound.delete(key);
+      } catch (error) { failed ??= { error }; }
     }
-    bound.clear();
+    if (failed) throw failed.error;
   }
   return { instance, send, started, cancel, pending, reply, terminal, liveTask, journal, interactions, admission,
     async invalidate(scope) { await interactions.processExited(scope); },

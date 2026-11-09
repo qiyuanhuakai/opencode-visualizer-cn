@@ -513,3 +513,83 @@ describe('Kimi Web driver session reclamation', () => {
     expect(nativePrompts()).toBe(0);
   }, 60000);
 });
+
+it('drains independent resources after a durable close failure and retries only unfinished cleanup', async () => {
+  const { startKimiFixture } = await loadFixtureModule();
+  const fixture = await startKimiFixture({ count: 2 });
+  const directory = await mkdtemp(path.join(tmpdir(), 'kimi-close-retry-'));
+  const store = createRuntimeStore({ stateDirectory: directory, environmentId, ownerId: randomUUID(), epoch });
+  await store.ready;
+  const driver = await createKimiWebDriver({ ...scope, store, endpoint: fixture.endpoint, getAuthorization: fixture.authorization,
+    getAuthority: () => ({ epoch, processGeneration: 1 }), ownership: 'borrowed', deadlineMs: 3000 });
+  const mutate = store.mutateControl.bind(store);
+  let failures = 0;
+  try {
+    const subscribe = driver.registration.driver.core.subscribe;
+    const send = driver.registration.driver.core.send;
+    if (!subscribe || !send) throw new Error('Missing native session operations');
+    for (let index = 0; index < 2; index++) {
+      const session = sessionRef(sessionId(index));
+      await subscribe({ ...scope, session, params: {} });
+      await send({ ...scope, session, params: { content: [{ type: 'text', text: 'owned close probe' }], idempotencyKey: `close-${index}` } });
+    }
+    await driver.flush();
+    store.mutateControl = async mutation => {
+      if (failures === 0 && mutation.changes.some(change => change.key.startsWith('process:') && typeof change.value === 'object' && change.value !== null && !Array.isArray(change.value) && 'alive' in change.value && change.value.alive === false)) {
+        failures++;
+        throw new Error('owned durable close failure');
+      }
+      return mutate(mutation);
+    };
+    await expect(driver.close()).rejects.toThrow('owned durable close failure');
+    expect(failures).toBe(1);
+    expect(driver.diagnostics()).toMatchObject({ observers: 0, selected: 0, historySessions: 0, lifecycleSubscriptions: 0, nativeConnections: 0 });
+    const processes = (await store.page({ collection: 'operations', limit: 100 })).items.filter(item => item.key.startsWith('process:'));
+    expect(processes).toHaveLength(2);
+    expect(processes.filter(item => item.value && typeof item.value === 'object' && !Array.isArray(item.value) && 'alive' in item.value && item.value.alive === false)).toHaveLength(1);
+    store.mutateControl = mutate;
+    await expect(driver.close()).resolves.toEqual({ closed: true });
+    const restored = (await store.page({ collection: 'operations', limit: 100 })).items.filter(item => item.key.startsWith('process:'));
+    expect(restored.every(item => item.value && typeof item.value === 'object' && !Array.isArray(item.value) && 'alive' in item.value && item.value.alive === false)).toBe(true);
+  } finally {
+    store.mutateControl = mutate;
+    await driver.close().catch(() => undefined);
+    await store.close(); await fixture.close(); await rm(directory, { recursive: true, force: true });
+  }
+}, 30000);
+
+it('does not create a live durable process when credentials resolve after driver closure', async () => {
+  const { startKimiFixture } = await loadFixtureModule();
+  const fixture = await startKimiFixture({ count: 1 });
+  const directory = await mkdtemp(path.join(tmpdir(), 'kimi-close-admission-'));
+  const store = createRuntimeStore({ stateDirectory: directory, environmentId, ownerId: randomUUID(), epoch });
+  await store.ready;
+  let arm = false;
+  let admit: (() => void) | undefined;
+  let entered: (() => void) | undefined;
+  const gate = new Promise<void>(resolve => { admit = resolve; });
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const driver = await createKimiWebDriver({ ...scope, store, endpoint: fixture.endpoint,
+    getAuthorization: async () => { if (arm) { arm = false; entered?.(); await gate; } return fixture.authorization(); },
+    getAuthority: () => ({ epoch, processGeneration: 1 }), ownership: 'borrowed', deadlineMs: 3000 });
+  try {
+    const session = sessionRef(sessionId(0));
+    const subscribe = driver.registration.driver.core.subscribe;
+    const send = driver.registration.driver.core.send;
+    if (!subscribe || !send) throw new Error('Missing native session operations');
+    await subscribe({ ...scope, session, params: {} });
+    arm = true;
+    const sending = send({ ...scope, session, params: { content: [{ type: 'text', text: 'must not dispatch' }], idempotencyKey: 'late-credentials' } });
+    const rejected = expect(sending).rejects.toMatchObject({ code: 'reconcile_required' });
+    await waiting;
+    await driver.close();
+    admit?.();
+    await rejected;
+    expect(fixture.calls.filter(call => call.method === 'POST' && call.path.endsWith('/prompts'))).toHaveLength(0);
+    const processes = (await store.page({ collection: 'operations', limit: 100 })).items.filter(item => item.key.startsWith('process:'));
+    expect(processes.filter(item => item.value && typeof item.value === 'object' && !Array.isArray(item.value) && 'alive' in item.value && item.value.alive === true)).toHaveLength(0);
+  } finally {
+    admit?.(); await driver.close().catch(() => undefined);
+    await store.close(); await fixture.close(); await rm(directory, { recursive: true, force: true });
+  }
+}, 30000);

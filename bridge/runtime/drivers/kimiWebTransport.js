@@ -127,6 +127,7 @@ export function createKimiWebTransport({ endpoint, getAuthorization, deadlineMs 
     if (connection) return { generation, hello: connection.hello };
     connecting = (async () => {
       const auth = await authorization();
+      if (stopped) throw failure('source_unavailable', 'driver_closed');
       const target = new URL('/api/v1/ws', base); target.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
       let upstream;
       try { upstream = await connectUpstreamWebSocket(target.toString(), auth, { handshakeTimeoutMs: deadlineMs }); }

@@ -46,7 +46,7 @@ export async function createKimiWebDriver(options) {
   };
   let sourceAuthority = authority();
   let state = options.enabled === false ? 'disabled' : options.installed === false ? 'missing' : 'starting';
-  let closed = false, closing, sourceId;
+  let closed = false, closing, sourceId, ownedStopped = false;
   let capabilities = parseNativeCapabilities({}, { paths: {} }, { components: { messages: {} } });
   const admission = options.admission ?? createAdmissionQueue();
   const transport = state === 'starting' ? createKimiWebTransport({ endpoint: options.endpoint, getAuthorization: options.getAuthorization, deadlineMs: options.deadlineMs }) : undefined;
@@ -466,15 +466,22 @@ export async function createKimiWebDriver(options) {
     if (closing) return closing;
     closed = true;
     closing = (async () => {
-      await transport?.close(); await lifecycleTransport?.close(); await eventWork;
-      await operations?.close();
-      for (const entry of observers) await entry.stream.return();
+      const errors = [];
+      const attempt = async action => { try { await action(); } catch (error) { errors.push(error); } };
+      await Promise.all([
+        attempt(() => transport?.close()),
+        attempt(() => lifecycleTransport?.close()),
+      ]);
+      await attempt(() => eventWork);
+      await attempt(() => operations?.close());
+      await Promise.all([...observers].map(entry => attempt(() => entry.stream.return())));
       history?.clear(); selected.clear(); retained.clear(); runningTasks.clear(); endedTasks.clear(); uncertain.clear();
       for (const timer of recheckTimers.values()) clearTimeout(timer);
-      recheckTimers.clear(); recheckAttempts.clear();
-      if (options.ownership === 'owned') await options.stopOwned();
+      recheckTimers.clear(); recheckAttempts.clear(); lifecycleSubscriptions.clear();
+      if (options.ownership === 'owned' && !ownedStopped) await attempt(async () => { await options.stopOwned(); ownedStopped = true; });
+      if (errors.length) throw errors[0];
       return { closed: true };
-    })();
+    })().catch(error => { closing = undefined; throw error; });
     return closing;
   }
   await inspectNative();
