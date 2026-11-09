@@ -12,7 +12,7 @@ import { startKimiFixture } from './task-16-fixture.mjs';
 import { startNativeKimi, until } from './task-16-native.mjs';
 
 export const sourceFiles = [
-  ...['kimiWebDriver', 'kimiWebHistory', 'kimiWebTransport', 'kimiWebOperations'].flatMap((name) => [`bridge/runtime/drivers/${name}.js`, `bridge/runtime/drivers/${name}.d.ts`]),
+  ...['kimiWebDriver', 'kimiWebHistory', 'kimiWebTransport', 'kimiWebOperations', 'kimiWebRecovery'].flatMap((name) => [`bridge/runtime/drivers/${name}.js`, `bridge/runtime/drivers/${name}.d.ts`]),
   ...['protocol', 'transcript'].flatMap((name) => [`shared/runtime/native/kimiWeb/${name}.js`, `shared/runtime/native/kimiWeb/${name}.d.ts`]),
   'bridge/runtime/operationJournal.js', 'bridge/runtime/interactionStore.js', 'bridge/runtime/admissionQueue.js',
   'bridge/runtime/storage/runtimeStore.js', 'bridge/runtime/storage/runtimeDatabaseWorker.mjs',

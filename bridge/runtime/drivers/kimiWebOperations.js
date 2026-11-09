@@ -1,3 +1,4 @@
+import { createKimiWebRecovery } from './kimiWebRecovery.js';
 import { encodeSessionKey } from '../../../shared/runtime/identity.js';
 import { ProtocolError, jsonValue } from '../../../shared/runtime/capabilities.js';
 import { nativeText, record } from '../../../shared/runtime/native/kimiWeb/protocol.js';
@@ -11,6 +12,7 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
   const journal = createOperationJournal({ store, admission, isProcessCurrent: isCurrent });
   const interactions = createInteractionStore({ store, admission });
   const bound = new Map();
+  const recoveryAuthority = createKimiWebRecovery({ store, isCurrent });
   const leaseKey = (scope) => `lease:${fingerprint(encodeSessionKey(scope.session))}`;
   function fence(scope) { if (!isCurrent(scope)) fail('reconcile_required', 'stale_generation'); }
   async function instance(scope, method, payload, idempotencyKey, pathname) {
@@ -203,7 +205,9 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
   }
   async function recoverModernInteractions(scope, page, onPending = () => {}) {
     fence(scope);
-    // Browsing native history does not acquire a task or a process binding.
+    const recoveredFrom = await recoveryAuthority.adopt(scope, page);
+    if (recoveredFrom && !bound.has(fingerprint(scope))) await bind(scope);
+    // Browsing unowned native history does not acquire a task or process binding.
     if (!bound.has(fingerprint(scope))) return;
     const lease = await readRecord(store, 'operations', leaseKey(scope));
     if (!lease?.value?.operationId) return;
@@ -222,6 +226,7 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     for (const item of page.interactions ?? []) {
       if (!tools.has(item.toolCallId) || !['question', 'approval'].includes(item.interactionKind) || !['pending', 'answered', 'dismissed', 'cancelled', 'approved', 'rejected'].includes(item.state)) continue;
       fence(scope);
+      if (recoveredFrom) await recoveryAuthority.retire(scope, recoveredFrom, item.interactionId, lease.value.operationId);
       const pending = await modernInteraction(scope, { agent_id: 'main', kind: item.interactionKind, status: item.state === 'pending' ? 'pending' : 'ended', interaction_id: item.interactionId, tool_call_id: item.toolCallId }, { ...recovery, item });
       if (pending) onPending(pending, item.interactionKind);
       // A large owned turn remains incremental; control requests can interleave.
