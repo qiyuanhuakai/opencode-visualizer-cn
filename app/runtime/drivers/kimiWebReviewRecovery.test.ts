@@ -3,14 +3,18 @@ import { parseNativeCapabilities } from '../../../shared/runtime/native/kimiWeb/
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { expect, it } from 'vitest';
-import type { JsonValue } from '../../../shared/runtime/capabilities.js';
+import type { JsonValue, ProtocolError } from '../../../shared/runtime/capabilities.js';
 import { createKimiWebDriver } from '../../../bridge/runtime/drivers/kimiWebDriver.js';
 import { createRuntimeStore } from '../../../bridge/runtime/storage/runtimeStore.js';
 import { createRawWebSocketPeer, createWebSocketAccept } from '../../../bridge/webSocketFrames.js';
 import { parseEnvironmentId, parseHarnessInstanceId, parseSessionRef } from '../../../shared/runtime/identity.js';
+
+// Load the actual internal Node error without requiring a public declaration for storeProtocol.
+const { StoreError } = createRequire(import.meta.url)('../../../bridge/runtime/storage/storeProtocol.js') as { StoreError: new (code: ProtocolError['code'], reason: string) => ProtocolError };
 
 const environmentId = parseEnvironmentId('11111111-1111-4111-8111-111111111111');
 const harnessInstanceId = parseHarnessInstanceId('22222222-2222-4222-8222-222222222222');
@@ -409,4 +413,63 @@ it('does not lose an HTTP recovery arriving while the prior batch is running', a
     expect(rows).toHaveLength(1);
     expect(rows[0].value).toMatchObject({ nativeRequestId: 'new-question', phase: 'pending' });
   } finally { gate.resolve(); await reconnecting?.catch(() => {}); operations.recoverModernInteractions = recover; await f.close(); }
+});
+
+it.each(['question', 'approval'].flatMap(kind => ['queue-full', 'stale-pending', 'wrong-turn'].map(fault => ({ kind, fault }))))('isolates $kind recovery $fault from the owned main terminal', async ({ kind, fault }) => {
+  const f = await fixture(false);
+  const read = f.store.get.bind(f.store);
+  let stream: AsyncIterator<unknown> | undefined, watching: Promise<void> | undefined;
+  let globalStream: AsyncIterator<unknown> | undefined, globalWatching: Promise<void> | undefined;
+  const globalEvents: unknown[] = [];
+  const events: unknown[] = [];
+  try {
+    const core = f.driver.registration.driver.core;
+    stream = await core.subscribe!({ ...context }) as AsyncIterator<unknown>;
+    const observed = stream;
+    watching = (async () => { for (;;) { const next = await observed.next(); if (next.done) break; events.push(next.value); } })();
+    globalStream = await core.subscribe!({ ...context, session: undefined }) as AsyncIterator<unknown>;
+    const diagnostic = globalStream;
+    globalWatching = (async () => { for (;;) { const next = await diagnostic.next(); if (next.done) break; globalEvents.push(next.value); } })();
+    const sent = await core.send!({ ...context, params: { content: [{ type: 'text', text: 'Finish independently' }], idempotencyKey: 'independent-terminal-send' } }) as { operationId: string };
+    await f.driver.flush();
+    f.state.turn = { ...f.state.turn, steps: [{ frames: [{ kind: 'tool', toolCallId: 'owned-tool', name: kind === 'question' ? 'AskUserQuestion' : 'Bash' }] }] };
+    f.state.interactions = [{ interactionId: 'finish-interaction', interactionKind: kind, toolCallId: 'owned-tool', state: 'pending', request: kind === 'question' ? { session_id: session.nativeSessionId, questions: [] } : { sessionId: session.nativeSessionId, toolName: 'Bash' } }];
+    f.send({ type: 'interaction', session_id: session.nativeSessionId, agent_id: 'main', interaction_id: 'finish-interaction', tool_call_id: 'owned-tool', kind, status: 'pending' });
+    let row;
+    for (let i = 0; i < 100; i++) {
+      row = (await f.store.page({ collection: 'interactions', limit: 100 })).items.find(row => row.value && typeof row.value === 'object' && !Array.isArray(row.value) && 'kind' in row.value && row.value.kind === 'interaction');
+      if (row) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(row).toBeDefined(); await f.driver.flush();
+    let injected = 0;
+    f.store.get = async params => {
+      if (fault !== 'stale-pending' && !injected && params.collection === 'interactions' && params.key === row!.key) { injected++; throw new StoreError('source_unavailable', 'queue_full'); }
+      return read(params);
+    };
+    f.state.turn = { ...f.state.turn, state: 'completed', ...(fault === 'wrong-turn' ? { turnId: 'wrong-completed-turn' } : {}) }; f.state.seq++;
+    f.state.interactions[0] = { ...f.state.interactions[0], state: fault === 'stale-pending' ? 'pending' : kind === 'question' ? 'answered' : 'approved' };
+    f.send({ type: 'resync_required', session_id: session.nativeSessionId });
+    for (let i = 0; i < 100; i++) {
+      if (f.driver.diagnostics().lastEventError && f.driver.diagnostics().eventQueue === 0) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(injected).toBe(fault === 'stale-pending' ? 0 : 1);
+    const field = fault === 'stale-pending' ? 'interaction_turn_unknown' : fault === 'wrong-turn' ? 'native_turn_identity' : 'runtime.store.queue_full';
+    await expect(f.driver.flush()).rejects.toMatchObject({ field });
+    if (fault === 'wrong-turn') {
+      expect(await f.driver.operations!.journal.get(sent.operationId)).toMatchObject({ phase: 'observed' });
+      expect(globalEvents.some(event => event && typeof event === 'object' && 'reason' in event && event.reason === 'runtime.store.queue_full')).toBe(true);
+      expect(globalEvents.some(event => event && typeof event === 'object' && 'reason' in event && event.reason === 'native_turn_identity')).toBe(true);
+      expect(events.some(event => event && typeof event === 'object' && 'type' in event && event.type === 'turn.ended')).toBe(false);
+      expect(f.state.prompts).toBe(1);
+      return;
+    }
+    expect(await f.driver.operations!.journal.get(sent.operationId)).toMatchObject({ phase: 'terminal', outcome: 'completed' });
+    expect(events.some(event => event && typeof event === 'object' && 'type' in event && event.type === 'turn.ended')).toBe(true);
+    await stream.return?.(); await watching; await globalStream.return?.(); await globalWatching;
+    expect(f.driver.diagnostics()).toMatchObject({ observers: 0, selected: 0, historySessions: 0 });
+    await expect(core.send!({ ...context, params: { content: [{ type: 'text', text: 'Next after fault' }], idempotencyKey: 'independent-terminal-next' } })).resolves.toMatchObject({ phase: 'native-executed' });
+    expect(f.state.prompts).toBe(2);
+  } finally { f.store.get = read; await stream?.return?.(); await watching; await globalStream?.return?.(); await globalWatching; await f.close(); }
 });

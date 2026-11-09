@@ -194,6 +194,10 @@ export async function createKimiWebDriver(options) {
   } }) : undefined;
   function requireCapability(name) { if (!capabilities[name]) throw new ProtocolError('unsupported', `kimi_${name}`); }
   const modernRecoveryWork = new Map();
+  function reportEventError(error) {
+    lastEventError = { code: error?.code ?? 'source_unavailable', reason: error?.field ?? error?.reason ?? 'native_event' };
+    emit({ type: 'source_error', ...lastEventError });
+  }
   function scheduled(action, bytes = 0) {
     if (eventCount >= 256 || eventBytes + bytes > 4194304) {
       lastEventError = { code: 'replay_required', reason: 'producer_backpressure' };
@@ -203,10 +207,7 @@ export async function createKimiWebDriver(options) {
       return false;
     }
     eventCount++; eventBytes += bytes;
-    eventWork = eventWork.then(action).catch((error) => {
-      lastEventError = { code: error?.code ?? 'source_unavailable', reason: error?.field ?? error?.reason ?? 'native_event' };
-      emit({ type: 'source_error', ...lastEventError });
-    }).finally(() => { eventCount--; eventBytes -= bytes; });
+    eventWork = eventWork.then(action).catch(reportEventError).finally(() => { eventCount--; eventBytes -= bytes; });
     return true;
   }
   function onFrame(frame, connection) {
@@ -278,15 +279,26 @@ export async function createKimiWebDriver(options) {
           await Promise.allSettled(attachments);
           if (!selected.has(sessionId)) return;
           const snapshot = history.inspect(sessionId).snapshot;
-          await operations.recoverModernInteractions(captured, snapshot, (pending, kind) => {
-            emit({ type: 'interaction.pending', session: captured.session, interactionId: pending.interactionId, kind, payload: pending.payload }, sessionId);
-          });
-          const turns = snapshot.items.filter(turn => turn.kind === 'turn' && typeof turn.triggerPromptId === 'string');
-          const ended = await operations.syncTranscript(captured, turns);
-          if (ended) {
-            noteEndedTask(sessionId, ended.operationId); releaseTask(sessionId, ended.operationId);
-            uncertain.delete(sessionId); forgetRecheck(sessionId); reclaim(sessionId);
-            emit({ type: 'turn.ended', session: captured.session, reason: ended.reason }, sessionId);
+          const failures = [];
+          try {
+            await operations.recoverModernInteractions(captured, snapshot, (pending, kind) => {
+              emit({ type: 'interaction.pending', session: captured.session, interactionId: pending.interactionId, kind, payload: pending.payload }, sessionId);
+            });
+          } catch (error) { failures.push(error); }
+          // A failed interaction write does not invalidate the snapshot's independent
+          // proof about the owned main turn. Always attempt its fenced settlement.
+          try {
+            const turns = snapshot.items.filter(turn => turn.kind === 'turn' && typeof turn.triggerPromptId === 'string');
+            const ended = await operations.syncTranscript(captured, turns);
+            if (ended) {
+              noteEndedTask(sessionId, ended.operationId); releaseTask(sessionId, ended.operationId);
+              uncertain.delete(sessionId); forgetRecheck(sessionId); reclaim(sessionId);
+              emit({ type: 'turn.ended', session: captured.session, reason: ended.reason }, sessionId);
+            }
+          } catch (error) { failures.push(error); }
+          if (failures.length) {
+            for (const error of failures.slice(0, -1)) reportEventError(error);
+            throw failures.at(-1);
           }
           if (!entry.dirty) break;
         }

@@ -187,12 +187,15 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     const binding = await readRecord(store, 'operations', `kimi-native:${lease.value.operationId}`);
     if (!binding || fingerprint(binding.value.scope) !== fingerprint(scope)) fail('reconcile_required', 'interaction_parent_unknown');
     const turns = (page.items ?? []).filter(turn => turn.kind === 'turn' && turn.triggerPromptId === binding.value.promptId);
-    await syncTranscript(scope, turns);
+    const identities = new Set(turns.map(turn => nativeText(turn.turnId, 'native_turn_id', 512)));
+    if (turns.length && (identities.size !== 1 || binding.value.turnId !== undefined && !identities.has(binding.value.turnId))) fail('reconcile_required', 'native_turn_identity');
     const request = record(item.request);
     const toolName = kind === 'question' ? 'AskUserQuestion' : nativeText(request.tool_name ?? request.toolName, 'native_tool_name', 512);
     const proof = recovery?.tools.get(toolCallId);
-    const turn = turns.find(turn => turn.state === 'running' && (recovery ? proof?.turnId === turn.turnId && proof.name === toolName : turn.steps?.some(step => step.frames?.some(frame => frame.kind === 'tool' && frame.toolCallId === toolCallId && frame.name === toolName))));
-    if (!turn || (request.session_id ?? request.sessionId) !== scope.session.nativeSessionId || (request.agent_id ?? request.agentId ?? 'main') !== 'main') fail('reconcile_required', 'interaction_turn_unknown');
+    const turn = turns.at(-1);
+    const ownsTool = turn && (recovery ? proof?.turnId === turn.turnId && proof.name === toolName : turn.steps?.some(step => step.frames?.some(frame => frame.kind === 'tool' && frame.toolCallId === toolCallId && frame.name === toolName)));
+    if (!turn || turn.state !== 'running' || !ownsTool || (request.session_id ?? request.sessionId) !== scope.session.nativeSessionId || (request.agent_id ?? request.agentId ?? 'main') !== 'main') fail('reconcile_required', 'interaction_turn_unknown');
+    await started(scope, { promptId: binding.value.promptId, turnId: turn.turnId, agentId: 'main' });
     const payload = { ...request, ...(kind === 'approval' ? { tool_name: toolName, ...(request.display ? { tool_input_display: request.display } : {}) } : {}), turnId: turn.turnId, turn_id: turn.turnId };
     const interactionId = await pending(scope, kind, nativeRequestId, payload, true);
     const canonical = await readRecord(store, 'interactions', interactionId, false);
