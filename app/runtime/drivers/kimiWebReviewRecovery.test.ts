@@ -21,7 +21,7 @@ async function fixture(legacy: boolean) {
   const epoch = randomUUID();
   const store = createRuntimeStore({ stateDirectory: directory, environmentId, ownerId: randomUUID(), epoch });
   await store.ready;
-  const state = { interactions: [] as Record<string, unknown>[], answers: [] as Record<string, unknown>[], legacy, gate: undefined as Promise<void> | undefined, entered: undefined as (() => void) | undefined, seq: 1, turn: undefined as Record<string, unknown> | undefined, prompts: 0, historyGate: undefined as Promise<void> | undefined, historyEntered: undefined as (() => void) | undefined };
+  const state = { replyGate: undefined as Promise<void> | undefined, replyEntered: undefined as (() => void) | undefined, interactions: [] as Record<string, unknown>[], answers: [] as Record<string, unknown>[], legacy, gate: undefined as Promise<void> | undefined, entered: undefined as (() => void) | undefined, seq: 1, turn: undefined as Record<string, unknown> | undefined, prompts: 0, historyGate: undefined as Promise<void> | undefined, historyEntered: undefined as (() => void) | undefined };
   const sockets = new Set<import('node:net').Socket>();
   const peers = new Set<ReturnType<typeof createRawWebSocketPeer>>();
   const controls: Record<string, unknown>[] = [];
@@ -66,6 +66,7 @@ async function fixture(legacy: boolean) {
     if (url.pathname.includes('/interactions/') && req.method === 'POST') {
       const parts = []; for await (const part of req) parts.push(part);
       state.answers.push(JSON.parse(Buffer.concat(parts).toString()));
+      state.replyEntered?.(); if (state.replyGate) await state.replyGate;
       return reply({ outcome: 'answered', ended_at: '2026-11-09T00:00:00Z' });
     }
     reply({});
@@ -171,6 +172,10 @@ it.each([false, true])('persists and answers a modern question only after provin
     }
     expect(pending).toBeDefined();
     await f.driver.flush();
+    const canonical = await f.driver.operations!.interactions.get(pending!.key);
+    await expect(f.driver.operations!.interactions.invalidatePending({ ...canonical.scope, epoch: randomUUID() }, 'question-1')).rejects.toMatchObject({ code: 'reconcile_required' });
+    await expect(f.driver.operations!.interactions.invalidatePending({ ...canonical.scope, processGeneration: canonical.scope.processGeneration + 1 }, 'question-1')).rejects.toMatchObject({ code: 'reconcile_required' });
+    expect(await f.driver.operations!.interactions.get(pending!.key)).toMatchObject({ phase: 'pending' });
     const answer: Record<string, JsonValue> = dismiss ? { dismiss: true } : { answers: { q_0: { kind: 'single', option_id: 'opt_0' } } };
     const params = { interactionId: pending!.key, answer, idempotencyKey: 'question-reply' };
     await expect(core.respondInteraction!({ ...context, session: { ...session, nativeSessionId: 'foreign-session' }, params })).rejects.toMatchObject({ field: 'interaction_scope' });
@@ -210,4 +215,77 @@ it.each(['2.5.2', '2.5.3', 'missing-route'])('enables modern questions only for 
   expect(capability.modernQuestions).toBe(version === '2.5.2');
   expect(capability.questions).toBe(version === '2.5.2');
   expect(capability.approvals).toBe(false);
+});
+
+it.each(['reconnect', 'resync'])('recovers a modern pending question from HTTP without replay (%s)', async mode => {
+  const f = await fixture(false);
+  try {
+    const core = f.driver.registration.driver.core;
+    await core.send!({ ...context, params: { content: [{ type: 'text', text: 'Recover question' }], idempotencyKey: 'recover-question-send' } });
+    await f.driver.flush();
+    f.state.turn = { ...f.state.turn, steps: [{ frames: [{ kind: 'tool', toolCallId: 'owned-tool', name: 'AskUserQuestion' }] }] };
+    f.state.interactions = [{ interactionId: 'question-recovered', interactionKind: 'question', toolCallId: 'owned-tool', state: 'pending', request: { session_id: session.nativeSessionId, questions: [{ id: 'q_0', question: 'Choose', options: [{ id: 'opt_0', label: 'First' }] }] } }];
+    if (mode === 'reconnect') await f.driver.reconnect();
+    else f.send({ type: 'resync_required', session_id: session.nativeSessionId });
+    let row;
+    for (let i = 0; i < 100; i++) {
+      await f.driver.flush();
+      row = (await f.store.page({ collection: 'interactions', limit: 100 })).items.find(row => row.value && typeof row.value === 'object' && !Array.isArray(row.value) && 'kind' in row.value && row.value.kind === 'interaction');
+      if (row) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(row).toBeDefined();
+    await expect(core.respondInteraction!({ ...context, params: { interactionId: row!.key, answer: { answers: { q_0: { kind: 'single', option_id: 'opt_0' } } }, idempotencyKey: 'recover-question-reply' } })).resolves.toMatchObject({ phase: 'native-executed' });
+    expect(f.state.answers).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
+it.each(['live', 'reconnect', 'unproven-ended', 'own-reply'])('synchronizes a native question resolution without stealing a reply (%s)', async mode => {
+  const f = await fixture(false);
+  const gate = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>();
+  try {
+    const core = f.driver.registration.driver.core;
+    await core.send!({ ...context, params: { content: [{ type: 'text', text: 'External answer' }], idempotencyKey: 'external-answer-send' } });
+    await f.driver.flush();
+    f.state.turn = { ...f.state.turn, steps: [{ frames: [{ kind: 'tool', toolCallId: 'owned-tool', name: 'AskUserQuestion' }] }] };
+    f.state.interactions = [{ interactionId: 'question-external', interactionKind: 'question', toolCallId: 'owned-tool', state: 'pending', request: { session_id: session.nativeSessionId, questions: [] } }];
+    const event = { type: 'interaction', session_id: session.nativeSessionId, agent_id: 'main', interaction_id: 'question-external', tool_call_id: 'owned-tool', kind: 'question' };
+    f.send({ ...event, status: 'pending' });
+    let row;
+    for (let i = 0; i < 100; i++) {
+      row = (await f.store.page({ collection: 'interactions', limit: 100 })).items.find(row => row.value && typeof row.value === 'object' && !Array.isArray(row.value) && 'kind' in row.value && row.value.kind === 'interaction');
+      if (row) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(row).toBeDefined(); await f.driver.flush();
+    let replying: Promise<unknown> | undefined;
+    if (mode === 'own-reply') {
+      f.state.replyGate = gate.promise; f.state.replyEntered = entered.resolve;
+      replying = Promise.resolve(core.respondInteraction!({ ...context, params: { interactionId: row!.key, answer: { dismiss: true }, idempotencyKey: 'owned-inflight-reply' } }));
+      // Observe rejection immediately while the held HTTP reply is still in flight.
+      void replying.catch(() => {});
+      await entered.promise;
+    }
+    if (mode !== 'unproven-ended') f.state.interactions[0] = { ...f.state.interactions[0], state: 'answered' };
+    const before = f.driver.diagnostics().nativeFrames;
+    if (mode === 'reconnect') await f.driver.reconnect();
+    else f.send({ ...event, status: 'ended', outcome: 'answered' });
+    for (let i = 0; i < 100 && f.driver.diagnostics().nativeFrames === before; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    await f.driver.flush();
+    if (mode === 'own-reply') {
+      try { expect(await f.driver.operations!.interactions.get(row!.key)).toMatchObject({ phase: 'replying' }); }
+      finally { gate.resolve(); }
+      await expect(replying).resolves.toMatchObject({ phase: 'native-executed' });
+      expect(await f.driver.operations!.interactions.get(row!.key)).toMatchObject({ phase: 'replied' });
+      expect(f.state.answers).toHaveLength(1);
+    } else if (mode === 'unproven-ended') {
+      expect(await f.driver.operations!.interactions.get(row!.key)).toMatchObject({ phase: 'pending' });
+      await expect(core.respondInteraction!({ ...context, params: { interactionId: row!.key, answer: { dismiss: true }, idempotencyKey: 'real-question-reply' } })).resolves.toMatchObject({ phase: 'native-executed' });
+      expect(f.state.answers).toHaveLength(1);
+    } else {
+      expect(await f.driver.operations!.interactions.get(row!.key)).toMatchObject({ phase: 'invalidated' });
+      await expect(core.respondInteraction!({ ...context, params: { interactionId: row!.key, answer: { dismiss: true }, idempotencyKey: 'late-question-reply' } })).rejects.toBeDefined();
+      expect(f.state.answers).toHaveLength(0);
+    }
+  } finally { gate.resolve(); await f.close(); }
 });

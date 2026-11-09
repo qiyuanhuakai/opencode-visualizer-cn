@@ -191,7 +191,12 @@ export async function createKimiWebDriver(options) {
     if (capabilities.promptAbort && !capabilities.snapshot && selected.has(sessionId)) {
       const snapshot = history.inspect(sessionId);
       const turns = snapshot.snapshot.items.filter(turn => turn.kind === 'turn' && typeof turn.triggerPromptId === 'string').map(turn => ({ kind: 'turn', turnId: turn.turnId, triggerPromptId: turn.triggerPromptId, state: turn.state }));
-      settleModernTurns(Object.freeze({ target: scope.environmentId, ...authority(), session: { ...scope, nativeSessionId: sessionId } }), turns);
+      const captured = Object.freeze({ target: scope.environmentId, ...authority(), session: { ...scope, nativeSessionId: sessionId } });
+      settleModernTurns(captured, turns);
+      if (capabilities.modernQuestions) for (const interaction of snapshot.snapshot.interactions ?? []) {
+        if (interaction.interactionKind !== 'question' || !['pending', 'answered', 'dismissed', 'cancelled'].includes(interaction.state)) continue;
+        settleModernQuestion(captured, { type: 'interaction', agent_id: 'main', kind: 'question', status: interaction.state === 'pending' ? 'pending' : 'ended', interaction_id: interaction.interactionId, tool_call_id: interaction.toolCallId });
+      }
     }
   } }) : undefined;
   function requireCapability(name) { if (!capabilities[name]) throw new ProtocolError('unsupported', `kimi_${name}`); }
@@ -246,13 +251,8 @@ export async function createKimiWebDriver(options) {
   function onModernLifecycle(frame, captured) {
     const sessionId = captured.session.nativeSessionId;
     if (!selected.has(sessionId)) return;
-    if (capabilities.modernQuestions && frame.type === 'interaction' && frame.agent_id === 'main' && frame.kind === 'question' && frame.status === 'pending') {
-      const attachments = [...(selected.get(sessionId)?.values() ?? [])].map(entry => entry.work ?? entry);
-      scheduled(async () => {
-        await Promise.allSettled(attachments);
-        const pending = await operations.modernQuestion(captured, frame);
-        if (pending) emit({ type: 'interaction.pending', session: captured.session, interactionId: pending.interactionId, kind: 'question', payload: pending.payload }, sessionId);
-      }, Buffer.byteLength(JSON.stringify(frame)));
+    if (capabilities.modernQuestions && frame.type === 'interaction' && frame.agent_id === 'main' && frame.kind === 'question' && ['pending', 'ended'].includes(frame.status)) {
+      settleModernQuestion(captured, frame);
       return;
     }
     const payload = frame.payload ?? {};
@@ -265,6 +265,15 @@ export async function createKimiWebDriver(options) {
     const turns = frame.type === 'transcript.reset' ? payload.snapshot?.items : frame.type === 'transcript.ops' ? payload.ops?.filter(op => op.op === 'turn.upsert').map(op => op.turn) : undefined;
     if (!Array.isArray(turns) || !turns.length) return;
     settleModernTurns(captured, turns, Buffer.byteLength(JSON.stringify(frame)));
+  }
+  function settleModernQuestion(captured, frame) {
+    const sessionId = captured.session.nativeSessionId;
+    const attachments = [...(selected.get(sessionId)?.values() ?? [])].map(entry => entry.work ?? entry);
+    scheduled(async () => {
+      await Promise.allSettled(attachments);
+      const pending = await operations.modernQuestion(captured, frame);
+      if (pending) emit({ type: 'interaction.pending', session: captured.session, interactionId: pending.interactionId, kind: 'question', payload: pending.payload }, sessionId);
+    }, Buffer.byteLength(JSON.stringify(frame)));
   }
   function settleModernTurns(captured, turns, bytes = 0) {
     if (!turns.length) return;

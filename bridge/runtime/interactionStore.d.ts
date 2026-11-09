@@ -15,6 +15,7 @@ export interface InteractionStore {
     readonly nativeRequestId: string | number;
     readonly payload: Json;
   }): Promise<string>;
+  invalidatePending(scope: OperationScope, nativeRequestId: string | number): Promise<void>;
   get(key: string): Promise<Interaction>;
   reply(
     key: string,

@@ -139,6 +139,29 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
       return key;
     });
   }
+  // A native resolution can retire an unclaimed prompt, but cannot steal a reply
+  // already admitted by this process (its own native ACK may arrive before HTTP).
+  async function invalidatePending(input, nativeRequestId) {
+    const scope = parseOperationScope(input);
+    const key = keyFor(scope, nativeRequestId);
+    return admission.run({ reserved: true }, async (signal) => {
+      const { token } = await authority(scope);
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const prior = await readRecord(store, 'interactions', key);
+        if (!prior || prior.value.phase !== 'pending') return;
+        if (fingerprint(prior.value.scope) !== fingerprint(scope)) throw new StoreError('conflict', 'scope_fence');
+        if (!token.active || signal.aborted) throw new StoreError('reconcile_required', 'stale_generation');
+        try {
+          // The key includes epoch/generation: even a late retirement cannot touch a successor's interaction.
+          await compareRecord(store, 'interactions', key, prior, { ...prior.value, phase: 'invalidated' });
+          return;
+        } catch (error) {
+          if (!isRevisionConflict(error)) throw error;
+        }
+      }
+      throw new StoreError('conflict', 'concurrent_update');
+    });
+  }
   async function get(key) {
     const record = await readRecord(store, 'interactions', key, false);
     if (record?.value?.kind !== 'interaction')
@@ -238,5 +261,5 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
         throw error;
       });
   }
-  return { bindProcess, processExited, pending, get, reply };
+  return { bindProcess, processExited, pending, invalidatePending, get, reply };
 }

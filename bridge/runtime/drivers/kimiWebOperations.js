@@ -168,13 +168,18 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
   async function modernQuestion(scope, frame) {
     scope = clean(scope);
     fence(scope);
-    if (frame.agent_id !== 'main' || frame.kind !== 'question' || frame.status !== 'pending') return null;
+    if (frame.agent_id !== 'main' || frame.kind !== 'question' || !['pending', 'ended'].includes(frame.status)) return null;
     const nativeRequestId = nativeText(frame.interaction_id, 'native_request_id', 512);
     const toolCallId = nativeText(frame.tool_call_id, 'native_tool_call_id', 512);
     const page = record(await transport.request('GET', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/transcript?agent_id=main&page_size=100`));
     fence(scope);
-    const item = page.interactions?.find(item => item.interactionId === nativeRequestId && item.interactionKind === 'question' && item.state === 'pending' && item.toolCallId === toolCallId);
+    const item = page.interactions?.find(item => item.interactionId === nativeRequestId && item.interactionKind === 'question' && item.toolCallId === toolCallId);
     if (!item) return null;
+    if (['answered', 'dismissed', 'cancelled'].includes(item.state)) {
+      await interactions.invalidatePending(scope, nativeRequestId);
+      return null;
+    }
+    if (item.state !== 'pending' || frame.status !== 'pending') return null;
     const lease = await readRecord(store, 'operations', leaseKey(scope));
     if (!lease?.value?.operationId) fail('reconcile_required', 'interaction_parent_unknown');
     const binding = await readRecord(store, 'operations', `kimi-native:${lease.value.operationId}`);
