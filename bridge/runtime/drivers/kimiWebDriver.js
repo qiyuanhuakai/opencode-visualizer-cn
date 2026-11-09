@@ -193,9 +193,10 @@ export async function createKimiWebDriver(options) {
       const turns = snapshot.snapshot.items.filter(turn => turn.kind === 'turn' && typeof turn.triggerPromptId === 'string').map(turn => ({ kind: 'turn', turnId: turn.turnId, triggerPromptId: turn.triggerPromptId, state: turn.state }));
       const captured = Object.freeze({ target: scope.environmentId, ...authority(), session: { ...scope, nativeSessionId: sessionId } });
       settleModernTurns(captured, turns);
-      if (capabilities.modernQuestions) for (const interaction of snapshot.snapshot.interactions ?? []) {
-        if (interaction.interactionKind !== 'question' || !['pending', 'answered', 'dismissed', 'cancelled'].includes(interaction.state)) continue;
-        settleModernQuestion(captured, { type: 'interaction', agent_id: 'main', kind: 'question', status: interaction.state === 'pending' ? 'pending' : 'ended', interaction_id: interaction.interactionId, tool_call_id: interaction.toolCallId });
+      if (capabilities.modernQuestions || capabilities.modernApprovals) for (const interaction of snapshot.snapshot.interactions ?? []) {
+        const kind = interaction.interactionKind;
+        if (!(kind === 'question' && capabilities.modernQuestions || kind === 'approval' && capabilities.modernApprovals) || !['pending', 'answered', 'dismissed', 'cancelled', 'approved', 'rejected'].includes(interaction.state)) continue;
+        settleModernInteraction(captured, { type: 'interaction', agent_id: 'main', kind, status: interaction.state === 'pending' ? 'pending' : 'ended', interaction_id: interaction.interactionId, tool_call_id: interaction.toolCallId });
       }
     }
   } }) : undefined;
@@ -251,8 +252,8 @@ export async function createKimiWebDriver(options) {
   function onModernLifecycle(frame, captured) {
     const sessionId = captured.session.nativeSessionId;
     if (!selected.has(sessionId)) return;
-    if (capabilities.modernQuestions && frame.type === 'interaction' && frame.agent_id === 'main' && frame.kind === 'question' && ['pending', 'ended'].includes(frame.status)) {
-      settleModernQuestion(captured, frame);
+    if (frame.type === 'interaction' && frame.agent_id === 'main' && (frame.kind === 'question' && capabilities.modernQuestions || frame.kind === 'approval' && capabilities.modernApprovals) && ['pending', 'ended'].includes(frame.status)) {
+      settleModernInteraction(captured, frame);
       return;
     }
     const payload = frame.payload ?? {};
@@ -266,13 +267,13 @@ export async function createKimiWebDriver(options) {
     if (!Array.isArray(turns) || !turns.length) return;
     settleModernTurns(captured, turns, Buffer.byteLength(JSON.stringify(frame)));
   }
-  function settleModernQuestion(captured, frame) {
+  function settleModernInteraction(captured, frame) {
     const sessionId = captured.session.nativeSessionId;
     const attachments = [...(selected.get(sessionId)?.values() ?? [])].map(entry => entry.work ?? entry);
     scheduled(async () => {
       await Promise.allSettled(attachments);
-      const pending = await operations.modernQuestion(captured, frame);
-      if (pending) emit({ type: 'interaction.pending', session: captured.session, interactionId: pending.interactionId, kind: 'question', payload: pending.payload }, sessionId);
+      const pending = await operations.modernInteraction(captured, frame);
+      if (pending) emit({ type: 'interaction.pending', session: captured.session, interactionId: pending.interactionId, kind: frame.kind, payload: pending.payload }, sessionId);
     }, Buffer.byteLength(JSON.stringify(frame)));
   }
   function settleModernTurns(captured, turns, bytes = 0) {

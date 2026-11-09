@@ -65,9 +65,9 @@ async function fixture(legacy: boolean) {
     }
     if (url.pathname.includes('/interactions/') && req.method === 'POST') {
       const parts = []; for await (const part of req) parts.push(part);
-      state.answers.push(JSON.parse(Buffer.concat(parts).toString()));
+      const answer = JSON.parse(Buffer.concat(parts).toString()); state.answers.push(answer);
       state.replyEntered?.(); if (state.replyGate) await state.replyGate;
-      return reply({ outcome: 'answered', ended_at: '2026-11-09T00:00:00Z' });
+      return reply({ outcome: answer.kind === 'approval' ? answer.decision : 'answered', ended_at: '2026-11-09T00:00:00Z' });
     }
     reply({});
   });
@@ -186,16 +186,16 @@ it.each([false, true])('persists and answers a modern question only after provin
   } finally { await f.close(); }
 });
 
-it.each(['external-prompt', 'wrong-turn', 'missing-tool', 'child-agent'])('does not adopt a modern question from %s', async variant => {
+it.each(['external-prompt', 'wrong-turn', 'missing-tool', 'child-agent'].flatMap(variant => [['question', variant], ['approval', variant]]))('does not adopt a modern %s from %s', async (kind, variant) => {
   const f = await fixture(false);
   try {
     const core = f.driver.registration.driver.core;
     const sent = await core.send!({ ...context, params: { content: [{ type: 'text', text: 'Question' }], idempotencyKey: 'question-unowned' } }) as { operationId: string };
     await f.driver.flush();
-    f.state.turn = { ...f.state.turn, ...(variant === 'external-prompt' ? { triggerPromptId: 'foreign-prompt' } : {}), ...(variant === 'wrong-turn' ? { turnId: 'wrong-turn' } : {}), steps: variant === 'missing-tool' ? [] : [{ frames: [{ kind: 'tool', toolCallId: 'owned-tool', name: 'AskUserQuestion' }] }] };
-    f.state.interactions = [{ interactionId: 'question-1', interactionKind: 'question', toolCallId: 'owned-tool', state: 'pending', request: { session_id: session.nativeSessionId, questions: [] } }];
+    f.state.turn = { ...f.state.turn, ...(variant === 'external-prompt' ? { triggerPromptId: 'foreign-prompt' } : {}), ...(variant === 'wrong-turn' ? { turnId: 'wrong-turn' } : {}), steps: variant === 'missing-tool' ? [] : [{ frames: [{ kind: 'tool', toolCallId: 'owned-tool', name: kind === 'question' ? 'AskUserQuestion' : 'Bash' }] }] };
+    f.state.interactions = [{ interactionId: 'question-1', interactionKind: kind, toolCallId: 'owned-tool', state: 'pending', request: kind === 'question' ? { session_id: session.nativeSessionId, questions: [] } : { sessionId: session.nativeSessionId, toolName: 'Bash' } }];
     const initialFrames = f.driver.diagnostics().nativeFrames;
-    f.send({ type: 'interaction', session_id: session.nativeSessionId, agent_id: variant === 'child-agent' ? 'child' : 'main', interaction_id: 'question-1', tool_call_id: 'owned-tool', kind: 'question', status: 'pending' });
+    f.send({ type: 'interaction', session_id: session.nativeSessionId, agent_id: variant === 'child-agent' ? 'child' : 'main', interaction_id: 'question-1', tool_call_id: 'owned-tool', kind, status: 'pending' });
     // A subsequent ordered transcript event proves the prior frame has been dispatched.
     f.state.seq++;
     f.send({ type: 'transcript.ops', session_id: session.nativeSessionId, payload: { agent_id: 'main', seq: f.state.seq, ops: [] } });
@@ -214,17 +214,18 @@ it.each(['2.5.2', '2.5.3', 'missing-route'])('enables modern questions only for 
   const capability = parseNativeCapabilities({ backend: 'v2', server_version: version === 'missing-route' ? '2.5.2' : version, capabilities: {} }, { paths }, { components: { messages: {} } });
   expect(capability.modernQuestions).toBe(version === '2.5.2');
   expect(capability.questions).toBe(version === '2.5.2');
-  expect(capability.approvals).toBe(false);
+  expect(capability.approvals).toBe(version === '2.5.2');
+  expect(capability.modernApprovals).toBe(version === '2.5.2');
 });
 
-it.each(['reconnect', 'resync'])('recovers a modern pending question from HTTP without replay (%s)', async mode => {
+it.each(['reconnect', 'resync'].flatMap(mode => [['question', mode], ['approval', mode]]))('recovers a modern pending %s from HTTP without replay (%s)', async (kind, mode) => {
   const f = await fixture(false);
   try {
     const core = f.driver.registration.driver.core;
     await core.send!({ ...context, params: { content: [{ type: 'text', text: 'Recover question' }], idempotencyKey: 'recover-question-send' } });
     await f.driver.flush();
-    f.state.turn = { ...f.state.turn, steps: [{ frames: [{ kind: 'tool', toolCallId: 'owned-tool', name: 'AskUserQuestion' }] }] };
-    f.state.interactions = [{ interactionId: 'question-recovered', interactionKind: 'question', toolCallId: 'owned-tool', state: 'pending', request: { session_id: session.nativeSessionId, questions: [{ id: 'q_0', question: 'Choose', options: [{ id: 'opt_0', label: 'First' }] }] } }];
+    f.state.turn = { ...f.state.turn, steps: [{ frames: [{ kind: 'tool', toolCallId: 'owned-tool', name: kind === 'question' ? 'AskUserQuestion' : 'Bash' }] }] };
+    f.state.interactions = [{ interactionId: 'question-recovered', interactionKind: kind, toolCallId: 'owned-tool', state: 'pending', request: kind === 'question' ? { session_id: session.nativeSessionId, questions: [{ id: 'q_0', question: 'Choose', options: [{ id: 'opt_0', label: 'First' }] }] } : { sessionId: session.nativeSessionId, toolName: 'Bash' } }];
     if (mode === 'reconnect') await f.driver.reconnect();
     else f.send({ type: 'resync_required', session_id: session.nativeSessionId });
     let row;
@@ -235,21 +236,23 @@ it.each(['reconnect', 'resync'])('recovers a modern pending question from HTTP w
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     expect(row).toBeDefined();
-    await expect(core.respondInteraction!({ ...context, params: { interactionId: row!.key, answer: { answers: { q_0: { kind: 'single', option_id: 'opt_0' } } }, idempotencyKey: 'recover-question-reply' } })).resolves.toMatchObject({ phase: 'native-executed' });
+    const answer: Record<string, JsonValue> = kind === 'approval' ? { decision: 'rejected' } : { answers: { q_0: { kind: 'single', option_id: 'opt_0' } } };
+    await expect(core.respondInteraction!({ ...context, params: { interactionId: row!.key, answer, idempotencyKey: 'recover-question-reply' } })).resolves.toMatchObject({ phase: 'native-executed' });
     expect(f.state.answers).toHaveLength(1);
   } finally { await f.close(); }
 });
 
-it.each(['live', 'reconnect', 'unproven-ended', 'own-reply'])('synchronizes a native question resolution without stealing a reply (%s)', async mode => {
+it.each(['live', 'reconnect', 'unproven-ended', 'own-reply'].flatMap(mode => [['question', mode], ['approval', mode]]))('synchronizes a native %s resolution without stealing a reply (%s)', async (kind, mode) => {
   const f = await fixture(false);
   const gate = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>();
   try {
     const core = f.driver.registration.driver.core;
     await core.send!({ ...context, params: { content: [{ type: 'text', text: 'External answer' }], idempotencyKey: 'external-answer-send' } });
     await f.driver.flush();
-    f.state.turn = { ...f.state.turn, steps: [{ frames: [{ kind: 'tool', toolCallId: 'owned-tool', name: 'AskUserQuestion' }] }] };
-    f.state.interactions = [{ interactionId: 'question-external', interactionKind: 'question', toolCallId: 'owned-tool', state: 'pending', request: { session_id: session.nativeSessionId, questions: [] } }];
-    const event = { type: 'interaction', session_id: session.nativeSessionId, agent_id: 'main', interaction_id: 'question-external', tool_call_id: 'owned-tool', kind: 'question' };
+    f.state.turn = { ...f.state.turn, steps: [{ frames: [{ kind: 'tool', toolCallId: 'owned-tool', name: kind === 'question' ? 'AskUserQuestion' : 'Bash' }] }] };
+    f.state.interactions = [{ interactionId: 'question-external', interactionKind: kind, toolCallId: 'owned-tool', state: 'pending', request: kind === 'question' ? { session_id: session.nativeSessionId, questions: [] } : { sessionId: session.nativeSessionId, toolName: 'Bash' } }];
+    const event = { type: 'interaction', session_id: session.nativeSessionId, agent_id: 'main', interaction_id: 'question-external', tool_call_id: 'owned-tool', kind };
+    const replyAnswer: Record<string, JsonValue> = kind === 'approval' ? { decision: 'rejected' } : { dismiss: true };
     f.send({ ...event, status: 'pending' });
     let row;
     for (let i = 0; i < 100; i++) {
@@ -261,15 +264,15 @@ it.each(['live', 'reconnect', 'unproven-ended', 'own-reply'])('synchronizes a na
     let replying: Promise<unknown> | undefined;
     if (mode === 'own-reply') {
       f.state.replyGate = gate.promise; f.state.replyEntered = entered.resolve;
-      replying = Promise.resolve(core.respondInteraction!({ ...context, params: { interactionId: row!.key, answer: { dismiss: true }, idempotencyKey: 'owned-inflight-reply' } }));
+      replying = Promise.resolve(core.respondInteraction!({ ...context, params: { interactionId: row!.key, answer: replyAnswer, idempotencyKey: 'owned-inflight-reply' } }));
       // Observe rejection immediately while the held HTTP reply is still in flight.
       void replying.catch(() => {});
       await entered.promise;
     }
-    if (mode !== 'unproven-ended') f.state.interactions[0] = { ...f.state.interactions[0], state: 'answered' };
+    if (mode !== 'unproven-ended') f.state.interactions[0] = { ...f.state.interactions[0], state: kind === 'approval' ? 'rejected' : 'answered' };
     const before = f.driver.diagnostics().nativeFrames;
     if (mode === 'reconnect') await f.driver.reconnect();
-    else f.send({ ...event, status: 'ended', outcome: 'answered' });
+    else f.send({ ...event, status: 'ended', outcome: kind === 'approval' ? 'rejected' : 'answered' });
     for (let i = 0; i < 100 && f.driver.diagnostics().nativeFrames === before; i++) await new Promise(resolve => setTimeout(resolve, 10));
     await f.driver.flush();
     if (mode === 'own-reply') {
@@ -280,12 +283,38 @@ it.each(['live', 'reconnect', 'unproven-ended', 'own-reply'])('synchronizes a na
       expect(f.state.answers).toHaveLength(1);
     } else if (mode === 'unproven-ended') {
       expect(await f.driver.operations!.interactions.get(row!.key)).toMatchObject({ phase: 'pending' });
-      await expect(core.respondInteraction!({ ...context, params: { interactionId: row!.key, answer: { dismiss: true }, idempotencyKey: 'real-question-reply' } })).resolves.toMatchObject({ phase: 'native-executed' });
+      await expect(core.respondInteraction!({ ...context, params: { interactionId: row!.key, answer: replyAnswer, idempotencyKey: 'real-question-reply' } })).resolves.toMatchObject({ phase: 'native-executed' });
       expect(f.state.answers).toHaveLength(1);
     } else {
       expect(await f.driver.operations!.interactions.get(row!.key)).toMatchObject({ phase: 'invalidated' });
-      await expect(core.respondInteraction!({ ...context, params: { interactionId: row!.key, answer: { dismiss: true }, idempotencyKey: 'late-question-reply' } })).rejects.toBeDefined();
+      await expect(core.respondInteraction!({ ...context, params: { interactionId: row!.key, answer: replyAnswer, idempotencyKey: 'late-question-reply' } })).rejects.toBeDefined();
       expect(f.state.answers).toHaveLength(0);
     }
   } finally { gate.resolve(); await f.close(); }
+});
+
+it.each(['approved', 'rejected'])('persists a verified modern approval and replies %s once', async decision => {
+  const f = await fixture(false);
+  try {
+    const core = f.driver.registration.driver.core;
+    const sent = await core.send!({ ...context, params: { content: [{ type: 'text', text: 'Approval' }], idempotencyKey: 'approval-send' } }) as { operationId: string };
+    await f.driver.flush();
+    f.state.turn = { ...f.state.turn, steps: [{ frames: [{ kind: 'tool', toolCallId: 'owned-tool', name: 'Bash' }] }] };
+    f.state.interactions = [{ interactionId: 'approval-1', interactionKind: 'approval', toolCallId: 'owned-tool', state: 'pending', request: { sessionId: session.nativeSessionId, agentId: 'main', toolName: 'Bash', action: 'Run private command', display: { kind: 'command', command: 'pwd' } } }];
+    f.send({ type: 'interaction', session_id: session.nativeSessionId, agent_id: 'main', interaction_id: 'approval-1', tool_call_id: 'owned-tool', kind: 'approval', status: 'pending' });
+    let row;
+    for (let i = 0; i < 100; i++) {
+      row = (await f.store.page({ collection: 'interactions', limit: 100 })).items.find(row => row.value && typeof row.value === 'object' && !Array.isArray(row.value) && 'kind' in row.value && row.value.kind === 'interaction');
+      if (row) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(row).toBeDefined(); await f.driver.flush();
+    expect((await f.driver.operations!.interactions.get(row!.key)).payload).toMatchObject({ kind: 'approval', details: { tool_name: 'Bash', action: 'Run private command', tool_input_display: { kind: 'command', command: 'pwd' } } });
+    const params = { interactionId: row!.key, answer: { decision }, idempotencyKey: 'approval-reply' };
+    await expect(core.respondInteraction!({ ...context, session: { ...session, nativeSessionId: 'foreign-session' }, params })).rejects.toMatchObject({ field: 'interaction_scope' });
+    await expect(core.respondInteraction!({ ...context, params })).resolves.toMatchObject({ phase: 'native-executed', parentOperationId: sent.operationId });
+    expect(f.state.answers).toEqual([{ kind: 'approval', decision }]);
+    await expect(core.respondInteraction!({ ...context, params })).rejects.toBeDefined();
+    expect(f.state.answers).toHaveLength(1);
+  } finally { await f.close(); }
 });

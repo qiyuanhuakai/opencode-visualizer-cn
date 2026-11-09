@@ -165,17 +165,18 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     if (!prior) await compareRecord(store, 'operations', metadataKey, null, value);
     return key;
   }
-  async function modernQuestion(scope, frame) {
+  async function modernInteraction(scope, frame) {
     scope = clean(scope);
     fence(scope);
-    if (frame.agent_id !== 'main' || frame.kind !== 'question' || !['pending', 'ended'].includes(frame.status)) return null;
+    if (frame.agent_id !== 'main' || !['question', 'approval'].includes(frame.kind) || !['pending', 'ended'].includes(frame.status)) return null;
+    const kind = frame.kind;
     const nativeRequestId = nativeText(frame.interaction_id, 'native_request_id', 512);
     const toolCallId = nativeText(frame.tool_call_id, 'native_tool_call_id', 512);
     const page = record(await transport.request('GET', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/transcript?agent_id=main&page_size=100`));
     fence(scope);
-    const item = page.interactions?.find(item => item.interactionId === nativeRequestId && item.interactionKind === 'question' && item.toolCallId === toolCallId);
+    const item = page.interactions?.find(item => item.interactionId === nativeRequestId && item.interactionKind === kind && item.toolCallId === toolCallId);
     if (!item) return null;
-    if (['answered', 'dismissed', 'cancelled'].includes(item.state)) {
+    if ((kind === 'question' ? ['answered', 'dismissed', 'cancelled'] : ['approved', 'rejected', 'cancelled']).includes(item.state)) {
       await interactions.invalidatePending(scope, nativeRequestId);
       return null;
     }
@@ -186,10 +187,12 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     if (!binding || fingerprint(binding.value.scope) !== fingerprint(scope)) fail('reconcile_required', 'interaction_parent_unknown');
     const turns = (page.items ?? []).filter(turn => turn.kind === 'turn' && turn.triggerPromptId === binding.value.promptId);
     await syncTranscript(scope, turns);
-    const turn = turns.find(turn => turn.state === 'running' && turn.steps?.some(step => step.frames?.some(frame => frame.kind === 'tool' && frame.toolCallId === toolCallId && frame.name === 'AskUserQuestion')));
-    if (!turn || item.request?.session_id !== scope.session.nativeSessionId) fail('reconcile_required', 'interaction_turn_unknown');
-    const payload = { ...record(item.request), turnId: turn.turnId, turn_id: turn.turnId };
-    const interactionId = await pending(scope, 'question', nativeRequestId, payload, true);
+    const request = record(item.request);
+    const toolName = kind === 'question' ? 'AskUserQuestion' : nativeText(request.tool_name ?? request.toolName, 'native_tool_name', 512);
+    const turn = turns.find(turn => turn.state === 'running' && turn.steps?.some(step => step.frames?.some(frame => frame.kind === 'tool' && frame.toolCallId === toolCallId && frame.name === toolName)));
+    if (!turn || (request.session_id ?? request.sessionId) !== scope.session.nativeSessionId || (request.agent_id ?? request.agentId ?? 'main') !== 'main') fail('reconcile_required', 'interaction_turn_unknown');
+    const payload = { ...request, ...(kind === 'approval' ? { tool_name: toolName, ...(request.display ? { tool_input_display: request.display } : {}) } : {}), turnId: turn.turnId, turn_id: turn.turnId };
+    const interactionId = await pending(scope, kind, nativeRequestId, payload, true);
     return { interactionId, payload };
   }
   async function reply(scope, interactionId, answer, idempotencyKey) {
@@ -251,7 +254,7 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     }
     if (failed) throw failed.error;
   }
-  return { instance, send, started, cancel, pending, modernQuestion, reply, terminal, syncTranscript, liveTask, journal, interactions, admission,
+  return { instance, send, started, cancel, pending, modernInteraction, reply, terminal, syncTranscript, liveTask, journal, interactions, admission,
     async invalidate(scope) { await interactions.processExited(scope); },
     close,
   };
