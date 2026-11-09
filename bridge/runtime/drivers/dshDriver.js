@@ -98,10 +98,10 @@ export function createDshDriver(options) {
     if (closed || generation !== liveGeneration || boundClient !== clientId || !mux) fail('reconcile_required', 'stale_client');
   }
   function invalidate(delivery) {
-    invalidations.add(delivery);
     delivery.live = false;
     const existing = invalidationWork.get(delivery);
     if (existing) return existing;
+    invalidations.add(delivery);
     // Every entry point shares one reserved-store lane, including disconnect and native cancel.
     // A failed delivery remains in invalidations for retry without preventing later items from draining.
     const work = invalidationSerial.then(() => invalidateDelivery(delivery));
