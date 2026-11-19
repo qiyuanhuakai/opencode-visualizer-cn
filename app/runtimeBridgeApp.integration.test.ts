@@ -16,3 +16,20 @@ it('connects through Bridge login and renders selected native history over the a
   }, { timeout: 10000 });
   expect(fixture.historyOpens.every(session => session.environmentId === fixture.environmentId)).toBe(true);
 }, 30000);
+
+it('opens the selected session as a Host Thread through the Bridge', async () => {
+  const fixture = await mountRuntimeApp([]);
+  await fixture.connect();
+  await fixture.select('Session A');
+  const opener = await vi.waitFor(() => {
+    const button = fixture.element.querySelector<HTMLButtonElement>('[data-testid="open-runtime-thread"]');
+    if (!button || button.disabled) throw new Error('Selected session cannot open a Host Thread');
+    return button;
+  });
+  opener.click();
+  await vi.waitFor(() => {
+    const view = fixture.element.querySelector('[data-testid="thread-view"]');
+    expect(view?.querySelector('[data-testid="thread-meta"]')).toBeTruthy();
+    expect(view?.querySelector('[data-testid="thread-error"]')).toBeNull();
+  }, { timeout: 10000 });
+}, 30000);
