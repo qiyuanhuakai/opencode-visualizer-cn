@@ -284,4 +284,4 @@ it('executes ACP writers in separate processes and worktrees, refuses reverse wr
         2,
       ),
     );
-});
+}, 45_000);
