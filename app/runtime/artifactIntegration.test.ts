@@ -61,6 +61,7 @@
 // in the QA worktree: every repository below is a private temporary repository under os.tmpdir().
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import {
   chmod,
   mkdir,
@@ -335,9 +336,15 @@ interface IntegrationResult {
   readonly outcome:
     | 'integrated'
     | 'artifact_mismatch'
+    | 'base_mismatch'
     | 'target_dirty'
+    | 'target_checked_out'
+    | 'target_moved'
     | 'head_moved'
     | 'tests_failed'
+    | 'test_runner_failed'
+    | 'tree_changed'
+    | 'commit_tree_changed'
     | 'worktree_failed'
     | 'commit_failed'
     | 'fast_forward_failed';
@@ -358,7 +365,13 @@ interface IntegrationResult {
     fileCount: number;
     treeDigest: string;
   }>;
-  readonly worktree: Readonly<{ path: string; created: boolean; removed: boolean; removedAt: number | null }>;
+  readonly worktree: Readonly<{
+    path: string;
+    created: boolean;
+    removed: boolean;
+    removedAt: number | null;
+    treeAfterApply: Readonly<{ fileCount: number; treeDigest: string }> | null;
+  }>;
   readonly commit: Readonly<{ created: boolean; sha: string | null; worktree: string | null }>;
   readonly fastForward: Readonly<{
     ref: string;
@@ -948,14 +961,14 @@ describe('task 41 — serialized post-review integration', () => {
   });
 
   it('a second integration that will not wait is refused with the observed holder (observed: repository_lock_busy carries the first operation id)', async () => {
-    const repository = await createRepo('refused');
+    const repository = await createRepo('refused', ['integration/target']);
     const harness = await buildHarness('refused');
     try {
       const artifact = await captureArtifact(harness, repository, 'refused-a', async (cwd) => {
         await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
       });
       const review = await harness.reviews.create({
-        repository, target: 'main', artifactHash: artifact.artifactHash, at: 1700000000000,
+        repository, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
       });
       const approval = harness.reviews.approve({
         reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
@@ -1227,7 +1240,7 @@ describe('task 41 — serialized post-review integration', () => {
   /* ---------------------------------------------------------------- criterion 4 */
 
   it('a failing test cleans only this operation temp and never resets the user files (observed: per-operation temp gone, user tree digest and status byte-identical)', async () => {
-    const repository = await createRepo('testfail');
+    const repository = await createRepo('testfail', ['integration/target']);
     const harness = await buildHarness('testfail');
     try {
       const artifact = await captureArtifact(harness, repository, 'testfail-a', async (cwd) => {
@@ -1236,7 +1249,7 @@ describe('task 41 — serialized post-review integration', () => {
         await rm(path.join(cwd, 'gone.txt'));
       });
       const review = await harness.reviews.create({
-        repository, target: 'main', artifactHash: artifact.artifactHash, at: 1700000000000,
+        repository, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
       });
       const approval = harness.reviews.approve({
         reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
@@ -1417,14 +1430,14 @@ describe('task 41 — serialized post-review integration', () => {
   });
 
   it('the command runner type cannot write to a child stdin (observed: no runner member accepts input, and the child reads its blob from a temp file)', async () => {
-    const repository = await createRepo('stdin');
+    const repository = await createRepo('stdin', ['integration/target']);
     const harness = await buildHarness('stdin');
     try {
       const artifact = await captureArtifact(harness, repository, 'stdin-a', async (cwd) => {
         await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
       });
       const review = await harness.reviews.create({
-        repository, target: 'main', artifactHash: artifact.artifactHash, at: 1700000000000,
+        repository, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
       });
       const approval = harness.reviews.approve({
         reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
@@ -1589,14 +1602,14 @@ describe('task 41 — serialized post-review integration', () => {
   });
 
   it('a lost artifact object is an explicit miss, never a fabricated empty integration', async () => {
-    const repository = await createRepo('lost');
+    const repository = await createRepo('lost', ['integration/target']);
     const harness = await buildHarness('lost');
     try {
       const artifact = await captureArtifact(harness, repository, 'lost-a', async (cwd) => {
         await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
       });
       const review = await harness.reviews.create({
-        repository, target: 'main', artifactHash: artifact.artifactHash, at: 1700000000000,
+        repository, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
       });
       const approval = harness.reviews.approve({
         reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
@@ -1629,6 +1642,602 @@ describe('task 41 — serialized post-review integration', () => {
         harness.modules.INTEGRATION_LIMITS.maxTestOutputBytes,
       );
       expect(result.artifactPeakBufferedBytes).toBeLessThan(artifact.bytes + 1);
+    } finally {
+      harness.close();
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ PR #197 review findings */
+
+describe('task 41 — the seven PR #197 review findings', () => {
+  let logPath: string;
+
+  beforeAll(async () => {
+    logPath = path.join(await scratch('pr197-log'), 'order.log');
+  });
+
+  /** An integration service over a harness's own dependencies, with injectable seams. */
+  function integrationWith(
+    harness: Harness,
+    overrides: Record<string, unknown>,
+  ): IntegrationService {
+    return harness.modules.createIntegrationService({
+      store: harness.store,
+      artifacts: harness.artifacts,
+      reviews: harness.reviews,
+      locks: harness.locks,
+      integrationsRoot: harness.integrationsRoot,
+      newOperationId: nextOperationId,
+      fs: fsPromises,
+      ...overrides,
+    }) as IntegrationService;
+  }
+
+  it('R1: a target branch that is CHECKED OUT is refused, and the user workspace is left clean', async () => {
+    const repository = await createRepo('pr197-checked-out');
+    const harness = await buildHarness('pr197-checked-out');
+    try {
+      const artifact = await captureArtifact(harness, repository, 'pr197-checked-out-a', async (cwd) => {
+        await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
+      });
+      // The review binds the CURRENT HEAD, and the target is the very branch that is checked out
+      // in the repository's main worktree — exactly the reviewer's reproduction.
+      const review = await harness.reviews.create({
+        repository, target: 'main', artifactHash: artifact.artifactHash, at: 1700000000000,
+      });
+      const approval = harness.reviews.approve({
+        reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
+      });
+      const beforeStatus = statusDigest(repository);
+      const beforeBranch = branchOf(repository, 'main');
+      const beforeHead = headOf(repository);
+
+      const result = await harness.integration.integrate({
+        approvalId: approval.approvalId,
+        criteria: CRITERIA,
+        tests: passingTests(logPath, 'pr197-checked-out'),
+        commitMessage: 'must not happen',
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe('target_checked_out');
+      expect(result.rejection?.code).toBe('conflict');
+      expect(result.rejection?.field).toBe('integration_target_checked_out');
+      // The refusal names the worktree that holds the branch.
+      const detail = result.rejection?.detail as { worktrees?: readonly string[] };
+      expect(detail.worktrees).toContain(repository);
+      // Nothing was written: the branch did not move and the workspace is not a reverse edit.
+      expect(branchOf(repository, 'main')).toBe(beforeBranch);
+      expect(headOf(repository)).toBe(beforeHead);
+      expect(statusDigest(repository)).toBe(beforeStatus);
+      expect(result.commit.created).toBe(false);
+      expect(result.fastForward.applied).toBe(false);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('R2: a review refuses an artifact whose OWN base commit is not the base it would bind', async () => {
+    const repository = await createRepo('pr197-stale-base');
+    const harness = await buildHarness('pr197-stale-base');
+    try {
+      // The artifact is captured against the ORIGINAL base A.
+      const artifact = await captureArtifact(harness, repository, 'pr197-stale-base-a', async (cwd) => {
+        await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
+      });
+      // The user then lands a real fix B on the same branch.
+      await writeFile(path.join(repository, 'src', 'a.txt'), 'fixed in B\n', 'utf8');
+      gitQuiet(repository, ['add', '-A']);
+      gitQuiet(repository, ['-c', 'user.name=vis', '-c', 'user.email=vis@example.invalid', 'commit', '-q', '-m', 'fix B']);
+
+      // Reviewing the A-based artifact at B must be refused: an old snapshot cannot silently
+      // overwrite the newer fix.
+      const observed = await rejection(harness.reviews.create({
+        repository, target: 'main', artifactHash: artifact.artifactHash, at: 1700000000000,
+      }));
+      expect(observed.code).toBe('conflict');
+      expect(observed.field).toBe('integration_artifact_base');
+      const detail = observed.detail as { artifactBase?: string; base?: string };
+      expect(detail.artifactBase).not.toBe(detail.base);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('R2b: the apply-side check refuses a binding whose base differs from the artifact own base', async () => {
+    const repository = await createRepo('pr197-stale-base-apply', ['integration/target']);
+    const harness = await buildHarness('pr197-stale-base-apply');
+    try {
+      const artifact = await captureArtifact(harness, repository, 'pr197-stale-base-apply-a', async (cwd) => {
+        await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
+      });
+      // The user lands a real fix B after the artifact was captured against A.
+      await writeFile(path.join(repository, 'src', 'a.txt'), 'fixed in B\n', 'utf8');
+      gitQuiet(repository, ['add', '-A']);
+      gitQuiet(repository, ['-c', 'user.name=vis', '-c', 'user.email=vis@example.invalid', 'commit', '-q', '-m', 'fix B']);
+      // A review service whose base probe reports the CURRENT head (B) at review time, so the
+      // review is created and binds B — while the durable artifact still declares A.
+      const probeBase = headOf(repository);
+      const reviews = harness.modules.createIntegrationReviewService({
+        store: harness.store,
+        hasArtifact: async () => true,
+        artifactBase: async () => probeBase,
+      }) as IntegrationReviewService;
+      const review = await reviews.create({
+        repository, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
+      });
+      const approval = reviews.approve({
+        reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
+      });
+      const beforeBranch = branchOf(repository, 'integration/target');
+
+      const integration = integrationWith(harness, { reviews });
+      try {
+        const result = await integration.integrate({
+          approvalId: approval.approvalId,
+          criteria: CRITERIA,
+          tests: passingTests(logPath, 'pr197-stale-base-apply'),
+          commitMessage: 'must not happen',
+        });
+        expect(result.ok).toBe(false);
+        expect(result.outcome).toBe('base_mismatch');
+        expect(result.rejection?.field).toBe('integration_artifact_base');
+        // Nothing was applied and nothing moved.
+        expect(branchOf(repository, 'integration/target')).toBe(beforeBranch);
+        expect(result.commit.created).toBe(false);
+      } finally {
+        integration.close();
+      }
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('R3: a repository that becomes dirty DURING the tests is refused before the ref advances', async () => {
+    const repository = await createRepo('pr197-race', ['integration/target']);
+    const harness = await buildHarness('pr197-race');
+    try {
+      const artifact = await captureArtifact(harness, repository, 'pr197-race-a', async (cwd) => {
+        await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
+      });
+      const review = await harness.reviews.create({
+        repository, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
+      });
+      const approval = harness.reviews.approve({
+        reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
+      });
+      const beforeBranch = branchOf(repository, 'integration/target');
+
+      // The first test command edits a TRACKED file in the user's own repository while the
+      // integration is running: the pre-check passed clean, so only a re-check can see this.
+      const racer = [
+        `require('node:fs').writeFileSync(${JSON.stringify(path.join(repository, 'src', 'keep.txt'))}, 'edited during the run\\n');`,
+      ].join('');
+      const result = await harness.integration.integrate({
+        approvalId: approval.approvalId,
+        criteria: CRITERIA,
+        tests: [
+          { criterionId: 'applies-cleanly', command: process.execPath, args: ['-e', racer] },
+          { criterionId: 'tests-pass', command: process.execPath, args: ['-e', 'process.exit(0)'] },
+          { criterionId: 'fast-forward-only', command: process.execPath, args: ['-e', 'process.exit(0)'] },
+        ],
+        commitMessage: 'must not happen',
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe('target_moved');
+      expect(result.rejection?.field).toBe('integration_target_moved');
+      // The target ref did NOT advance. Any commit the operation made lives only inside its own
+      // temp worktree, which is removed: nothing reached the target branch.
+      expect(branchOf(repository, 'integration/target')).toBe(beforeBranch);
+      expect(result.fastForward.applied).toBe(false);
+      expect(result.worktree.removed).toBe(true);
+      // The user's edit is still there: nothing was reset or stashed.
+      expect(await readFile(path.join(repository, 'src', 'keep.txt'), 'utf8')).toBe('edited during the run\n');
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('R4: a test that writes an UNREVIEWED file into the worktree is refused before the commit', async () => {
+    const repository = await createRepo('pr197-tree-lock', ['integration/target']);
+    const harness = await buildHarness('pr197-tree-lock');
+    try {
+      const artifact = await captureArtifact(harness, repository, 'pr197-tree-lock-a', async (cwd) => {
+        await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
+      });
+      const review = await harness.reviews.create({
+        repository, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
+      });
+      const approval = harness.reviews.approve({
+        reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
+      });
+      const beforeBranch = branchOf(repository, 'integration/target');
+
+      // The approved manifest is exactly src/a.txt; the test adds a file nobody reviewed.
+      const smuggler = [
+        "require('node:fs').writeFileSync(require('node:path').join(process.env.VIS_INTEGRATION_WORKTREE, 'unreviewed.txt'), 'unreviewed\\n');",
+      ].join('');
+      const result = await harness.integration.integrate({
+        approvalId: approval.approvalId,
+        criteria: CRITERIA,
+        tests: [
+          { criterionId: 'applies-cleanly', command: process.execPath, args: ['-e', smuggler] },
+          { criterionId: 'tests-pass', command: process.execPath, args: ['-e', 'process.exit(0)'] },
+          { criterionId: 'fast-forward-only', command: process.execPath, args: ['-e', 'process.exit(0)'] },
+        ],
+        commitMessage: 'must not happen',
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe('tree_changed');
+      expect(result.rejection?.field).toBe('integration_tree_changed');
+      // No commit was created, so the unreviewed file cannot have reached the target.
+      expect(result.commit.created).toBe(false);
+      expect(branchOf(repository, 'integration/target')).toBe(beforeBranch);
+      expect(result.fastForward.applied).toBe(false);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('R5: a test-runner timeout STOPS the child and returns a durable refused result', async () => {
+    const stops: unknown[] = [];
+    const spawned: EventEmitter[] = [];
+    const runnerModule = require_('../../bridge/runtime/collaboration/integrationService.js') as {
+      createTestRunner(options: Record<string, unknown>): (input: Record<string, unknown>) => Promise<unknown>;
+    };
+    const runner = runnerModule.createTestRunner({
+      spawnProcess: () => {
+        const child = new EventEmitter();
+        const stdout = new EventEmitter();
+        const stderr = new EventEmitter();
+        spawned.push(child);
+        return Object.assign(child, { stdout, stderr });
+      },
+      stopChild: (child: unknown) => {
+        stops.push(child);
+        return Promise.resolve();
+      },
+      timeoutMs: 10,
+    });
+    const pending = runner({ command: 'node', args: ['-e', 'process.exit(0)'], cwd: tmpdir() });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The child was actually stopped, exactly once, and it is the child this run spawned.
+    expect(stops).toHaveLength(1);
+    expect(stops[0]).toBe(spawned[0]);
+    // The promise is still pending: only the child's close settles it, so the stop is what ends
+    // the run rather than the child exiting on its own.
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+    spawned[0].emit('close', 0, null);
+    const observed = await rejection(pending);
+    expect(observed.code).toBe('timeout');
+    expect(observed.field).toBe('integration_test_timeout');
+
+    // The SERVICE half: a runner that fails mid-run still yields ONE durable refused result.
+    const repository = await createRepo('pr197-runner-failure', ['integration/target']);
+    const harness = await buildHarness('pr197-runner-failure');
+    try {
+      const artifact = await captureArtifact(harness, repository, 'pr197-runner-failure-a', async (cwd) => {
+        await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
+      });
+      const review = await harness.reviews.create({
+        repository, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
+      });
+      const approval = harness.reviews.approve({
+        reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
+      });
+      // The error is constructed through the SAME module instance the product uses (the native
+      // require graph the bridge modules live in), so the service's own instanceof check sees it.
+      const sharedModule = require_('../../shared/runtime/collaboration.js') as {
+        CollaborationError: new (code: string, field: string, detail?: unknown) => Error;
+      };
+      const failing = async () => {
+        throw new sharedModule.CollaborationError('timeout', 'integration_test_timeout', { command: 'node' });
+      };
+      const integration = integrationWith(harness, { runTest: failing });
+      try {
+        const result = await integration.integrate({
+          approvalId: approval.approvalId,
+          criteria: CRITERIA,
+          tests: passingTests(logPath, 'pr197-runner-failure'),
+          commitMessage: 'must not happen',
+        });
+        expect(result.ok).toBe(false);
+        expect(result.outcome).toBe('test_runner_failed');
+        expect(result.rejection?.code).toBe('timeout');
+        expect(result.rejection?.field).toBe('integration_test_timeout');
+        expect(integration.operations()).toHaveLength(1);
+        expect(integration.operations()[0]).toBe(result);
+        // The temp worktree was still cleaned and the ref never moved.
+        expect(result.worktree.removed).toBe(true);
+        expect(branchOf(repository, 'integration/target')).toBe(headOf(repository));
+      } finally {
+        integration.close();
+      }
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('R6: a committed DANGLING symlink is observed by its raw target and never throws', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'vis-int-pr197-dangling-'));
+    CLEANUPS.push(() => rm(root, { recursive: true, force: true }));
+    await mkdir(path.join(root, 'src'), { recursive: true });
+    await writeFile(path.join(root, 'README.md'), 'base readme\n', 'utf8');
+    await writeFile(path.join(root, 'src', 'keep.txt'), 'keep\n', 'utf8');
+    // A committed symlink whose target does not exist — git allows it, realpath does not.
+    await symlink('missing-target', path.join(root, 'dangling'));
+    gitQuiet(root, ['init', '-q', '-b', 'main']);
+    gitQuiet(root, ['add', '-A']);
+    gitQuiet(root, ['-c', 'user.name=vis', '-c', 'user.email=vis@example.invalid', 'commit', '-q', '-m', 'base']);
+    gitQuiet(root, ['branch', 'integration/target']);
+
+    const harness = await buildHarness('pr197-dangling');
+    try {
+      const artifact = await captureArtifact(harness, root, 'pr197-dangling-a', async (cwd) => {
+        await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
+      });
+      const review = await harness.reviews.create({
+        repository: root, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
+      });
+      const approval = harness.reviews.approve({
+        reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
+      });
+      const result = await harness.integration.integrate({
+        approvalId: approval.approvalId,
+        criteria: CRITERIA,
+        tests: passingTests(logPath, 'pr197-dangling'),
+        commitMessage: 'integrate with a dangling symlink present',
+      });
+      // The dangling link is observed, not resolved: the integration completes and the tree
+      // observation recorded the link by its raw target.
+      expect(result.ok).toBe(true);
+      expect(result.outcome).toBe('integrated');
+      expect(result.targetBefore.fileCount).toBeGreaterThan(0);
+      expect(result.targetBefore.treeDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(result.targetAfter.treeDigest).toBe(result.targetBefore.treeDigest);
+    } finally {
+      harness.close();
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ PR #197 wave-3 review findings */
+
+describe('task 41 — the three remaining PR #197 wave-3 review findings', () => {
+  let logPath: string;
+
+  beforeAll(async () => {
+    logPath = path.join(await scratch('pr197w3-log'), 'order.log');
+  });
+
+  /** The three criteria, with the FIRST command replaced by `firstScript`. */
+  function testsWithFirst(firstScript: string): readonly TestSpec[] {
+    return [
+      { criterionId: 'applies-cleanly', command: process.execPath, args: ['-e', firstScript] },
+      { criterionId: 'tests-pass', command: process.execPath, args: ['-e', 'process.exit(0)'] },
+      { criterionId: 'fast-forward-only', command: process.execPath, args: ['-e', 'process.exit(0)'] },
+    ];
+  }
+
+  it('W1: a linked worktree that checks the target out DURING the tests is refused before the ref moves', async () => {
+    const repository = await createRepo('pr197w3-checkout-linked', ['integration/target']);
+    const harness = await buildHarness('pr197w3-checkout-linked');
+    try {
+      const artifact = await captureArtifact(harness, repository, 'pr197w3-checkout-linked-a', async (cwd) => {
+        await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
+      });
+      const review = await harness.reviews.create({
+        repository, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
+      });
+      const approval = harness.reviews.approve({
+        reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
+      });
+      const beforeBranch = branchOf(repository, 'integration/target');
+      const beforeHead = headOf(repository);
+      const beforeStatus = statusDigest(repository);
+
+      // The target is NOT checked out when the integration starts — the step-3 probe passes and
+      // the operation proceeds into its tests.
+      expect(runGit(repository, ['worktree', 'list', '--porcelain']))
+        .not.toContain('integration/target');
+
+      // While the frozen tests run, the target branch is checked out in a NEW linked worktree: a
+      // normal user git operation that the service's own repository lock cannot prevent.
+      const linkedRoot = await scratch('pr197w3-linked');
+      const linked = path.join(linkedRoot, 'linked');
+      const racer = [
+        "const {execFileSync}=require('node:child_process');",
+        `execFileSync('git', ['worktree','add','--',${JSON.stringify(linked)},'integration/target'], {cwd:${JSON.stringify(repository)}, stdio:'ignore'});`,
+      ].join('');
+      const result = await harness.integration.integrate({
+        approvalId: approval.approvalId,
+        criteria: CRITERIA,
+        tests: testsWithFirst(racer),
+        commitMessage: 'must not happen',
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe('target_checked_out');
+      expect(result.rejection?.code).toBe('conflict');
+      expect(result.rejection?.field).toBe('integration_target_checked_out');
+      // The refusal names the worktree that took the branch DURING the run.
+      const detail = result.rejection?.detail as { worktrees?: readonly string[] };
+      expect(detail.worktrees).toContain(linked);
+      // The ref never advanced, so the linked worktree is not a reverse modification of the
+      // integration's work: it still sits on the reviewed base with a clean tree.
+      expect(branchOf(repository, 'integration/target')).toBe(beforeBranch);
+      expect(headOf(repository)).toBe(beforeHead);
+      expect(statusDigest(repository)).toBe(beforeStatus);
+      expect(result.fastForward.applied).toBe(false);
+      expect(headOf(linked)).toBe(beforeBranch);
+      expect(runGit(linked, ['status', '--porcelain']).trim()).toBe('');
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('W2: the main worktree checking the target out DURING the tests is refused before the ref moves', async () => {
+    const repository = await createRepo('pr197w3-checkout-main', ['integration/target']);
+    const harness = await buildHarness('pr197w3-checkout-main');
+    try {
+      const artifact = await captureArtifact(harness, repository, 'pr197w3-checkout-main-a', async (cwd) => {
+        await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
+      });
+      const review = await harness.reviews.create({
+        repository, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
+      });
+      const approval = harness.reviews.approve({
+        reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
+      });
+      const beforeBranch = branchOf(repository, 'integration/target');
+
+      // While the tests run, the user's own directory switches to the target branch. Both
+      // branches sit on the SAME commit, so HEAD, targetHead and clean all read unchanged at the
+      // re-check — only the worktree occupancy reveals that the ref is about to move under a
+      // live checkout.
+      const racer = [
+        "const {execFileSync}=require('node:child_process');",
+        `execFileSync('git', ['checkout','integration/target'], {cwd:${JSON.stringify(repository)}, stdio:'ignore'});`,
+      ].join('');
+      const result = await harness.integration.integrate({
+        approvalId: approval.approvalId,
+        criteria: CRITERIA,
+        tests: testsWithFirst(racer),
+        commitMessage: 'must not happen',
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe('target_checked_out');
+      expect(result.rejection?.code).toBe('conflict');
+      expect(result.rejection?.field).toBe('integration_target_checked_out');
+      const detail = result.rejection?.detail as { worktrees?: readonly string[] };
+      expect(detail.worktrees).toContain(repository);
+      expect(branchOf(repository, 'integration/target')).toBe(beforeBranch);
+      expect(result.fastForward.applied).toBe(false);
+      // The user's directory was never reset or switched back: it stays where the user left it,
+      // on the target branch at the reviewed base, with a clean tree.
+      expect(runGit(repository, ['symbolic-ref', '--short', 'HEAD']).trim()).toBe('integration/target');
+      expect(headOf(repository)).toBe(beforeBranch);
+      expect(runGit(repository, ['status', '--porcelain']).trim()).toBe('');
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('W3: a pre-commit hook that adds an unreviewed file is refused before the ref moves', async () => {
+    const repository = await createRepo('pr197w3-hook', ['integration/target']);
+    const harness = await buildHarness('pr197w3-hook');
+    try {
+      // A legal, user-local pre-commit hook: it generates a file and stages it. It is trusted
+      // local configuration, not a permission bypass — the defect is that the "the commit
+      // contains only the reviewed artifact" contract does not survive it.
+      const hookPath = path.join(repository, '.git', 'hooks', 'pre-commit');
+      await mkdir(path.dirname(hookPath), { recursive: true });
+      await writeFile(hookPath, [
+        '#!/bin/sh',
+        "printf 'generated by the hook\\n' > hook-generated.txt",
+        'exec git add hook-generated.txt',
+        '',
+      ].join('\n'), 'utf8');
+      await chmod(hookPath, 0o755);
+
+      const artifact = await captureArtifact(harness, repository, 'pr197w3-hook-a', async (cwd) => {
+        await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
+      });
+      const review = await harness.reviews.create({
+        repository, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
+      });
+      const approval = harness.reviews.approve({
+        reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
+      });
+      const beforeBranch = branchOf(repository, 'integration/target');
+
+      // Every test exits zero and none of them writes anything: only the commit-time hook can
+      // change what the commit records.
+      const result = await harness.integration.integrate({
+        approvalId: approval.approvalId,
+        criteria: CRITERIA,
+        tests: passingTests(logPath, 'pr197w3-hook'),
+        commitMessage: 'integrate with a hook present',
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe('commit_tree_changed');
+      expect(result.rejection?.code).toBe('conflict');
+      expect(result.rejection?.field).toBe('integration_commit_tree');
+      // Two DIFFERENT real git tree objects: the approved one and the one the commit recorded.
+      const detail = result.rejection?.detail as { approvedTree?: string; observedTree?: string };
+      expect(detail.approvedTree).toMatch(/^[a-f0-9]{40}$/);
+      expect(detail.observedTree).toMatch(/^[a-f0-9]{40}$/);
+      expect(detail.approvedTree).not.toBe(detail.observedTree);
+      // A commit object WAS created — the hook runs inside it — but it never reached the target.
+      expect(result.commit.created).toBe(true);
+      expect(result.fastForward.applied).toBe(false);
+      expect(branchOf(repository, 'integration/target')).toBe(beforeBranch);
+      // The target tree is still the reviewed base: the hook's file is nowhere near it.
+      expect(runGit(repository, ['ls-tree', '-r', '--name-only', 'integration/target']))
+        .not.toContain('hook-generated.txt');
+      // The user's own directory is untouched.
+      expect(runGit(repository, ['status', '--porcelain']).trim()).toBe('');
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('W4: a test that only chmods an approved file is refused before the commit', async () => {
+    const repository = await createRepo('pr197w3-mode', ['integration/target']);
+    const harness = await buildHarness('pr197w3-mode');
+    try {
+      // The executable bit must be OBSERVABLE by git for this scenario to be real, so it is
+      // pinned explicitly rather than left to the ambient configuration.
+      gitQuiet(repository, ['config', 'core.filemode', 'true']);
+      const artifact = await captureArtifact(harness, repository, 'pr197w3-mode-a', async (cwd) => {
+        await writeFile(path.join(cwd, 'src', 'a.txt'), 'a\n', 'utf8');
+      });
+      const review = await harness.reviews.create({
+        repository, target: 'integration/target', artifactHash: artifact.artifactHash, at: 1700000000000,
+      });
+      const approval = harness.reviews.approve({
+        reviewId: review.reviewId, at: 1700000000001, reviewerId: 'reviewer-1',
+      });
+      const beforeBranch = branchOf(repository, 'integration/target');
+
+      // The test changes ONLY the file mode. The content digest is unchanged, so only a check
+      // that binds the git tree — which records 100644 against 100755 — can see it.
+      const racer = [
+        "require('node:fs').chmodSync(require('node:path').join(process.env.VIS_INTEGRATION_WORKTREE,'src','a.txt'), 0o755);",
+      ].join('');
+      const result = await harness.integration.integrate({
+        approvalId: approval.approvalId,
+        criteria: CRITERIA,
+        tests: testsWithFirst(racer),
+        commitMessage: 'must not happen',
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe('tree_changed');
+      expect(result.rejection?.field).toBe('integration_tree_changed');
+      const detail = result.rejection?.detail as {
+        approvedTree?: string;
+        observedTree?: string;
+        expectedTreeDigest?: string;
+        observedTreeDigest?: string;
+      };
+      // The content is byte-identical — the two digests MATCH — while the two git trees differ:
+      // that difference is the mode change, and it is the whole point of the check.
+      expect(detail.expectedTreeDigest).toBe(detail.observedTreeDigest);
+      expect(detail.approvedTree).toMatch(/^[a-f0-9]{40}$/);
+      expect(detail.observedTree).toMatch(/^[a-f0-9]{40}$/);
+      expect(detail.approvedTree).not.toBe(detail.observedTree);
+      expect(result.commit.created).toBe(false);
+      expect(result.fastForward.applied).toBe(false);
+      expect(branchOf(repository, 'integration/target')).toBe(beforeBranch);
     } finally {
       harness.close();
     }
