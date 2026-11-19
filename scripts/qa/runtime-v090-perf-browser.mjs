@@ -61,17 +61,28 @@ export async function openBrowser(output, userDataDirectory = `${output}-profile
   await page.setViewportSize({ width: 1440, height: 1000 });
   const cdp = await context.newCDPSession(page);
   await cdp.send('Network.enable');
-  const wire = { frames: 0, bytes: 0, methods: {}, errors: [], timeline: [], last: null };
+  const wire = { frames: 0, bytes: 0, methods: {}, errors: [], timeline: [], startup: {}, last: null };
   const requests = new Map();
-  cdp.on('Network.webSocketFrameSent', ({ response }) => {
-    try { const parsed = JSON.parse(response.payloadData); if (parsed.method) { wire.methods[parsed.method] = (wire.methods[parsed.method] ?? 0) + 1; requests.set(parsed.id, parsed.method); } } catch {}
+  cdp.on('Network.webSocketFrameSent', ({ requestId, response }) => {
+    try { const parsed = JSON.parse(response.payloadData); if (parsed.method) { wire.methods[parsed.method] = (wire.methods[parsed.method] ?? 0) + 1; requests.set(`${requestId}:${parsed.id}`, parsed.method);
+      const startup = wire.startup[requestId];
+      if (startup?.length < 20 && ['runtime.inspect', 'runtime.snapshot'].includes(parsed.method)) {
+        startup.push({ at: Date.now(), sent: parsed.method, collection: parsed.params?.collection });
+      } } } catch {}
   });
-  cdp.on('Network.webSocketFrameReceived', ({ response }) => {
+  cdp.on('Network.webSocketFrameReceived', ({ requestId, response }) => {
     wire.frames++;
     wire.bytes += Buffer.byteLength(response.payloadData);
     const parsed = (() => { try { return JSON.parse(response.payloadData); } catch { return null; } })();
-    const method = parsed?.id ? requests.get(parsed.id) : undefined;
-    if (parsed?.id) requests.delete(parsed.id);
+    const key = parsed?.id ? `${requestId}:${parsed.id}` : undefined;
+    const method = key ? requests.get(key) : undefined;
+    if (key) requests.delete(key);
+    if (parsed?.kind === 'hello') wire.startup[requestId] = [{ at: Date.now(), received: 'hello' }];
+    if (wire.startup[requestId]?.length < 20 && ['runtime.inspect', 'runtime.snapshot'].includes(method)) {
+      wire.startup[requestId].push({
+        at: Date.now(), received: method, bytes: Buffer.byteLength(response.payloadData), collection: parsed.result?.items?.[0]?.collection,
+      });
+    }
     if (wire.timeline.length < 100 && ['runtime.inspect', 'runtime.snapshot'].includes(method)) wire.timeline.push({ at: Date.now(), method, collection: parsed.result?.items?.[0]?.collection, count: parsed.result?.items?.length, watermark: parsed.result?.watermark });
     if (!wire.firstCanonicalSessionAt && method === 'runtime.entity.resolve' && parsed.result?.collection === 'session_summaries' && parsed.result.value) wire.firstCanonicalSessionAt = Date.now();
     if (parsed?.ok === false && wire.errors.length < 100) wire.errors.push({ id: parsed.id, ...parsed.typedError });
@@ -116,7 +127,7 @@ export async function connectApp(page, origin, port) {
     return start;
   });
   await page.locator('[data-testid="unified-session-tree"]').waitFor({ timeout: 180000 });
-  return { start, startEpoch: Date.now() - await page.evaluate((time) => performance.now() - time, start), shellMs: await page.evaluate((time) => performance.now() - time, start) };
+  return page.evaluate(start => ({ start, startEpoch: performance.timeOrigin + start, shellMs: performance.now() - start }), start);
 }
 
 export async function measureTree(page, connected) {
