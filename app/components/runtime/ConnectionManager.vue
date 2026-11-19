@@ -88,7 +88,7 @@
         </div>
       </section>
 
-      <label v-if="selectedProfile" class="new-profile-hint">
+      <label v-if="selectedProfile" class="new-profile-hint profile-enabled-control">
         <input type="checkbox" data-testid="profile-enabled" :checked="selectedProfile.enabled" :disabled="busy" @change="setEnabled" />
         {{ rt('Enable this profile') }}
       </label>
@@ -689,6 +689,12 @@ function shortId(value: string): string {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.profile-enabled-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .new-profile-hint {
