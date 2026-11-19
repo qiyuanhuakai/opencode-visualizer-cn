@@ -277,4 +277,39 @@ describe('acpProcessManager', () => {
     expect(manager.getStatus()[0]?.droppedFrames).toBe(1);
     await manager.stopAll();
   });
+
+  it('delivers runtime stdout to the selected history raw tap and stops once it is cleared', async () => {
+    const script = [
+      "const readline = require('node:readline');",
+      "readline.createInterface({ input: process.stdin }).on('line', () => {",
+      "  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'note', params: { token: 'RAW' } }) + '\\n');",
+      '});',
+    ].join('\n');
+    const manager = createAcpProcessManager();
+    await manager.reconcile([
+      { id: 'tap', name: 'Tap ACP', command: process.execPath, args: ['-e', script], enabled: true },
+    ]);
+    const client = new TestClient();
+    const attachment = manager.attach('tap', client, { runtime: true });
+    const tapped: string[] = [];
+    attachment.setRawTap((chunk) => tapped.push(Buffer.from(chunk).toString('utf8')));
+    const trigger = () =>
+      client.emit(
+        'message',
+        JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping', params: {} }),
+      );
+
+    trigger();
+    await vi.waitFor(() => expect(tapped.join('')).toContain('RAW'));
+    expect(client.sent.some((payload) => payload.includes('RAW'))).toBe(true);
+
+    attachment.setRawTap(undefined);
+    const before = tapped.join('').split('RAW').length;
+    trigger();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(tapped.join('').split('RAW').length).toBe(before);
+
+    await manager.stopAll();
+    expect(manager.getStatus()[0]?.state).toBe('stopped');
+  });
 });

@@ -102,8 +102,18 @@ export function defaultBridgeConfigPath(env = process.env) {
   return path.join(configRoot, 'vis', 'bridge.json');
 }
 
+/** Profile state path shared by the Browser and Electron clients through the bridge HTTP API. */
+export function defaultBridgeProfilePath(env = process.env) {
+  return path.join(path.dirname(defaultBridgeConfigPath(env)), 'profiles.json');
+}
+
+export function resolveBridgeProfilePath(configPath) {
+  return path.join(path.dirname(configPath), 'profiles.json');
+}
+
 export function createBridgeConfigStore(options = {}) {
   const configPath = options.configPath ?? defaultBridgeConfigPath();
+  const profilePath = options.profilePath ?? resolveBridgeProfilePath(configPath);
   let current;
 
   async function save(config) {
@@ -148,5 +158,5 @@ export function createBridgeConfigStore(options = {}) {
     return save({ ...config, acpAgents: config.acpAgents.filter((agent) => agent.id !== id) });
   }
 
-  return { configPath, load, save, getConfig, upsertAgent, removeAgent };
+  return { configPath, profilePath, load, save, getConfig, upsertAgent, removeAgent };
 }

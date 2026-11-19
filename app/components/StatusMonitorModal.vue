@@ -209,6 +209,9 @@ import KimiAccountUsage from './kimiWeb/KimiAccountUsage.vue';
 import AcpManagerPanel from './AcpManagerPanel.vue';
 import KimiWebPluginManager from './kimiWeb/KimiWebPluginManager.vue';
 import { createKimiWebPluginsClient } from '../utils/kimiWebPlugins';
+import type { HarnessManifest } from '../../shared/runtime/harnessContract.js';
+import { describeControlSupport, resolveControlSupport } from '../composables/useRuntimeCapabilities';
+import type { ControlScope, ControlSupport } from '../composables/useRuntimeCapabilities';
 
 type CodexApi = ReturnType<typeof useCodexApi>;
 
@@ -238,11 +241,50 @@ const props = defineProps<{
    * snapshot it is handed. Absent → no dsh rows, never a guessed status.
    */
   dshStatus?: DshStatusSnapshot;
+  /**
+   * Task 23: the scope every backend-specific monitor control is entered for —
+   * the CURRENT SESSION or an explicit Harness instance. Absent keeps the
+   * legacy adapter-shape behaviour (the task-22 delegation seam pattern).
+   */
+  harnessScope?: ControlScope;
+  /** The harness manifests visible to this modal; only the target instance resolves. */
+  harnessManifests?: readonly HarnessManifest[];
 }>();
 const emit = defineEmits<{ close: [] }>();
 
 const { t, locale } = useI18n();
 const popoverRef = ref<HTMLDivElement | null>(null);
+
+/**
+ * Task 23: resolve one backend-specific monitor control against the harness
+ * manifest of the current scope. Returns `null` when no scope was supplied, so
+ * the legacy adapter-shape path stays the fallback until App.vue binds one.
+ */
+function monitorControlSupport(control: string): ControlSupport | null {
+  if (!props.harnessScope || !props.harnessManifests) return null;
+  return resolveControlSupport({
+    control,
+    scope: props.harnessScope,
+    manifests: props.harnessManifests,
+    activeBackendKind: props.activeBackendKind,
+  });
+}
+
+function monitorControlSourceLine(control: string): string {
+  const support = monitorControlSupport(control);
+  if (!support || support.state !== 'unsupported') return '';
+  return describeControlSupport(support);
+}
+
+function monitorControlUnavailable(control: string): boolean {
+  const support = monitorControlSupport(control);
+  return support !== null && support.state === 'unsupported';
+}
+
+function monitorControlAvailable(control: string): boolean {
+  const support = monitorControlSupport(control);
+  return support === null || support.state === 'supported';
+}
 const msg = useMessages();
 const codexApi = props.codexApi;
 const codexSessionUsage = computed(() => props.activeBackendKind === 'codex' && props.sessionId
@@ -324,11 +366,13 @@ const mcpUnsupportedText = computed(() => {
   if (isDshBackend.value) return t('statusMonitor.mcp.unsupportedDsh');
   return t(isAcpBackend.value ? 'statusMonitor.mcp.unsupportedAcp' : 'statusMonitor.mcp.unsupported');
 });
+const mcpUnsupportedSource = computed(() => monitorControlSourceLine('getMcpStatus'));
 const lspUnsupportedText = computed(() => {
   if (isKimiWebBackend.value) return t('statusMonitor.lsp.unsupportedKimiWeb');
   if (isDshBackend.value) return t('statusMonitor.lsp.unsupportedDsh');
   return t(isAcpBackend.value ? 'statusMonitor.lsp.unsupportedAcp' : 'statusMonitor.lsp.unsupported');
 });
+const lspUnsupportedSource = computed(() => monitorControlSourceLine('getLspStatus'));
 const skillUnsupportedText = computed(() => {
   if (isKimiWebBackend.value) return t('statusMonitor.skills.unsupportedKimiWeb');
   if (isDshBackend.value) {
@@ -340,6 +384,7 @@ const skillUnsupportedText = computed(() => {
     isAcpBackend.value ? 'statusMonitor.skills.unsupportedAcp' : 'statusMonitor.skills.unsupported',
   );
 });
+const skillUnsupportedSource = computed(() => monitorControlSourceLine('getSkillStatus'));
 const pluginUnsupportedText = computed(() => {
   if (isKimiWebBackend.value) return t('statusMonitor.plugins.unsupportedKimiWeb');
   if (isDshBackend.value) return t('statusMonitor.plugins.unsupportedDsh');
@@ -349,6 +394,7 @@ const pluginUnsupportedText = computed(() => {
       : 'statusMonitor.plugins.unsupported',
   );
 });
+const pluginUnsupportedSource = computed(() => monitorControlSourceLine('getPluginStatus'));
 const configData = ref<Record<string, unknown> | null>(null);
 const codexPluginData = ref<CodexPlugin[]>([]);
 const backendPluginData = ref<Array<{
@@ -465,6 +511,17 @@ watch(() => props.activeBackendKind, (newKind, oldKind) => {
   }
 });
 
+// Task 23: the harness scope or manifest decides which source the monitor
+// controls resolve against. When either changes, the previous source's
+// results are retired before the new resolution runs, so data fetched for
+// one instance can never be attributed to another.
+watch([() => props.harnessScope, () => props.harnessManifests], () => {
+  resetLoadedState();
+  if (props.open || props.preload) {
+    void ensureLoaded();
+  }
+});
+
 onBeforeUnmount(() => {
   unbindEvents();
 });
@@ -564,28 +621,50 @@ async function refresh() {
       : typeof activeBackend.getPluginStatus !== 'function' &&
         typeof activeBackend.getGlobalConfig !== 'function';
   }
+  // Task 23: when a harness scope is supplied, the manifest decides. The
+  // support of every item is resolved BEFORE its request is issued: an
+  // unsupported or undeclared control is never called, its data is cleared,
+  // and the source line stays visible — so neither stale results nor a
+  // coincidental adapter method can masquerade as an available control.
+  const healthUnsupported = monitorControlUnavailable('getGlobalHealth');
+  const mcpUnsupportedControl = monitorControlUnavailable('getMcpStatus');
+  const lspUnsupportedControl = monitorControlUnavailable('getLspStatus');
+  const skillUnsupportedControl = monitorControlUnavailable('getSkillStatus');
+  const pluginUnsupportedControl = monitorControlUnavailable('getPluginStatus');
+  const configUnsupportedControl = monitorControlUnavailable('getGlobalConfig');
+  if (mcpUnsupportedControl) { mcpUnsupported.value = true; mcpData.value = null; }
+  if (lspUnsupportedControl) { lspUnsupported.value = true; lspData.value = null; }
+  if (skillUnsupportedControl) { skillUnsupported.value = true; skillData.value = null; }
+  if (pluginUnsupportedControl) {
+    pluginUnsupported.value = true;
+    backendPluginData.value = [];
+    codexPluginData.value = [];
+  }
+  if (healthUnsupported) serverHealth.value = null;
+  if (configUnsupportedControl) configData.value = null;
 
   const currentRefresh = (async () => {
     try {
       const [health, mcp, lsp, skills, cfg, plugins] = await Promise.allSettled([
-        activeBackend.getGlobalHealth?.() ?? Promise.resolve(null),
-        activeBackend.getMcpStatus?.() ?? Promise.resolve({}),
-        activeBackend.getLspStatus?.() ?? Promise.resolve([]),
-        activeBackend.getSkillStatus?.(isDshBackend.value ? props.sessionId : undefined) ?? Promise.resolve([]),
-        activeBackend.getGlobalConfig?.() ?? Promise.resolve({}),
-        activeBackend.getPluginStatus?.() ?? Promise.resolve([]),
+        healthUnsupported ? Promise.resolve(null) : (activeBackend.getGlobalHealth?.() ?? Promise.resolve(null)),
+        mcpUnsupportedControl ? Promise.resolve(null) : (activeBackend.getMcpStatus?.() ?? Promise.resolve({})),
+        lspUnsupportedControl ? Promise.resolve(null) : (activeBackend.getLspStatus?.() ?? Promise.resolve([])),
+        skillUnsupportedControl ? Promise.resolve(null) : (activeBackend.getSkillStatus?.(isDshBackend.value ? props.sessionId : undefined) ?? Promise.resolve([])),
+        configUnsupportedControl ? Promise.resolve(null) : (activeBackend.getGlobalConfig?.() ?? Promise.resolve({})),
+        pluginUnsupportedControl ? Promise.resolve(null) : (activeBackend.getPluginStatus?.() ?? Promise.resolve([])),
       ]);
       if (requestId !== refreshRequestId) return;
-      serverHealth.value = health.status === 'fulfilled' ? health.value : null;
+      serverHealth.value = healthUnsupported ? null : (health.status === 'fulfilled' ? health.value : null);
       mcpData.value =
-        mcp.status === 'fulfilled' ? ((mcp.value as typeof mcpData.value) ?? {}) : null;
+        mcpUnsupportedControl ? null : (mcp.status === 'fulfilled' ? ((mcp.value as typeof mcpData.value) ?? {}) : null);
       lspData.value =
-        lsp.status === 'fulfilled' ? ((lsp.value as typeof lspData.value) ?? []) : null;
+        lspUnsupportedControl ? null : (lsp.status === 'fulfilled' ? ((lsp.value as typeof lspData.value) ?? []) : null);
       skillData.value =
-        skills.status === 'fulfilled' ? ((skills.value as typeof skillData.value) ?? []) : null;
-      configData.value = cfg.status === 'fulfilled' ? (cfg.value as Record<string, unknown>) : null;
+        skillUnsupportedControl ? null : (skills.status === 'fulfilled' ? ((skills.value as typeof skillData.value) ?? []) : null);
+      configData.value =
+        configUnsupportedControl ? null : (cfg.status === 'fulfilled' ? (cfg.value as Record<string, unknown>) : null);
       backendPluginData.value =
-        plugins.status === 'fulfilled' ? (plugins.value as typeof backendPluginData.value) : [];
+        pluginUnsupportedControl ? [] : (plugins.status === 'fulfilled' ? (plugins.value as typeof backendPluginData.value) : []);
       if (!mcpUnsupported.value && mcp.status === 'rejected') mcpUnsupported.value = true;
       if (!lspUnsupported.value && lsp.status === 'rejected') lspUnsupported.value = true;
       if (!skillUnsupported.value && skills.status === 'rejected') skillUnsupported.value = true;
@@ -1119,6 +1198,10 @@ const skillEntries = computed(() => {
 });
 
 async function handleSkillToggle(name: string, currentEnabled: boolean | undefined, path: string | undefined) {
+  if (!monitorControlAvailable('updateSkill')) {
+    errorMessage.value = t('statusMonitor.skills.toggleFailed');
+    return;
+  }
   const updateSkill = backend().updateSkill;
   if (typeof updateSkill !== 'function') {
     errorMessage.value = t('statusMonitor.skills.toggleFailed');
@@ -1155,6 +1238,10 @@ async function handleSkillToggle(name: string, currentEnabled: boolean | undefin
 }
 
 async function handleMcpToggle(name: string, currentStatus: string) {
+  if (!monitorControlAvailable('updateMcp')) {
+    errorMessage.value = t('statusMonitor.mcp.toggleFailed');
+    return;
+  }
   const nextEnabled = currentStatus === 'disabled';
   const mcpConfigs = configData.value?.mcp_servers ?? configData.value?.mcp;
   const baseConfig =
@@ -1793,8 +1880,11 @@ watch(tabs, (available) => {
           <div v-if="loading && !mcpData" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
-          <div v-else-if="mcpUnsupported && mcpEntries.length === 0" class="status-monitor-empty">
+          <div v-else-if="mcpUnsupported" class="status-monitor-empty">
             {{ mcpUnsupportedText }}
+            <span v-if="mcpUnsupportedSource" class="status-monitor-source" data-testid="monitor-control-source">{{
+              mcpUnsupportedSource
+            }}</span>
           </div>
           <div v-else-if="mcpEntries.length === 0" class="status-monitor-empty">
             {{ $t('statusMonitor.mcp.noData') }}
@@ -1847,8 +1937,11 @@ watch(tabs, (available) => {
           <div v-if="loading && !lspData" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
-          <div v-else-if="lspUnsupported && (lspData || []).length === 0" class="status-monitor-empty">
+          <div v-else-if="lspUnsupported" class="status-monitor-empty">
             {{ lspUnsupportedText }}
+            <span v-if="lspUnsupportedSource" class="status-monitor-source" data-testid="monitor-control-source">{{
+              lspUnsupportedSource
+            }}</span>
           </div>
           <div v-else-if="(lspData || []).length === 0" class="status-monitor-empty">
             {{ $t('statusMonitor.lsp.noData') }}
@@ -1881,6 +1974,9 @@ watch(tabs, (available) => {
           </div>
           <div v-else-if="pluginUnsupported" class="status-monitor-empty">
             {{ pluginUnsupportedText }}
+            <span v-if="pluginUnsupportedSource" class="status-monitor-source" data-testid="monitor-control-source">{{
+              pluginUnsupportedSource
+            }}</span>
           </div>
           <div v-else-if="activeBackendKind === 'codex'" class="status-monitor-summary-grid">
             <div class="status-monitor-summary-chip">
@@ -1937,8 +2033,11 @@ watch(tabs, (available) => {
           <div v-if="loading && skillEntries.length === 0" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
-          <div v-else-if="skillStatusUnsupported && skillEntries.length === 0" class="status-monitor-empty">
+          <div v-else-if="skillStatusUnsupported" class="status-monitor-empty">
             {{ skillUnsupportedText }}
+            <span v-if="skillUnsupportedSource" class="status-monitor-source" data-testid="monitor-control-source">{{
+              skillUnsupportedSource
+            }}</span>
           </div>
           <div v-else-if="skillEntries.length === 0" class="status-monitor-empty">
             {{ $t('statusMonitor.skills.noData') }}
@@ -2704,6 +2803,15 @@ watch(tabs, (available) => {
   font-size: 13px;
   color: var(--theme-empty-state-text, var(--theme-modal-text-muted, #94a3b8));
   text-align: center;
+}
+
+.status-monitor-source {
+  display: block;
+  margin-top: 6px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--theme-status-warning, #fcd34d);
+  word-break: break-word;
 }
 
 .status-dot {

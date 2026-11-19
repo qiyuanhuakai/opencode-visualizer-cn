@@ -4,6 +4,7 @@ import { loadDshHistory, type DshHistoryChildAddress, type DshHistoryPageFetcher
 import { loadKimiWebHistoryEntries } from '../backends/kimiWeb/history';
 import type { KimiWebClient } from '../utils/kimiWeb';
 import type { MessageCacheIdentity } from './useMessages';
+import { bindRuntimeAction, type RuntimeSessionRuntime } from './useRuntimeSessionActions';
 
 type MessageStoreLike = {
   saveSessionState: (identity: MessageCacheIdentity) => void;
@@ -92,6 +93,7 @@ export function useBackendSessionReload(params: {
   fetchPendingPermissions: (directory?: string) => Promise<void> | void;
   fetchPendingQuestions: (directory?: string) => Promise<void> | void;
   focusInput: () => void;
+  runtime?: RuntimeSessionRuntime;
 }) {
   let loadedMessageCacheContext: LoadedMessageCacheContext | null = null;
 
@@ -121,6 +123,8 @@ export function useBackendSessionReload(params: {
   }
 
   async function reloadSelectedSessionState(newId?: string, oldId?: string, forceReset = false) {
+    const bound = bindRuntimeAction(params.runtime);
+    if (bound && params.runtime) { await params.runtime.router.history(bound, {}); return; }
     const reloadRequestId = ++params.sessionReloadRequestId.value;
     params.isLoadingHistory.value = Boolean(newId) && params.activeBackendKind.value === 'codex';
     const previousCacheContext = loadedMessageCacheContext;

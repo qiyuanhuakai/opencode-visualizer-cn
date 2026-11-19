@@ -277,7 +277,7 @@ export async function runInstalledNative(context) {
       raw[`window${position}`] = { first, sessions: all, replayPages, sqlEvents, targetWatermark: current.meta.seq }; persist();
       check(`native snapshot window${position} replay exactly matches independent durable SQLite sequence and entity revisions`, replayEvents.filter((event) => event.seq <= current.meta.seq).map((event) => [event.seq, event.entityRevision, event.payload.collection, event.payload.key, event.payload.deleted]), sqlEvents.map((event) => [event.seq, event.revision, event.patch.collection, event.patch.key, event.patch.deleted]));
       check(`native snapshot window${position} retains old summary while replay bridges real delete`, [all.some((row) => row.value?.session.nativeSessionId === created[0].id && row.value.session.harnessInstanceId === ids.opencode), replayEvents.some((event) => event.payload.key === encodeSessionKey({ environmentId, harnessInstanceId: ids.opencode, nativeSessionId: created[0].id }) && event.payload.deleted)], [true, true]);
-      window.close();
+      await window.close();
     }
     const beforeFailure = rowsFor(database().sessions, 'kimi-web').map((row) => row.session.nativeSessionId).sort();
     register({ kind: 'Kimi-graceful-source-stop', pid: kimiProcess.pid, signal: 'SIGTERM', teardown: 'detach index and driver feeds, then await this original stop promise and verify code0/PID/port/root' });

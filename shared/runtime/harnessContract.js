@@ -3,7 +3,7 @@ import { ProtocolError, requireValue, objectFields, jsonValue, textValue } from 
 import { WORKSPACE_OPERATIONS, NATIVE_EXTENSIONS, LEGACY_CAPABILITIES } from './nativeExtensions.js';
 
 export const HARNESS_KINDS = Object.freeze(['opencode', 'codex', 'acp', 'kimi-web', 'dsh']);
-export const CORE_OPERATIONS = Object.freeze({ inspect: 'instance', listSessionPage: 'instance', getSession: 'session', readHistoryPage: 'session', createSession: 'instance', send: 'session', cancel: 'session', respondInteraction: 'session', subscribe: 'optional-session', close: 'instance' });
+export const CORE_OPERATIONS = Object.freeze({ inspect: 'instance', listSessionPage: 'instance', getSession: 'session', readHistoryPage: 'session', openHistory: 'session', createSession: 'instance', send: 'session', cancel: 'session', respondInteraction: 'session', subscribe: 'optional-session', close: 'instance' });
 export const INSPECTION_STATES = Object.freeze(['supported', 'disabled', 'missing', 'auth-required', 'starting', 'ready', 'failed']);
 
 export function unsupported(reason) {
@@ -31,8 +31,8 @@ export function validateHarnessManifest(input) {
   requireValue(HARNESS_KINDS.includes(value.kind), 'kind', 'unsupported');
   requireValue(value.protocolVersion === 1, 'protocolVersion', 'version_mismatch');
   const scope = identity(value);
-  objectFields(value.core, Object.keys(CORE_OPERATIONS));
-  const core = Object.fromEntries(Object.entries(value.core).map(([name, state]) => [name, declaration(state)]));
+  objectFields(value.core, Object.keys(CORE_OPERATIONS).filter(name => name !== 'openHistory'), ['openHistory']);
+  const core = Object.fromEntries(Object.entries({ openHistory: unsupported('Streaming history not implemented'), ...value.core }).map(([name, state]) => [name, declaration(state)]));
   requireValue(Array.isArray(value.extensions), 'extensions');
   const names = new Set();
   const extensions = value.extensions.map((entry) => {

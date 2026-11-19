@@ -1,6 +1,10 @@
+import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 
 import {
@@ -237,5 +241,119 @@ describe('vis_bridge lifecycle commands', () => {
         args: ['__daemon', '--port', '23120'],
       });
     }
+  });
+});
+
+const CONTROL_STORE_ENVIRONMENT = '11111111-1111-4111-8111-111111111111';
+const controlStoreCliPath = path.resolve(import.meta.dirname, '../vis_bridge.js');
+
+function spawnControlStore(stateRoot: string) {
+  return spawn(
+    process.execPath,
+    [
+      controlStoreCliPath,
+      'control-store',
+      '--state-root',
+      stateRoot,
+      '--environment',
+      CONTROL_STORE_ENVIRONMENT,
+    ],
+    { stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+}
+
+async function waitForControlStoreOwnership(child: ChildProcess, timeoutMs = 8_000): Promise<string> {
+  const stdout = child.stdout;
+  if (!stdout) throw new Error('control-store child has no stdout pipe.');
+  let output = '';
+  return new Promise<string>((resolve, reject) => {
+    const finish = (error?: Error) => {
+      clearTimeout(timer);
+      stdout.off('data', onData);
+      child.off('exit', onExit);
+      if (error) reject(error);
+      else resolve(output);
+    };
+    const timer = setTimeout(
+      () => finish(new Error(`Timed out after ${timeoutMs}ms waiting for control-store ownership; stdout=${JSON.stringify(output)}`)),
+      timeoutMs,
+    );
+    const onData = (chunk: Buffer) => {
+      output += chunk.toString('utf8');
+      if (output.includes('control-store owns')) finish();
+    };
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      finish(new Error(`control-store exited before claiming ownership (code=${code}, signal=${signal}); stdout=${JSON.stringify(output)}`));
+    };
+    stdout.on('data', onData);
+    child.once('exit', onExit);
+  });
+}
+
+async function readControlStoreFence(stateRoot: string): Promise<{ released: boolean; pid?: number }> {
+  return JSON.parse(await readFile(path.join(stateRoot, 'fence.json'), 'utf8')) as {
+    released: boolean;
+    pid?: number;
+  };
+}
+
+function processIsAlive(pid: number | undefined): boolean {
+  if (pid === undefined) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+describe('vis_bridge control-store process lifecycle', { timeout: 20_000 }, () => {
+  const children: ChildProcess[] = [];
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    for (const child of children.splice(0)) {
+      if (child.exitCode === null && child.pid !== undefined) child.kill('SIGKILL');
+    }
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  it('stays alive after claiming ownership and releases the fence on SIGTERM', async () => {
+    const stateRoot = await mkdtemp(path.join(tmpdir(), 'vis-control-store-term-'));
+    roots.push(stateRoot);
+    const child = spawnControlStore(stateRoot);
+    children.push(child);
+
+    await waitForControlStoreOwnership(child);
+    const claimed = await readControlStoreFence(stateRoot);
+    expect(claimed.released).toBe(false);
+
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(child.exitCode).toBeNull();
+    expect(processIsAlive(child.pid)).toBe(true);
+
+    child.kill('SIGTERM');
+    const [code, signal] = (await once(child, 'exit')) as [number | null, NodeJS.Signals | null];
+    expect(signal).toBeNull();
+    expect(code).toBe(0);
+
+    const released = await readControlStoreFence(stateRoot);
+    expect(released.released).toBe(true);
+  });
+
+  it('releases the fence on SIGINT and exits 0', async () => {
+    const stateRoot = await mkdtemp(path.join(tmpdir(), 'vis-control-store-int-'));
+    roots.push(stateRoot);
+    const child = spawnControlStore(stateRoot);
+    children.push(child);
+
+    await waitForControlStoreOwnership(child);
+    expect((await readControlStoreFence(stateRoot)).released).toBe(false);
+
+    child.kill('SIGINT');
+    const [code, signal] = (await once(child, 'exit')) as [number | null, NodeJS.Signals | null];
+    expect(signal).toBeNull();
+    expect(code).toBe(0);
+    expect((await readControlStoreFence(stateRoot)).released).toBe(true);
   });
 });

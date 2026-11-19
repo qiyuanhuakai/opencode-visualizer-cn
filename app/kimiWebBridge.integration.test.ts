@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import {
   createServer as createHttpServer,
@@ -227,6 +227,20 @@ async function startBridge(
   return { server, port };
 }
 
+type RestSocketTuple = Pick<Socket, 'localAddress' | 'localPort' | 'remoteAddress' | 'remotePort'>;
+type RestFinish = { readonly status: number };
+type RestDiagnostic = {
+  listening: ReturnType<HttpServer['address']>;
+  client: RestSocketTuple | null;
+  request: RestSocketTuple | null;
+  finish: RestFinish | null;
+  bodyBytes: number;
+  bodySha256: string;
+  bodyPrefix: string;
+};
+
+const restDiagnostics = new WeakMap<object, RestDiagnostic>();
+
 function restRequest(
   port: number,
   path: string,
@@ -234,7 +248,64 @@ function restRequest(
 ): Promise<{ status: number; headers: IncomingHttpHeaders; text: string }> {
   return new Promise((resolve, reject) => {
     const body = options.body ?? '';
-    const request = httpRequest(
+    const bridge = bridgeServers.find((server) => {
+      const address = server.address();
+      return address && typeof address !== 'string' && address.port === port;
+    });
+    const diagnostic: RestDiagnostic = {
+      listening: bridge?.address() ?? null,
+      client: null,
+      request: null,
+      finish: null,
+      bodyBytes: 0,
+      bodySha256: '',
+      bodyPrefix: '',
+    };
+    const tuple = (socket: Socket): RestSocketTuple => ({
+      localAddress: socket.localAddress,
+      localPort: socket.localPort,
+      remoteAddress: socket.remoteAddress,
+      remotePort: socket.remotePort,
+    });
+    let clientSocket: Socket | undefined;
+    let serverResponse: ServerResponse | undefined;
+    const onConnect = () => {
+      if (clientSocket) diagnostic.client = tuple(clientSocket);
+    };
+    const onFinish = () => {
+      if (serverResponse)
+        diagnostic.finish = {
+          status: serverResponse.statusCode,
+        };
+    };
+    const onRequest: NonNullable<Parameters<typeof createHttpServer>[1]> = (incoming, response) => {
+      const socket = incoming.socket;
+      const client = diagnostic.client;
+      if (
+        !client ||
+        socket.localPort !== client.remotePort ||
+        socket.remotePort !== client.localPort ||
+        socket.localAddress !== client.remoteAddress ||
+        socket.remoteAddress !== client.localAddress
+      )
+        return;
+      diagnostic.request = tuple(socket);
+      serverResponse = response;
+      response.once('finish', onFinish);
+    };
+    const cleanup = () => {
+      bridge?.removeListener('request', onRequest);
+      clientSocket?.removeListener('connect', onConnect);
+      serverResponse?.removeListener('finish', onFinish);
+    };
+    const fail = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    bridge?.prependListener('request', onRequest);
+    let request;
+    try {
+      request = httpRequest(
       {
         host: '127.0.0.1',
         port,
@@ -251,20 +322,40 @@ function restRequest(
           ...options.headers,
         },
       },
-      (response) => {
-        const chunks: Buffer[] = [];
-        response.on('data', (chunk: Buffer) => chunks.push(chunk));
-        response.on('end', () =>
-          resolve({
-            status: response.statusCode ?? 0,
-            headers: response.headers,
-            text: Buffer.concat(chunks).toString('utf8'),
-          }),
-        );
-        response.on('error', reject);
-      },
-    );
-    request.on('error', reject);
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on('data', (chunk: Buffer) => chunks.push(chunk));
+          response.on('end', () => {
+            const bytes = Buffer.concat(chunks);
+            const result = {
+              status: response.statusCode ?? 0,
+              headers: response.headers,
+              text: bytes.toString('utf8'),
+            };
+            diagnostic.bodyBytes = bytes.length;
+            diagnostic.bodySha256 = createHash('sha256').update(bytes).digest('hex');
+            diagnostic.bodyPrefix =
+              /^(?:<!doctype html>|<html>|<html(?=\s)|<!DOCTYPE )/iu.exec(
+                bytes.subarray(0, 32).toString('utf8'),
+              )?.[0] ?? '[redacted non-markup prefix]';
+            restDiagnostics.set(result, diagnostic);
+            cleanup();
+            resolve(result);
+          });
+          response.once('close', cleanup);
+          response.on('error', fail);
+        },
+      );
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
+    request.once('socket', (socket) => {
+      clientSocket = socket;
+      socket.once('connect', onConnect);
+    });
+    request.once('close', cleanup);
+    request.on('error', fail);
     if (body) request.write(body);
     request.end();
   });
@@ -272,10 +363,32 @@ function restRequest(
 
 async function restJson(port: number, path: string, options?: Parameters<typeof restRequest>[2]) {
   const result = await restRequest(port, path, options);
-  return {
-    ...result,
-    body: result.text ? (JSON.parse(result.text) as unknown) : null,
-  };
+  let body: unknown = null;
+  try {
+    if (result.text) body = JSON.parse(result.text);
+  } catch (cause) {
+    if (!(cause instanceof SyntaxError)) throw cause;
+    const diagnostic = restDiagnostics.get(result);
+    throw new SyntaxError(
+      `Invalid REST JSON: ${JSON.stringify({
+        request: { host: '127.0.0.1', port, path: path.split(/[?#]/u)[0] },
+        status: result.status,
+        contentType: result.headers['content-type'] ?? null,
+        wwwAuthenticate: result.headers['www-authenticate'] ?? null,
+        bodyBytes: diagnostic?.bodyBytes,
+        bodySha256: diagnostic?.bodySha256,
+        bodyPrefix: diagnostic?.bodyPrefix,
+        transport: {
+          listening: diagnostic?.listening,
+          client: diagnostic?.client,
+          request: diagnostic?.request,
+          finish: diagnostic?.finish,
+        },
+      })}`,
+      { cause },
+    );
+  }
+  return { ...result, body };
 }
 
 async function openUpgrade(

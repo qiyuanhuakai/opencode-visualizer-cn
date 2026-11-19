@@ -110,7 +110,7 @@ describe('durable runtime event bus', () => {
       expect((await first.replay({ after: page.watermark })).events).toMatchObject([{ seq: 4, payload: { deleted: true } }]);
       current = false;
       await expect(first.page()).rejects.toMatchObject({ code: 'reconcile_required' });
-      first.close(); second.close();
+      await first.close(); await second.close();
     });
   });
   it('recovers explicitly when 257 distinct summaries overflow the observer queue', () => {

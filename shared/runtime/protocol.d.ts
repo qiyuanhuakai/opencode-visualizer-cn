@@ -1,5 +1,7 @@
 import type { EnvironmentId, InstanceId } from './identity.js';
 import type { Capabilities, ErrorCode, JsonValue, Method } from './capabilities.js';
+import type { RawFramePreflight } from './rawFrame.js';
+export type { RawFrameSpan, RawFrameSummary, FramePreflightDecision, RawFramePreflight } from './rawFrame.js';
 export { ProtocolError, ERROR_CODES } from './capabilities.js';
 export { createProtocolState } from './protocolState.js';
 export const PROTOCOL_VERSION: 1;
@@ -27,6 +29,8 @@ export function parseBinding(input: unknown): Binding;
 export function validateFrame(input: unknown): Frame;
 export function encodeFrame(input: unknown): string;
 export function decodeFrame(text: string): Frame;
+/** Guarded decode: runs `preflight` after the 1MiB guard and before `JSON.parse`; `undefined` is an explicitly dropped well-formed unmatched/stale result. */
+export function decodeFrame(text: string, preflight: RawFramePreflight): Frame | undefined;
 export function validateChunk(input: unknown): Chunk;
 /** 24-byte big-endian RVB1/channel-u32/offset-u64/length-u32/reserved-zero-u32 header. */
 export function encodeBinary(input: BinaryInput): Uint8Array;

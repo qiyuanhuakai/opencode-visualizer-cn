@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { effectScope } from 'vue';
 
 describe('useCredentials', () => {
   let storageListeners: Array<(event: StorageEvent) => void>;
@@ -35,6 +36,9 @@ describe('useCredentials', () => {
           storageListeners.push(handler as (event: StorageEvent) => void);
         }
       }),
+      removeEventListener: vi.fn((type: string, handler: EventListener) => {
+        if (type === 'storage') storageListeners = storageListeners.filter(listener => listener !== handler);
+      }),
       electronAPI: {
         persistentStorage: {
           getItem: vi.fn((key: string) => electronStore.get(key) ?? null),
@@ -63,6 +67,53 @@ describe('useCredentials', () => {
     const mod = await import('./useCredentials');
     return mod.useCredentials();
   }
+
+  it('removes scoped credential listeners after one instance is disposed before scope shutdown', async () => {
+    const { useCredentials } = await import('./useCredentials');
+    const scope = effectScope();
+    const credentials = scope.run(() => { const first = useCredentials(); useCredentials(); return first; });
+    if (!credentials) throw new Error('credential scope missing');
+    expect(storageListeners).toHaveLength(2);
+    credentials.dispose();
+    expect(storageListeners).toHaveLength(1);
+    scope.stop();
+    expect(storageListeners).toHaveLength(0);
+  });
+
+  it('keeps disposal safe without a browser window, including later scope shutdown', async () => {
+    vi.stubGlobal('window', undefined);
+    const { useCredentials } = await import('./useCredentials');
+    const scope = effectScope();
+    const credentials = scope.run(useCredentials);
+    if (!credentials) throw new Error('credential scope missing');
+    credentials.dispose(); credentials.dispose(); scope.stop();
+    expect(storageListeners).toHaveLength(0);
+  });
+
+  it('disposes a listener outside Vue scope without updating shared credentials later', async () => {
+    const credentials = await importFresh();
+    credentials.saveCodex('ws://selected.test/codex', 'private-candidate');
+    credentials.dispose(); credentials.dispose();
+    for (const listener of storageListeners) listener({ key: 'opencode.auth.codexBridgeUrl.v1', newValue: 'ws://unrelated.test/codex' } as StorageEvent);
+    expect(storageListeners).toHaveLength(0);
+    expect(credentials.codexBridgeUrl.value).toBe('ws://selected.test/codex');
+  });
+
+  it('never offers native OpenCode auth as management auth and selects only the active bridge', async () => {
+    const credentials = await importFresh();
+    const { getRuntimeConnectionCandidate } = await import('./useCredentials');
+    credentials.save('http://native.test', 'native-user', 'native-private');
+    expect(getRuntimeConnectionCandidate()).toBeNull();
+    credentials.saveCodex('ws://selected.test/codex', 'private-candidate');
+    const candidate = getRuntimeConnectionCandidate();
+    expect(candidate?.reference).toEqual({ url: 'ws://selected.test/runtime' });
+    expect(JSON.stringify(candidate)).not.toContain('private-candidate');
+    expect(await candidate?.resolveAuthentication()).toEqual({ bridgeToken: 'private-candidate' });
+    credentials.saveDsh('ws://dsh.test/dsh/ws', 'dsh-private'); credentials.clear();
+    expect(getRuntimeConnectionCandidate()).toBeNull();
+    expect(electronStore.get('opencode.auth.codexBridgeToken.v1')).toBe('private-candidate');
+    credentials.dispose();
+  });
 
   it('persists baseUrl and auth data to Electron storage', async () => {
     const credentials = await importFresh();

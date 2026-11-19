@@ -53,8 +53,17 @@ export function createAcpStdoutForwarder(options) {
   }
 
   return function forwardStdout(entry, chunk) {
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    // Raw capture precedes the bounded frame assembly below; an absent tap keeps the legacy path byte-identical.
+    if (entry.runtimeOwned && entry.rawTap) {
+      try {
+        entry.rawTap(bytes);
+      } catch {
+        entry.status.droppedFrames += 1;
+      }
+    }
     entry.stdoutDecoder ??= new StringDecoder('utf8');
-    let text = entry.stdoutDecoder.write(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    let text = entry.stdoutDecoder.write(bytes);
     if (entry.discardingOversizedFrame) {
       const newline = text.indexOf('\n');
       if (newline < 0) return;

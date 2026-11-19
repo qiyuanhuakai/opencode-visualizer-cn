@@ -25,7 +25,7 @@
  * Human-readable inventory: .omo/evidence/dsh-web-adapt/task-17/branch-inventory.md
  * RED-then-GREEN + injection evidence: .omo/evidence/dsh-web-adapt/task-17.txt
  *
- * // allow: SIZE_OK — 222-row pure-data inventory table; the verifier is thin.
+ * // allow: SIZE_OK — 270-row pure-data inventory table; the verifier is thin.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -119,10 +119,11 @@ type ManualEntry = {
 };
 
 // ---------------------------------------------------------------------------
-// INVENTORY (mirrors task-17/branch-inventory.md) — 222 auto-detected rows.
+// INVENTORY (mirrors task-17/branch-inventory.md) — 273 auto-detected rows.
 // ---------------------------------------------------------------------------
 const BRANCHES: BranchEntry[] = [
-  { file: "App.vue", fp: "? 'opencode'", n: 2, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 33, sym: "active backend / composer / identity" },
+  { file: "App.vue", fp: "? 'opencode'", n: 2, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 33, sym: "active backend / composer / identity; task 24 activeHarnessKind fallback reuses this site so a workspace scope is never built for an unknown source" },
+  { file: "App.vue", fp: ": 'opencode',", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 24, sym: "task 24 activeHarnessKind fallback: an unknown active kind resolves to opencode so a harness scope is never built for a source the runtime does not know" },
   { file: "App.vue", fp: "@click=\"loginBackendKind = 'acp'\"", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 32, sym: "login surface" },
   { file: "App.vue", fp: "@click=\"loginBackendKind = 'codex'\"", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 32, sym: "login surface" },
   { file: "App.vue", fp: "@click=\"loginBackendKind = 'dsh'\"", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 35, sym: "login surface dsh backend button (Todo 35)" },
@@ -254,6 +255,11 @@ const BRANCHES: BranchEntry[] = [
   { file: "components/ThreadBlock.vue", fp: "props.backendKind==='acp'", n: 2, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 35, sym: "message card actions/diff gates" },
   { file: "components/ThreadBlock.vue", fp: "props.backendKind==='codex'", n: 3, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 35, sym: "message card actions/diff gates" },
   { file: "components/ThreadBlock.vue", fp: "props.backendKind==='kimi-web'", n: 13, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 35, sym: "message card actions/diff gates (x13 after main #155 ghost-card fix)" },
+  { file: "components/runtime/HarnessBadge.vue", fp: "if (props.harness === 'acp') return 'lucide:plug';", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 21, sym: "unified session tree harness badge icon mapping (five harness kinds)" },
+  { file: "components/runtime/HarnessBadge.vue", fp: "if (props.harness === 'codex') return 'lucide:code';", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 21, sym: "unified session tree harness badge icon mapping (five harness kinds)" },
+  { file: "components/runtime/HarnessBadge.vue", fp: "if (props.harness === 'dsh') return 'lucide:waves';", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 21, sym: "unified session tree harness badge icon mapping; dsh -> waves icon instead of the generic help-circle fallback" },
+  { file: "components/runtime/HarnessBadge.vue", fp: "if (props.harness === 'kimi-web') return 'lucide:globe';", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 21, sym: "unified session tree harness badge icon mapping (five harness kinds)" },
+  { file: "components/runtime/HarnessBadge.vue", fp: "if (props.harness === 'opencode') return 'lucide:terminal';", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 21, sym: "unified session tree harness badge icon mapping (five harness kinds)" },
   { file: "composables/backendMessageSend.kimiSlash.ts", fp: "params.activeBackendKind.value==='kimi-web'", n: 1, kind: 'cmp', cls: 'capability-optional', disp: 'handled', owner: 18, sym: "kimi slash dispatch (dsh has none)" },
   { file: "composables/backendMessageSend.openCode.ts", fp: "preflight.backend==='acp'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 25, sym: "opencode send fail-closed seam" },
   { file: "composables/backendMessageSend.openCode.ts", fp: "preflight.backend==='kimi-web'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 25, sym: "opencode send fail-closed seam" },
@@ -338,6 +344,11 @@ const BRANCHES: BranchEntry[] = [
   { file: "composables/useCredentials.ts", fp: "backendKind.value==='codex'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 13, sym: "credentials four-branch" },
   { file: "composables/useCredentials.ts", fp: "backendKind.value==='dsh'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 13, sym: "credentials four-branch" },
   { file: "composables/useCredentials.ts", fp: "backendKind.value==='kimi-web'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 13, sym: "credentials four-branch" },
+  { file: "composables/useCredentials.ts", fp: "case:'opencode'", n: 1, kind: 'case', cls: 'ui-required', disp: 'handled', owner: 19, sym: "runtime candidate excludes OpenCode native authentication" },
+  { file: "composables/useCredentials.ts", fp: "case:'codex'", n: 1, kind: 'case', cls: 'ui-required', disp: 'handled', owner: 19, sym: "runtime candidate uses selected Codex bridge authentication" },
+  { file: "composables/useCredentials.ts", fp: "case:'acp'", n: 1, kind: 'case', cls: 'ui-required', disp: 'handled', owner: 19, sym: "runtime candidate requires selected ACP agent" },
+  { file: "composables/useCredentials.ts", fp: "case:'kimi-web'", n: 1, kind: 'case', cls: 'ui-required', disp: 'handled', owner: 19, sym: "runtime candidate uses selected Kimi bridge authentication" },
+  { file: "composables/useCredentials.ts", fp: "case:'dsh'", n: 1, kind: 'case', cls: 'ui-required', disp: 'handled', owner: 19, sym: "runtime candidate requires DSH opt-in" },
   { file: "composables/useCredentials.ts", fp: "const backendKind = ref<BackendKind>('opencode');", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 13, sym: "credentials four-branch" },
   { file: "composables/useCredentials.ts", fp: "event.newValue === 'acp' ||", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 13, sym: "credentials four-branch" },
   { file: "composables/useCredentials.ts", fp: "event.newValue === 'codex' ||", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 13, sym: "credentials four-branch" },
@@ -362,6 +373,10 @@ const BRANCHES: BranchEntry[] = [
   { file: "composables/useFileTree.ts", fp: "backendKind==='dsh'", n: 1, kind: 'cmp', cls: 'ui-required', disp: 'handled', owner: 30, sym: "file tree status source (Todo 30: bridge /dsh listFiles, no PTY git)" },
   { file: "composables/useLiveDescendantHistoryHydration.ts", fp: "backendKind==='opencode'", n: 1, kind: 'cmp', cls: 'capability-optional', disp: 'handled', sym: "opencode-only scope (excludes dsh)" },
   { file: "composables/useRootHistoryLoader.ts", fp: "options.activeBackendKind.value==='acp'", n: 1, kind: 'cmp', cls: 'capability-optional', disp: 'handled', sym: "acp-only metadata refresh" },
+  { file: "composables/useRuntimeMessageSend.ts", fp: "kind: 'codex',", n: 1, kind: 'literal', cls: 'data-only', disp: 'not-applicable', sym: "task 22 per-harness runtime send adapter: the codex adapter's kind label (adapter internals; no dsh branch)" },
+  { file: "composables/useRuntimeMessageSend.ts", fp: "adapter ?? (ctx.harnessKind === 'codex' ? codexSendAdapter() : null);", n: 1, kind: 'literal', cls: 'capability-optional', disp: 'handled', owner: 22, sym: "task 22 per-harness send adapter selection: only codex installs a native send adapter; a non-codex harness (incl. dsh) keeps the generic session.send text/attachments envelope" },
+  { file: "composables/useRuntimeSessionTree.ts", fp: "'kimi-web': 'Kimi Web',", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 21, sym: "unified session tree HARNESS_LABELS (five harness kinds + unknown)" },
+  { file: "composables/useRuntimeSessionTree.ts", fp: "export const HARNESS_KINDS = ['opencode', 'codex', 'kimi-web', 'dsh', 'acp'] as const;", n: 5, kind: 'literal', cls: 'ui-required', disp: 'handled', owner: 21, sym: "unified session tree harness-kind contract (five kinds)" },
   { file: "composables/useSubagentWindows.ts", fp: "agentLabel = messageInfo.mode === 'codex' ? messageInfo.agent", n: 1, kind: 'literal', cls: 'capability-optional', disp: 'todo-24', owner: 24, sym: "subagent window message-mode" },
   { file: "utils/codexTopPanelTree.ts", fp: "const keyPrefix = options.keyPrefix ?? 'codex';", n: 1, kind: 'literal', cls: 'data-only', disp: 'not-applicable', sym: "codex tree internals" },
   { file: "utils/defaultComposerMode.ts", fp: "backend==='codex'", n: 1, kind: 'cmp', cls: 'capability-optional', disp: 'todo-33', owner: 33, sym: "composer default mode" },

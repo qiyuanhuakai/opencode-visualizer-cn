@@ -1,5 +1,7 @@
 import { loadAcpSessionTurnMeta } from './acpSessionMeta.js';
 import { writeJsonHttpResponse } from './bridgeHttp.js';
+import { ProtocolError } from '../shared/runtime/capabilities.js';
+import { assertNoSecretPayload } from '../shared/runtime/connectionProfile.js';
 
 const JSON_BODY_LIMIT = 2 * 1024 * 1024;
 
@@ -183,4 +185,97 @@ export async function handleSupervisorHttpRequest(request, response, requestUrl,
     return true;
   }
   return false;
+}
+
+const PROFILE_ACTION = /^\/api\/v1\/profiles\/([^/]+)\/(connect|disconnect|reconnect|enabled)$/u;
+const PROFILE_ITEM = /^\/api\/v1\/profiles\/([^/]+)$/u;
+const PROFILE_ERROR_STATUS = Object.freeze({
+  invalid_request: 400,
+  unsupported: 400,
+  version_mismatch: 400,
+  unauthorized: 401,
+  conflict: 409,
+  cancelled: 409,
+  source_unavailable: 404,
+  timeout: 504,
+});
+
+export function profileErrorStatus(error) {
+  const code = error instanceof ProtocolError ? error.code : undefined;
+  return PROFILE_ERROR_STATUS[code] ?? 500;
+}
+
+/** Profile management API: one surface for Browser and Electron; every response runs the secret guard. */
+export async function handleProfileHttpRequest(request, response, requestUrl, manager) {
+  const { pathname } = requestUrl;
+  if (!pathname.startsWith('/api/v1/profiles')) return false;
+  const method = request.method ?? 'GET';
+  const send = (status, body) => {
+    assertNoSecretPayload(body);
+    writeJsonHttpResponse(response, status, body);
+  };
+  try {
+    if (pathname === '/api/v1/profiles') {
+      if (method === 'GET') {
+        send(200, { profiles: await manager.list() });
+        return true;
+      }
+      if (method === 'POST') {
+        send(201, await manager.create(await readJsonBody(request)));
+        return true;
+      }
+      send(405, { error: 'Method not allowed.' });
+      return true;
+    }
+    const action = pathname.match(PROFILE_ACTION);
+    if (action) {
+      const id = decodeURIComponent(action[1]);
+      const verb = action[2];
+      if (verb === 'enabled' && method === 'PUT') {
+        const payload = await readJsonBody(request);
+        const enabled = await manager.setEnabled(id, payload?.enabled);
+        send(enabled ? 200 : 404, enabled ?? { error: 'Profile not found.' });
+        return true;
+      }
+      if (verb === 'connect' && method === 'POST') {
+        send(200, await manager.connect(id));
+        return true;
+      }
+      if (verb === 'disconnect' && method === 'POST') {
+        send(200, await manager.disconnect(id));
+        return true;
+      }
+      if (verb === 'reconnect' && method === 'POST') {
+        send(200, await manager.reconnect(id));
+        return true;
+      }
+      send(405, { error: 'Method not allowed.' });
+      return true;
+    }
+    const item = pathname.match(PROFILE_ITEM);
+    if (!item) return false;
+    const id = decodeURIComponent(item[1]);
+    if (method === 'GET') {
+      const profile = await manager.get(id);
+      send(profile ? 200 : 404, profile ?? { error: 'Profile not found.' });
+      return true;
+    }
+    if (method === 'PATCH' || method === 'PUT') {
+      const updated = await manager.update(id, await readJsonBody(request));
+      send(updated ? 200 : 404, updated ?? { error: 'Profile not found.' });
+      return true;
+    }
+    if (method === 'DELETE') {
+      send(200, await manager.delete(id));
+      return true;
+    }
+    send(405, { error: 'Method not allowed.' });
+    return true;
+  } catch (error) {
+    send(profileErrorStatus(error), {
+      error: error instanceof Error ? error.message : String(error),
+      code: error instanceof ProtocolError ? error.code : undefined,
+    });
+    return true;
+  }
 }

@@ -1,12 +1,14 @@
+import { randomUUID } from 'node:crypto';
 import { parseEnvironmentId, parseHarnessInstanceId, parseSessionRef, parseInstanceId } from '../../../shared/runtime/identity.js';
-import { ProtocolError, jsonValue } from '../../../shared/runtime/capabilities.js';
+import { ProtocolError, jsonValue, requireValue } from '../../../shared/runtime/capabilities.js';
 import { CORE_OPERATIONS, unsupported, validateHarnessRegistration } from '../../../shared/runtime/harnessContract.js';
 import { record, nativeText, pageSize, parseCatalogPage, sessionSummary, parseNativeCapabilities } from '../../../shared/runtime/native/kimiWeb/protocol.js';
 import { createAdmissionQueue } from '../admissionQueue.js';
 import { createKimiWebTransport } from './kimiWebTransport.js';
-import { createKimiWebHistory } from './kimiWebHistory.js';
+import { createKimiWebHistory, createKimiWebHistoryProducer, KIMI_WEB_HISTORY_LIMITS } from './kimiWebHistory.js';
 import { createKimiWebOperations } from './kimiWebOperations.js';
 
+function failure(code, reason) { return new ProtocolError(code, reason); }
 function observer(onReturn) {
   const queue = []; let bytes = 0, waiter, done = false;
   return {
@@ -53,6 +55,7 @@ export async function createKimiWebDriver(options) {
   const lifecycleTransport = transport ? createKimiWebTransport({ endpoint: options.endpoint, getAuthorization: options.getAuthorization, deadlineMs: options.deadlineMs }) : undefined;
   const lifecycleCursors = new Map();
   const lifecycleSubscriptions = new Map();
+  const lifecycleSessions = new Set();
   const observers = new Set();
   const selected = new Map();
   const invalidated = new Set();
@@ -174,6 +177,7 @@ export async function createKimiWebDriver(options) {
         throw new ProtocolError('reconcile_required', 'lifecycle_replay_required');
       }
       if (!lifecycleCursors.has(sessionId) && ack.payload.cursors?.[sessionId]) lifecycleCursors.set(sessionId, ack.payload.cursors[sessionId]);
+      lifecycleSessions.add(sessionId);
     })();
     lifecycleSubscriptions.set(key, work);
     try { await work; } catch (error) { lifecycleSubscriptions.delete(key); throw error; }
@@ -204,30 +208,100 @@ export async function createKimiWebDriver(options) {
     requireCapability('subscribeV2'); requireCapability('subscribe');
     await transport.open(onFrame, () => { stats.sourceDisconnects++; if (!closed) emit({ type: 'source_disconnected' }); });
   }
-  async function subscribeSession(sessionId, agentId = 'main') {
+  function agentSlot(sessionId, agentId) {
+    const pending = selected.get(sessionId);
+    if (pending) for (const [key, entry] of pending) if (key.slice(key.indexOf(':') + 1) === agentId) return { pending, key, entry };
+    return { pending, key: `${transport.generation}:${agentId}`, entry: undefined };
+  }
+  async function subscribeSession(sessionId, agentId = 'main', hold = 'permanent') {
     requireCapability('subscribeV2'); requireCapability('snapshot'); requireCapability('transcript');
     history.selected(sessionId, agentId);
-    let pending = selected.get(sessionId);
-    if (!pending) { pending = new Map(); selected.set(sessionId, pending); }
-    const key = `${transport.generation}:${agentId}`;
-    if (pending.has(key)) return pending.get(key);
-    const work = (async () => {
-      if (!history.cursor(sessionId)) await history.recover(sessionId);
-      await connect();
-      await subscribeLifecycle(sessionId);
-      const cursor = history.cursor(sessionId);
-      const replay = await transport.control('subscribe', { session_ids: [sessionId], ...(cursor ? { cursors: { [sessionId]: cursor } } : {}) });
-      if (replay.payload.not_found?.includes(sessionId)) throw new ProtocolError('source_unavailable', 'native_session_missing');
-      if (replay.resync.includes(sessionId)) await history.recover(sessionId);
-      const since = history.transcriptCursors(sessionId);
-      const grades = Object.fromEntries([...new Set([...pending.keys()].map((entry) => entry.slice(entry.indexOf(':') + 1)).concat(agentId))].map((id) => [id, 'delta']));
-      const attached = await transport.control('subscribe_v2', { session_id: sessionId, transcript: grades, ...(Object.keys(since).length ? { transcript_since: since } : {}) });
-      if (attached.payload.not_found?.includes(sessionId)) throw new ProtocolError('source_unavailable', 'native_session_missing');
-      if (attached.resync.includes(sessionId)) await history.recover(sessionId);
-      if (!history.cursor(sessionId)) await history.recover(sessionId);
+    const found = agentSlot(sessionId, agentId);
+    const pending = found.pending ?? selected.set(sessionId, new Map()).get(sessionId);
+    const key = found.key;
+    let entry = found.entry;
+    if (!entry || entry.work === undefined) {
+      entry = { permanent: 0, held: 0, work: undefined };
+      pending.set(key, entry);
+      entry.work = (async () => {
+        if (!history.cursor(sessionId)) await history.recover(sessionId);
+        await connect();
+        await subscribeLifecycle(sessionId);
+        const cursor = history.cursor(sessionId);
+        const replay = await transport.control('subscribe', { session_ids: [sessionId], ...(cursor ? { cursors: { [sessionId]: cursor } } : {}) });
+        if (replay.payload.not_found?.includes(sessionId)) throw new ProtocolError('source_unavailable', 'native_session_missing');
+        if (replay.resync.includes(sessionId)) await history.recover(sessionId);
+        const since = history.transcriptCursors(sessionId);
+        const grades = Object.fromEntries([...new Set([...pending.keys()].map((entry) => entry.slice(entry.indexOf(':') + 1)).concat(agentId))].map((id) => [id, 'delta']));
+        const attached = await transport.control('subscribe_v2', { session_id: sessionId, transcript: grades, ...(Object.keys(since).length ? { transcript_since: since } : {}) });
+        if (attached.payload.not_found?.includes(sessionId)) throw new ProtocolError('source_unavailable', 'native_session_missing');
+        if (attached.resync.includes(sessionId)) await history.recover(sessionId);
+        if (!history.cursor(sessionId)) await history.recover(sessionId);
+      })();
+      void entry.work.catch(() => {});
+    }
+    const counted = hold === 'permanent' ? 'permanent' : hold === 'held' ? 'held' : undefined;
+    if (counted === 'permanent') entry.permanent++;
+    else if (counted === 'held') entry.held++;
+    try { await entry.work; }
+    catch (error) {
+      if (counted === 'permanent') entry.permanent--;
+      else if (counted === 'held') entry.held--;
+      if (entry.permanent === 0 && entry.held === 0) pending.delete(key);
+      throw error;
+    }
+  }
+  function observe(captured) {
+    const entry = { sessionId: captured.session.nativeSessionId, stream: undefined };
+    entry.stream = observer(() => observers.delete(entry)); observers.add(entry);
+    return entry.stream;
+  }
+  /** Raw native transcript pull: the driver alone builds the endpoint and holds the admission slot. */
+  function pullTranscript(captured, agentId, before, signal) {
+    const sessionId = captured.session.nativeSessionId;
+    return (async () => {
+      fence(captured);
+      const query = new URLSearchParams({ agent_id: agentId, page_size: String(KIMI_WEB_HISTORY_LIMITS.page), ...(before === null ? {} : { before_turn: before }) });
+      const path = `/api/v1/sessions/${encodeURIComponent(sessionId)}/transcript?${query}`;
+      const ready = Promise.withResolvers();
+      let finish = () => {};
+      const drained = new Promise((resolve) => { finish = resolve; });
+      const work = admission.run({}, async (admissionSignal) => {
+        const pulled = await transport.stream(path, signal ? AbortSignal.any([admissionSignal, signal]) : admissionSignal);
+        if (!pulled) throw failure('source_unavailable', 'kimi.history_body');
+        let released = false;
+        const release = () => { if (released) return; released = true; finish(); pulled.release(); };
+        const body = (async function* () {
+          try { for await (const piece of pulled.body) yield piece; }
+          finally { release(); }
+        })();
+        ready.resolve({ body, release });
+        await drained;
+      });
+      void work.catch(() => {});
+      return await ready.promise;
     })();
-    pending.set(key, work);
-    try { await work; } catch (error) { pending.delete(key); throw error; }
+  }
+  async function teardown(type, payload) {
+    const lane = type === 'unsubscribe_v2' ? transport : lifecycleTransport;
+    if (!lane?.connected) return;
+    try { await lane.control(type, payload, { destructive: false }); }
+    catch (error) { if (!(error instanceof ProtocolError)) throw error; }
+  }
+  async function releaseHistoryOwner(sessionId, agentId, notify = true) {
+    const { pending, key, entry } = agentSlot(sessionId, agentId);
+    if (!entry || entry.held === 0) return;
+    entry.held--;
+    if (entry.permanent > 0 || entry.held > 0) return;
+    pending.delete(key);
+    if (!notify) return;
+    await teardown('unsubscribe_v2', { session_id: sessionId, transcript: { [agentId]: 'off' } });
+    if (pending.size > 0) return;
+    selected.delete(sessionId);
+    if (lifecycleSessions.delete(sessionId)) await teardown('unsubscribe', { session_ids: [sessionId] });
+    for (const [lifecycleKey] of lifecycleSubscriptions) if (lifecycleKey.slice(lifecycleKey.indexOf(':') + 1) === sessionId) lifecycleSubscriptions.delete(lifecycleKey);
+    lifecycleCursors.delete(sessionId);
+    invalidated.delete(sessionId);
   }
   const methods = {
     async inspect(context) { capture(context); return inspectNative(); },
@@ -254,6 +328,28 @@ export async function createKimiWebDriver(options) {
       await subscribeSession(captured.session.nativeSessionId, agentId);
       const page = await admission.run({}, (signal) => history.read(captured.session.nativeSessionId, { agentId, cursor: params.cursor, limit: params.limit ?? 100, signal }));
       fence(captured); return page;
+    },
+    async openHistory(context) {
+      const captured = capture(context, true);
+      requireCapability('transcript'); requireCapability('subscribeV2'); requireCapability('snapshot');
+      const params = record(context.params);
+      const present = authority();
+      requireValue(params.epoch === present.epoch && params.processGeneration === present.processGeneration, 'kimi.request_generation', 'reconcile_required');
+      const agentId = nativeText(params.agentId ?? 'main', 'agent_id', 128);
+      const sessionId = captured.session.nativeSessionId;
+      try { await subscribeSession(sessionId, agentId, 'held'); } catch (error) { await releaseHistoryOwner(sessionId, agentId, false); throw error; }
+      fence(captured);
+      return createKimiWebHistoryProducer({
+        session: captured.session,
+        authority: Object.freeze({ epoch: captured.epoch, processGeneration: captured.processGeneration }),
+        current: () => isCurrent(captured),
+        assertCurrent: async () => fence(captured),
+        pull: ({ before, signal }) => pullTranscript(captured, agentId, before, signal),
+        subscribe: () => observe(captured),
+        releaseOwner: () => releaseHistoryOwner(sessionId, agentId),
+        sessionEpoch: () => history.cursor(sessionId)?.epoch,
+        randomUUID,
+      });
     },
     async createSession(context) {
       const captured = capture(context); requireCapability('create');
@@ -335,6 +431,7 @@ export async function createKimiWebDriver(options) {
   const support = {
     inspect: true, close: true, listSessionPage: capabilities.catalogV2,
     getSession: capabilities.snapshot, readHistoryPage: capabilities.transcript && capabilities.subscribeV2 && capabilities.snapshot,
+    openHistory: capabilities.transcript && capabilities.subscribeV2 && capabilities.snapshot,
     createSession: capabilities.create,
     subscribe: capabilities.subscribeV2 && capabilities.subscribe && capabilities.snapshot,
     send: capabilities.send && capabilities.subscribeV2 && capabilities.subscribe && capabilities.snapshot,
@@ -362,9 +459,13 @@ export async function createKimiWebDriver(options) {
       await inspectNative();
       if (state !== 'ready') throw new ProtocolError('source_unavailable', 'native_reconnect');
       const sessions = [...selected].map(([id, pending]) => [id, [...new Set([...pending.keys()].map((key) => key.slice(key.indexOf(':') + 1)))]]);
-      for (const [, pending] of selected) pending.clear();
+      for (const [, pending] of selected) {
+        const slots = [...pending.entries()];
+        pending.clear();
+        for (const [key, entry] of slots) { entry.work = undefined; pending.set(`${transport.generation}:${key.slice(key.indexOf(':') + 1)}`, entry); }
+      }
       await connect();
-      for (const [sessionId, agentIds] of sessions) for (const agentId of agentIds) await subscribeSession(sessionId, agentId);
+      for (const [sessionId, agentIds] of sessions) for (const agentId of agentIds) await subscribeSession(sessionId, agentId, 'restored');
       await eventWork;
     },
     async flush() { await eventWork; if (lastEventError) throw new ProtocolError(lastEventError.code, lastEventError.reason); },

@@ -5,8 +5,10 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { createRuntimeStore } from '../../bridge/runtime/storage/runtimeStore.js';
+import { createRuntimeSnapshots } from '../../bridge/runtime/snapshots.js';
+import { parseEnvironmentId } from '../../shared/runtime/identity.js';
 
-const environmentId = '11111111-1111-4111-8111-111111111111';
+const environmentId = parseEnvironmentId('11111111-1111-4111-8111-111111111111');
 const ownerId = '22222222-2222-4222-8222-222222222222';
 const epoch = '33333333-3333-4333-8333-333333333333';
 async function withStore(run: (store: ReturnType<typeof createRuntimeStore>, directory: string) => Promise<void>) {
@@ -17,6 +19,71 @@ async function withStore(run: (store: ReturnType<typeof createRuntimeStore>, dir
 }
 
 describe('runtime common-watermark snapshots', () => {
+  it('waits for an in-flight page on close and releases its late materialization before rejecting the stale page', async () => {
+    await withStore(async (store, directory) => {
+      let resume = () => {}, started = () => {};
+      const gate = new Promise<void>(resolve => { resume = resolve; });
+      const entered = new Promise<void>(resolve => { started = resolve; });
+      const snapshots = createRuntimeSnapshots({ store: { ...store, async snapshot(input) { const result = await store.snapshot(input); started(); await gate; return result; } } });
+      const window = await snapshots.connect({ target: environmentId, epoch, generation: 1 }, () => true);
+      const page = window.page({ collection: 'workspaces' });
+      const rejected = expect(page).rejects.toMatchObject({ code: 'reconcile_required' });
+      await entered; let closed = false; const closing = window.close(); closing.then(() => { closed = true; });
+      expect(window.close()).toBe(closing);
+      try {
+        await store.inspect(); expect(closed).toBe(false);
+        resume(); await rejected; await closing;
+        const database = new DatabaseSync(path.join(directory, 'runtime/runtime.db'), { readOnly: true });
+        try { expect(database.prepare('SELECT count(*) AS count FROM runtime_snapshots').get()).toMatchObject({ count: 0 }); expect(database.prepare('SELECT count(*) AS count FROM runtime_snapshot_rows').get()).toMatchObject({ count: 0 }); } finally { database.close(); }
+        expect((await store.snapshot({ collection: 'workspaces' })).token).toBeTypeOf('string');
+      } finally { resume(); await closing; }
+    });
+  });
+  it('fences internal snapshot release by environment and epoch, validates its shape and keeps double release idempotent', async () => {
+    await withStore(async (store, directory) => {
+      const before = await store.inspect(), page = await store.snapshot({ collection: 'workspaces' });
+      const other = createRuntimeStore({ stateDirectory: directory, environmentId: '44444444-4444-4444-8444-444444444444', ownerId, epoch });
+      try { await other.ready; expect(await other.releaseSnapshot({ token: page.token, epoch })).toEqual({ released: false }); } finally { await other.close(); }
+      expect(await store.releaseSnapshot({ token: page.token, epoch: ownerId })).toEqual({ released: false });
+      for (const params of [{ token: '', epoch }, { token: page.token, epoch: 'bad' }, { token: page.token, epoch, environment: environmentId }]) await expect(store.releaseSnapshot(params)).rejects.toMatchObject({ code: 'invalid_request' });
+      expect(await store.snapshot({ collection: 'workspaces', token: page.token })).toMatchObject({ token: page.token, expiresAt: page.expiresAt });
+      expect(await store.releaseSnapshot({ token: page.token, epoch })).toEqual({ released: true });
+      expect(await store.releaseSnapshot({ token: page.token, epoch })).toEqual({ released: false });
+      await expect(store.snapshot({ collection: 'workspaces', token: page.token })).rejects.toMatchObject({ code: 'replay_required' });
+      expect(await store.inspect()).toMatchObject({ seq: before.seq, revision: before.revision });
+    });
+  });
+  it('refuses snapshot cleanup by a replaced store owner without deleting the current materialization', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'runtime-snapshot-owner-'));
+    const store = createRuntimeStore({ stateDirectory: directory, environmentId, ownerId, epoch });
+    let replacement: ReturnType<typeof createRuntimeStore> | undefined;
+    try {
+      const initial = await store.ready; const page = await store.snapshot({ collection: 'workspaces' });
+      replacement = createRuntimeStore({ stateDirectory: directory, environmentId, ownerId, epoch, takeover: { expectedFence: initial.fence } }); await replacement.ready;
+      await expect(store.releaseSnapshot({ token: page.token, epoch })).rejects.toMatchObject({ code: 'conflict', reason: 'stale_owner' });
+      expect(await replacement.snapshot({ collection: 'workspaces', token: page.token })).toMatchObject({ token: page.token });
+      expect(await replacement.releaseSnapshot({ token: page.token, epoch })).toEqual({ released: true });
+    } finally { await store.terminate(); await replacement?.close(); await rm(directory, { recursive: true, force: true }); }
+  });
+  it('reclaims only a disconnected subscriber token while preserving two other windows and the global three-token cap', async () => {
+    await withStore(async (store, directory) => {
+      await store.mutate({ intentId: 'seed-close', changes: [{ collection: 'workspaces', key: 'large', value: 'x'.repeat(70000) }] });
+      const snapshots = createRuntimeSnapshots({ store });
+      const windows = await Promise.all([1, 2, 3].map(generation => snapshots.connect({ target: environmentId, epoch, generation }, () => true)));
+      try {
+        const pages = await Promise.all(windows.map(window => window.page({ collection: 'workspaces' })));
+        const before = await store.inspect();
+        await expect(windows[0].page({ collection: 'workspaces' })).rejects.toMatchObject({ code: 'conflict', reason: 'snapshot_limit' });
+        await windows[0].close(); await windows[0].close();
+        const database = new DatabaseSync(path.join(directory, 'runtime/runtime.db'), { readOnly: true });
+        try { expect(database.prepare('SELECT token FROM runtime_snapshots ORDER BY token').all().map(row => row.token)).toEqual(pages.slice(1).map(page => page.token).sort()); expect(database.prepare('SELECT count(*) AS count FROM runtime_snapshot_rows WHERE token=?').get(pages[0].token)).toMatchObject({ count: 0 }); } finally { database.close(); }
+        for (const index of [1, 2]) expect(await windows[index].readChunk({ collection: 'workspaces', key: 'large', revision: 1, offset: 0, token: pages[index].token })).toMatchObject({ revision: 1, nextOffset: 65536 });
+        const replacement = await snapshots.connect({ target: environmentId, epoch, generation: 4 }, () => true);
+        try { expect(await replacement.page({ collection: 'workspaces' })).toMatchObject({ revision: before.revision, watermark: before.seq }); await expect(replacement.page({ collection: 'workspaces' })).rejects.toMatchObject({ code: 'conflict', reason: 'snapshot_limit' }); } finally { await replacement.close(); }
+        expect(await store.inspect()).toMatchObject({ seq: before.seq, revision: before.revision });
+      } finally { await Promise.all(windows.map(window => window.close())); }
+    });
+  });
   it('keeps topology and same-key summaries at one revision across concurrent mutations', async () => {
     const stateDirectory = await mkdtemp(path.join(tmpdir(), 'runtime-snapshot-'));
     const store = createRuntimeStore({ stateDirectory, environmentId, ownerId, epoch });

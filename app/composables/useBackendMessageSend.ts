@@ -13,6 +13,7 @@ import { prepareSendPreflight } from './backendMessageSend.preflight';
 import { runLocalSlashCommand } from './backendMessageSend.local';
 import { createCodexSlashDispatcher } from './backendMessageSend.slash';
 import { parseLeadingSlashCommand } from '../utils/codexSlashCommands';
+import { bindRuntimeAction, type RuntimeSessionRuntime } from './useRuntimeSessionActions';
 import type {
   BackendMessageSendParams,
   RequestGuard,
@@ -23,7 +24,7 @@ function assertNever(value: never): never {
   throw new Error(`Unhandled send status: ${String(value)}`);
 }
 
-export function useBackendMessageSend(params: BackendMessageSendParams) {
+export function useBackendMessageSend(params: BackendMessageSendParams, runtime?: RuntimeSessionRuntime) {
   const dispatchCodexSlash = createCodexSlashDispatcher(params);
   const dispatchKimiWebSlash = createKimiWebSlashDispatcher(params);
   const dispatchDshSlash = createDshSlashDispatcher(params);
@@ -229,6 +230,13 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
       (await dispatchCodexSlash())
     )
       return;
+    // Task 22 seam: a qualified binding routes the send by full SessionRef on
+    // the new path; without one the legacy pipeline below is unchanged.
+    const bound = bindRuntimeAction(runtime);
+    if (bound && runtime) {
+      await runtime.router.sendMessage(bound, { text: params.messageInput.value });
+      return;
+    }
     if (!params.ensureConnectionReady(params.translate('app.actions.sending'))) return;
     if (params.activeBackendKind.value === 'kimi-web' && await dispatchKimiWebSlash()) return;
     if (params.activeBackendKind.value === 'dsh' && await dispatchDshSlash()) return;

@@ -53,8 +53,8 @@
                   :card-actions-disabled="(backendKind === 'kimi-web' || backendKind === 'dsh') && isThinking"
                   :is-latest-root="root.id === latestRootId"
                   :assistant-html="getAssistantHtml(root.id)"
-                  @fork-message="emit('fork-message', $event)"
-                  @revert-message="emit('revert-message', $event)"
+                  @fork-message="onForkMessage"
+                  @revert-message="onRevertMessage"
                   @undo-revert="emit('undo-revert')"
                   @show-message-diff="emit('show-message-diff', $event)"
                   @card-notice="emit('card-notice', $event)"
@@ -93,7 +93,7 @@
 
 <script setup lang="ts">
 import { Icon } from '@iconify/vue';
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import FileRefPopup from './FileRefPopup.vue';
 import StatusBar from './StatusBar.vue';
@@ -108,6 +108,11 @@ import type { MessageInfo } from '../types/sse';
 import type { BackendKind } from '../backends/types';
 import { resolveChildOwners } from '../utils/threadSubagents';
 import type { ModelMeta } from '../utils/resolveModelMeta';
+import {
+  RUNTIME_SESSION_ACTIONS_KEY,
+  bindRuntimeAction,
+  type RuntimeSessionRuntime,
+} from '../composables/useRuntimeSessionActions';
 import {
   initialProgressiveRootWindow,
   preserveProgressiveRootWindowOnAppend,
@@ -179,6 +184,28 @@ const emit = defineEmits<{
   (event: 'message-rendered'): void;
   (event: 'content-resized'): void;
 }>();
+
+// Task 22: prefer the injected qualified runtime action port for fork/revert;
+// fall back to the legacy emits when no container provides it.
+const runtimeSessionActions = inject<RuntimeSessionRuntime | null>(RUNTIME_SESSION_ACTIONS_KEY, null);
+
+function onForkMessage(payload: { sessionId: string; messageId: string }): void {
+  const binding = runtimeSessionActions ? bindRuntimeAction(runtimeSessionActions) : null;
+  if (binding && runtimeSessionActions) {
+    void runtimeSessionActions.router.fork(binding, { messageId: payload.messageId });
+    return;
+  }
+  emit('fork-message', payload);
+}
+
+function onRevertMessage(payload: { sessionId: string; messageId: string }): void {
+  const binding = runtimeSessionActions ? bindRuntimeAction(runtimeSessionActions) : null;
+  if (binding && runtimeSessionActions) {
+    void runtimeSessionActions.router.revert(binding, { messageId: payload.messageId });
+    return;
+  }
+  emit('revert-message', payload);
+}
 
 const visibleRoots = computed(() => {
   const currentSessionId = props.currentSessionId?.trim();

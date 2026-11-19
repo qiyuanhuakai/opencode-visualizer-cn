@@ -44,6 +44,8 @@
           @open-directory="handleOpenProjectDirectory"
           @edit-project="handleEditProject"
           @open-settings="openSettings()"
+          @open-connection-entry="openConnectionEntry()"
+          @open-workspace-migration="openWorkspaceMigration()"
           @open-provider-manager="isProviderManagerOpen = true"
           @open-status-monitor="isStatusMonitorOpen = true"
           @open-codex-panel="openCodexPanel"
@@ -345,52 +347,55 @@
         </div>
         <div v-if="uiInitState === 'login'" class="app-login-form">
           <p class="app-loading-title">{{ loginTitle }}</p>
-          <div class="app-login-backends" role="group" :aria-label="t('app.login.backendLabel')">
-            <button
-              type="button"
-              class="app-login-backend"
-              :class="{ active: loginBackendKind === 'opencode' }"
-              :aria-pressed="loginBackendKind === 'opencode'"
-              @click="loginBackendKind = 'opencode'"
-            >
-              {{ t('app.login.openCodeBackend') }}
-            </button>
-            <button
-              type="button"
-              class="app-login-backend"
-              :class="{ active: loginBackendKind === 'codex' }"
-              :aria-pressed="loginBackendKind === 'codex'"
-              @click="loginBackendKind = 'codex'"
-            >
-              {{ t('app.login.codexBackend') }}
-            </button>
-            <button
-              type="button"
-              class="app-login-backend"
-              :class="{ active: loginBackendKind === 'acp' }"
-              :aria-pressed="loginBackendKind === 'acp'"
-              @click="loginBackendKind = 'acp'"
-            >
-              {{ t('app.login.acpBackend') }}
-            </button>
-            <button
-              type="button"
-              class="app-login-backend"
-              :class="{ active: loginBackendKind === 'kimi-web' }"
-              :aria-pressed="loginBackendKind === 'kimi-web'"
-              @click="loginBackendKind = 'kimi-web'"
-            >
-              {{ t('app.login.kimiWebBackend') }}
-            </button>
-            <button
-              type="button"
-              class="app-login-backend"
-              :class="{ active: loginBackendKind === 'dsh' }"
-              :aria-pressed="loginBackendKind === 'dsh'"
-              @click="loginBackendKind = 'dsh'"
-            >
-              {{ t('app.login.dshBackend') }}
-            </button>
+          <div class="app-login-entry" data-testid="connection-entry">
+            <p class="app-login-entry-description">{{ t('app.runtimeConnection.description') }}</p>
+            <div class="app-login-backends" role="group" :aria-label="t('app.login.backendLabel')">
+              <button
+                type="button"
+                class="app-login-backend"
+                :class="{ active: loginBackendKind === 'opencode' }"
+                :aria-pressed="loginBackendKind === 'opencode'"
+                @click="loginBackendKind = 'opencode'"
+              >
+                {{ t('app.login.openCodeBackend') }}
+              </button>
+              <button
+                type="button"
+                class="app-login-backend"
+                :class="{ active: loginBackendKind === 'codex' }"
+                :aria-pressed="loginBackendKind === 'codex'"
+                @click="loginBackendKind = 'codex'"
+              >
+                {{ t('app.login.codexBackend') }}
+              </button>
+              <button
+                type="button"
+                class="app-login-backend"
+                :class="{ active: loginBackendKind === 'acp' }"
+                :aria-pressed="loginBackendKind === 'acp'"
+                @click="loginBackendKind = 'acp'"
+              >
+                {{ t('app.login.acpBackend') }}
+              </button>
+              <button
+                type="button"
+                class="app-login-backend"
+                :class="{ active: loginBackendKind === 'kimi-web' }"
+                :aria-pressed="loginBackendKind === 'kimi-web'"
+                @click="loginBackendKind = 'kimi-web'"
+              >
+                {{ t('app.login.kimiWebBackend') }}
+              </button>
+              <button
+                type="button"
+                class="app-login-backend"
+                :class="{ active: loginBackendKind === 'dsh' }"
+                :aria-pressed="loginBackendKind === 'dsh'"
+                @click="loginBackendKind = 'dsh'"
+              >
+                {{ t('app.login.dshBackend') }}
+              </button>
+            </div>
           </div>
           <div class="app-login-fields">
             <template v-if="loginBackendKind === 'opencode'">
@@ -553,11 +558,42 @@
         </div>
       </div>
     </div>
+    <ConnectionEntry
+      :open="isConnectionEntryOpen"
+      :profiles="connectionEntryProfiles"
+      :status="connectionState === 'ready' ? 'ready' : connectionState === 'connecting' ? 'connecting' : 'idle'"
+      :error="initErrorMessage"
+      @close="isConnectionEntryOpen = false"
+      @bind="handleConnectionBind"
+      @retry="startInitialization"
+    />
+    <MigrationWizard
+      :open="isMigrationWizardOpen"
+      :inventory="migrationWizardInventory"
+      :status="migrationWizardStatus"
+      :backup="migrationWizardBackup"
+      :result="migrationWizardResult ?? undefined"
+      :error="migrationWizardError"
+      :retained="migrationWizardStatus === 'failed'"
+      @close="isMigrationWizardOpen = false"
+      @bind="handleMigrationBind"
+      @start="handleMigrationStart"
+      @retry="handleMigrationRetry"
+    />
     <ProjectPicker
       :open="isProjectPickerOpen"
       :home-path="projectPickerHomePath"
       @close="isProjectPickerOpen = false"
       @select="handleProjectDirectorySelect"
+    />
+    <HarnessSettings
+      v-if="isHarnessSettingsOpen"
+      :harness-kind="harnessSettingsKind"
+      :manifests="harnessManifests"
+      :scope="harnessScope ?? harnessInstanceScope"
+      :controls="harnessSettingsControls"
+      :title="t('app.harnessSettings.title')"
+      @save="handleHarnessSettingsSave"
     />
     <SettingsModal
       :open="isSettingsOpen"
@@ -575,6 +611,8 @@
       :provider-config="providerConfig"
       :backend-kind="activeBackendKind"
       :dsh-rpc-client="dshSettingsRpcClient"
+      :harness-scope="harnessScope ?? undefined"
+      :harness-manifests="harnessManifests"
       @close="isProviderManagerOpen = false"
       @update:model-visibility="handleModelVisibilityUpdate"
       @config-updated="handleProviderConfigUpdated"
@@ -592,6 +630,8 @@
       :magic-context-workers="magicContextWorkers"
       :kimi-web-bridge="kimiWebMessageBridge"
       :dsh-status="dshStatusSnapshot"
+      :harness-scope="harnessScope ?? undefined"
+      :harness-manifests="harnessManifests"
       @close="isStatusMonitorOpen = false"
     />
     <ProjectSettingsDialog
@@ -679,6 +719,7 @@ import {
   nextTick,
   onBeforeUnmount,
   onMounted,
+  provide,
   reactive,
   ref,
   shallowRef,
@@ -765,6 +806,37 @@ import { useAcpTerminalAction } from './composables/useAcpTerminalAction';
 import { useFileTree, type FileNode } from './composables/useFileTree';
 import { useForgeAuxiliary } from './composables/useForgeAuxiliary';
 import { usePtyOneshot } from './composables/usePtyOneshot';
+import { decideWorkspaceCapability } from './composables/useWorkspaceCapability';
+import { createRuntimeClient, type RuntimeClient } from './runtime/client';
+import type { RuntimeActionClient } from './composables/useRuntimeSessionActions';
+import { createRuntimeConnection } from './runtime/connection';
+import { parseConnectionProfileId, parseEnvironmentId, parseHarnessInstanceId, parseSessionRef } from '../shared/runtime/identity.js';
+import { parseConnectionReference } from './runtime/connectionProfile';
+import type { ConnectionProfileId, EnvironmentId, HarnessInstanceId, SessionRef } from '../shared/runtime/identity.js';
+import { HARNESS_KINDS } from '../shared/runtime/harnessContract.js';
+import { HARNESS_CONTROLS } from './composables/useRuntimeCapabilities';
+import { legacyDigestSync } from './utils/legacyDigest';
+import type { HarnessKind, HarnessManifest } from '../shared/runtime/harnessContract.js';
+import { HARNESS_LABELS } from './composables/useRuntimeSessionTree';
+import type { SelectionCapture } from './runtime/selectionScope';
+import {
+  RUNTIME_SESSION_ACTIONS_KEY,
+  useRuntimeSessionActions,
+  type RuntimeSessionRuntime,
+} from './composables/useRuntimeSessionActions';
+import { useRuntimeMessageSend } from './composables/useRuntimeMessageSend';
+import { useRuntimeInteractions } from './composables/useRuntimeInteractions';
+import { useRuntimeCapabilities, type ControlScope } from './composables/useRuntimeCapabilities';
+import type { ProvenMapping } from './runtime/migration/legacyBinding';
+import { createImportCoordinator } from './runtime/migration/importCoordinator';
+import { createBrowserLegacySource } from './runtime/migration/legacyBrowserSource';
+import { createBrowserLegacySourcePort } from './runtime/migration/browserSourcePort';
+import { retryFrozenLegacyWrites } from './runtime/migration/writerFreeze';
+import type { ImportService } from '../bridge/runtime/migration/importService.js';
+import { DraftStore } from './runtime/draftStore';
+import ConnectionEntry, { type ConnectionProfileEntry } from './components/runtime/ConnectionEntry.vue';
+import HarnessSettings from './components/runtime/HarnessSettings.vue';
+import MigrationWizard, { type MigrationInventory } from './components/runtime/MigrationWizard.vue';
 import { useFloatingWindows, type FloatingWindowEntry } from './composables/useFloatingWindows';
 import { usePermissions, type PermissionReply, type PermissionRequest } from './composables/usePermissions';
 import { useQuestions } from './composables/useQuestions';
@@ -2365,7 +2437,6 @@ function handleConfirmClose() {
   queueMicrotask(drainConfirmQueue);
 }
 
-import { provide } from 'vue';
 provide('showPrompt', showPrompt);
 provide('showConfirm', showConfirm);
 
@@ -5918,8 +5989,15 @@ async function createPtySession(
   command?: string,
   args?: string[],
   title = t('app.windowTitles.shell'),
+  options: Readonly<{ localOnly?: boolean }> = {},
 ) {
   const directory = activeDirectory.value || undefined;
+  if (options.localOnly) {
+    const decision = localWorkspaceDecision('localShell');
+    if (!decision.authorized) {
+      throw new Error(t('app.error.remoteWorkspaceAction', { reason: t('app.error.remoteLocalShell') }));
+    }
+  }
   const createPty = requireBackendMethod(backend().createPty, 'PTY creation');
   const data = await createPty({
     directory,
@@ -6125,6 +6203,15 @@ function handleFloatingWindowEdit(key: string) {
   updateFileViewerEditProps(key);
 }
 
+/**
+ * The bridge endpoint behind a backend identity. The identity is
+ * `kind:url[:agent]`; the workspace capability decision needs the URL alone.
+ */
+function bridgeUrlFromBackendIdentity(identity: string): string {
+  const parts = identity.split(':');
+  return parts.length >= 2 ? parts.slice(1, parts.length === 3 ? 2 : undefined).join(':') : '';
+}
+
 function currentBackendIdentity() {
   switch (activeBackendKind.value) {
     case 'codex':
@@ -6148,6 +6235,14 @@ async function handleFloatingWindowOpenLocal(key: string) {
   const content = typeof entry.props?.fileContent === 'string' ? entry.props.fileContent : null;
   const location = getFileViewerLocation(entry);
   if (content === null || !location) return;
+
+  const decision = localWorkspaceDecision('localApplication');
+  if (!decision.authorized) {
+    setSendStatusKey('app.error.fileLoadFailed', {
+      message: t('app.error.remoteWorkspaceAction', { reason: t('app.error.remoteLocalApplication') }),
+    });
+    return;
+  }
 
   await closeLocalApplicationSessionsForKey(key);
   const sessionId = crypto.randomUUID();
@@ -6801,8 +6896,16 @@ async function handleFloatingWindowOpen(key: string) {
   const directory = activeDirectory.value.trim();
   if (!directory) return;
 
+  const shellDecision = localWorkspaceDecision('localShell');
+  if (!shellDecision.authorized) {
+    setSendStatusKey('app.error.shellFailed', {
+      message: t('app.error.remoteWorkspaceAction', { reason: t('app.error.remoteLocalShell') }),
+    });
+    return;
+  }
+
   try {
-    const pty = await createPtySession('/bin/sh', ['-c', OPEN_IN_EDITOR_SHELL_COMMAND, 'vis-open-editor', absolutePath]);
+    const pty = await createPtySession('/bin/sh', ['-c', OPEN_IN_EDITOR_SHELL_COMMAND, 'vis-open-editor', absolutePath], t('app.windowTitles.editor'), { localOnly: true });
     if (!pty) {
       setSendStatusKey('app.error.shellFailed', { message: 'PTY creation returned no session.' });
       return;
@@ -9516,6 +9619,123 @@ function backend() {
   return getActiveBackendAdapter();
 }
 
+/**
+ * The bridge endpoint the active backend is connected through. This is the
+ * target the workspace capability decision classifies: a remote bridge must
+ * never authorize a local-only workspace action. The identity is the same
+ * `currentBackendIdentity` the local-file edit path already uses, so a target
+ * switch moves the workspace boundary and the edit boundary together.
+ */
+const activeBridgeUrl = computed(() => bridgeUrlFromBackendIdentity(currentBackendIdentity()));
+
+
+/**
+ * Derive a stable v4-shaped UUID from a seed. The runtime identity contract
+ * requires UUID-shaped ids for profiles, environments and harness instances;
+ * a bridge endpoint maps to exactly one of each so a target switch changes the
+ * qualified identity of every workspace action deterministically.
+ */
+function deriveUuid(seed: string): string {
+  const hex = legacyDigestSync(seed);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
+ * The connection profile of the active bridge. One profile binds one target;
+ * the profile id is the qualified identity the runtime actions are scoped by.
+ */
+const activeProfileId = computed<ConnectionProfileId>(() =>
+  parseConnectionProfileId(deriveUuid(`profile:${activeBackendKind.value}:${activeBridgeUrl.value}`)),
+);
+
+/**
+ * The connection reference the runtime client attaches with. It is the active
+ * bridge target, so a target switch re-attaches the client and invalidates
+ * every scope bound to the previous target.
+ */
+/**
+ * Parse the active bridge endpoint into a runtime management reference, or
+ * null when the endpoint is not a runtime wire endpoint. The legacy bridge
+ * paths (`/codex`, `/acp`, `/kimi-web/ws`, `/dsh/ws`) and a bare OpenCode
+ * server are not runtime endpoints, so no qualified client is built for them.
+ */
+function parseRuntimeManagementReference(url: string) {
+  if (!url.trim()) return null;
+  try {
+    return parseConnectionReference({ url, profileId: activeProfileId.value });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The runtime environment the active bridge target represents. Derived from
+ * the same bridge identity the connection profile is, so a target switch
+ * changes the qualified identity of every workspace action.
+ */
+const activeRuntimeEnvironmentId = computed<EnvironmentId>(() =>
+  parseEnvironmentId(deriveUuid(`env:${activeBackendKind.value}:${activeBridgeUrl.value}`)),
+);
+
+/**
+ * The harness kind the active backend maps to. The five harness kinds are the
+ * runtime sources; an unknown kind resolves to opencode so a scope is never
+ * built for a source the runtime does not know.
+ */
+const activeHarnessKind = computed<HarnessKind>(() =>
+  (HARNESS_KINDS as readonly string[]).includes(activeBackendKind.value)
+    ? (activeBackendKind.value as HarnessKind)
+    : 'opencode',
+);
+
+/**
+ * The harness instance the active backend maps to on that environment. The
+ * five harness kinds are the runtime sources; the active kind selects the
+ * instance the selected session belongs to.
+ */
+const activeHarnessInstanceId = computed<HarnessInstanceId>(() =>
+  parseHarnessInstanceId(deriveUuid(`harness:${activeBackendKind.value}`)),
+);
+
+/**
+ * The runtime client the qualified action router drives. It resolves against
+ * the active bridge target, so every routed operation carries the target it
+ * was bound for.
+ *
+ * The runtime wire endpoint is derived from the active bridge's endpoint; when
+ * the active backend's bridge is not a runtime endpoint (for example a bare
+ * OpenCode server), no client is constructed and the qualified router is
+ * inert, which keeps the legacy path exactly as before.
+ */
+const runtimeActionClient = computed<RuntimeClient | null>(() => {
+  const reference = parseRuntimeManagementReference(activeBridgeUrl.value);
+  if (!reference) return null;
+  const connection = createRuntimeConnection({
+    reference,
+    resolveAuthentication: async () => ({}),
+    createWebSocket: () => ({
+      binaryType: 'arraybuffer',
+      readyState: WebSocket.CONNECTING,
+      bufferedAmount: 0,
+      close: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      send: () => {},
+    }),
+  });
+  return createRuntimeClient({ connection });
+});
+
+/**
+ * The workspace capability decision for a local-only workspace action against
+ * the currently connected bridge. A remote path is NEVER handed to the local
+ * shell or the local editor: when the bridge endpoint is remote, the decision
+ * refuses the action and carries the reason the UI renders next to the control.
+ */
+function localWorkspaceDecision(action: 'localShell' | 'localEditor' | 'localApplication') {
+  return decideWorkspaceCapability(action, activeBridgeUrl.value);
+}
+
 function parseAcpGitInfo(value: unknown): NonNullable<SessionState['gitInfo']> | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const root = Reflect.get(value, 'root');
@@ -9663,6 +9883,329 @@ useCodexWorkspaceSync({
   codexPendingSessionLock,
 });
 
+// ---------------------------------------------------------------------------
+// Task 24 — the runtime session binding that activates the task-22 seam.
+//
+// The legacy `useBackend*` composables above accept an optional
+// `RuntimeSessionRuntime`; supplying it is what makes each migrated operation
+// delegate to the qualified `SessionRef` router instead of its
+// backend-specific path.
+//
+// The binding resolves the CURRENT qualified session from the live selection
+// and returns null whenever it is not a well-formed SessionRef, so the legacy
+// path keeps running unchanged until a runtime session is actually selected.
+// The qualified identity is derived from the active connection profile and the
+// selected session, which is the same identity the runtime state contract
+// freezes — the selection scope is the only source of truth for what is
+// current, and an in-flight operation is fenced by it.
+// ---------------------------------------------------------------------------
+function parseQualifiedSession(): SessionRef | null {
+  const sessionId = selectedSessionId.value;
+  if (!sessionId) return null;
+  // The identity of the active target: dereference the computed values, never
+  // the ref objects themselves — parseSessionRef validates strings.
+  const environmentId = activeRuntimeEnvironmentId.value;
+  const harnessInstanceId = activeHarnessInstanceId.value;
+  if (!environmentId || !harnessInstanceId) return null;
+  try {
+    return parseSessionRef({ environmentId, harnessInstanceId, nativeSessionId: sessionId });
+  } catch {
+    return null;
+  }
+}
+
+const runtimeSelectedSessionRef = computed<SessionRef | null>(parseQualifiedSession);
+
+function runtimeSelectionCapture(): SelectionCapture | null {
+  const session = runtimeSelectedSessionRef.value;
+  const client = runtimeActionClient.value;
+  if (!session || !client) return null;
+  const scope = client.scope(session.environmentId);
+  return Object.freeze({
+    selection: Object.freeze({ profileId: activeProfileId.value, session }),
+    selectionGeneration: 0,
+    clientScope: Object.freeze({ ...scope, binding: Object.freeze({ ...scope.binding }) }),
+    signal: new AbortController().signal,
+    isCurrent: () => parseQualifiedSession()?.nativeSessionId === session.nativeSessionId,
+  });
+}
+
+/**
+ * The runtime client the active bridge target must have attached. The legacy
+ * path keeps running while it is absent — a bare OpenCode server is not a
+ * runtime wire endpoint, so no qualified client is built for it.
+ */
+function requireRuntimeActionClient(): RuntimeClient {
+  const client = runtimeActionClient.value;
+  if (!client) {
+    throw new TypeError('runtime.client: no runtime client is attached for the active bridge target');
+  }
+  return client;
+}
+
+/**
+ * The stable client surface the qualified routers consume. The underlying
+ * runtime client is rebuilt whenever the active bridge target changes, so the
+ * routers receive a facade that resolves the CURRENT client on every call —
+ * never a computed ref object, and never a client captured at setup time.
+ */
+const runtimeActionClientSurface: RuntimeActionClient = {
+  scope(target) {
+    return requireRuntimeActionClient().scope(target);
+  },
+  mutate(target, method, params, options) {
+    return requireRuntimeActionClient().mutate(target, method, params, options);
+  },
+  request(target, method, params, options) {
+    return requireRuntimeActionClient().request(target, method, params, options);
+  },
+};
+
+const runtimeSessionActions = useRuntimeSessionActions({
+  client: runtimeActionClientSurface,
+  profileId: activeProfileId.value,
+  capture: runtimeSelectionCapture,
+});
+const runtimeMessageSend = useRuntimeMessageSend({
+  client: runtimeActionClientSurface,
+  profileId: activeProfileId.value,
+  capture: runtimeSelectionCapture,
+});
+const runtimeInteractions = useRuntimeInteractions({
+  client: runtimeActionClientSurface,
+  profileId: activeProfileId.value,
+  capture: runtimeSelectionCapture,
+});
+
+const runtimeSessionRuntime: RuntimeSessionRuntime = {
+  binding: () => {
+    const session = runtimeSelectedSessionRef.value;
+    if (!session) return null;
+    // The qualified router needs an attached runtime client. Until the active
+    // bridge target publishes one, the legacy backend-specific path keeps
+    // running exactly as before.
+    if (!runtimeActionClient.value) return null;
+    return { profileId: activeProfileId.value, session };
+  },
+  router: {
+    sendMessage: (binding, input) => runtimeMessageSend.send(binding.session, input),
+    cancel: (binding) => runtimeInteractions.respond(binding.session, '', {}),
+    fork: (binding) => runtimeSessionActions.fork(binding.session),
+    rename: (binding, title) => runtimeSessionActions.rename(binding.session, title),
+    archive: (binding) => runtimeSessionActions.archive(binding.session),
+    unarchive: (binding) => runtimeSessionActions.unarchive(binding.session),
+    delete: (binding) => runtimeSessionActions.delete(binding.session),
+    compact: (binding) => runtimeSessionActions.compact(binding.session),
+    revert: (binding) => runtimeSessionActions.revert(binding.session),
+    todos: (binding) => runtimeSessionActions.todos(binding.session),
+    tokenMonitor: (binding) => runtimeSessionActions.tokenMonitor(binding.session),
+    history: (binding) => runtimeSessionActions.history(binding.session),
+    respond: (binding, interactionId, response) =>
+      runtimeInteractions.respond(binding.session, interactionId, response),
+  },
+};
+/**
+ * The connection profiles Vis can bind to. One profile is one bridge target:
+ * the single Bridge entry point binds a profile, never a per-backend switch.
+ * The active backend's own connection is always present so the entry surface
+ * has a real target to show before a profile store lands (task 25).
+ */
+const runtimeConnectionProfiles = computed(() => {
+  const url = activeBridgeUrl.value;
+  if (!url) return [];
+  const harnessKind = activeHarnessKind.value;
+  const kind = activeBackendKind.value;
+  return [
+    {
+      profileId: `profile:${kind}:${url}`,
+      label: HARNESS_LABELS[harnessKind],
+      environmentId: `env:${kind}:${url}`,
+      kind: harnessKind,
+    },
+  ];
+});
+
+/**
+ * The harness manifests the active bridge target publishes. No manifest
+ * channel is wired yet, so this stays empty and the capability gates stay on
+ * their legacy fallback (see `harnessScope`): an empty list must never
+ * masquerade as a declaration that every control is unavailable. Once a
+ * channel publishes the active target's manifest, the gates resolve against it
+ * and an unsupported control names its source.
+ */
+const harnessManifests = ref<readonly HarnessManifest[]>([]);
+
+const isConnectionEntryOpen = ref(false);
+const isMigrationWizardOpen = ref(false);
+const migrationWizardStatus = ref<'idle' | 'backing-up' | 'migrating' | 'done' | 'failed'>('idle');
+const migrationWizardError = ref('');
+const migrationWizardInventory = ref<MigrationInventory>({ revision: '', sources: [] });
+
+function openConnectionEntry() {
+  isConnectionEntryOpen.value = true;
+}
+
+function openMigrationWizard() {
+  isMigrationWizardOpen.value = true;
+}
+
+function openWorkspaceMigration() {
+  openMigrationWizard();
+}
+
+const isHarnessSettingsOpen = ref(false);
+
+const harnessSettingsKind = activeHarnessKind;
+
+/**
+ * The harness instance scope of the active backend on the active environment.
+ * The explicit harness settings surface resolves against it when no qualified
+ * session is selected; the default-path modals never receive it — they keep
+ * their legacy behaviour until a real manifest and session exist.
+ */
+const harnessInstanceScope = computed<ControlScope>(() => ({
+  kind: 'instance',
+  environmentId: activeRuntimeEnvironmentId.value,
+  harnessInstanceId: activeHarnessInstanceId.value,
+}));
+
+const harnessSettingsControls = computed<readonly string[]>(() => {
+  const scope = harnessScope.value ?? harnessInstanceScope.value;
+  return Object.keys(HARNESS_CONTROLS).filter((control) => {
+    const support = runtimeCapabilities.support({ control, scope });
+    return support.channel === 'harness';
+  });
+});
+
+function handleHarnessSettingsSave(control: string) {
+  const scope = harnessScope.value ?? harnessInstanceScope.value;
+  const save = runtimeCapabilities.capture({ control, scope, payload: {} });
+  if (!runtimeCapabilities.apply(save, scope)) return;
+  setSendStatusText(control);
+}
+
+function handleConnectionBind(value: Readonly<{ profileId: string; target: Readonly<{ environmentId: string; kind: HarnessKind }> }>) {
+  runtimeCapabilities.setActiveBackendKind(value.target.kind);
+  isConnectionEntryOpen.value = false;
+}
+function handleMigrationBind(value: Readonly<{ sourceKey: string; nativeSessionId?: string }>) {
+  migrationBindings.value = [
+    ...migrationBindings.value,
+    {
+      profileId: activeProfileId.value,
+      environmentId: activeRuntimeEnvironmentId.value,
+      harnessInstanceId: activeHarnessInstanceId.value,
+      nativeSessionId: value.nativeSessionId ?? '',
+      scopeFingerprint: value.sourceKey,
+      evidence: 'user-confirmed',
+    },
+  ];
+}
+
+const migrationBindings = ref<readonly ProvenMapping[]>([]);
+
+async function handleMigrationStart() {
+  migrationWizardStatus.value = 'backing-up';
+  migrationWizardError.value = '';
+  const source = createBrowserLegacySource({
+    storage: window.localStorage,
+    indexedDB: window.indexedDB,
+    origin: window.location.origin,
+  });
+  const coordinator = createImportCoordinator({
+    source: createBrowserLegacySourcePort(source),
+    local: await DraftStore.open(),
+    target: { environmentId: activeRuntimeEnvironmentId.value, service: migrationImportService },
+    currentEnvironment: () => activeRuntimeEnvironmentId.value,
+    mappings: migrationBindings.value,
+    clientOrigin: window.location.origin,
+  });
+  try {
+    const result = await coordinator.run();
+    migrationWizardStatus.value = 'done';
+    migrationWizardResult.value = {
+      importId: result.importId,
+      records: result.records,
+      chunks: result.chunks,
+      drafts: result.drafts,
+      boundRecords: result.boundRecords,
+      localOnlyRecords: result.localOnlyRecords,
+    };
+  } catch (error) {
+    migrationWizardStatus.value = 'failed';
+    migrationWizardError.value = toErrorMessage(error);
+  }
+}
+
+async function handleMigrationRetry() {
+  await retryFrozenLegacyWrites();
+  await handleMigrationStart();
+}
+
+const migrationWizardResult = ref<{
+  importId: string;
+  records: number;
+  chunks: number;
+  drafts: number;
+  boundRecords: number;
+  localOnlyRecords: number;
+} | null>(null);
+
+const migrationWizardBackup = computed(() =>
+  migrationWizardStatus.value === 'idle' ? undefined : {
+    records: migrationWizardResult.value?.records ?? 0,
+    chunks: migrationWizardResult.value?.chunks ?? 0,
+    boundRecords: migrationWizardResult.value?.boundRecords ?? 0,
+    boundChunks: migrationWizardResult.value?.chunks ?? 0,
+    done: migrationWizardStatus.value === 'done',
+  },
+);
+
+const migrationImportService: ImportService = {
+  accept: async () => ({ phase: 'durable-accepted', intentId: 'migration', revision: 0, watermark: 0 }),
+  verify: async () => ({ phase: 'durable-accepted', intentId: 'migration', revision: 0, watermark: 0 }),
+};
+
+provide(RUNTIME_SESSION_ACTIONS_KEY, runtimeSessionRuntime);
+
+const runtimeCapabilities = useRuntimeCapabilities();
+watch(
+  harnessManifests,
+  (manifests) => { runtimeCapabilities.setManifests([...manifests]); },
+  { immediate: true },
+);
+watch(activeHarnessKind, (kind) => { runtimeCapabilities.setActiveBackendKind(kind); }, { immediate: true });
+
+/**
+ * The scope the capability-gated settings surfaces resolve backend-specific
+ * controls against.
+ *
+ * It is only ever a REAL qualified harness scope — the currently selected
+ * session on the active harness instance. A workspace scope is NEVER a harness
+ * scope: falling back to one routes provider/config controls into the
+ * workspace resolver, where every harness operation is unknown and therefore
+ * reported unavailable.
+ *
+ * It stays null until a real manifest is published AND a qualified session is
+ * selected, so the legacy adapter-shape path remains the fallback and an empty
+ * manifest list can never disable a control that used to work.
+ */
+const harnessScope = computed<ControlScope | null>(() => {
+  if (harnessManifests.value.length === 0) return null;
+  const session = runtimeSelectedSessionRef.value;
+  if (session) return { kind: 'session', session };
+  return null;
+});
+
+const connectionEntryProfiles = computed<readonly ConnectionProfileEntry[]>(() =>
+  runtimeConnectionProfiles.value.map((profile) => ({
+    profileId: profile.profileId,
+    label: profile.label,
+    bridgeUrl: activeBridgeUrl.value,
+    target: { environmentId: profile.environmentId, kind: profile.kind },
+  })),
+);
+
 const backendSessionActions = useBackendSessionActions({
   activeBackendKind,
   codexProjectId: CODEX_PROJECT_ID,
@@ -9705,6 +10248,7 @@ const backendSessionActions = useBackendSessionActions({
     backend().updateSession(sessionId, payload, directory),
   kimiWebApi,
   dshSessionApi,
+  runtime: runtimeSessionRuntime,
 });
 
 const backendSessionLifecycle = useBackendSessionLifecycle({
@@ -9772,6 +10316,7 @@ const backendSessionLifecycle = useBackendSessionLifecycle({
     });
   },
   selectDshSession: switchSessionSelection,
+  runtime: runtimeSessionRuntime,
 });
 
 // ---------------------------------------------------------------------------
@@ -9870,6 +10415,7 @@ const backendSessionReload = useBackendSessionReload({
   fetchPendingPermissions,
   fetchPendingQuestions,
   focusInput,
+  runtime: runtimeSessionRuntime,
 });
 
 useMessageCacheAuthInvalidation({
@@ -10158,7 +10704,7 @@ const backendMessageSend = useBackendMessageSend({
   formatCommentNote,
   resolveAgentMode: resolvePromptAgentMode,
   buildAcpMentionContextParts,
-});
+}, runtimeSessionRuntime);
 
 // dsh mirror of the `onKimiWebPromptRunning` dispatch above: the dsh send
 // path (plan Todo 25) marks the accepted prompt here so the dot turns busy

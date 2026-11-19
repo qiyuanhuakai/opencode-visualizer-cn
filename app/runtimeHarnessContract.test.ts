@@ -42,12 +42,26 @@ describe('runtime harness structure', () => {
   it('preserves all legacy capability identifiers when declarations are extracted separately', () => {
     const capabilities = members('BackendCapabilities').filter(ts.isPropertySignature).map((member) => member.name.getText());
     expect(Object.keys(LEGACY_CAPABILITIES).sort()).toEqual(capabilities.sort());
-    expect(Object.keys(CORE_OPERATIONS)).toEqual(['inspect', 'listSessionPage', 'getSession', 'readHistoryPage', 'createSession', 'send', 'cancel', 'respondInteraction', 'subscribe', 'close']);
+    expect(Object.keys(CORE_OPERATIONS)).toEqual(['inspect', 'listSessionPage', 'getSession', 'readHistoryPage', 'openHistory', 'createSession', 'send', 'cancel', 'respondInteraction', 'subscribe', 'close']);
   });
   it.each(HARNESS_KINDS)('validates %s manifest and every native extension owner without claiming behavior', (kind) => {
     const entry = registration(kind);
     const manifest = { ...entry.manifest, extensions: Object.entries(NATIVE_EXTENSIONS).map(([name, spec]) => ({ name, owner: entry.manifest.harnessInstanceId, scope: spec.scope, permission: `native.${name}`, schemaVersion: 1, support: no })) };
     expect(validateHarnessRegistration({ manifest, driver: entry.driver }).manifest.extensions).toHaveLength(41);
+  });
+  it('normalizes an older omitted history declaration to unsupported without inferring core support', async () => {
+    const entry = registration(); const registry = createHarnessRegistry(); registry.register(entry);
+    expect(registry.list()[0]?.core.openHistory).toMatchObject({ state: 'unsupported' });
+    await expect(registry.invoke(invoke(entry, 'openHistory'))).rejects.toMatchObject({ code: 'unsupported' });
+    expect(() => validateHarnessRegistration({ ...entry, manifest: { ...entry.manifest, core: { ...entry.manifest.core, openHistory: supported } } })).toThrow('method.openHistory');
+  });
+  it('returns an inert implemented history handle while refusing non-JSON registry parameters', async () => {
+    const entry = registration(); const registry = createHarnessRegistry(); let opened = 0;
+    const handle = { open() { opened++; } };
+    registry.register({ manifest: { ...entry.manifest, core: { ...entry.manifest.core, openHistory: supported } }, driver: { ...entry.driver, core: { ...entry.driver.core, openHistory: () => handle } } });
+    expect(await registry.invoke(invoke(entry, 'openHistory'))).toBe(handle); expect(opened).toBe(0);
+    const invalid = Object.assign({ ...invoke(entry, 'openHistory') }, { params: { signal: new AbortController().signal } });
+    await expect(Reflect.apply(registry.invoke, registry, [invalid])).rejects.toThrow('json.object');
   });
   it('keeps pin unsupported when rename uses the same adapter method', () => {
     const entry = registration();

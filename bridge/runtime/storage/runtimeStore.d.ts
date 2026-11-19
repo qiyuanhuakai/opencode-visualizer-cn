@@ -25,6 +25,7 @@ export interface RuntimeStore {
   get(params: { readonly collection: Collection; readonly key: string }): Promise<Item | null>;
   page(params: PageOptions): Promise<Page>;
   snapshot(params: SnapshotOptions): Promise<Snapshot>;
+  releaseSnapshot(params: { readonly token: string; readonly epoch: string }): Promise<{ readonly released: boolean }>;
   readChunk(params: { readonly collection: Collection; readonly key: string; readonly revision: number; readonly offset: number; readonly token?: string }): Promise<{ readonly revision: number; readonly bytes: number; readonly offset: number; readonly data: string; readonly nextOffset: number | null }>;
   replay(params: { readonly epoch: string; readonly after: number; readonly limit?: number }): Promise<{ readonly epoch: string; readonly events: readonly Json[]; readonly through: number; readonly watermark: number }>;
   inspect(): Promise<Inspection>; close(): Promise<Exit>; terminate(): Promise<Exit>;

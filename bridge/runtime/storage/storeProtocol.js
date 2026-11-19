@@ -35,6 +35,11 @@ export function parseRequest(method, input = {}) {
       requireStore(['interactions', 'operations'].includes(params.collection), 'control_collection');
       return parseRequest('get', params);
     case 'readIntent': text(params.intentId); break;
+    case 'releaseSnapshot':
+      requireStore(Object.keys(params).length === 2 && Object.keys(params).every(key => key === 'token' || key === 'epoch'), 'snapshot_release');
+      try { parseInstanceId(params.token); parseInstanceId(params.epoch); }
+      catch (error) { if (error instanceof TypeError) throw new StoreError('invalid_request', 'snapshot_release'); throw error; }
+      break;
     case 'mutate':
       text(params.intentId);
       requireStore(Array.isArray(params.changes) && params.changes.length > 0 && params.changes.length <= 200, 'changes');
