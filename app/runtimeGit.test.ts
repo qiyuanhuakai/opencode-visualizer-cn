@@ -227,6 +227,34 @@ describe('target Git topology', () => {
     });
   });
 
+  it('returns an empty discovery batch while another catalog write is pending', async () => {
+    const f = await fixture();
+    let startRead!: () => void;
+    let releaseRead!: () => void;
+    const started = new Promise<void>(resolve => { startRead = resolve; });
+    const held = new Promise<void>(resolve => { releaseRead = resolve; });
+    const catalog = createWorkspaceCatalog({
+      store: {
+        ...f.store,
+        async getMany(input) {
+          startRead();
+          await held;
+          return f.store.getMany(input);
+        },
+      },
+      git: f.git,
+    });
+    const registration = catalog.register({ workspace: f.workspace, harnessInstanceId: foreign, harness: 'codex' });
+    try {
+      await started;
+      const nextTurn = new Promise(resolve => setImmediate(() => resolve('queued')));
+      await expect(Promise.race([catalog.registerMany([]), nextTurn])).resolves.toEqual([]);
+    } finally {
+      releaseRead();
+      await registration;
+    }
+  });
+
   it('does not publish another workspace change for an unchanged Git identity', async () => {
     const f = await fixture();
     const catalog = createWorkspaceCatalog({ store: f.store, git: f.git });

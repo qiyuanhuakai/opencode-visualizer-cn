@@ -26,6 +26,7 @@ export function createWorkspaceCatalog({ store, git }) {
       entry.sources.set(source.harnessInstanceId, source); entry.orphan = orphan;
       pending.set(key, entry); keys.push(key);
     }
+    if (!pending.size) return keys;
     const workspaceKeys = [...pending.keys()];
     return write(async () => {
       // Keep catalog commits from invalidating one another's revisions during
