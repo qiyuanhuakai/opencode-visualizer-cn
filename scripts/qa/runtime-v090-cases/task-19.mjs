@@ -7,6 +7,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
+import { loadBrowserKernel } from '../runtime-v090-browser-kernel.mjs';
 import { encodeSessionKey } from '../../../shared/runtime/identity.js';
 import { artifact, digest, sourceSnapshot, writeJson } from '../runtime-v090-evidence.mjs';
 import { createFixture, alive } from './task-19-fixture.mjs';
@@ -17,7 +18,6 @@ import { assertPortReleased } from './task-17-native.mjs';
 const root = path.resolve(new URL('../../..', import.meta.url).pathname);
 const tree = directory => readdirSync(path.join(root, directory), { recursive: true, withFileTypes: true }).filter(entry => entry.isFile() && /\.(?:js|mjs|ts)$/.test(entry.name)).map(entry => path.relative(root, path.join(entry.parentPath, entry.name)));
 export const sourceFiles = [...tree('bridge'), ...tree('shared/runtime'), ...tree('app/runtime'), ...tree('scripts/qa'), 'app/composables/useRuntimeConnection.ts', 'app/composables/useCredentials.ts', 'app/dev/runtime-v090/index.html', 'app/dev/runtime-v090/task19.ts', 'vis_bridge.js'];
-const browserSkill = '/home/qiyuaner/.codex/plugins/cache/sisyphuslabs/omo/5.1.27/skills/browser/scripts/omowright.mjs';
 async function unauthorizedUpgrade(fixture) {
   fixture.register({ kind: 'unauthorized-upgrade-probe', url: fixture.url, token: 'deliberately invalid fixture token', teardown: 'owned HTTP request/socket destroyed after response' });
   const url = new URL(fixture.url); url.protocol = 'http:'; url.searchParams.set('token', 'wrong-private-bridge-token');
@@ -71,7 +71,7 @@ export async function run(context) {
     const profile = JSON.parse(await readFile(path.join(fixture.stateRoot, 'runtime/registrations/management-profile.json'), 'utf8')).id;
     const pageUrl = `${baseUrl}?task=19&runtimeProfile=${profile}&runtimeSession=${encodeSessionKey(selected.value.session)}`;
     proof.pageUrl = pageUrl;
-    const { omowright } = await (await import(browserSkill)).loadOmowright();
+    const { omowright } = await loadBrowserKernel();
     const profileRoot = path.join(fixture.root, 'chromium-profile');
     fixture.register({ kind: 'Chromium-planned', executable: chromium.executablePath(), profile: profileRoot, teardown: 'owned browser.close; process exit; private root removal' });
     browser = await omowright.connectPipe({ browserPath: chromium.executablePath(), browserArgs: ['--headless', '--no-sandbox', '--disable-gpu', '--no-first-run', `--user-data-dir=${profileRoot}`], storageRoot: runDir });
@@ -208,7 +208,14 @@ export async function run(context) {
     check('dirty worktree source bytes and unrelated uncommitted paths are preserved', worktree(), sourceBefore);
   } catch (error) { proof.failure = { message: error.message, stack: error.stack }; persist(); if (page) { writeJson(path.join(runDir, 'failure-dom.json'), await page.evaluate(() => ({ url: location.href, body: document.body.innerText, runtime: window.task19?.state() }))); await page.screenshot({ path: path.join(runDir, 'failure.png') }); } throw error; }
   finally {
-    await fixture.close(); persist();
+    try {
+      await fixture.close();
+    } catch (cleanupError) {
+      if (!proof.failure) throw cleanupError;
+      proof.cleanupFailure = { message: cleanupError.message, stack: cleanupError.stack };
+    } finally {
+      persist();
+    }
     artifacts.push(artifact(path.join(runDir, 'proof.json'), 'real-renderer-runtime-proof'), artifact(path.join(runDir, 'resources.json'), 'resource-cleanup'), artifact(path.join(runDir, 'native-inventory.json'), 'installed-native-inventory'));
   }
   const classMatchers = {
