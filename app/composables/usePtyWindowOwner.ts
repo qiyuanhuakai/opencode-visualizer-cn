@@ -30,7 +30,7 @@ type PtyWindowOwnerOptions<
   readonly prepareWindow: (pty: Pty, options: WindowOptions) => void;
   readonly openWindow: (pty: Pty, options: WindowOptions) => void;
   readonly closeWindow: (ptyId: string) => void;
-  readonly createSession: (pty: Pty, terminal: Terminal) => Session;
+  readonly createSession: (pty: Pty, terminal: Terminal, windowOptions: WindowOptions) => Session;
   readonly connectSession: (ptyId: string) => void;
   readonly queueAfterRender: (callback: () => void) => void;
   readonly waitForFontsReady: () => Promise<void>;
@@ -66,7 +66,7 @@ export function usePtyWindowOwner<
         return;
       }
 
-      options.sessions.set(pty.id, options.createSession(pty, terminal));
+      options.sessions.set(pty.id, options.createSession(pty, terminal, windowOptions));
       options.connectSession(pty.id);
       options.queueAfterRender(() => {
         void options.waitForFontsReady().then(() => {

@@ -6621,6 +6621,7 @@ type ShellWindowOptions = {
   minWidth?: number;
   minHeight?: number;
   onExit?: (exitCode: number) => void | Promise<void>;
+  closeOnSuccess?: boolean;
 };
 
 const ptyWindowOwner = usePtyWindowOwner({
@@ -6677,7 +6678,7 @@ const ptyWindowOwner = usePtyWindowOwner({
   closeWindow: (ptyId: string) => {
     fw.close(`shell:${ptyId}`);
   },
-  createSession: (pty: PtyInfo, terminal: Terminal): ShellSession => ({ pty, terminal }),
+  createSession: (pty: PtyInfo, terminal: Terminal, options: ShellWindowOptions): ShellSession => ({ pty, terminal, closeOnSuccess: options.closeOnSuccess }),
   connectSession: connectShellSocket,
   queueAfterRender: (callback: () => void) => {
     nextTick(callback);
@@ -6706,6 +6707,7 @@ const ptyWindowOwner = usePtyWindowOwner({
       if (options.kill) storageRemove(StorageKeys.state.forgePtyId);
     }
     shellWindowMinimums.delete(`shell:${ptyId}`);
+    shellExitWaiters.get(ptyId)?.(-1);
     shellExitWaiters.delete(ptyId);
     shellExitCallbacks.delete(ptyId);
     ptyToFileMap.delete(ptyId);
@@ -7087,9 +7089,7 @@ async function handleFloatingWindowOpen(key: string) {
       return;
     }
     ptyToFileMap.set(pty.id, absolutePath);
-    await ensureShellWindow(pty);
-    const session = shellSessionsByPtyId.get(pty.id);
-    if (session) session.closeOnSuccess = true;
+    await ensureShellWindow(pty, { closeOnSuccess: true });
   } catch (error) {
     setSendStatusKey('app.error.shellFailed', { message: toErrorMessage(error) });
   }
@@ -7160,10 +7160,7 @@ async function openShellFromInput(input: string) {
       setSendStatusKey('app.error.shellFailed', { message: 'PTY creation returned no session.' });
       return false;
     }
-    ensureShellWindow(pty);
-    if (!hasCommand) return true;
-    const session = shellSessionsByPtyId.get(pty.id);
-    if (session) session.closeOnSuccess = true;
+    await ensureShellWindow(pty, { closeOnSuccess: hasCommand });
     return true;
   } catch (error) {
     setSendStatusKey('app.error.shellFailed', { message: toErrorMessage(error) });
@@ -7177,12 +7174,16 @@ async function runTreeShellCommand(command: string) {
   const commandDirectory = activeDirectory.value.trim();
   const pty = await createPtySession('/bin/sh', ['-c', script]);
   if (!pty) return;
-  ensureShellWindow(pty);
-  const session = shellSessionsByPtyId.get(pty.id);
-  if (session) session.closeOnSuccess = true;
-  const exitCode = await new Promise<number>((resolve) => {
+  const exit = new Promise<number>((resolve) => {
     shellExitWaiters.set(pty.id, resolve);
   });
+  try {
+    await ensureShellWindow(pty, { closeOnSuccess: true });
+    if (!shellSessionsByPtyId.has(pty.id)) return;
+  } finally {
+    if (!shellSessionsByPtyId.has(pty.id)) shellExitWaiters.delete(pty.id);
+  }
+  const exitCode = await exit;
   if (exitCode === 0) {
     invalidateDirectorySidebarCache(commandDirectory);
     if (activeDirectory.value.trim() !== commandDirectory) {
