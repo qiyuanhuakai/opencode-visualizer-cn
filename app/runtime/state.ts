@@ -240,7 +240,12 @@ export function createRuntimeState(options: RuntimeStateOptions) {
         try {
           await snapshot(entry); recoveries = 0; ready.resolve();
           requireValue(entry.observer !== undefined, 'state.observer');
-          while (current(entry)) { const delivery = await entry.observer.read(); if (delivery === null) await idle(entry.controller.signal); }
+          while (current(entry)) {
+            const startedAt = performance.now();
+            const delivery = await entry.observer.read();
+            // Back off an immediate empty legacy response. A long read is already paced by the Bridge.
+            if (delivery === null && performance.now() - startedAt < 25) await idle(entry.controller.signal);
+          }
         } catch (error) {
           if (error instanceof ProtocolError && error.code === 'replay_required' && current(entry) && recoveries++ < 3) {
             await entry.observer?.close(); entry.observer = undefined; continue;

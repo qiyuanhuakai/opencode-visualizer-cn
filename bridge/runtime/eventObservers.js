@@ -73,7 +73,7 @@ export function createEventObserver({ binding: input, after, isCurrent, onClose 
       const chunk = bulk.shift();
       return chunk ? { kind: 'binary', ...chunk } : null;
     },
-    async waitRead(signal) {
+    async waitRead(signal, waitMs = 250) {
       if (wakeRead) throw new StoreError('conflict', 'observer_read_pending');
       if (signal?.aborted) throw new StoreError('cancelled', 'observer_read_aborted');
       const ready = observer.read();
@@ -85,7 +85,7 @@ export function createEventObserver({ binding: input, after, isCurrent, onClose 
             signal?.removeEventListener('abort', finish);
             resolve();
           };
-          const timer = setTimeout(finish, 250);
+          const timer = setTimeout(finish, waitMs);
           wakeRead = finish;
           signal?.addEventListener('abort', finish, { once: true });
         });
