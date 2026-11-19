@@ -10055,6 +10055,7 @@ function buildUnifiedSessionTree(): void {
     client,
     profileId: activeProfileId.value,
     target,
+    sessionWindow: true,
     onCanonical: entity => {
       runtimeTurns.apply(entity); runtimeInteractionProjection?.observeOperation(entity);
       const selected = runtimeSelectedPresentation.value;

@@ -154,6 +154,19 @@ describe('runtime state through production client and frame codecs', () => {
     expect(wire.methods.has('session.history')).toBe(false);
   });
 
+  it('starts a live view after two summary pages while leaving the rest of the index on the Bridge', async () => {
+    const { state, wire } = await fixture(1000);
+    await state.start(target, { collection: 'session_summaries', visible: true, sessionWindow: true });
+    const initial = read(state);
+    expect(initial).toMatchObject({ status: 'partial', loaded: 400 });
+    expect(initial.items).toHaveLength(200);
+
+    const key = encodeSessionKey(session(0));
+    const frame = wire.event(0, { title: 'incoming after window' });
+    wire.deliveries.set(target, [{ kind: 'event', frame }]);
+    await vi.advanceTimersByTimeAsync(25);
+    expect(read(state).items.find(item => item.key === key)?.value).toMatchObject({ title: 'incoming after window' });
+  });
   it('applies a canonical summary delivered with its event without issuing a resolve request', async () => {
     const { state, wire } = await fixture(10);
     await state.start(target);

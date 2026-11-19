@@ -400,7 +400,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       close,
     };
   }
-  async function snapshot(target: EnvironmentId, collections: Collection | readonly Collection[], options: RequestOptions & { readonly onPage: (collection: Collection, page: Snapshot) => void | Promise<void>; readonly onDelivery?: (delivery: ObserverDelivery) => void | Promise<void>; readonly onDeliveries?: (deliveries: readonly ObserverDelivery[]) => Promise<void> }) {
+  async function snapshot(target: EnvironmentId, collections: Collection | readonly Collection[], options: RequestOptions & { readonly onPage: (collection: Collection, page: Snapshot) => void | false | Promise<void | false>; readonly onDelivery?: (delivery: ObserverDelivery) => void | Promise<void>; readonly onDeliveries?: (deliveries: readonly ObserverDelivery[]) => Promise<void> }) {
     const attached = getTarget(target);
     requireValue(!attached.paging, 'snapshot.pending', 'conflict');
     const names = typeof collections === 'string' ? [collections] : collections;
@@ -438,9 +438,9 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
           }
           requireValue(page.token === first.token && page.revision === first.revision && page.watermark === first.watermark && page.target === attached.hello.target && page.epoch === attached.hello.epoch && page.generation === attached.hello.generation, 'snapshot.atomic', 'replay_required');
           requireValue(page.expiresAt > Date.now() && (page.cursor === null || page.cursor !== cursor), 'snapshot.expired', 'replay_required');
-          await options.onPage(collection, page);
+          const keepPaging = await options.onPage(collection, page);
           requireValue(current(attached) && (options.selectionCurrent?.() ?? true), 'snapshot.selection', 'reconcile_required');
-          cursor = page.cursor;
+          cursor = keepPaging === false ? null : page.cursor;
         } while (cursor !== null);
       }
       requireValue(first !== undefined && openingObserver !== undefined, 'snapshot.empty');

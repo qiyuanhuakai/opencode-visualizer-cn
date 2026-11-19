@@ -16,7 +16,7 @@ export type RuntimeHistoryResource = RuntimeResource & Readonly<{ select(capture
 export type RuntimeStateOptions = Readonly<{ client: RuntimeClient; profileId: ConnectionProfileId; drafts?: RuntimeResource; history?: RuntimeHistoryResource; pins?: RuntimeResource; onCanonical?: (entity: CanonicalEntity) => void }>;
 export type PageState<T> = Readonly<{ status: 'loading' | 'partial' | 'complete' | 'error'; items: readonly T[]; cursor: string | null; loaded: number; error?: Readonly<{ code: ErrorCode; retryable: boolean }> }>;
 export type RuntimePageView = PageState<CachedEntity> & Readonly<{ release(): void }>;
-export type RuntimeViewRequest = Readonly<{ collection?: IndexCollection; offset?: number; visible?: boolean }>;
+export type RuntimeViewRequest = Readonly<{ collection?: IndexCollection; offset?: number; visible?: boolean; sessionWindow?: boolean }>;
 type Progress = { status: PageState<never>['status']; loaded: number; cursor: string | null; error?: Readonly<{ code: ErrorCode; retryable: boolean }> };
 type Observer = Awaited<ReturnType<RuntimeClient['observe']>>;
 type TargetState = {
@@ -76,7 +76,7 @@ export function createRuntimeState(options: RuntimeStateOptions) {
   }
   function fail(entry: TargetState, error: unknown) {
     const code = error instanceof ProtocolError ? error.code : 'source_unavailable';
-    for (const [name, value] of entry.progress) if (name === entry.pendingCollection || value.status === 'complete') {
+    for (const [name, value] of entry.progress) if (name === entry.pendingCollection || value.status === 'complete' || (entry.request.sessionWindow && name === 'session_summaries')) {
       value.status = 'error'; value.error = { code, retryable: code !== 'unauthorized' && code !== 'unsupported' };
     }
     if (!disposed) notify();
@@ -216,10 +216,15 @@ export function createRuntimeState(options: RuntimeStateOptions) {
         onPage: (name, page) => {
           if (first) { requireValue(firstPage.resize(2048 + 2 * estimateRetainedBytes(page.items) + 4 * page.token.length), 'state.first_page_budget', 'source_unavailable'); first = false; }
           publishPage(entry, name, page);
+          // The visible page and its bounded local backfill are ready. The
+          // rest of the inventory stays in the Bridge for search and child pages.
+          if (entry.request.sessionWindow && name === 'session_summaries' && visible?.target === entry.target && visible.collection === name && lookahead.length > 0) return false;
         }, onDelivery: delivery => deliver(entry, delivery), onDeliveries: deliveries => deliverMany(entry, deliveries),
       });
       entry.observer = result.observer; check(entry);
-      for (const value of entry.progress.values()) value.status = 'complete';
+      for (const [name, value] of entry.progress) {
+        value.status = entry.request.sessionWindow && name === 'session_summaries' && value.cursor !== null ? 'partial' : 'complete';
+      }
       notify();
     } finally { firstPage.release(); }
   }
