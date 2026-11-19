@@ -711,6 +711,8 @@ describe('task 43 full-chain system integration', () => {
     const review = await world.reviews.create({ repository: world.repository, target: 'main', artifactHash: captured.artifactHash, at: T0 });
     const approval = world.reviews.approve({ reviewId: review.reviewId, at: T0 + 1, reviewerId: 'reviewer-system43' });
     const base = headOf(world.repository);
+    // The integration service only advances branches not checked out in a worktree.
+    runGit(world.repository, ['switch', '--detach', base]);
     const integrated = await world.integration.integrate({
       approvalId: approval.approvalId,
       criteria: CRITERIA,
@@ -763,7 +765,7 @@ describe('task 43 full-chain system integration', () => {
       writerPosture: posture,
     };
     expect(observed.approvedHashMatchesCaptured).toBe(true);
-    expect(observed.integrated.ok).toBe(true);
+    expect(observed.integrated.ok, JSON.stringify(integrated)).toBe(true);
     expect(observed.integrated.outcome).toBe('integrated');
     expect(observed.integrated.verified).toBe(true);
     expect(observed.targetMoved).toBe(true);
@@ -910,7 +912,7 @@ describe('task 43 full-chain system integration', () => {
     });
     const peak = { normal: 0, bytes: 0 };
     for (let seq = 1; seq <= OBSERVER_LIMITS.normalFrames + 64; seq += 1) {
-      observer.push({ version: 1, kind: 'event', target: ENV_A, epoch: 'epoch', generation: 1, seq, entityRevision: seq, scope: `session:${seq}`, type: 'entity.patch', payload: { collection: 'session_summaries', key: `session:${seq}`, revision: seq } });
+      observer.push({ version: 1, kind: 'event', target: ENV_A, epoch: 'epoch', generation: 1, seq, entityRevision: seq, scope: encodeSessionKey(sessionOf('opencode', String(seq))), type: 'entity.patch', payload: { collection: 'session_summaries', key: `session:${seq}`, revision: seq } });
       peak.normal = Math.max(peak.normal, observer.state.normal);
       peak.bytes = Math.max(peak.bytes, observer.state.bytes);
     }
