@@ -2,7 +2,7 @@ import { readRecord, readPayload } from './operationJournal.js';
 import { authorizeNativeCall } from './nativeWirePolicy.js';
 import { randomUUID } from 'node:crypto';
 import { ProtocolError, requireValue } from '../../shared/runtime/capabilities.js';
-import { validateFrame, decodeBinary, encodeBinary } from '../../shared/runtime/protocol.js';
+import { validateFrame, decodeBinary, encodeBinary, LIMITS } from '../../shared/runtime/protocol.js';
 import { encodeSessionKey, decodeWorkspaceKey } from '../../shared/runtime/identity.js';
 import { INDEX_COLLECTIONS, RUNTIME_WIRE_METHODS, parseRuntimeParams, parseRuntimeResult, parseTargetGrant } from '../../shared/runtime/runtimeWire.js';
 import { createHistoryService } from './historyService.js';
@@ -171,6 +171,7 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
         requireValue(nested.target === source.target && nested.epoch === source.epoch && nested.generation === source.generation, 'runtime.remote_binding', 'reconcile_required');
         return { ...nested, ...entry.binding };
       };
+      if (frame.method === 'runtime.inspect' && result.treeBootstrap) return { ...result, treeBootstrap: result.treeBootstrap.map(rebind) };
       if (frame.method === 'runtime.snapshot') return rebind(result);
       if (frame.method === 'runtime.replay') return { ...rebind(result), events: result.events.map(rebind) };
       if (frame.method === 'runtime.observer.read' && result && ['event', 'control'].includes(result.kind)) return { ...result, frame: rebind(result.frame) };
@@ -222,7 +223,32 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
           }
         }
         for (const grant of management.remoteServices?.listTargets() ?? []) grantFor(grant.target);
-        return graph.inspect(inspect(), [...allowed.values()]);
+        const inspection = await graph.inspect(inspect(), [...allowed.values()]);
+        if (!params.bootstrapTree || !entry.grant.capabilities.methods.includes('runtime.snapshot')
+          || !graph.grant.workspaceKeys.every(key => entry.grant.workspaceKeys.includes(key))) return inspection;
+        const view = await snapshots(entry);
+        let first;
+        let keep = false;
+        try {
+          first = await view.page({ collection: 'harnesses', limit: 200 });
+          const token = first.token;
+          const remaining = await Promise.allSettled([
+            view.page({ collection: 'workspaces', token, limit: 200 }),
+            view.page({ collection: 'session_summaries', token, limit: 32 }),
+          ]);
+          if (remaining.some(page => page.status === 'rejected')) return inspection;
+          const result = { ...inspection, treeBootstrap: [first, ...remaining.map(page => page.value)] };
+          if (Buffer.byteLength(JSON.stringify(result)) > LIMITS.jsonBytes - 4096) return inspection;
+          entry.current();
+          keep = true;
+          return result;
+        } catch (error) {
+          entry.current();
+          if (signal.aborted) throw error;
+          return inspection;
+        } finally {
+          if (first && !keep) await view.release({ token: first.token }).catch(() => {});
+        }
       }
       case 'runtime.target.attach': {
         requireValue(entry.graph === management, 'runtime.management', 'unauthorized');

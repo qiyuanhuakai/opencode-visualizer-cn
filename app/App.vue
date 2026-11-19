@@ -9920,6 +9920,7 @@ async function connectRuntimeBridge(): Promise<void> {
   bridgeReference.value = null;
   const owner = useRuntimeConnection({
     reference: managementCandidate(bridgeLoginUrl.value),
+    bootstrapTree: true,
     resolveAuthentication: async () => bridgeLoginToken.value ? { bridgeToken: bridgeLoginToken.value } : {},
     createWebSocket: endpoint => new WebSocket(endpoint),
   });

@@ -165,6 +165,19 @@ describe('runtime real WebSocket dispatch', () => {
       })] } });
       expect(await connection.request('native.query', { harnessInstanceId: manifest.harnessInstanceId, operation: 'listProviders', args: {} })).toMatchObject({ ok: true, result: { ready: true } });
     }
+    expect(inspection.result).not.toHaveProperty('treeBootstrap');
+    const bootstrapped = await connection.request('runtime.inspect', { bootstrapTree: true });
+    expect(bootstrapped.ok).toBe(true);
+    const pages = (bootstrapped.result as unknown as { treeBootstrap: import('../../shared/runtime/protocol.js').Snapshot[] }).treeBootstrap;
+    expect(pages).toHaveLength(3);
+    expect(pages[0].items.length).toBeGreaterThan(0);
+    for (const page of pages) expect(page).toMatchObject({
+      target: connection.hello.target, epoch: connection.hello.epoch, generation: connection.hello.generation,
+      token: pages[0].token, revision: pages[0].revision, watermark: pages[0].watermark,
+    });
+    expect(await connection.request('runtime.snapshot', { collection: 'workspaces', token: pages[0].token })).toMatchObject({
+      ok: true, result: { token: pages[0].token, items: pages[1].items },
+    });
     const disabled = services.registry.list().find(item => item.kind === 'opencode');
     if (!disabled) throw new Error('Disabled OpenCode registration is missing');
     expect(await connection.request('session.list', { harnessInstanceId: disabled.harnessInstanceId, args: {} })).toMatchObject({ ok: false, typedError: { code: 'source_unavailable' } });

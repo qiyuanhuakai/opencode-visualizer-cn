@@ -276,8 +276,15 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     requireValue(management !== undefined, 'connection.hello', 'reconcile_required');
     return management;
   }
-  async function inspect() {
-    const result = await request(managementTarget(), 'runtime.inspect', {});
+  const bootstrapPages = new WeakMap<ReturnType<typeof getTarget>, readonly Snapshot[]>();
+  async function inspect(bootstrapTree = false) {
+    const target = managementTarget();
+    const attached = getTarget(target);
+    const result = await request(target, 'runtime.inspect', bootstrapTree ? { bootstrapTree: true } : {}).catch(error => {
+      if (!bootstrapTree || !(error instanceof RuntimeRequestError) || error.code !== 'invalid_request' || error.field !== 'fields') throw error;
+      return request(target, 'runtime.inspect', {});
+    });
+    if (result.treeBootstrap) bootstrapPages.set(attached, result.treeBootstrap);
     grants.clear();
     for (const grant of result.targets) grants.set(grant.target, grant);
     return result;
@@ -414,12 +421,19 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     let releaseView: (() => Promise<void>) | undefined;
     try {
       if (attached.indexSnapshot) await retireView(attached, attached.indexSnapshot.token);
+      const bootstrap = bootstrapPages.get(attached);
+      if (bootstrap && options.initialSummaryLimit === 32 && bootstrap[0].expiresAt > Date.now()
+        && names.slice(0, 3).join(',') === 'harnesses,workspaces,session_summaries') {
+        bootstrapPages.delete(attached);
+        names.slice(0, 3).forEach((collection, index) => prefetched.set(collection, Promise.resolve(bootstrap[index])));
+      }
       for (const collection of names) {
         let cursor: string | null = null;
         do {
           const ahead = cursor === null ? prefetched.get(collection) : undefined;
           const page: Snapshot = await (ahead ?? request(target, 'runtime.snapshot', { collection, ...(first ? { token: first.token } : {}), cursor, limit: limit(collection, cursor) }, options));
           if (ahead) prefetched.delete(collection);
+          requireValue(page.token === (first ?? page).token && page.revision === (first ?? page).revision && page.watermark === (first ?? page).watermark && page.target === attached.hello.target && page.epoch === attached.hello.epoch && page.generation === attached.hello.generation, 'snapshot.atomic', 'replay_required');
           if (!first) {
             first = page;
             releaseView = holdView(attached, page.token);
@@ -428,7 +442,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
             // are downloaded. Event reads still begin after snapshot commit.
             openingObserver = observe(target, { ...options, after: first.watermark, onDelivery: options.onDelivery ?? (() => {}) });
             void openingObserver.catch(() => undefined);
-            if (names.length >= 3) {
+            if (names.length >= 3 && prefetched.size === 0) {
               // Queue at most two independent first pages on this same token.
               // Apply them in collection order so session rows see topology.
               for (const nextCollection of names.slice(1, 3)) {
@@ -438,7 +452,6 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
               }
             }
           }
-          requireValue(page.token === first.token && page.revision === first.revision && page.watermark === first.watermark && page.target === attached.hello.target && page.epoch === attached.hello.epoch && page.generation === attached.hello.generation, 'snapshot.atomic', 'replay_required');
           requireValue(page.expiresAt > Date.now() && (page.cursor === null || page.cursor !== cursor), 'snapshot.expired', 'replay_required');
           const keepPaging = await options.onPage(collection, page);
           requireValue(current(attached) && (options.selectionCurrent?.() ?? true), 'snapshot.selection', 'reconcile_required');
