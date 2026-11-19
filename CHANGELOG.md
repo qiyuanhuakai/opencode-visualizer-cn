@@ -20,8 +20,8 @@
 - [x] Host Thread 跨 Harness 接力：参与者引用 SessionRef，NativeSubagent 与 Host Participant 分离；handoff checkpoint 最多 32KiB/8000 token，不转发密钥、不复制完整 transcript；delivery 状态：`checkpoint → attached → prepared → delivered → observed → active`。
 - [x] 任务/尝试/团队协作：task successful 必须 attempt 原生终态 + 验收/审查 accepted；默认四活动 attempts、单 mutation owner；Team DAG 检环、依赖失败显式策略、子任务级联取消；mailbox 32KiB、单任务默认 32 子任务/深度 4/1000 消息，超预算暂停并展示。
 - [x] 隔离改动与审查：writer 默认独立 worktree，base commit 与 lease 持久；产物支持 binary/untracked 并记录 hash 清单（预算 32MiB）；集成需干净目标 + HEAD 匹配 + 显式批准 artifact hash，串行 integration lease 下检查→apply→tests→durable record；失败不用 reset --hard/force push/自动 stash。
-- [x] 旧历史、草稿、收藏、辅助元数据完整迁移：迁移对旧来源只读（遍历前后每文件 SHA-256 不变）；身份不明数据保留为 unattached legacy namespace 待显式绑定；草稿逐条持久副本，按 client-origin revision 合并；卸载保留数据（卸载后 DB 字节完全一致，204,800B）。
-- [x] 打包产物：安装目录移走源码且 PATH 无 node 仍启动 store worker 与 PTY；空路径安装与更新成功；卸载保留数据。五 backend 专属文档保留，能力/版本实测矩阵见 [docs/runtime.md](docs/runtime.md)。
+- 旧历史、草稿、收藏与辅助元数据通过迁移流程保留。工具只读旧来源，身份未确定的数据保存在未绑定区域。导入后校验计数、正文及附件哈希，再切换客户端。升级、回滚及验证步骤见 [迁移指南](docs/migration-v090.md)。
+- 打包产物包含独立 Vis Bridge 和桌面端。安装产物测试覆盖无 Node.js 环境下的 Bridge 启动与 PTY。桌面与 Bridge 适用的架构及平台见 [迁移指南](docs/migration-v090.md)。
 - [x] 旧全局后端路由移除（task 48）：模块级“活动后端”单例与 `getActiveBackendAdapter`/`getActiveBackendKind`/`setActiveBackendKind` 退出生产路径，运行时消费者按连接作用域的 kind 显式解析 `getBackendAdapter(kind)`；全仓检索（排除 fixture 与 legacy 导出）无生产消费者，旧 SSE worker 入口经显式工厂创建适配器、不经过全局路由。被移除函数仅保留在 `app/backends/legacyGlobalRouting.ts` 供测试沿袭。
 
 ### SSH 与 Slurm 远程执行
@@ -33,9 +33,9 @@
 
 ### 发布兼容与限制（逐字记录）
 
-- [x] 协议破坏性变更、废弃登录路径（登录页按后端选择与每后端直连地址，仍可用于本 alpha）、旧 Bridge 拒绝规则、direct 与 managed browser 差异、Slurm 持久化条件、不支持拓扑（多节点、`srun --parsable --async`、缺 exact/gres=none/reserve、Slurm 网络/step I/O 不可用）见 [docs/migration-v090.md](docs/migration-v090.md)。
-- [x] 平台限制：没有构建也没有声称任何 Windows 或 macOS 安装包产物（RPM/NSIS/PKG 仅验证生成文本与布局 13/13）；未走真实 GitHub-release 更新下载+校验路径（只应用本地 deb）；Electron 运行时只在 Linux 实测；无物理 GPU（GRES 经真实 generic-GRES 记账演练）；macOS/Windows live 腿只在 CI 工作流定义、未执行。
-- [x] 迁移状态为**部分完成**：旧全局后端路由（`useBackend*` 接缝与 `activeBackendKind` 全局单例）已移除——生产动作不再经过全局 backend 路由，改为按连接作用域显式解析 `getBackendAdapter(kind)`；被移除的全局函数仅保留在 legacy 导出模块（`app/backends/legacyGlobalRouting.ts`）供测试沿袭，无生产引用。App.vue 已接入新运行时 wire（真实 `/runtime` 连接与客户端、hello 后构建并 start 统一树、客户端交给会话动作/消息发送/交互模块）；未建立可用 runtime target（未绑定 bridge 地址，或 bridge 尚未回答 hello）时，会话动作沿用 per-backend 路径；未构建统一树时，侧栏沿用旧树；登录页按后端选择与每后端直连地址仍可用于本 alpha。
+- 首屏连接 Vis Bridge，默认地址为 `ws://127.0.0.1:23004/runtime`。旧版按 Agent 逐个登录的入口已移除。状态监控和供应商与模型面板各自提供管理 Agent 切换，底部输入栏按所选会话加载原生能力。旧 Bridge 的拒绝规则、SSH、Slurm 连接方式与拓扑限制见 [迁移指南](docs/migration-v090.md)。
+- CI 构建 Windows 和 macOS 的 x64／arm64 桌面及 Bridge 安装包，构建 Linux x64 桌面与 x64／arm64 Bridge。Windows x64 已实测从安装包解出的应用连接独立 Bridge。GitHub Release 在线更新下载与校验、Slurm 物理 GPU 仍待验证。隔离 Slurm 环境用 generic GRES 验证资源分配和预留。
+- 升级按备份、绑定、导入、校验、切换的顺序执行。保留旧来源和校验记录供回退。未达到校验条件时保留当前迁移状态。
 
 ---
 
