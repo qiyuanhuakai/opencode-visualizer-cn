@@ -198,6 +198,34 @@ describe('runtime common-watermark snapshots', () => {
       expect((await store.snapshot({ collection: 'workspaces' })).items).toHaveLength(1);
     });
   });
+  it('preserves each pinned revision through overwrites, deletes, and later insertions', async () => {
+    await withStore(async store => {
+      const collection = 'session_summaries';
+      await store.mutate({ intentId: 'pin-original', changes: [
+        { collection, key: 'a', value: 'initial' },
+        { collection, key: 'b', value: null },
+      ] });
+      const first = await store.snapshot({ collection, limit: 1 });
+      await store.mutate({ intentId: 'after-first', changes: [
+        { collection, key: 'a', value: 'middle' },
+        { collection, key: 'b', value: 'restored' },
+        { collection, key: 'c', value: 'new' },
+      ] });
+      const second = await store.snapshot({ collection });
+      await store.mutate({ intentId: 'after-second', changes: [
+        { collection, key: 'a', value: null },
+        { collection, key: 'b', value: 'latest' },
+      ] });
+      expect(first.items).toEqual([{ key: 'a', revision: 1, value: 'initial' }]);
+      expect((await store.snapshot({ collection, token: first.token, cursor: first.cursor })).items)
+        .toEqual([{ key: 'b', revision: 2, value: null }]);
+      expect((await store.snapshot({ collection, token: second.token })).items).toEqual([
+        { key: 'a', revision: 3, value: 'middle' },
+        { key: 'b', revision: 4, value: 'restored' },
+        { key: 'c', revision: 5, value: 'new' },
+      ]);
+    });
+  });
   it('bounds materialized page bytes and roundtrips maximum-length keys', async () => {
     await withStore(async (store) => {
       const largeKey = '界'.repeat(4096);

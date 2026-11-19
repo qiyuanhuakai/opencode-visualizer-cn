@@ -26,7 +26,8 @@ export function prepareSchema(db, file) {
       CREATE TABLE IF NOT EXISTS runtime_intents(environment TEXT NOT NULL, id TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(environment,id));
       CREATE TABLE IF NOT EXISTS runtime_events(environment TEXT NOT NULL, seq INTEGER NOT NULL, revision INTEGER NOT NULL, created INTEGER NOT NULL, bytes INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(environment,seq));
       CREATE TABLE IF NOT EXISTS runtime_snapshots(token TEXT PRIMARY KEY, environment TEXT NOT NULL, collection TEXT NOT NULL, epoch TEXT NOT NULL, revision INTEGER NOT NULL, watermark INTEGER NOT NULL, expires INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS runtime_snapshot_rows(token TEXT NOT NULL, key TEXT NOT NULL, revision INTEGER NOT NULL, value TEXT, PRIMARY KEY(token,key), FOREIGN KEY(token) REFERENCES runtime_snapshots(token) ON DELETE CASCADE);`);
+      CREATE TABLE IF NOT EXISTS runtime_snapshot_rows(token TEXT NOT NULL, key TEXT NOT NULL, revision INTEGER NOT NULL, value TEXT, PRIMARY KEY(token,key), FOREIGN KEY(token) REFERENCES runtime_snapshots(token) ON DELETE CASCADE);
+      CREATE TABLE IF NOT EXISTS runtime_snapshot_priors(token TEXT NOT NULL, collection TEXT NOT NULL, key TEXT NOT NULL, revision INTEGER NOT NULL, value TEXT, PRIMARY KEY(token,collection,key), FOREIGN KEY(token) REFERENCES runtime_snapshots(token) ON DELETE CASCADE);`);
     for (const name of COLLECTIONS) db.exec(`CREATE TABLE IF NOT EXISTS ${name}(environment TEXT NOT NULL, key TEXT NOT NULL, revision INTEGER NOT NULL, value TEXT, PRIMARY KEY(environment,key));`);
     db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
   });

@@ -6,6 +6,12 @@ function item(row) {
   const bytes = row.bytes;
   return bytes > STORE_LIMITS.chunkBytes ? { key: row.key, revision: row.revision, chunked: true, bytes } : { key: row.key, revision: row.revision, value: row.value === null ? null : JSON.parse(row.value) };
 }
+// New tokens retain only values overwritten after their revision. Keep reads
+// for materialized tokens from an older worker across same-epoch takeover.
+// Older workers reject a prior-version token because its collection differs.
+const PRIOR_SNAPSHOT_MARKER = '@';
+const snapshotCollections = definition => definition.startsWith('[') ? JSON.parse(definition) : [definition];
+
 export function createQueries(db, binding) {
   const environment = binding.environmentId;
   const meta = () => db.prepare('SELECT * FROM runtime_meta WHERE environment=?').get(environment);
@@ -33,14 +39,14 @@ export function createQueries(db, binding) {
         if (params.cursor != null) throw new StoreError('replay_required', 'snapshot_cursor');
         if (db.prepare('SELECT count(*) AS count FROM runtime_snapshots WHERE environment=?').get(environment).count >= LIMITS.snapshotTokens) throw new StoreError('conflict', 'snapshot_limit');
         token = randomUUID(); const state = meta();
-        db.prepare('INSERT INTO runtime_snapshots VALUES(?,?,?,?,?,?,?)').run(token, environment, params.collections ? JSON.stringify(params.collections) : params.collection, state.epoch, state.revision, state.seq, now + LIMITS.snapshotTtlMs);
-        if (params.collections) {
-          for (const name of params.collections) db.prepare(`INSERT INTO runtime_snapshot_rows SELECT ?,json_array(?,key),revision,value FROM ${name} WHERE environment=?`).run(token, name, environment);
-        } else db.prepare(`INSERT INTO runtime_snapshot_rows SELECT ?,key,revision,value FROM ${params.collection} WHERE environment=?`).run(token, environment);
+        const definition = params.collections ? JSON.stringify(params.collections) : params.collection;
+        db.prepare('INSERT INTO runtime_snapshots VALUES(?,?,?,?,?,?,?)').run(
+          token, environment, PRIOR_SNAPSHOT_MARKER + definition, state.epoch, state.revision, state.seq, now + LIMITS.snapshotTtlMs,
+        );
       }
       const header = snapshotHeader({ ...params, token });
-      const multiple = header.collection.startsWith('[');
-      if (params.collections && header.collection !== JSON.stringify(params.collections)) throw new StoreError('replay_required', 'snapshot_collections');
+      const multiple = header.definition.startsWith('[');
+      if (params.collections && header.definition !== JSON.stringify(params.collections)) throw new StoreError('replay_required', 'snapshot_collections');
       let cursor = params.cursor ?? '';
       if (multiple && cursor) {
         let decoded;
@@ -51,10 +57,22 @@ export function createQueries(db, binding) {
       }
       const limit = params.limit ?? STORE_LIMITS.page;
       const valueColumns = 'revision,length(CAST(value AS BLOB)) AS bytes,CASE WHEN length(CAST(value AS BLOB))<=65536 THEN value ELSE NULL END AS value';
-      const prefix = `${JSON.stringify([params.collection]).slice(0, -1)},`;
-      const rows = multiple
-        ? db.prepare(`SELECT key,${valueColumns} FROM runtime_snapshot_rows WHERE token=? AND key>? AND key<? ORDER BY key LIMIT ?`).all(token, cursor ? JSON.stringify([params.collection, cursor]) : prefix, `${prefix}\uffff`, limit + 1).map((row) => ({ ...row, key: JSON.parse(row.key)[1] }))
-        : db.prepare(`SELECT key,${valueColumns} FROM runtime_snapshot_rows WHERE token=? AND key>? ORDER BY key LIMIT ?`).all(token, cursor, limit + 1);
+      let rows;
+      if (header.priors) {
+        rows = db.prepare(`
+          SELECT key,${valueColumns} FROM ${params.collection} WHERE environment=? AND key>? AND revision<=?
+          UNION ALL
+          SELECT key,${valueColumns} FROM runtime_snapshot_priors WHERE token=? AND collection=? AND key>?
+          ORDER BY key LIMIT ?
+        `).all(environment, cursor, header.revision, token, params.collection, cursor, limit + 1);
+      } else if (multiple) {
+        const prefix = `${JSON.stringify([params.collection]).slice(0, -1)},`;
+        rows = db.prepare(`SELECT key,${valueColumns} FROM runtime_snapshot_rows WHERE token=? AND key>? AND key<? ORDER BY key LIMIT ?`)
+          .all(token, cursor ? JSON.stringify([params.collection, cursor]) : prefix, `${prefix}\uffff`, limit + 1)
+          .map(row => ({ ...row, key: JSON.parse(row.key)[1] }));
+      } else {
+        rows = db.prepare(`SELECT key,${valueColumns} FROM runtime_snapshot_rows WHERE token=? AND key>? ORDER BY key LIMIT ?`).all(token, cursor, limit + 1);
+      }
       const result = bounded(rows, limit);
       if (multiple && result.cursor !== null) result.cursor = Buffer.from(JSON.stringify([token, params.collection, result.cursor])).toString('base64url');
       return { ...result, token, epoch: header.epoch, revision: header.revision, watermark: header.watermark, expiresAt: header.expires };
@@ -63,9 +81,24 @@ export function createQueries(db, binding) {
   function snapshotHeader(params) {
     const header = db.prepare('SELECT * FROM runtime_snapshots WHERE token=? AND environment=?').get(params.token, environment);
     if (!header || header.expires <= Date.now() || header.epoch !== meta().epoch) throw new StoreError('replay_required', 'snapshot_expired');
-    const collections = header.collection.startsWith('[') ? JSON.parse(header.collection) : [header.collection];
-    if (!collections.includes(params.collection)) throw new StoreError('replay_required', 'snapshot_collection');
-    return header;
+    const priors = header.collection.startsWith(PRIOR_SNAPSHOT_MARKER);
+    const definition = priors ? header.collection.slice(PRIOR_SNAPSHOT_MARKER.length) : header.collection;
+    if (!snapshotCollections(definition).includes(params.collection)) throw new StoreError('replay_required', 'snapshot_collection');
+    return { ...header, definition, priors };
+  }
+  function activePriorSnapshots() {
+    return db.prepare("SELECT token,revision,collection FROM runtime_snapshots WHERE environment=? AND epoch=? AND expires>? AND collection LIKE '@%'")
+      .all(environment, binding.epoch, Date.now())
+      .map(row => ({ ...row, collections: new Set(snapshotCollections(row.collection.slice(PRIOR_SNAPSHOT_MARKER.length))) }));
+  }
+  function preservePrior(snapshots, collection, key, revision) {
+    for (const snapshot of snapshots) {
+      if (snapshot.revision < revision || !snapshot.collections.has(collection)) continue;
+      db.prepare(`
+        INSERT OR IGNORE INTO runtime_snapshot_priors
+        SELECT ?,?,key,revision,value FROM ${collection} WHERE environment=? AND key=?
+      `).run(snapshot.token, collection, environment, key);
+    }
   }
   function replay(params) {
     const state = meta();
@@ -88,7 +121,7 @@ export function createQueries(db, binding) {
     db.prepare('UPDATE runtime_meta SET floor=? WHERE environment=?').run(floor, environment);
   }
   return {
-    meta, page, snapshot, replay, trim,
+    meta, page, snapshot, replay, trim, activePriorSnapshots, preservePrior,
     releaseSnapshot(params) {
       return transaction(db, () => {
         binding.assertOwner();
@@ -98,14 +131,26 @@ export function createQueries(db, binding) {
     },
     get(params) { const row = db.prepare(`SELECT key,revision,length(CAST(value AS BLOB)) AS bytes,CASE WHEN length(CAST(value AS BLOB))<=65536 THEN value ELSE NULL END AS value FROM ${params.collection} WHERE environment=? AND key=?`).get(environment, params.key); return row ? item(row) : null; },
     readChunk(params) {
-      let key = params.key;
-      if (params.token) {
-        const header = snapshotHeader(params);
-        if (header.collection.startsWith('[')) key = JSON.stringify([params.collection, key]);
+      const header = params.token ? snapshotHeader(params) : undefined;
+      const chunkColumns = 'revision,length(CAST(value AS BLOB)) AS bytes,substr(CAST(value AS BLOB),?,?) AS chunk';
+      let row;
+      if (header?.priors) {
+        row = db.prepare(`
+          SELECT ${chunkColumns} FROM (
+            SELECT revision,value FROM ${params.collection} WHERE environment=? AND key=? AND revision<=?
+            UNION ALL
+            SELECT revision,value FROM runtime_snapshot_priors WHERE token=? AND collection=? AND key=?
+          )
+        `).get(params.offset + 1, STORE_LIMITS.chunkBytes, environment, params.key, header.revision,
+          params.token, params.collection, params.key);
+      } else if (header) {
+        const key = header.definition.startsWith('[') ? JSON.stringify([params.collection, params.key]) : params.key;
+        row = db.prepare(`SELECT ${chunkColumns} FROM runtime_snapshot_rows WHERE token=? AND key=?`)
+          .get(params.offset + 1, STORE_LIMITS.chunkBytes, params.token, key);
+      } else {
+        row = db.prepare(`SELECT ${chunkColumns} FROM ${params.collection} WHERE environment=? AND key=?`)
+          .get(params.offset + 1, STORE_LIMITS.chunkBytes, environment, params.key);
       }
-      const table = params.token ? 'runtime_snapshot_rows' : params.collection;
-      const field = params.token ? 'token' : 'environment';
-      const row = db.prepare(`SELECT revision,length(CAST(value AS BLOB)) AS bytes,substr(CAST(value AS BLOB),?,?) AS chunk FROM ${table} WHERE ${field}=? AND key=?`).get(params.offset + 1, STORE_LIMITS.chunkBytes, params.token ?? environment, key);
       if (!row || row.revision !== params.revision) throw new StoreError('conflict', 'chunk_revision');
       return { revision: row.revision, bytes: row.bytes, offset: params.offset, data: Buffer.from(row.chunk ?? []).toString('base64'), nextOffset: params.offset + STORE_LIMITS.chunkBytes < row.bytes ? params.offset + STORE_LIMITS.chunkBytes : null };
     },

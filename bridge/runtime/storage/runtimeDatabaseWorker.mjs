@@ -47,13 +47,23 @@ function mutate(params) {
     const previous = db.prepare('SELECT digest,result FROM runtime_intents WHERE environment=? AND id=?').get(environment, params.intentId);
     if (previous) { if (previous.digest !== digest) throw new StoreError('conflict', 'intent_mismatch'); return JSON.parse(previous.result); }
     let { revision, seq } = queries.meta();
+    const priorSnapshots = queries.activePriorSnapshots();
     for (const change of params.changes) {
       const current = db.prepare(`SELECT revision FROM ${change.collection} WHERE environment=? AND key=?`).get(environment, change.key);
       if (change.expectedRevision !== undefined && change.expectedRevision !== (current?.revision ?? 0)) throw new StoreError('conflict', change.checkOnly === true ? 'entity_precondition' : 'entity_revision');
       if (change.checkOnly === true) continue;
+      if (current) queries.preservePrior(priorSnapshots, change.collection, change.key, current.revision);
       revision++; seq++;
       db.prepare(`INSERT INTO ${change.collection} VALUES(?,?,?,?) ON CONFLICT(environment,key) DO UPDATE SET revision=excluded.revision,value=excluded.value`).run(environment, change.key, revision, change.value === null ? null : JSON.stringify(change.value));
-      if (change.value === null) db.prepare('INSERT INTO tombstones VALUES(?,?,?,?) ON CONFLICT(environment,key) DO UPDATE SET revision=excluded.revision,value=excluded.value').run(environment, JSON.stringify([change.collection, change.key]), revision, JSON.stringify({ collection: change.collection, key: change.key }));
+      if (change.value === null) {
+        const key = JSON.stringify([change.collection, change.key]);
+        if (priorSnapshots.some(snapshot => snapshot.collections.has('tombstones'))) {
+          const prior = db.prepare('SELECT revision FROM tombstones WHERE environment=? AND key=?').get(environment, key);
+          if (prior) queries.preservePrior(priorSnapshots, 'tombstones', key, prior.revision);
+        }
+        db.prepare('INSERT INTO tombstones VALUES(?,?,?,?) ON CONFLICT(environment,key) DO UPDATE SET revision=excluded.revision,value=excluded.value')
+          .run(environment, key, revision, JSON.stringify({ collection: change.collection, key: change.key }));
+      }
       // Replay stores identity/revision patches; native transcript remains in its authority.
       const event = JSON.stringify({ seq, entityRevision: revision, epoch: options.epoch, collection: change.collection, key: change.key, deleted: change.value === null });
       db.prepare('INSERT INTO runtime_events VALUES(?,?,?,?,?,?)').run(environment, seq, revision, Date.now(), Buffer.byteLength(event), event);
