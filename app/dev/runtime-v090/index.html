@@ -4,22 +4,42 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Runtime protocol QA</title>
   <style>
-    :root { color-scheme: light dark; font: 1rem/1.6 system-ui; --space: 1rem; }
-    body { margin: auto; padding: var(--space); max-width: 48rem; }
-    button, textarea { font: inherit; padding: .5em; }
-    textarea { box-sizing: border-box; width: 100%; min-height: 13rem; }
-    pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--space); border: 1px solid; }
-    button:focus-visible, textarea:focus-visible { outline: 3px solid Highlight; outline-offset: 3px; }
+    :root { font: 14px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 1rem; color: var(--theme-text-primary); background: var(--theme-surface-page); }
+    main { margin: auto; padding: 1.25rem; max-width: 48rem; background: var(--theme-surface-panel); border: 1px solid var(--theme-border-default); border-radius: 8px; }
+    h1 { font-size: 1.25rem; font-weight: 600; margin-top: 0; }
+    p { color: var(--theme-text-secondary); }
+    label { display: block; margin-bottom: .5rem; }
+    button, textarea { font: inherit; padding: .5em .75em; border-radius: 6px; }
+    textarea { display: block; width: 100%; min-height: 13rem; margin-bottom: 1rem; color: var(--theme-form-control-text); background: var(--theme-form-control-bg); border: 1px solid var(--theme-form-control-border); resize: vertical; }
+    button { min-height: 44px; color: var(--theme-action-button-text); background: var(--theme-action-button-bg); border: 1px solid var(--theme-action-button-border); cursor: pointer; }
+    button:hover { background: var(--theme-action-button-hover-bg); }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 1rem; background: var(--theme-surface-panel-muted); border: 1px solid var(--theme-border-default); border-radius: 6px; }
+    button:focus-visible, textarea:focus-visible { outline: 2px solid var(--theme-form-control-focus-border); outline-offset: 3px; }
   </style>
 </head>
 <body>
-  <main><h1>Runtime protocol QA</h1><p>Validate a fixture frame with the shared runtime protocol.</p>
+  <main><h1>Vis · Runtime protocol QA</h1><p>Development harness: validate a fixture frame with the shared runtime protocol.</p>
     <label for="frame">Protocol frame</label><textarea id="frame" spellcheck="false"></textarea>
     <button id="validate" type="button">Validate frame</button>
     <pre id="result" role="status" aria-live="polite">Ready</pre>
   </main>
   <script type="module">
     import { decodeFrame, encodeFrame } from '/shared/runtime/protocol.js';
+    import { StorageKeys, storageGetJSON } from '/app/utils/storageKeys.ts';
+    import { LIGHT_MODE_PRESET } from '/app/utils/regionTheme.ts';
+    import { createSemanticTokenSnapshot, extractSemanticTokenOverrides, normalizeThemeStorage, regionThemeToStorage, resolveSyntaxTheme, semanticTokenCssVariable } from '/app/utils/themeTokens.ts';
+    const scheme = matchMedia('(prefers-color-scheme: light)');
+    function applyTheme() {
+      const stored = normalizeThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
+      const theme = stored ?? (scheme.matches ? regionThemeToStorage(LIGHT_MODE_PRESET) : null);
+      for (const [token, value] of Object.entries(createSemanticTokenSnapshot(extractSemanticTokenOverrides(theme)))) document.documentElement.style.setProperty(semanticTokenCssVariable(token), value);
+      document.documentElement.style.colorScheme = resolveSyntaxTheme(theme) === 'github-light' ? 'light' : 'dark';
+    }
+    applyTheme();
+    scheme.addEventListener('change', applyTheme);
+    window.addEventListener('storage', applyTheme);
     const input = document.querySelector('#frame');
     document.querySelector('#validate').addEventListener('click', () => {
       try {

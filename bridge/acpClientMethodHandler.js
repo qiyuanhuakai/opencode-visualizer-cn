@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
 import os from 'node:os';
-import { open, readFile, realpath } from 'node:fs/promises';
+import { open, readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { createAcpTerminalManager } from './acpTerminalManager.js';
 
@@ -129,6 +129,18 @@ export function createAcpClientMethodHandler(options = {}) {
     throw new Error(`Path is outside the ACP session roots: ${requestedPath}`);
   }
 
+  // Only a regular file can be read to EOF. A FIFO or a device inside the granted root would
+  // leave the read in flight forever, and because Node's file reads cannot be cancelled that
+  // in-flight request would hold the reverse handler's close() — and the workspace shutdown
+  // that awaits it — open indefinitely. A path that does not exist yet is left alone so a new
+  // file can still be created.
+  async function assertRegularFile(filePath, requestedPath) {
+    const stats = await stat(filePath).catch(() => null);
+    if (stats && !stats.isFile()) {
+      throw new Error(`ACP filesystem path is not a regular file: ${requestedPath}`);
+    }
+  }
+
   function isWithinAgentDataDir(agentId, sessionId, requestedPath) {
     if (typeof requestedPath !== 'string' || !path.isAbsolute(requestedPath)) return false;
     if (!sessionRoots.has(sessionKey(agentId, sessionId))) return false;
@@ -143,6 +155,7 @@ export function createAcpClientMethodHandler(options = {}) {
     if (request.method === 'fs/read_text_file') {
       try {
         const filePath = await resolveSessionPath(context.agentId, params.sessionId, params.path);
+        await assertRegularFile(filePath, params.path);
         const content = await readFile(filePath, 'utf8');
         const line = typeof params.line === 'number' ? Math.max(1, Math.trunc(params.line)) : 1;
         const limit =
@@ -176,6 +189,7 @@ export function createAcpClientMethodHandler(options = {}) {
         params.path,
         true,
       );
+      await assertRegularFile(filePath, params.path);
       const file = await open(
         filePath,
         constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW,

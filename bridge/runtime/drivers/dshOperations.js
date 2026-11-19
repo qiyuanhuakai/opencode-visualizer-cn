@@ -109,13 +109,18 @@ export function createDshOperations({ store, transport, environmentId, harnessIn
       }
     });
   }
-  async function finish(session, outcome) {
+  async function pendingPrompt(session) {
     const scope = capture(session);
     const lease = await readRecord(store, 'operations', `lease:${fingerprint(encodeSessionKey(scope.session))}`);
-    if (!lease?.value?.operationId) return;
+    if (!lease?.value?.operationId) return null;
     const operation = await journal.get(lease.value.operationId);
-    if (operation.method !== 'session/prompt' || fingerprint(operation.scope) !== fingerprint(scope)) return;
-    if (['sent', 'observed', 'reconciling'].includes(operation.phase)) await journal.terminal(operation.operationId, scope, outcome);
+    if (operation.method !== 'session/prompt' || fingerprint(operation.scope) !== fingerprint(scope)) return null;
+    return ['sent', 'observed', 'reconciling'].includes(operation.phase) ? { operation, scope } : null;
   }
-  return { capture, current, authority, bind, journal, interactions, admission, sessionMutation, durable, finish };
+  async function finish(session, outcome) {
+    const pending = await pendingPrompt(session);
+    if (!pending) return;
+    await journal.terminal(pending.operation.operationId, pending.scope, outcome);
+  }
+  return { capture, current, authority, bind, journal, interactions, admission, sessionMutation, durable, finish, pendingPrompt };
 }

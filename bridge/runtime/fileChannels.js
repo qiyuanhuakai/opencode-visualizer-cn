@@ -13,10 +13,10 @@ export function createFileChannels() {
   function discard(entry) {
     entry.cleanup ??= (async () => {
       await entry.pending;
-      await entry.handle.close();
+      await entry.handle?.close();
       await rm(entry.staging, { recursive: true, force: true });
       channels.delete(entry.id);
-    })();
+    })().catch(error => { entry.cleanup = undefined; throw error; });
     return entry.cleanup;
   }
   function connect(scope) {

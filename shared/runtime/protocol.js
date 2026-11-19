@@ -1,4 +1,4 @@
-import { parseEnvironmentId, parseInstanceId } from './identity.js';
+import { IdentityError, decodeRepoKey, decodeSessionKey, decodeWorkspaceKey, parseEnvironmentId, parseInstanceId } from './identity.js';
 import { ERROR_CODES, METHODS, ProtocolError, requireValue, objectFields, textValue, integerValue, jsonValue, parseCapabilities } from './capabilities.js';
 import { scanRawFrame } from './rawFrame.js';
 export { ProtocolError, ERROR_CODES } from './capabilities.js';
@@ -20,6 +20,14 @@ export function parseBinding(input) {
   textValue(input.epoch, 'epoch');
   integerValue(input.generation, 'generation');
   return Object.freeze({ target: input.target, epoch: input.epoch, generation: input.generation });
+}
+export function entityKeyValue(value, field) {
+  requireValue(typeof value === 'string' && value.length > 0 && !value.includes('\0'), field);
+  for (const decode of [decodeWorkspaceKey, decodeRepoKey, decodeSessionKey]) {
+    try { decode(value); return value; }
+    catch (error) { if (!(error instanceof IdentityError)) throw error; }
+  }
+  throw new ProtocolError('invalid_request', field);
 }
 export function validateFrame(input) {
   const value = jsonValue(input);
@@ -67,7 +75,7 @@ export function validateFrame(input) {
       integerValue(value.seq, 'seq');
       requireValue(value.seq > 0, 'seq');
       integerValue(value.entityRevision, 'entityRevision');
-      textValue(value.scope, 'scope');
+      entityKeyValue(value.scope, 'scope');
       textValue(value.type, 'type');
       break;
     case 'snapshot':
@@ -99,7 +107,11 @@ export function validateFrame(input) {
 }
 export function encodeFrame(value) { return JSON.stringify(validateFrame(value)); }
 export function decodeFrame(text, preflight) {
-  requireValue(typeof text === 'string' && encoder.encode(text).byteLength <= LIMITS.jsonBytes, 'json.size');
+  // UTF-8 uses at least one byte per UTF-16 code unit. Reject an impossible
+  // frame before allocating its encoded copy; the byte check still handles
+  // multibyte input whose code-unit length fits the limit.
+  requireValue(typeof text === 'string' && text.length <= LIMITS.jsonBytes
+    && encoder.encode(text).byteLength <= LIMITS.jsonBytes, 'json.size');
   if (preflight !== undefined) {
     const summary = scanRawFrame(text);
     if (summary.duplicateKeys) throw new ProtocolError('invalid_request', 'frame');

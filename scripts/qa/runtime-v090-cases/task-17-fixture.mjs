@@ -115,7 +115,9 @@ export async function createFixture(register, wire, options = {}) {
       for (const entry of streams) entry.controller.abort();
       for (const socket of clients) socket.destroy();
       await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-      await installedGateway.close(); await Promise.allSettled(tasks); await assertPortReleased(port);
+      await installedGateway.close(); await Promise.allSettled(tasks);
+      await waitUntil(() => clients.size === 0 && streams.size === 0, 'owned fixture connections drained', 5000);
+      await assertPortReleased(port);
       return { port, portReleased: true, clients: clients.size, streams: streams.size, nativePending: installedGateway.gateway.pendingRemoteEvents.size };
     },
   };

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createDshTransport } from './dshTransport.js';
 import { createDshOperations } from './dshOperations.js';
 import { readDshHistoryPage, createDshHistory } from './dshHistory.js';
-import { createFollowState } from '../../../shared/runtime/native/dsh/follow.js';
+import { createFollowState, terminalTurn } from '../../../shared/runtime/native/dsh/follow.js';
 import { record, text, integer, summaries, selectModel, approvalOutcome, fail, DshError } from '../../../shared/runtime/native/dsh/protocol.js';
 import { parseSessionRef, parseEnvironmentId, parseHarnessInstanceId } from '../../../shared/runtime/identity.js';
 import { jsonValue } from '../../../shared/runtime/capabilities.js';
@@ -10,6 +10,7 @@ import { CORE_OPERATIONS, unsupported } from '../../../shared/runtime/harnessCon
 import { readRecord, compareRecord, fingerprint } from '../operationJournal.js';
 
 const supported = Object.freeze({ state: 'supported' });
+const SELECTED_SLOTS = 4, SNAPSHOT_SLOTS = 3, SNAPSHOT_TTL_MS = 60000, SNAPSHOT_BUDGET_BYTES = 33554432, NATIVE_EVENT_LIMIT = 256;
 const EXTENSIONS = Object.freeze({
   'dsh.providers.list': { method: 'session/modelCatalog', scope: 'instance' },
   'dsh.models.list': { method: 'session/modelCatalog', scope: 'instance' },
@@ -25,8 +26,55 @@ export function createDshDriver(options) {
   const operations = createDshOperations({ ...options, ...identity, transport });
   const snapshots = new Map(), selected = new Map(), deliveries = new Map(), observers = new Set(), known = new Set();
   let mux, connecting, clientId, liveGeneration = 0, closed = false, reconnectTimer, reconnectAttempt = 0, retryBlocked = false;
+  let closing;
+  const invalidations = new Set();
+  const invalidationWork = new Map();
+  let invalidationSerial = Promise.resolve();
+  const receiving = new Set();
+  let invalidationDrain;
   const pendingWork = new Set();
   const now = options.now ?? Date.now;
+  let retainSeq = 0;
+  const retained = new Map();
+  function retain(session, reason) {
+    const key = session.nativeSessionId, token = `${reason}:${++retainSeq}`;
+    let tokens = retained.get(key);
+    if (!tokens) retained.set(key, (tokens = new Set()));
+    tokens.add(token);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      tokens.delete(token);
+      if (!tokens.size) retained.delete(key);
+    };
+  }
+  function stillIdle(entry) {
+    const key = entry.session.nativeSessionId;
+    if (selected.get(key) !== entry || entry.waiting || retained.get(key)?.size) return false;
+    for (const delivery of deliveries.values()) if (delivery.live && delivery.session?.nativeSessionId === key) return false;
+    return true;
+  }
+  async function reclaimable(entry) {
+    if (!stillIdle(entry)) return false;
+    try { if (await operations.pendingPrompt(entry.session)) return false; }
+    catch { return false; }
+    // The pending-prompt query yields, so a subscription, read or interaction can acquire this session
+    // meanwhile: re-verify synchronously so the judgement always matches the eviction that follows it.
+    return stillIdle(entry);
+  }
+  async function evictIdleFollows() {
+    for (const [key, entry] of selected) {
+      if (!(await reclaimable(entry))) continue;
+      // The await above yields, so the identity check that authorises the eviction must
+      // share one synchronous section with the cancellation and the removal themselves:
+      // a subscription, read or interaction that acquires this session in between has to
+      // win over an answer computed before it existed.
+      if (!stillIdle(entry)) continue;
+      entry.handle?.cancel(); entry.handle = undefined; entry.state.disconnect();
+      selected.delete(key);
+    }
+  }
   function publish(event) {
     const clean = jsonValue({ ...event, environmentId: identity.environmentId, harnessInstanceId: identity.harnessInstanceId, generation: liveGeneration });
     options.onEvent?.(clean);
@@ -49,15 +97,57 @@ export function createDshDriver(options) {
   function leaseCurrent(generation, boundClient) {
     if (closed || generation !== liveGeneration || boundClient !== clientId || !mux) fail('reconcile_required', 'stale_client');
   }
-  async function invalidate(delivery) {
+  function invalidate(delivery) {
     delivery.live = false;
-    if (delivery.key) {
-      const prior = await readRecord(options.store, 'interactions', delivery.key);
-      if (prior && ['pending', 'replying'].includes(prior.value.phase)) {
-        try { await compareRecord(options.store, 'interactions', delivery.key, prior, { ...prior.value, phase: 'invalidated' }); }
-        catch (error) { if (error?.reason !== 'entity_revision') throw error; }
+    const existing = invalidationWork.get(delivery);
+    if (existing) return existing;
+    invalidations.add(delivery);
+    // Every entry point shares one reserved-store lane, including disconnect and native cancel.
+    // A failed delivery remains in invalidations for retry without preventing later items from draining.
+    const work = invalidationSerial.then(() => invalidateDelivery(delivery));
+    invalidationWork.set(delivery, work);
+    invalidationSerial = work.catch(() => {});
+    void work.then(() => invalidationWork.delete(delivery), () => invalidationWork.delete(delivery));
+    return work;
+  }
+  async function invalidateDelivery(delivery) {
+    try {
+      if (delivery.key) {
+        const prior = await readRecord(options.store, 'interactions', delivery.key);
+        if (prior && ['pending', 'replying'].includes(prior.value.phase)) {
+          try { await compareRecord(options.store, 'interactions', delivery.key, prior, { ...prior.value, phase: 'invalidated' }); }
+          catch (error) { if (error?.reason !== 'entity_revision') throw error; }
+        }
       }
+    } catch (error) {
+      // Freeze native delivery before another client can accumulate stale rows.
+      mux?.close();
+      throw error;
     }
+    invalidations.delete(delivery);
+  }
+  function receive(frame, generation) {
+    if (closed || generation !== liveGeneration) return Promise.resolve();
+    if (receiving.size >= NATIVE_EVENT_LIMIT) {
+      retryBlocked = true;
+      publish({ type: 'source-error', code: 'source_unavailable', reason: 'native-event-budget' });
+      mux?.close();
+      return Promise.reject(new DshError('source_unavailable', 'native_event_budget'));
+    }
+    const work = receiveEvent(frame, generation);
+    receiving.add(work);
+    void work.then(() => receiving.delete(work), () => receiving.delete(work));
+    return work;
+  }
+  async function flushInvalidations() {
+    if (invalidationDrain) return invalidationDrain;
+    if (!invalidations.size) return;
+    const work = Promise.allSettled([...invalidations].map(invalidate)).then((results) => {
+      if (results.some((result) => result.status === 'rejected'))
+        fail('reconcile_required', 'interaction_cleanup');
+    });
+    invalidationDrain = work.finally(() => { invalidationDrain = undefined; });
+    return invalidationDrain;
   }
   async function receiveEvent(frame, generation) {
     record(frame);
@@ -72,7 +162,7 @@ export function createDshDriver(options) {
     if (frame.type !== 'waterfall') fail('invalid_request', 'events_frame');
     const eventId = text(frame.eventId), boundClient = text(clientId), nativeSessionId = text(frame.agentId);
     if (deliveries.has(eventId)) return;
-    if (deliveries.size >= 256) { retryBlocked = true; publish({ type: 'source-error', code: 'source_unavailable', reason: 'interaction-budget' }); mux?.close(); return; }
+    if (deliveries.size + invalidations.size >= NATIVE_EVENT_LIMIT) { retryBlocked = true; publish({ type: 'source-error', code: 'source_unavailable', reason: 'interaction-budget' }); mux?.close(); return; }
     const delivery = { generation, clientId: boundClient, eventId, live: true, key: undefined };
     deliveries.set(eventId, delivery);
     const guard = () => { leaseCurrent(generation, boundClient); if (!delivery.live || deliveries.get(eventId) !== delivery) fail('conflict', 'interaction_cancelled'); };
@@ -108,6 +198,15 @@ export function createDshDriver(options) {
       if (error.code !== 'invalid_request') scheduleReconnect();
     }
   }
+  function reconcileSnapshot(entry, frame) {
+    const sentCursor = entry.sentCursor;
+    if (sentCursor === undefined) return;
+    const terminal = terminalTurn(frame, sentCursor);
+    if (!terminal) return;
+    entry.sentCursor = undefined;
+    const kind = terminal.data?.reason?.kind;
+    background(operations.finish(entry.session, kind === 'completed' ? 'completed' : kind === 'aborted' ? 'cancelled' : 'failed'));
+  }
   function openFollow(entry) {
     if (!mux) fail('source_unavailable', 'mux');
     const connectionGeneration = liveGeneration, generation = entry.state.rebuild();
@@ -120,11 +219,13 @@ export function createDshDriver(options) {
           if (admitted.action === 'snapshot') {
             if (value.header.id !== entry.session.nativeSessionId) fail('conflict', 'snapshot_session');
             entry.snapshot = value; known.add(entry.session.nativeSessionId); entry.resolve?.(value); entry.resolve = undefined; entry.reject = undefined;
+            reconcileSnapshot(entry, value);
           }
           publish({ type: admitted.action === 'snapshot' ? 'session-snapshot' : 'session-event', session: entry.session, value: admitted.value,
             revision: entry.state.inspect().revision });
           if (admitted.action === 'event' && value.type === 'event' && value.event.type === 'turn/end') {
             const kind = value.event.data?.reason?.kind;
+            entry.sentCursor = undefined;
             background(operations.finish(entry.session, kind === 'completed' ? 'completed' : kind === 'aborted' ? 'cancelled' : 'failed'));
           }
         } catch (error) {
@@ -142,11 +243,15 @@ export function createDshDriver(options) {
   }
   async function ensureMux() {
     if (closed) fail('source_unavailable', 'closed');
+    await Promise.allSettled(receiving);
+    await flushInvalidations();
+    if (closed) fail('source_unavailable', 'closed');
     if (mux) return mux;
     if (connecting) return connecting;
     connecting = (async () => {
       const generation = ++liveGeneration;
       const connection = await transport.connect({ onDisconnect: (error) => disconnected(error, generation) });
+      try { await flushInvalidations(); } catch (error) { connection.close(); throw error; }
       if (closed || generation !== liveGeneration) { connection.close(); fail('reconcile_required', 'connection_changed'); }
       mux = connection;
       try {
@@ -158,10 +263,10 @@ export function createDshDriver(options) {
               if (readySeen) fail('invalid_request', 'duplicate_ready');
               try { clientId = text(frame.clientId); readySeen = true; clearTimeout(timer); resolve(); }
               catch (error) { clearTimeout(timer); reject(error); throw error; }
-            } else background(receiveEvent(frame, generation));
+            } else background(receive(frame, generation));
           }, onEnd(error) { clearTimeout(timer); reject(error ?? new DshError('source_unavailable', 'dsh.events_ended')); connection.close(); } });
         });
-        leaseCurrent(generation, clientId); reconnectAttempt = 0;
+        leaseCurrent(generation, clientId); reconnectAttempt = 0; retryBlocked = false;
         for (const entry of selected.values()) openFollow(entry);
         return connection;
       } catch (error) { connection.close(); throw error; }
@@ -179,22 +284,26 @@ export function createDshDriver(options) {
   async function select(session, refresh = false) {
     const key = session.nativeSessionId;
     let entry = selected.get(key);
-    if (!entry) {
-      if (selected.size >= 4) fail('source_unavailable', 'selected_limit');
-      entry = { session, state: createFollowState() }; selected.set(key, entry);
-    }
-    await ensureMux();
-    if (refresh && entry.state.inspect().phase === 'live' && !entry.waiting) { entry.handle?.cancel(); entry.handle = undefined; entry.state.disconnect(); }
-    if (entry.state.inspect().phase === 'live') return entry;
-    if (entry.waiting) { await entry.waiting; return entry; }
-    entry.waiting = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { entry.handle?.cancel(); entry.handle = undefined; entry.state.disconnect(); entry.reject = undefined; entry.resolve = undefined; reject(new DshError('timeout', 'dsh.follow_snapshot')); }, 15000);
-      entry.resolve = (value) => { clearTimeout(timer); resolve(value); };
-      entry.reject = (error) => { clearTimeout(timer); reject(error); };
-      if (!entry.handle) openFollow(entry);
-    }).finally(() => { entry.waiting = undefined; });
-    await entry.waiting;
-    return entry;
+    const release = retain(session, 'select');
+    try {
+      if (!entry) {
+        if (selected.size >= SELECTED_SLOTS) await evictIdleFollows();
+        if (selected.size >= SELECTED_SLOTS) fail('source_unavailable', 'selected_limit');
+        entry = { session, state: createFollowState() }; selected.set(key, entry);
+      }
+      await ensureMux();
+      if (refresh && entry.state.inspect().phase === 'live' && !entry.waiting) { entry.handle?.cancel(); entry.handle = undefined; entry.state.disconnect(); }
+      if (entry.state.inspect().phase === 'live') return entry;
+      if (entry.waiting) { await entry.waiting; return entry; }
+      entry.waiting = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { entry.handle?.cancel(); entry.handle = undefined; entry.state.disconnect(); entry.reject = undefined; entry.resolve = undefined; reject(new DshError('timeout', 'dsh.follow_snapshot')); }, 15000);
+        entry.resolve = (value) => { clearTimeout(timer); resolve(value); };
+        entry.reject = (error) => { clearTimeout(timer); reject(error); };
+        if (!entry.handle) openFollow(entry);
+      }).finally(() => { entry.waiting = undefined; });
+      await entry.waiting;
+      return entry;
+    } finally { release(); }
   }
   /** Trusted raw HTTP `session/page` admission for the selected-history producer. No `maxMessages` is sent,
    * so the substrate's own record/page bounds govern retention instead of a native-side truncation.
@@ -287,13 +396,17 @@ export function createDshDriver(options) {
       const items = summaries(native, workspace, identity);
       const bytes = Buffer.byteLength(JSON.stringify(items));
       if (bytes > 16777216 || items.length > 100000) fail('source_unavailable', 'summary_snapshot_budget');
-      if (snapshots.size >= 3 || [...snapshots.values()].reduce((sum, value) => sum + value.bytes, bytes) > 33554432) fail('source_unavailable', 'summary_snapshot_slots');
-      token = randomUUID(); snapshot = { items, lease, bytes, expiresAt: now() + 60000 }; snapshots.set(token, snapshot);
       known.clear();
       for (const item of items) known.add(item.session.nativeSessionId);
       for (const id of selected.keys()) known.add(id);
+      if (items.length <= limit) {
+        return { items, cursor: null, completeness: 'complete', source: 'native-summary-snapshot', total: items.length, expiresAt: now() + SNAPSHOT_TTL_MS };
+      }
+      if (snapshots.size >= SNAPSHOT_SLOTS || [...snapshots.values()].reduce((sum, value) => sum + value.bytes, bytes) > SNAPSHOT_BUDGET_BYTES) fail('source_unavailable', 'summary_snapshot_slots');
+      token = randomUUID(); snapshot = { items, lease, bytes, expiresAt: now() + SNAPSHOT_TTL_MS }; snapshots.set(token, snapshot);
     }
     const items = snapshot.items.slice(offset, offset + limit), next = offset + items.length;
+    if (next >= snapshot.items.length) snapshots.delete(token);
     return { items, cursor: next < snapshot.items.length ? `${token}:${next}` : null, completeness: next < snapshot.items.length ? 'partial' : 'complete',
       source: 'native-summary-snapshot', total: snapshot.items.length, expiresAt: snapshot.expiresAt };
   }
@@ -313,10 +426,11 @@ export function createDshDriver(options) {
     const { session } = context(input, true);
     if (observers.size >= 64) fail('source_unavailable', 'observer_limit');
     const queue = []; let bytes = 0, wake, error, ended = false;
-    const observer = { stop() { ended = true; wake?.(); wake = undefined; }, push(value) {
+    const release = retain(session, 'subscriber');
+    const observer = { stop() { ended = true; release(); wake?.(); wake = undefined; }, push(value) {
       if (ended || (value.session && value.session.nativeSessionId !== session.nativeSessionId)) return;
       const size = Buffer.byteLength(JSON.stringify(value));
-      if (queue.length >= 256 || bytes + size > 2097152) { error = new DshError('replay_required', 'dsh.subscriber_overflow'); ended = true; observers.delete(observer); }
+      if (queue.length >= 256 || bytes + size > 2097152) { error = new DshError('replay_required', 'dsh.subscriber_overflow'); ended = true; release(); observers.delete(observer); }
       else { queue.push({ value, size }); bytes += size; }
       wake?.(); wake = undefined;
     } };
@@ -327,7 +441,7 @@ export function createDshDriver(options) {
         const pending = await operations.interactions.get(delivery.key);
         if (delivery.live && delivery.generation === liveGeneration && pending.phase === 'pending') observer.push({ type: 'interaction-pending', session, interactionId: delivery.key, request: pending.payload.request });
       }
-    }).catch((failure) => { error = failure; ended = true; wake?.(); });
+    }).catch((failure) => { error = failure; ended = true; release(); wake?.(); });
     return { ready, async next() {
       await ready;
       if (error) throw error;
@@ -335,25 +449,54 @@ export function createDshDriver(options) {
       if (error) throw error;
       const item = queue.shift(); if (item) { bytes -= item.size; return { value: item.value, done: false }; }
       return { value: undefined, done: true };
-    }, async return() { ended = true; observers.delete(observer); queue.length = 0; bytes = 0; wake?.(); return { value: undefined, done: true }; },
+    }, async return() { ended = true; release(); observers.delete(observer); queue.length = 0; bytes = 0; wake?.(); return { value: undefined, done: true }; },
     [Symbol.asyncIterator]() { return this; } };
   }
-  async function close() {
-    if (closed) return;
-    closed = true; clearTimeout(reconnectTimer); reconnectTimer = undefined;
-    mux?.close(); mux = undefined; clientId = undefined;
-    transport.close();
-    for (const entry of selected.values()) entry.reject?.(new DshError('cancelled', 'dsh.closed'));
-    for (const delivery of deliveries.values()) await invalidate(delivery);
-    deliveries.clear(); snapshots.clear(); selected.clear(); known.clear();
-    await Promise.allSettled(pendingWork);
-    publish({ type: 'source-closed' }); for (const observer of observers) observer.stop(); observers.clear();
+  function close() {
+    if (closing) return closing;
+    const completion = Promise.withResolvers();
+    closing = completion.promise;
+    void closing.catch(() => {});
+    // Install the barrier before closing the mux: its callbacks can reenter
+    // shutdown and start durable invalidations that this close must drain.
+    (async () => {
+      closed = true; clearTimeout(reconnectTimer); reconnectTimer = undefined;
+      mux?.close(); mux = undefined; clientId = undefined;
+      transport.close();
+      for (const entry of selected.values()) entry.reject?.(new DshError('cancelled', 'dsh.closed'));
+      await Promise.allSettled(pendingWork);
+      const pending = new Set([...deliveries.values(), ...invalidations]);
+      const results = await Promise.allSettled([...pending].map(invalidate));
+      deliveries.clear(); snapshots.clear(); selected.clear(); known.clear(); retained.clear();
+      const failures = results.filter((result) => result.status === 'rejected').map((result) => result.reason);
+      try {
+        if (failures.length) throw new AggregateError(failures, 'DSH interaction cleanup failed');
+        publish({ type: 'source-closed' });
+      } finally {
+        for (const observer of observers) observer.stop();
+        observers.clear();
+      }
+    })().then(completion.resolve, (error) => {
+      closing = undefined;
+      completion.reject(error);
+    });
+    return completion.promise;
   }
   const core = {
     inspect(input) { context(input); const state = options.getOwnedEndpoint()?.state ?? 'missing'; return { state: closed ? 'disabled' : state, protocolVersion: 1 }; },
     listSessionPage,
-    async getSession(input) { const { session } = context(input, true); const entry = await select(session, true); return { session, snapshot: entry.snapshot, ...entry.state.inspect(), connectionGeneration: liveGeneration }; },
-    async readHistoryPage(input) { const { session, params } = context(input, true); const entry = await select(session); return readDshHistoryPage({ transport, session, state: entry.state, beforeSeq: params.beforeSeq, throughSeq: params.throughSeq, limit: params.limit }); },
+    async getSession(input) {
+      const { session } = context(input, true), release = retain(session, 'read');
+      try { const entry = await select(session, true); return { session, snapshot: entry.snapshot, ...entry.state.inspect(), connectionGeneration: liveGeneration }; }
+      finally { release(); }
+    },
+    async readHistoryPage(input) {
+      const { session, params } = context(input, true), release = retain(session, 'read');
+      // The await keeps the read token held across the whole paging lifecycle: releasing it in a bare
+      // `return` would let the reclaimer evict the session mid-page and fence the read as history_stale.
+      try { const entry = await select(session); return await readDshHistoryPage({ transport, session, state: entry.state, beforeSeq: params.beforeSeq, throughSeq: params.throughSeq, limit: params.limit }); }
+      finally { release(); }
+    },
     async openHistory(input) {
       const { session } = context(input, true);
       const lease = transport.capture();
@@ -383,8 +526,12 @@ export function createDshDriver(options) {
       const capturedScope = operations.capture(session);
       const payload = jsonValue(record(params.request));
       if (payload.sessionId !== undefined && payload.sessionId !== session.nativeSessionId) fail('conflict', 'prompt_session');
-      await select(session);
-      return operations.sessionMutation({ session, capturedScope, idempotencyKey, method: 'session/prompt', args: { request: { ...payload, sessionId: session.nativeSessionId } }, ongoing: true });
+      const release = retain(session, 'send');
+      try {
+        const entry = await select(session);
+        entry.sentCursor = entry.state.inspect().cursor;
+        return await operations.sessionMutation({ session, capturedScope, idempotencyKey, method: 'session/prompt', args: { request: { ...payload, sessionId: session.nativeSessionId } }, ongoing: true });
+      } finally { release(); }
     },
     async cancel(input) {
       const { session, params } = context(input, true);

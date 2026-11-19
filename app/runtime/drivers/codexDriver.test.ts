@@ -15,10 +15,10 @@ import { createOperationJournal, fingerprint } from '../../../bridge/runtime/ope
 import { createInteractionStore } from '../../../bridge/runtime/interactionStore.js';
 import { createCodexSessionOperations } from '../../../shared/runtime/native/codex/sessionOperations.js';
 import { createCodexCancellation } from '../../../shared/runtime/native/codex/cancelOperations.js';
-import { jsonValue } from '../../../shared/runtime/capabilities.js';
+import { ProtocolError, jsonValue } from '../../../shared/runtime/capabilities.js';
 import type { JsonValue } from '../../../shared/runtime/capabilities.js';
 import { record } from '../../../shared/runtime/native/codex/boundaries.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   normalizeCodexTurnsToHistory,
   parseCodexThreadTokenUsage,
@@ -232,6 +232,50 @@ describe('Codex privacy and connection faults', () => {
     client.close();
     receive(JSON.stringify({ method: 'turn/completed', params: { secret: 'private-value' } }));
     expect(notifications).toEqual([]);
+  });
+  it('classifies an explicit unmaterialized rejection without carrying the native error body', async () => {
+    // Given the fixed version's -32600 rejection that explicitly says the thread is not
+    // materialized yet, with the native message naming the thread.
+    const { createAppServerClient } =
+      await import('../../../shared/runtime/native/codex/appServerClient.js');
+    let receive: (raw: string) => void = () => {};
+    let requestId = 0;
+    const client = createAppServerClient({
+      transport: {
+        subscribe(callback) {
+          receive = callback;
+          return () => {};
+        },
+        send(raw) {
+          requestId = JSON.parse(raw).id;
+        },
+        close() {},
+      },
+      onMessage() {},
+    });
+    const pending = client.request('thread/turns/list', {});
+    receive(
+      JSON.stringify({
+        id: requestId,
+        error: {
+          code: -32600,
+          message:
+            'thread native-secret-thread is not materialized yet; thread/turns/list is unavailable before first user message',
+        },
+      }),
+    );
+    // When the rejection surfaces at the consumer.
+    const failure = await pending.catch((error: unknown) => error);
+    // Then only a boolean classification is kept and the native body never leaves the boundary.
+    expect(failure).toBeInstanceOf(ProtocolError);
+    expect(failure).toMatchObject({
+      code: 'invalid_request',
+      field: 'codex.rpc.thread/turns/list',
+      nativeCode: -32600,
+      unmaterialized: true,
+    });
+    expect(JSON.stringify(failure)).not.toContain('native-secret-thread');
+    expect(JSON.stringify(failure)).not.toContain('not materialized yet');
   });
   it('closes oversized native frames and never emits partial payloads', async () => {
     const { createAppServerClient } =
@@ -1264,4 +1308,349 @@ describe('Codex history cancellation before the first byte (upper client/produce
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
   }, 20000);
+});
+
+describe('Codex session operations completion and resume defects', () => {
+  const session = parseSessionRef({
+    environmentId: '11111111-1111-4111-8111-111111111111',
+    harnessInstanceId: '22222222-2222-4222-8222-222222222222',
+    nativeSessionId: 'native-defects',
+  });
+  const epoch = randomUUID();
+  const scope = { target: session.environmentId, epoch, processGeneration: 1, session };
+  async function harness() {
+    const directory = await mkdtemp(path.join(tmpdir(), 'vis-task14-defects-'));
+    const store = createRuntimeStore({
+      stateDirectory: directory,
+      environmentId: session.environmentId,
+      ownerId: session.harnessInstanceId,
+      epoch,
+    });
+    await store.ready;
+    const journal = createOperationJournal({ store, isProcessCurrent: () => true });
+    return { directory, store, journal, interactions: createInteractionStore({ store }) };
+  }
+  it('dispatches the accepted send queue once a non-turn mutation completes', async () => {
+    // Given a loaded session whose non-turn mutation holds the session active.
+    const { directory, store, journal, interactions } = await harness();
+    try {
+      const dispatched: string[] = [];
+      let releaseRename: () => void = () => {};
+      const renameGate = new Promise<void>((resolve) => {
+        releaseRename = resolve;
+      });
+      const sessions = createCodexSessionOperations({
+        store,
+        fingerprint,
+        newId: randomUUID,
+        journal,
+        interactions,
+        request: async (method: string): Promise<JsonValue> => {
+          dispatched.push(method);
+          if (method === 'thread/rename') await renameGate;
+          return method === 'thread/turn/start' ? { turn: { id: 'turn-1' } } : { ok: true };
+        },
+        scopeFor: () => scope,
+        assertCurrent() {},
+        emit() {},
+        authorizeSession: async () => directory,
+      });
+      await sessions.loaded(session);
+      const rename = sessions.mutate({
+        session,
+        method: 'thread/rename',
+        payload: { name: 'renamed' },
+        idempotencyKey: 'rename',
+      });
+      await vi.waitFor(() => expect(sessions.activeFor(session)?.method).toBe('thread/rename'));
+      // When a queue:true send is accepted while the mutation is still running.
+      const queued = record(
+        await sessions.mutate({
+          session,
+          method: 'thread/turn/start',
+          payload: { text: 'hi' },
+          idempotencyKey: 'send',
+          turn: true,
+          queue: true,
+        }),
+      );
+      if (typeof queued.operationId !== 'string') throw new Error('missing queued receipt');
+      const queuedId = queued.operationId;
+      expect(await journal.get(queuedId)).toMatchObject({ phase: 'accepted' });
+      releaseRename();
+      await rename;
+      // Then the non-turn completion advances the queue instead of stalling it.
+      await vi.waitFor(async () => {
+        expect(await journal.get(queuedId)).toMatchObject({ phase: 'observed' });
+      });
+      expect(dispatched).toContain('thread/turn/start');
+      await sessions.terminal({ session, turnId: 'turn-1', outcome: 'completed' });
+      await sessions.close();
+    } finally {
+      await store.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it('clears the cached resume rejection when authorization fails before the native send', async () => {
+    // Given a send whose resume closure fails at authorizeSession, before thread/resume.
+    const { directory, store, journal, interactions } = await harness();
+    try {
+      let authorizeCalls = 0;
+      let resumeCalls = 0;
+      let failAuthorization = true;
+      const sessions = createCodexSessionOperations({
+        store,
+        fingerprint,
+        newId: randomUUID,
+        journal,
+        interactions,
+        request: async (method: string): Promise<JsonValue> => {
+          if (method === 'thread/resume') resumeCalls += 1;
+          return method === 'thread/turn/start' ? { turn: { id: 'turn-1' } } : { ok: true };
+        },
+        scopeFor: () => scope,
+        assertCurrent() {},
+        emit() {},
+        authorizeSession: async () => {
+          authorizeCalls += 1;
+          // The second call is the one inside resume's closure.
+          if (failAuthorization && authorizeCalls === 2)
+            throw new Error('workspace check temporarily unavailable');
+          return directory;
+        },
+      });
+      await expect(
+        sessions.mutate({
+          session,
+          method: 'thread/turn/start',
+          payload: { text: 'hi' },
+          idempotencyKey: 'send-1',
+          turn: true,
+        }),
+      ).rejects.toThrow('workspace check temporarily unavailable');
+      expect(authorizeCalls).toBe(2);
+      expect(resumeCalls).toBe(0);
+      // When the transient condition clears, the next send retries in the same generation.
+      failAuthorization = false;
+      const retried = record(
+        await sessions.mutate({
+          session,
+          method: 'thread/turn/start',
+          payload: { text: 'again' },
+          idempotencyKey: 'send-2',
+          turn: true,
+        }),
+      );
+      if (typeof retried.operationId !== 'string') throw new Error('missing retried receipt');
+      // Then the memo is re-entered: authorizeSession runs again and thread/resume is sent once.
+      expect(authorizeCalls).toBe(4);
+      expect(resumeCalls).toBe(1);
+      expect(await journal.get(retried.operationId)).toMatchObject({ phase: 'observed' });
+      await sessions.terminal({ session, turnId: 'turn-1', outcome: 'completed' });
+      await sessions.close();
+    } finally {
+      await store.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it('keeps a rejected native resume memoised so an ambiguous outcome is not replayed', async () => {
+    // Given a resume whose native thread/resume was already sent when it failed.
+    const { directory, store, journal, interactions } = await harness();
+    try {
+      let resumeCalls = 0;
+      let failNative = true;
+      const sessions = createCodexSessionOperations({
+        store,
+        fingerprint,
+        newId: randomUUID,
+        journal,
+        interactions,
+        request: async (method: string): Promise<JsonValue> => {
+          if (method === 'thread/resume') {
+            resumeCalls += 1;
+            if (failNative) throw new Error('native resume acknowledgement lost');
+          }
+          return method === 'thread/turn/start' ? { turn: { id: 'turn-1' } } : { ok: true };
+        },
+        scopeFor: () => scope,
+        assertCurrent() {},
+        emit() {},
+        authorizeSession: async () => directory,
+      });
+      await expect(
+        sessions.mutate({
+          session,
+          method: 'thread/turn/start',
+          payload: { text: 'hi' },
+          idempotencyKey: 'send-1',
+          turn: true,
+        }),
+      ).rejects.toThrow('native resume acknowledgement lost');
+      expect(resumeCalls).toBe(1);
+      // When a later send retries, the ambiguous native outcome must not be replayed.
+      failNative = false;
+      await expect(
+        sessions.mutate({
+          session,
+          method: 'thread/turn/start',
+          payload: { text: 'again' },
+          idempotencyKey: 'send-2',
+          turn: true,
+        }),
+      ).rejects.toThrow('native resume acknowledgement lost');
+      expect(resumeCalls).toBe(1);
+      await sessions.close();
+    } finally {
+      await store.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Codex history unmaterialized thread reads', () => {
+  const session = parseSessionRef({
+    environmentId: '11111111-1111-4111-8111-111111111111',
+    harnessInstanceId: '22222222-2222-4222-8222-222222222222',
+    nativeSessionId: 'native-empty',
+  });
+  // Mirrors appServerClient's classification: the explicit "not materialized yet" marker sets
+  // `unmaterialized` only alongside the -32600 native code, so a different code stays a plain
+  // refusal without the classification.
+  const unmaterialized = (nativeCode: number) =>
+    Object.assign(new ProtocolError('invalid_request', 'codex.rpc.thread/turns/list'), {
+      nativeCode,
+      ...(nativeCode === -32600 ? { unmaterialized: true } : {}),
+    });
+  it('reads a brand-new thread with no first message as an empty complete page', async () => {
+    // Given Codex answers thread/turns/list on an unmaterialized thread with -32600.
+    const { createCodexHistory } = await import('../../../bridge/runtime/drivers/codexHistory.js');
+    const read = createCodexHistory({
+      processGeneration: 1,
+      epoch: 'epoch',
+      assertCurrent() {},
+      request: async (method: string): Promise<JsonValue> => {
+        if (method === 'thread/turns/list') throw unmaterialized(-32600);
+        throw new Error('unexpected method');
+      },
+    });
+    // When the initial history page is read.
+    const page = await read({ session });
+    // Then the thread reads as an empty, complete history instead of failing.
+    expect(page).toEqual({ items: [], cursor: null, completeness: 'complete' });
+  });
+  it('rejects an unrelated invalid_request instead of reporting empty history', async () => {
+    // Given a -32602 invalid params rejection on the same method (not unmaterialized).
+    const { createCodexHistory } = await import('../../../bridge/runtime/drivers/codexHistory.js');
+    const read = createCodexHistory({
+      processGeneration: 1,
+      epoch: 'epoch',
+      assertCurrent() {},
+      request: async (method: string): Promise<JsonValue> => {
+        if (method === 'thread/turns/list') throw unmaterialized(-32602);
+        throw new Error('unexpected method');
+      },
+    });
+    // When the initial history page is read.
+    // Then the failure surfaces instead of being swallowed as an empty page.
+    await expect(read({ session })).rejects.toThrow('codex.rpc.thread/turns/list');
+  });
+  it('never converts an unmaterialized rejection into an empty page mid-pagination', async () => {
+    // Given a first page that proves more turns remain, then an unmaterialized rejection.
+    const { createCodexHistory } = await import('../../../bridge/runtime/drivers/codexHistory.js');
+    let first = true;
+    const read = createCodexHistory({
+      processGeneration: 1,
+      epoch: 'epoch',
+      assertCurrent() {},
+      request: async (method: string): Promise<JsonValue> => {
+        if (method === 'thread/turns/list') {
+          if (first) {
+            first = false;
+            return { data: [{ id: 't', status: 'completed', items: [] }], nextCursor: 'turn-2' };
+          }
+          throw unmaterialized(-32600);
+        }
+        return {
+          data: [{ turnId: 't', item: { id: 'a', type: 'agentMessage', text: 'a' } }],
+          nextCursor: null,
+        };
+      },
+    });
+    const page = await read({ session });
+    expect(page.cursor).toBeTruthy();
+    // When the continuation page hits the same rejection.
+    // Then only the initial page may convert it, so the continuation still fails.
+    await expect(read({ session, cursor: page.cursor })).rejects.toThrow(
+      'codex.rpc.thread/turns/list',
+    );
+  });
+  // Drives the real RPC boundary: only the native transport is substituted, so a native -32600
+  // frame is classified by appServerClient before the history reader ever sees it.
+  const nativeChain = async (nativeError: { code: number; message: string }) => {
+    const { createAppServerClient } =
+      await import('../../../shared/runtime/native/codex/appServerClient.js');
+    const { createCodexHistory } = await import('../../../bridge/runtime/drivers/codexHistory.js');
+    let receive: (raw: string) => void = () => {};
+    const client = createAppServerClient({
+      transport: {
+        subscribe(callback) {
+          receive = callback;
+          return () => {};
+        },
+        send(raw) {
+          const id = (JSON.parse(raw) as { id: number }).id;
+          queueMicrotask(() => receive(JSON.stringify({ id, error: nativeError })));
+        },
+        close() {},
+      },
+      onMessage() {},
+    });
+    return createCodexHistory({
+      processGeneration: 1,
+      epoch: 'epoch',
+      assertCurrent() {},
+      request: async (method: string): Promise<JsonValue> => client.request(method, {}),
+    });
+  };
+  const sameCodeRefusals = [
+    {
+      name: 'an ephemeral thread without persistent history',
+      nativeError: { code: -32600, message: 'ephemeral threads do not support thread/turns/list' },
+    },
+    {
+      name: 'a thread that is not loaded in this connection',
+      nativeError: { code: -32600, message: 'thread not loaded: native-empty' },
+    },
+    {
+      name: 'an illegal thread id',
+      nativeError: { code: -32600, message: 'invalid thread id: not-a-uuid' },
+    },
+  ];
+  it.each(sameCodeRefusals)('rejects $name with an explicit code, not empty history', async ({
+    nativeError,
+  }) => {
+    // Given a -32600 refusal on the same method that is not the explicit unmaterialized signal.
+    const read = await nativeChain(nativeError);
+    // When the initial history page is read.
+    const failure = await read({ session }).catch((error: unknown) => error);
+    // Then the refusal surfaces instead of masquerading as a complete empty history.
+    expect(failure).toBeInstanceOf(ProtocolError);
+    expect(failure).toMatchObject({
+      code: 'invalid_request',
+      field: 'codex.rpc.thread/turns/list',
+      nativeCode: -32600,
+    });
+  });
+  it('reads a genuinely unmaterialized thread through the real RPC boundary as empty and complete', async () => {
+    // Given the fixed version's explicit -32600 rejection for a thread with no first message.
+    const read = await nativeChain({
+      code: -32600,
+      message:
+        'thread native-empty is not materialized yet; thread/turns/list is unavailable before first user message',
+    });
+    // When the initial history page is read.
+    const page = await read({ session });
+    // Then the thread still reads as an empty, complete history.
+    expect(page).toEqual({ items: [], cursor: null, completeness: 'complete' });
+  });
 });

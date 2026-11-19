@@ -1,3 +1,5 @@
+extends: ./scripts/electron-download-config.cjs
+
 appId: com.xenodrive.vis
 productName: Vis
 copyright: "Copyright © 2025 ${author}"

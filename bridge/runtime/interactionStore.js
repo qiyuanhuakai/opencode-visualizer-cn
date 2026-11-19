@@ -42,6 +42,20 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
     if (previous) previous.active = false;
     live.set(key, token);
   }
+  // Trusted recovery only: the Runtime atomically migrated this persisted process
+  // together with its task. Recreate the local token without a second generation claim.
+  async function resumeProcess(input) {
+    const scope = parseOperationScope(input);
+    await assertStoreScope(scope);
+    const key = processKey(scope);
+    const prior = await readRecord(store, 'operations', key);
+    if (!prior?.value.alive || prior.value.epoch !== scope.epoch || prior.value.generation !== scope.processGeneration)
+      throw new StoreError('reconcile_required', 'stale_generation');
+    await compareRecord(store, 'operations', key, prior, prior.value);
+    const previous = live.get(key);
+    if (previous) previous.active = false;
+    live.set(key, { scope, active: true });
+  }
   async function authority(scope, reserved = true) {
     await assertStoreScope(scope);
     const token = live.get(processKey(scope));
@@ -106,7 +120,7 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
     const key = keyFor(scope, nativeRequestId);
     const prepared = preparePayload(clean, `payload:${key}:${fingerprint(clean)}`);
     return admission.run({ size: prepared.ref.bytes }, async (signal) => {
-      const { token, record } = await authority(scope, false);
+      const { token } = await authority(scope, false);
       const value = {
         kind: 'interaction',
         scope,
@@ -125,23 +139,11 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
       await writePayload(store, 'interactions', prepared, false, signal);
       if (!token.active || signal.aborted)
         throw new StoreError('reconcile_required', 'stale_generation');
+      // The process row is a read-only authority precondition: including it in this
+      // mutation would expire the revision unrelated concurrent requests validated
+      // against, making distinct permission requests fail on each other's commit.
       try {
-        await compareRecord(
-          store,
-          'interactions',
-          key,
-          null,
-          value,
-          [
-            {
-              collection: 'operations',
-              key: processKey(scope),
-              expectedRevision: record.revision,
-              value: record.value,
-            },
-          ],
-          false,
-        );
+        await compareRecord(store, 'interactions', key, null, value, [], false);
       } catch (error) {
         if (!isRevisionConflict(error)) throw error;
         const duplicate = await readRecord(store, 'interactions', key);
@@ -149,6 +151,32 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
       }
       if (!token.active) throw new StoreError('reconcile_required', 'stale_generation');
       return key;
+    });
+  }
+  // A native resolution can retire an unclaimed prompt, but cannot steal a reply
+  // already admitted by this process (its own native ACK may arrive before HTTP).
+  async function invalidatePending(input, nativeRequestId) {
+    const scope = parseOperationScope(input);
+    const key = keyFor(scope, nativeRequestId);
+    await assertStoreScope(scope);
+    const existing = await readRecord(store, 'interactions', key, false);
+    if (!existing || existing.value.kind !== 'interaction' || existing.value.phase !== 'pending') return;
+    return admission.run({ reserved: true }, async (signal) => {
+      const { token } = await authority(scope);
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const prior = await readRecord(store, 'interactions', key);
+        if (!prior || prior.value.phase !== 'pending') return;
+        if (fingerprint(prior.value.scope) !== fingerprint(scope)) throw new StoreError('conflict', 'scope_fence');
+        if (!token.active || signal.aborted) throw new StoreError('reconcile_required', 'stale_generation');
+        try {
+          // The key includes epoch/generation: even a late retirement cannot touch a successor's interaction.
+          await compareRecord(store, 'interactions', key, prior, { ...prior.value, phase: 'invalidated' });
+          return;
+        } catch (error) {
+          if (!isRevisionConflict(error)) throw error;
+        }
+      }
+      throw new StoreError('conflict', 'concurrent_update');
     });
   }
   async function get(key) {
@@ -193,7 +221,7 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
     let claimedByThisCall = false;
     return admission
       .run({ reserved: true, deadlineMs, size: prepared.ref.bytes }, async (signal) => {
-        const { token, record: process } = await authority(scope);
+        const { token } = await authority(scope);
         const prior = await readRecord(store, 'interactions', key);
         if (!prior || fingerprint(prior.value.scope) !== fingerprint(scope))
           throw new StoreError('conflict', 'scope_fence');
@@ -204,21 +232,22 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
         await writePayload(store, 'interactions', prepared, true, signal);
         if (!token.active || signal.aborted)
           throw new StoreError('reconcile_required', 'stale_generation');
-        const claimed = await compareRecord(
-          store,
-          'interactions',
-          key,
-          prior,
-          { ...prior.value, phase: 'replying', answerRef: prepared.ref },
-          [
-            {
-              collection: 'operations',
-              key: processKey(scope),
-              expectedRevision: process.revision,
-              value: process.value,
-            },
-          ],
-        );
+        // The process row is a read-only authority precondition: including it in this
+        // mutation would expire the revision unrelated concurrent replies validated
+        // against, so only one of two distinct permission requests would be submitted.
+        let claimed;
+        try {
+          claimed = await compareRecord(store, 'interactions', key, prior, {
+            ...prior.value,
+            phase: 'replying',
+            answerRef: prepared.ref,
+          });
+        } catch (error) {
+          // This interaction row is the only change in the mutation, so a revision
+          // conflict can only mean another window claimed this same request.
+          if (!isRevisionConflict(error)) throw error;
+          throw new StoreError('conflict', 'interaction_claimed');
+        }
         claimedByThisCall = true;
         try {
           if (!token.active || signal.aborted)
@@ -249,5 +278,5 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
         throw error;
       });
   }
-  return { bindProcess, processExited, pending, get, reply };
+  return { bindProcess, resumeProcess, processExited, pending, invalidatePending, get, reply };
 }

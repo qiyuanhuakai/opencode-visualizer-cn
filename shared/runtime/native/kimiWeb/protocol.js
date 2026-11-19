@@ -92,17 +92,22 @@ export function parseNativeCapabilities(metaValue, openapiValue, asyncapiValue) 
   // This exact profile is verified with a live pending native turn and cancellation readback.
   const knownAbortDispatcher = v2 && meta.server_version === '2.1.1' &&
     paths['/api/v1/sessions/{session_id}:archive']?.post?.operationId === 'runSessionArchiveAction';
+  const promptAbort = v2 && meta.server_version === '2.5.2' && paths['/api/v1/sessions/{session_id}/prompts/{tail}']?.post?.operationId === 'promptAction';
   return Object.freeze({
+    promptAbort,
+    modernQuestions: promptAbort && route('/api/v1/sessions/{session_id}/interactions/{interaction_id}', 'post'),
+    modernApprovals: promptAbort && route('/api/v1/sessions/{session_id}/interactions/{interaction_id}', 'post'),
     catalogV2: v2 && route('/api/v2/sessions'),
     transcript: route('/api/v1/sessions/{session_id}/transcript'),
     snapshot: route('/api/v1/sessions/{session_id}/snapshot'),
+    sessionRead: route('/api/v1/sessions/{session_id}'),
     subscribeV2: meta.capabilities?.websocket === true && messages.subscribe_v2?.name === 'subscribe_v2',
     subscribe: meta.capabilities?.websocket === true && messages.subscribe?.name === 'subscribe',
     create: route('/api/v1/sessions', 'post'),
     send: route('/api/v1/sessions/{session_id}/prompts', 'post'),
-    cancel: route('/api/v1/sessions/{session_id}:abort', 'post') || knownAbortDispatcher,
-    approvals: route('/api/v1/sessions/{session_id}/approvals/{approval_id}', 'post'),
-    questions: route('/api/v1/sessions/{session_id}/questions/{tail}', 'post'),
+    cancel: route('/api/v1/sessions/{session_id}:abort', 'post') || knownAbortDispatcher || promptAbort,
+    approvals: route('/api/v1/sessions/{session_id}/approvals/{approval_id}', 'post') || (promptAbort && route('/api/v1/sessions/{session_id}/interactions/{interaction_id}', 'post')),
+    questions: route('/api/v1/sessions/{session_id}/questions/{tail}', 'post') || (promptAbort && route('/api/v1/sessions/{session_id}/interactions/{interaction_id}', 'post')),
     models: route('/api/v1/models'),
     agents: route('/api/v1/sessions/{session_id}/agents'),
     status: route('/api/v1/sessions/{session_id}/status'),

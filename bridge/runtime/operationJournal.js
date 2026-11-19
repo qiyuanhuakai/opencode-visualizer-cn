@@ -129,6 +129,7 @@ export async function compareRecord(
 export function isRevisionConflict(error) {
   return error instanceof StoreError && error.reason === 'entity_revision';
 }
+const OUTCOMES = Object.freeze(['completed', 'failed', 'cancelled', 'interrupted']);
 export function createOperationJournal({
   store,
   admission = createAdmissionQueue(),
@@ -149,15 +150,38 @@ export function createOperationJournal({
     if (fingerprint(value.scope) !== fingerprint(parseOperationScope(scope)))
       throw new StoreError('conflict', 'scope_fence');
   }
+  /**
+   * Authority for an operation the Runtime has already superseded: the recorded
+   * generation must be the same SessionRef and strictly older than the scope the
+   * caller presents. An old-generation callback can never satisfy it, because it
+   * cannot present a current scope, so the old-callback fence is preserved.
+   */
+  function supersededFence(value, scope) {
+    const recorded = parseOperationScope(value.scope);
+    if (
+      recorded.target !== scope.target ||
+      recorded.epoch !== scope.epoch ||
+      fingerprint(recorded.session) !== fingerprint(scope.session) ||
+      recorded.processGeneration >= scope.processGeneration
+    )
+      throw new StoreError('conflict', 'scope_fence');
+  }
   function assertCurrent(scope) {
     if (isProcessCurrent(scope) !== true)
       throw new StoreError('reconcile_required', 'stale_generation');
   }
-  async function transition(id, scope, change, reserved = true, requireCurrent = false) {
+  async function transition(
+    id,
+    scope,
+    change,
+    reserved = true,
+    requireCurrent = false,
+    authority = fence,
+  ) {
     await assertStoreScope(scope);
     for (let attempt = 0; attempt < 4; attempt++) {
       const prior = await getRecord(id, reserved);
-      fence(prior.value, scope);
+      authority(prior.value, scope);
       if (requireCurrent) assertCurrent(scope);
       const value = change(prior.value);
       if (value === prior.value) return value;
@@ -351,8 +375,7 @@ export function createOperationJournal({
     scope = parseOperationScope(scope);
     if (isProcessCurrent(scope) !== true)
       throw new StoreError('reconcile_required', 'stale_generation');
-    if (!['completed', 'failed', 'cancelled', 'interrupted'].includes(outcome))
-      throw new StoreError('invalid_request', 'outcome');
+    if (!OUTCOMES.includes(outcome)) throw new StoreError('invalid_request', 'outcome');
     return admission.run({ reserved: true }, () =>
       transition(
         id,
@@ -368,11 +391,39 @@ export function createOperationJournal({
       ),
     );
   }
+  /**
+   * Finishes an operation whose process generation the Runtime has superseded, and
+   * releases its session lease in the same mutation. `currentScope` must be the live
+   * generation: its currency is the Runtime's confirmation that the recorded
+   * generation's process has exited, which is what authorises the terminal.
+   */
+  async function terminalSuperseded(id, currentScope, outcome) {
+    const scope = parseOperationScope(currentScope);
+    if (isProcessCurrent(scope) !== true)
+      throw new StoreError('reconcile_required', 'stale_generation');
+    if (!OUTCOMES.includes(outcome)) throw new StoreError('invalid_request', 'outcome');
+    return admission.run({ reserved: true }, () =>
+      transition(
+        id,
+        scope,
+        (value) => {
+          if (value.phase === 'terminal') return value;
+          if (!['sent', 'observed', 'reconciling'].includes(value.phase))
+            throw new StoreError('conflict', 'operation_phase');
+          return { ...value, phase: 'terminal', outcome };
+        },
+        true,
+        true,
+        supersededFence,
+      ),
+    );
+  }
   return {
     accept,
     execute,
     cancel,
     terminal,
+    terminalSuperseded,
     get: async (id) => (await getRecord(id, false)).value,
     reconcile: (id, scope) =>
       admission.run({ reserved: true }, () =>

@@ -48,7 +48,7 @@ export async function createKimiWebDriver(options) {
   };
   let sourceAuthority = authority();
   let state = options.enabled === false ? 'disabled' : options.installed === false ? 'missing' : 'starting';
-  let closed = false, closing, sourceId;
+  let closed = false, closing, sourceId, ownedStopped = false;
   let capabilities = parseNativeCapabilities({}, { paths: {} }, { components: { messages: {} } });
   const admission = options.admission ?? createAdmissionQueue();
   const transport = state === 'starting' ? createKimiWebTransport({ endpoint: options.endpoint, getAuthorization: options.getAuthorization, deadlineMs: options.deadlineMs }) : undefined;
@@ -58,10 +58,143 @@ export async function createKimiWebDriver(options) {
   const lifecycleSessions = new Set();
   const observers = new Set();
   const selected = new Map();
+  const retained = new Map();
+  const runningTasks = new Map();
+  const endedTasks = new Map();
+  const monitorReads = new Map();
+  const uncertain = new Set();
+  // A durable read that fails is not evidence about the session, but it is also not a reason to
+  // retry forever: one pending re-check per session on a bounded backoff re-reads the lease after
+  // a transient refusal (the store rejects with queue_full while it is saturated) and, once the
+  // schedule is exhausted, leaves the session conservatively uncertain instead of pinning its slot.
+  const recheckTimers = new Map();
+  const recheckAttempts = new Map();
+  const RECHECK_DELAYS_MS = [50, 100, 200, 400, 800];
   const invalidated = new Set();
   let eventWork = Promise.resolve(), eventCount = 0, eventBytes = 0;
   let lastEventError;
-  const stats = { recoveries: 0, nativeFrames: 0, lifecycleFrames: 0, sourceDisconnects: 0 };
+  let startupWork = Promise.resolve();
+  let startupGeneration = 0;
+  const startupRecovery = { state: 'idle', scanned: 0, restored: 0, failures: 0 };
+  const stats = { recoveries: 0, nativeFrames: 0, lifecycleFrames: 0, sourceDisconnects: 0, reclaimed: 0, rechecks: 0 };
+  // A session is retained while an observer watches it, while a read or send is in flight, or while a submitted turn still has to be observed to completion.
+  function retain(sessionId) {
+    retained.set(sessionId, (retained.get(sessionId) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const count = (retained.get(sessionId) ?? 0) - 1;
+      if (count > 0) retained.set(sessionId, count);
+      else { retained.delete(sessionId); reclaim(sessionId); }
+    };
+  }
+  // A submitted turn is tracked by the identity of the operation that submitted it, so only that turn's terminal frame can release it.
+  function registerTask(sessionId, operationId) {
+    const tasks = runningTasks.get(sessionId);
+    if (tasks) { tasks.add(operationId); return; }
+    runningTasks.set(sessionId, new Set([operationId]));
+  }
+  // Keep terminal evidence until every overlapping recovery read has returned.
+  async function restoreTaskMonitor(captured, expectedOperationId) {
+    const sessionId = captured.session.nativeSessionId;
+    const ended = new Set();
+    let reads = monitorReads.get(sessionId);
+    if (!reads) monitorReads.set(sessionId, (reads = new Set()));
+    reads.add(ended);
+    try {
+      const operationId = await operations.liveTask(captured);
+      fence(captured);
+      if (!operationId || ended.has(operationId) ||
+          (expectedOperationId !== undefined && operationId !== expectedOperationId)) return;
+      if (!selected.has(sessionId) && selected.size >= 32) {
+        throw new ProtocolError('source_unavailable', 'selected_session_limit');
+      }
+      registerTask(sessionId, operationId);
+      return operationId;
+    } finally {
+      reads.delete(ended);
+      if (!reads.size) monitorReads.delete(sessionId);
+    }
+  }
+  function releaseTask(sessionId, operationId) {
+    const tasks = runningTasks.get(sessionId);
+    if (!tasks) return;
+    tasks.delete(operationId);
+    if (!tasks.size) runningTasks.delete(sessionId);
+  }
+  // A terminal observed on the native lane is remembered per session, so a late
+  // acknowledgement cannot re-register a task whose terminal already released it.
+  function noteEndedTask(sessionId, operationId) {
+    for (const ended of monitorReads.get(sessionId) ?? []) ended.add(operationId);
+    let ended = endedTasks.get(sessionId);
+    if (!ended) endedTasks.set(sessionId, (ended = new Set()));
+    ended.add(operationId);
+  }
+  function consumeEndedTask(sessionId, operationId) {
+    const ended = endedTasks.get(sessionId);
+    if (!ended?.has(operationId)) return false;
+    ended.delete(operationId);
+    if (!ended.size) endedTasks.delete(sessionId);
+    return true;
+  }
+  // A re-read that failed is rescheduled once per session on the bounded backoff above: the
+  // pending timer is the de-duplication, so a burst of uncertain sessions cannot pile up
+  // concurrent re-reads, and the attempt counter stops the schedule instead of retrying forever.
+  function scheduleRecheck(sessionId) {
+    if (closed || recheckTimers.has(sessionId)) return;
+    const attempt = (recheckAttempts.get(sessionId) ?? 0) + 1;
+    if (attempt > RECHECK_DELAYS_MS.length) return;
+    recheckAttempts.set(sessionId, attempt);
+    const timer = setTimeout(() => {
+      recheckTimers.delete(sessionId);
+      stats.rechecks++;
+      if (uncertain.has(sessionId)) void verify(sessionId);
+    }, RECHECK_DELAYS_MS[attempt - 1]);
+    timer.unref?.();
+    recheckTimers.set(sessionId, timer);
+  }
+  function forgetRecheck(sessionId) {
+    const timer = recheckTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    recheckTimers.delete(sessionId);
+    recheckAttempts.delete(sessionId);
+  }
+  function reclaim(sessionId) {
+    if (closed || retained.get(sessionId) || runningTasks.has(sessionId)) return;
+    // A session whose durable state could not be read is not evidence of an idle session:
+    // re-read it and keep monitoring until the answer is reliable.
+    if (uncertain.has(sessionId)) { void verify(sessionId); return; }
+    const pending = selected.get(sessionId);
+    if (!pending || [...pending.values()].some(entry => entry.held > 0)) return;
+    const agents = [...new Set([...pending.keys()].map((key) => key.slice(key.indexOf(':') + 1)))];
+    selected.delete(sessionId);
+    lifecycleCursors.delete(sessionId);
+    endedTasks.delete(sessionId);
+    uncertain.delete(sessionId);
+    forgetRecheck(sessionId);
+    for (const key of lifecycleSubscriptions.keys()) if (key.endsWith(`:${sessionId}`)) lifecycleSubscriptions.delete(key);
+    history.release(sessionId);
+    stats.reclaimed++;
+    detachNative(sessionId, agents);
+  }
+  async function verify(sessionId) {
+    let live = null;
+    // liveTask looks the lease up through the session key, so the re-read has to carry the full
+    // OperationScope of the session being verified: a flat identifier has no scope.session and
+    // fails identity parsing before any durable read, which would strand the session forever.
+    try { live = await restoreTaskMonitor(capture({ ...scope, session: { ...scope, nativeSessionId: sessionId } })); }
+    catch { scheduleRecheck(sessionId); return; }
+    forgetRecheck(sessionId);
+    uncertain.delete(sessionId);
+    if (live) return;
+    reclaim(sessionId);
+  }
+  function detachNative(sessionId, agents) {
+    const transcript = Object.fromEntries(agents.map((agentId) => [agentId, 'off']));
+    const lanes = [transport?.control('unsubscribe_v2', { session_id: sessionId, transcript }), lifecycleTransport?.control('unsubscribe', { session_ids: [sessionId] })];
+    for (const lane of lanes) void lane?.catch(() => undefined);
+  }
   function emit(value, sessionId) {
     for (const entry of observers) if (!entry.sessionId || entry.sessionId === sessionId) entry.stream.push(value);
   }
@@ -82,24 +215,30 @@ export async function createKimiWebDriver(options) {
       candidate.epoch === current.epoch && candidate.processGeneration === current.processGeneration;
   }
   function fence(candidate) { if (!isCurrent(candidate)) throw new ProtocolError('reconcile_required', 'stale_generation'); }
-  const operations = transport ? createKimiWebOperations({ store: options.store, transport, isCurrent, admission }) : undefined;
-  const history = transport ? createKimiWebHistory({ transport, onRecovered(sessionId, result) {
+  const operations = transport ? createKimiWebOperations({ store: options.store, transport, isCurrent, promptAbort: () => capabilities.promptAbort, admission }) : undefined;
+  const history = transport ? createKimiWebHistory({ transport, legacySnapshot: () => capabilities.snapshot, onRecovered(sessionId, result) {
     stats.recoveries++; emit({ type: 'resynchronized', session: { ...scope, nativeSessionId: sessionId }, ...result }, sessionId);
+    if (capabilities.promptAbort && !capabilities.snapshot && selected.has(sessionId)) {
+      settleModernRecovery(Object.freeze({ target: scope.environmentId, ...authority(), session: { ...scope, nativeSessionId: sessionId } }));
+    }
   } }) : undefined;
   function requireCapability(name) { if (!capabilities[name]) throw new ProtocolError('unsupported', `kimi_${name}`); }
+  const modernRecoveryWork = new Map();
+  function reportEventError(error) {
+    lastEventError = { code: error?.code ?? 'source_unavailable', reason: error?.field ?? error?.reason ?? 'native_event' };
+    emit({ type: 'source_error', ...lastEventError });
+  }
   function scheduled(action, bytes = 0) {
     if (eventCount >= 256 || eventBytes + bytes > 4194304) {
       lastEventError = { code: 'replay_required', reason: 'producer_backpressure' };
       emit({ type: 'replay_required', reason: 'producer_backpressure' });
       for (const sessionId of selected.keys()) invalidated.add(sessionId);
       void transport.disconnect(); void lifecycleTransport.disconnect();
-      return;
+      return false;
     }
     eventCount++; eventBytes += bytes;
-    eventWork = eventWork.then(action).catch((error) => {
-      lastEventError = { code: error?.code ?? 'source_unavailable', reason: error?.field ?? error?.reason ?? 'native_event' };
-      emit({ type: 'source_error', ...lastEventError });
-    }).finally(() => { eventCount--; eventBytes -= bytes; });
+    eventWork = eventWork.then(action).catch(reportEventError).finally(() => { eventCount--; eventBytes -= bytes; });
+    return true;
   }
   function onFrame(frame, connection) {
     stats.nativeFrames++;
@@ -113,6 +252,7 @@ export async function createKimiWebDriver(options) {
     }
     const session = { ...scope, nativeSessionId: sessionId };
     const captured = Object.freeze({ target: scope.environmentId, ...authority(), session });
+    if (capabilities.promptAbort && !capabilities.snapshot) onModernLifecycle(frame, captured);
     try {
       if (!history.receive(frame, connection)) return;
     } catch (error) {
@@ -134,6 +274,93 @@ export async function createKimiWebDriver(options) {
       emit({ type: 'catalog_changed', session }, sessionId);
     }
   }
+  function onModernLifecycle(frame, captured) {
+    const sessionId = captured.session.nativeSessionId;
+    if (!selected.has(sessionId)) return;
+    if (frame.type === 'interaction' && frame.agent_id === 'main' && (frame.kind === 'question' && capabilities.modernQuestions || frame.kind === 'approval' && capabilities.modernApprovals) && ['pending', 'ended'].includes(frame.status)) {
+      settleModernInteraction(captured, frame);
+      return;
+    }
+    const payload = frame.payload ?? {};
+    if ((payload.agent_id ?? payload.agentId ?? 'main') !== 'main') return;
+    if (frame.type === 'event.session.work_changed' && typeof payload.busy === 'boolean') {
+      emit({ type: 'session.activity', session: captured.session, status: payload.busy ? 'running' : 'idle' }, sessionId);
+      return;
+    }
+    if (!Number.isSafeInteger(payload.seq) || payload.seq < 0) return;
+    const turns = frame.type === 'transcript.reset' ? payload.snapshot?.items : frame.type === 'transcript.ops' ? payload.ops?.filter(op => op.op === 'turn.upsert').map(op => op.turn) : undefined;
+    if (!Array.isArray(turns) || !turns.length) return;
+    settleModernTurns(captured, turns, Buffer.byteLength(JSON.stringify(frame)));
+  }
+  function settleModernRecovery(captured) {
+    const sessionId = captured.session.nativeSessionId;
+    const key = JSON.stringify([captured.epoch, captured.processGeneration, sessionId]);
+    const existing = modernRecoveryWork.get(key);
+    if (existing) { existing.dirty = true; return; }
+    const entry = { dirty: true };
+    modernRecoveryWork.set(key, entry);
+    if (!scheduled(async () => {
+      try {
+        // Coalesce updates without losing a recovery that arrives during a pass.
+        // Yield the event lane after two passes so other sessions can progress.
+        for (let pass = 0; pass < 2; pass++) {
+          entry.dirty = false;
+          const attachments = [...(selected.get(sessionId)?.values() ?? [])].map(item => item.work ?? item);
+          await Promise.allSettled(attachments);
+          if (!selected.has(sessionId)) return;
+          const snapshot = history.inspect(sessionId).snapshot;
+          const failures = [];
+          try {
+            await operations.recoverModernInteractions(captured, snapshot, (pending, kind) => {
+              emit({ type: 'interaction.pending', session: captured.session, interactionId: pending.interactionId, kind, payload: pending.payload }, sessionId);
+            });
+          } catch (error) { failures.push(error); }
+          // A failed interaction write does not invalidate the snapshot's independent
+          // proof about the owned main turn. Always attempt its fenced settlement.
+          try {
+            const turns = snapshot.items.filter(turn => turn.kind === 'turn' && typeof turn.triggerPromptId === 'string');
+            const ended = await operations.syncTranscript(captured, turns);
+            if (ended) {
+              noteEndedTask(sessionId, ended.operationId); releaseTask(sessionId, ended.operationId);
+              uncertain.delete(sessionId); forgetRecheck(sessionId); reclaim(sessionId);
+              emit({ type: 'turn.ended', session: captured.session, reason: ended.reason }, sessionId);
+            }
+          } catch (error) { failures.push(error); }
+          if (failures.length) {
+            for (const error of failures.slice(0, -1)) reportEventError(error);
+            throw failures.at(-1);
+          }
+          if (!entry.dirty) break;
+        }
+      } finally {
+        modernRecoveryWork.delete(key);
+        if (entry.dirty && selected.has(sessionId) && isCurrent(captured)) settleModernRecovery(captured);
+      }
+    })) modernRecoveryWork.delete(key);
+  }
+  function settleModernInteraction(captured, frame) {
+    const sessionId = captured.session.nativeSessionId;
+    const attachments = [...(selected.get(sessionId)?.values() ?? [])].map(entry => entry.work ?? entry);
+    scheduled(async () => {
+      await Promise.allSettled(attachments);
+      const pending = await operations.modernInteraction(captured, frame);
+      if (pending) emit({ type: 'interaction.pending', session: captured.session, interactionId: pending.interactionId, kind: frame.kind, payload: pending.payload }, sessionId);
+    }, Buffer.byteLength(JSON.stringify(frame)));
+  }
+  function settleModernTurns(captured, turns, bytes = 0) {
+    if (!turns.length) return;
+    const sessionId = captured.session.nativeSessionId;
+    const attachments = [...(selected.get(sessionId)?.values() ?? [])].map(entry => entry.work ?? entry);
+    scheduled(async () => {
+      // Attachment failure must not discard an independently confirmed main terminal.
+      await Promise.allSettled(attachments);
+      const ended = await operations.syncTranscript(captured, turns);
+      if (!ended) return;
+      noteEndedTask(sessionId, ended.operationId); releaseTask(sessionId, ended.operationId);
+      uncertain.delete(sessionId); forgetRecheck(sessionId); reclaim(sessionId);
+      emit({ type: 'turn.ended', session: captured.session, reason: ended.reason }, sessionId);
+    }, bytes || Buffer.byteLength(JSON.stringify(turns)));
+  }
   function onLifecycle(frame) {
     stats.lifecycleFrames++;
     const sessionId = frame.session_id;
@@ -151,7 +378,11 @@ export async function createKimiWebDriver(options) {
     const payload = frame.payload ?? {};
     if (frame.type === 'turn.started') scheduled(() => operations.started(captured, payload));
     else if (frame.type === 'turn.ended') scheduled(async () => {
-      await operations.terminal(captured, payload);
+      const ended = await operations.terminal(captured, payload);
+      // A genuine terminal of the session's own main task is reliable evidence about its
+      // durable state, so it also resolves a session kept only by an unreadable read.
+      if (ended) { noteEndedTask(sessionId, ended.operationId); releaseTask(sessionId, ended.operationId); uncertain.delete(sessionId); forgetRecheck(sessionId); }
+      reclaim(sessionId);
       emit({ type: 'turn.ended', session, reason: payload.reason }, sessionId);
     });
     else if (frame.type === 'event.approval.requested' || frame.type === 'event.question.requested') {
@@ -204,8 +435,10 @@ export async function createKimiWebDriver(options) {
     }
     return { state, protocolVersion: 1 };
   }
+  function supportsHistory() { return capabilities.transcript && capabilities.subscribeV2 && (capabilities.snapshot ? capabilities.subscribe : capabilities.sessionRead); }
+  function requireHistory() { if (!supportsHistory()) throw new ProtocolError('unsupported', 'kimi.history'); }
   async function connect() {
-    requireCapability('subscribeV2'); requireCapability('subscribe');
+    requireCapability('subscribeV2'); if (capabilities.snapshot) requireCapability('subscribe');
     await transport.open(onFrame, () => { stats.sourceDisconnects++; if (!closed) emit({ type: 'source_disconnected' }); });
   }
   function agentSlot(sessionId, agentId) {
@@ -214,7 +447,7 @@ export async function createKimiWebDriver(options) {
     return { pending, key: `${transport.generation}:${agentId}`, entry: undefined };
   }
   async function subscribeSession(sessionId, agentId = 'main', hold = 'permanent') {
-    requireCapability('subscribeV2'); requireCapability('snapshot'); requireCapability('transcript');
+    requireHistory();
     history.selected(sessionId, agentId);
     const found = agentSlot(sessionId, agentId);
     const pending = found.pending ?? selected.set(sessionId, new Map()).get(sessionId);
@@ -226,11 +459,13 @@ export async function createKimiWebDriver(options) {
       entry.work = (async () => {
         if (!history.cursor(sessionId)) await history.recover(sessionId);
         await connect();
-        await subscribeLifecycle(sessionId);
-        const cursor = history.cursor(sessionId);
-        const replay = await transport.control('subscribe', { session_ids: [sessionId], ...(cursor ? { cursors: { [sessionId]: cursor } } : {}) });
-        if (replay.payload.not_found?.includes(sessionId)) throw new ProtocolError('source_unavailable', 'native_session_missing');
-        if (replay.resync.includes(sessionId)) await history.recover(sessionId);
+        if (capabilities.snapshot) {
+          await subscribeLifecycle(sessionId);
+          const cursor = history.cursor(sessionId);
+          const replay = await transport.control('subscribe', { session_ids: [sessionId], ...(cursor ? { cursors: { [sessionId]: cursor } } : {}) });
+          if (replay.payload.not_found?.includes(sessionId)) throw new ProtocolError('source_unavailable', 'native_session_missing');
+          if (replay.resync.includes(sessionId)) await history.recover(sessionId);
+        }
         const since = history.transcriptCursors(sessionId);
         const grades = Object.fromEntries([...new Set([...pending.keys()].map((entry) => entry.slice(entry.indexOf(':') + 1)).concat(agentId))].map((id) => [id, 'delta']));
         const attached = await transport.control('subscribe_v2', { session_id: sessionId, transcript: grades, ...(Object.keys(since).length ? { transcript_since: since } : {}) });
@@ -317,17 +552,23 @@ export async function createKimiWebDriver(options) {
       return { ...page, items: page.items.map((item) => sessionSummary(item, scope)) };
     },
     async getSession(context) {
-      const captured = capture(context, true); requireCapability('snapshot');
-      const snapshot = record(await transport.request('GET', `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}/snapshot`));
+      const captured = capture(context, true);
+      const useSnapshot = capabilities.snapshot;
+      requireCapability(useSnapshot ? 'snapshot' : 'sessionRead');
+      const path = `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}`;
+      const value = record(await transport.request('GET', useSnapshot ? `${path}/snapshot` : path));
       fence(captured);
-      return sessionSummary(snapshot.session, scope);
+      return sessionSummary(useSnapshot ? value.session : value, scope);
     },
     async readHistoryPage(context) {
       const captured = capture(context, true); requireCapability('transcript');
       const params = record(context.params); const agentId = params.agentId ?? 'main';
-      await subscribeSession(captured.session.nativeSessionId, agentId);
-      const page = await admission.run({}, (signal) => history.read(captured.session.nativeSessionId, { agentId, cursor: params.cursor, limit: params.limit ?? 100, signal }));
-      fence(captured); return page;
+      const release = retain(captured.session.nativeSessionId);
+      try {
+        await subscribeSession(captured.session.nativeSessionId, agentId);
+        const page = await admission.run({}, (signal) => history.read(captured.session.nativeSessionId, { agentId, cursor: params.cursor, limit: params.limit ?? 100, signal }));
+        fence(captured); return page;
+      } finally { release(); }
     },
     async openHistory(context) {
       const captured = capture(context, true);
@@ -367,25 +608,56 @@ export async function createKimiWebDriver(options) {
       if (!Array.isArray(content) || !content.length || content.some((part) => !part || part.type !== 'text' || typeof part.text !== 'string'))
         throw new ProtocolError('invalid_request', 'prompt_content');
       const payload = jsonValue({ content, ...(params.agentId ? { agent_id: nativeText(params.agentId, 'agent_id', 128) } : {}), ...(params.model ? { model: nativeText(params.model, 'model_id', 512) } : {}) });
-      await subscribeSession(captured.session.nativeSessionId, params.agentId ?? 'main');
-      fence(captured);
-      return operations.send(captured, payload, params.idempotencyKey);
+      nativeText(params.idempotencyKey, 'idempotency_key', 512);
+      const release = retain(captured.session.nativeSessionId);
+      try {
+        await subscribeSession(captured.session.nativeSessionId, params.agentId ?? 'main');
+        fence(captured);
+        const executed = await operations.send(captured, payload, params.idempotencyKey);
+        // The native turn can complete on the WebSocket before this acknowledgement
+        // resolves: an operation whose terminal was already observed must not be
+        // registered again, because no later frame would ever release that reference.
+        if (!consumeEndedTask(captured.session.nativeSessionId, executed.operationId))
+          registerTask(captured.session.nativeSessionId, executed.operationId);
+        return executed;
+      } catch (error) {
+        // A task that provably reached the send boundary, or whose acknowledgement cannot be accounted for, stays monitored for reconciliation; one that never entered it is reclaimed by the release below.
+        try {
+          await restoreTaskMonitor(captured);
+        } catch {
+          // The durable state could not be read, which is not evidence that no task is
+          // running: keep the session monitored until a reliable read or terminal decides.
+          uncertain.add(captured.session.nativeSessionId);
+        }
+        throw error;
+      } finally { release(); }
     },
     async cancel(context) {
       const captured = capture(context, true); requireCapability('cancel');
       const params = record(context.params);
-      return operations.cancel(captured, params.operationId, params.idempotencyKey);
+      const release = retain(captured.session.nativeSessionId);
+      try { return await operations.cancel(captured, params.operationId, params.idempotencyKey); }
+      finally { release(); }
     },
     async respondInteraction(context) {
       const captured = capture(context, true); const params = record(context.params);
-      return operations.reply(captured, params.interactionId, record(params.answer), params.idempotencyKey);
+      const release = retain(captured.session.nativeSessionId);
+      try { return await operations.reply(captured, params.interactionId, record(params.answer), params.idempotencyKey); }
+      finally { release(); }
     },
     async subscribe(context) {
       const captured = capture(context); requireCapability('subscribeV2');
-      const params = record(context.params); const entry = { sessionId: captured.session?.nativeSessionId, stream: undefined };
-      entry.stream = observer(() => observers.delete(entry)); observers.add(entry);
+      const params = record(context.params); const sessionId = captured.session?.nativeSessionId;
+      const entry = { sessionId, stream: undefined };
+      const release = sessionId === undefined ? undefined : retain(sessionId);
+      let detached = false;
+      const detach = () => { if (detached) return; detached = true; observers.delete(entry); release?.(); };
+      entry.stream = observer(detach); observers.add(entry);
       try {
-        if (captured.session) await subscribeSession(captured.session.nativeSessionId, params.agentId ?? 'main'); else await connect();
+        if (captured.session && sessionId !== undefined) {
+          await restoreTaskMonitor(captured);
+          await subscribeSession(sessionId, params.agentId ?? 'main');
+        } else await connect();
         fence(captured); return entry.stream;
       } catch (error) { await entry.stream.return(); throw error; }
     },
@@ -412,17 +684,78 @@ export async function createKimiWebDriver(options) {
       const value = await transport.request('GET', `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}/status`); fence(captured); return value;
     },
   };
+  function queueStartupRecovery() {
+    const generation = ++startupGeneration;
+    startupWork = startupWork.then(() => new Promise(resolve => setImmediate(resolve))).then(() => restoreOwnedTasks(generation));
+  }
+  async function restoreOwnedTasks(generation) {
+    const stopped = () => closed || generation !== startupGeneration;
+    if (stopped()) return;
+    if (state !== 'ready' || capabilities.snapshot || !capabilities.promptAbort) { startupRecovery.state = 'idle'; return; }
+    Object.assign(startupRecovery, { state: 'scanning', scanned: 0, restored: 0, failures: 0 });
+    let cursor = null;
+    try {
+      do {
+        if (stopped()) return;
+        const page = await options.store.page({ collection: 'operations', limit: 100, cursor });
+        for (const row of page.items) {
+          if (stopped()) return;
+          startupRecovery.scanned++;
+          const value = row.value;
+          if (!value || value.kind !== 'operation' || value.method !== 'send' || !['sent', 'observed', 'reconciling'].includes(value.phase)) continue;
+          const session = value.scope?.session;
+          if (session?.environmentId !== scope.environmentId || session?.harnessInstanceId !== scope.harnessInstanceId) continue;
+          // New sends already register their own monitor. Only old Runtime tasks (or an
+          // interrupted adoption from one) require startup restoration.
+          if (value.scope.epoch === authority().epoch && !value.recoveredFrom) continue;
+          try {
+            const captured = capture({ ...scope, session }, true);
+            const operationId = await restoreTaskMonitor(captured, row.key);
+            if (!operationId) continue;
+            await subscribeSession(session.nativeSessionId, 'main', 'restored');
+            await eventWork;
+            if (stopped()) return;
+            fence(captured);
+            const restored = await operations.journal.get(operationId);
+            if (restored.scope.epoch !== captured.epoch || restored.scope.processGeneration !== captured.processGeneration) throw new ProtocolError('reconcile_required', 'startup_task_unreconciled');
+            startupRecovery.restored++;
+          } catch (error) {
+            if (stopped()) return;
+            startupRecovery.failures++;
+            reportEventError(error);
+          }
+        }
+        if (page.cursor !== null && page.cursor === cursor) throw new ProtocolError('reconcile_required', 'startup_cursor_cycle');
+        cursor = page.cursor;
+        // One bounded store page and one attachment at a time; normal commands can interleave.
+        await new Promise(resolve => setImmediate(resolve));
+      } while (cursor !== null);
+      startupRecovery.state = startupRecovery.failures ? 'partial' : 'complete';
+    } catch (error) {
+      if (!stopped()) { startupRecovery.state = 'partial'; startupRecovery.failures++; reportEventError(error); }
+    } finally { if (closed) startupRecovery.state = 'stopped'; }
+  }
   async function close() {
     if (closing) return closing;
-    closed = true;
+    closed = true; startupGeneration++; startupRecovery.state = 'stopped';
     closing = (async () => {
-      await transport?.close(); await lifecycleTransport?.close(); await eventWork;
-      await operations?.close();
-      for (const entry of observers) await entry.stream.return();
-      history?.clear(); selected.clear();
-      if (options.ownership === 'owned') await options.stopOwned();
+      const errors = [];
+      const attempt = async action => { try { await action(); } catch (error) { errors.push(error); } };
+      await Promise.all([
+        attempt(() => transport?.close()),
+        attempt(() => lifecycleTransport?.close()),
+      ]);
+      await attempt(() => startupWork);
+      await attempt(() => eventWork);
+      await attempt(() => operations?.close());
+      await Promise.all([...observers].map(entry => attempt(() => entry.stream.return())));
+      history?.clear(); selected.clear(); retained.clear(); runningTasks.clear(); endedTasks.clear(); uncertain.clear();
+      for (const timer of recheckTimers.values()) clearTimeout(timer);
+      recheckTimers.clear(); recheckAttempts.clear(); lifecycleSubscriptions.clear();
+      if (options.ownership === 'owned' && !ownedStopped) await attempt(async () => { await options.stopOwned(); ownedStopped = true; });
+      if (errors.length) throw errors[0];
       return { closed: true };
-    })();
+    })().catch(error => { closing = undefined; throw error; });
     return closing;
   }
   await inspectNative();
@@ -430,11 +763,11 @@ export async function createKimiWebDriver(options) {
   const denied = unsupported('native capability not verified');
   const support = {
     inspect: true, close: true, listSessionPage: capabilities.catalogV2,
-    getSession: capabilities.snapshot, readHistoryPage: capabilities.transcript && capabilities.subscribeV2 && capabilities.snapshot,
+    getSession: capabilities.snapshot || capabilities.sessionRead, readHistoryPage: supportsHistory(),
     openHistory: capabilities.transcript && capabilities.subscribeV2 && capabilities.snapshot,
     createSession: capabilities.create,
-    subscribe: capabilities.subscribeV2 && capabilities.subscribe && capabilities.snapshot,
-    send: capabilities.send && capabilities.subscribeV2 && capabilities.subscribe && capabilities.snapshot,
+    subscribe: supportsHistory(),
+    send: capabilities.send && supportsHistory() && (capabilities.snapshot || capabilities.promptAbort),
     cancel: capabilities.cancel, respondInteraction: capabilities.approvals || capabilities.questions,
   };
   const extensions = [
@@ -450,11 +783,14 @@ export async function createKimiWebDriver(options) {
     },
     driver: { core: Object.fromEntries(Object.entries(methods).filter(([name]) => support[name])), native: Object.fromEntries(extensions.filter(({ enabled }) => enabled).map(({ name }) => [name, native[name]])) },
   });
+  if (state === 'ready' && !capabilities.snapshot && capabilities.promptAbort) queueStartupRecovery();
   return {
     registration, close,
     async reconnect() {
       if (closed) throw new ProtocolError('source_unavailable', 'driver_closed');
+      startupGeneration++; startupRecovery.state = 'paused';
       await transport.disconnect(); await lifecycleTransport.disconnect();
+      await startupWork;
       lifecycleSubscriptions.clear();
       await inspectNative();
       if (state !== 'ready') throw new ProtocolError('source_unavailable', 'native_reconnect');
@@ -467,9 +803,10 @@ export async function createKimiWebDriver(options) {
       await connect();
       for (const [sessionId, agentIds] of sessions) for (const agentId of agentIds) await subscribeSession(sessionId, agentId, 'restored');
       await eventWork;
+      queueStartupRecovery();
     },
     async flush() { await eventWork; if (lastEventError) throw new ProtocolError(lastEventError.code, lastEventError.reason); },
-    diagnostics() { return { state, capabilities, ...stats, heartbeats: transport?.heartbeats ?? { pings: 0, pongs: 0 }, observers: observers.size, selected: selected.size, connected: transport?.connected ?? false, nativeConnections: Number(transport?.connected ?? false) + Number(lifecycleTransport?.connected ?? false), eventQueue: eventCount, lastEventError: lastEventError ?? null }; },
+    diagnostics() { return { state, capabilities, ...stats, startupRecovery: { ...startupRecovery }, heartbeats: transport?.heartbeats ?? { pings: 0, pongs: 0 }, observers: observers.size, selected: selected.size, historySessions: history?.resident() ?? 0, lifecycleSubscriptions: lifecycleSubscriptions.size, connected: transport?.connected ?? false, nativeConnections: Number(transport?.connected ?? false) + Number(lifecycleTransport?.connected ?? false), eventQueue: eventCount, lastEventError: lastEventError ?? null }; },
     history: (sessionId, agentId) => history.inspect(sessionId, agentId),
     operations,
   };

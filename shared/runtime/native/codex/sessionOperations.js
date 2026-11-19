@@ -50,7 +50,13 @@ export function createCodexSessionOperations({
     const handle = await bind(session);
     if (!handle.resumed) {
       handle.resumePromise ??= (async () => {
-        await authorizeSession(session);
+        try {
+          await authorizeSession(session);
+        } catch (error) {
+          // Proven pre-native: thread/resume was never sent, so the memo is not an answer.
+          handle.resumePromise = null;
+          throw error;
+        }
         await request('thread/resume', { threadId: session.nativeSessionId, excludeTurns: true });
         assertCurrent();
         handle.resumed = true;
@@ -98,7 +104,11 @@ export function createCodexSessionOperations({
         }
       } else {
         await journal.terminal(job.operationId, handle.scope, 'completed');
-        if (handle.active === active) handle.active = null;
+        if (handle.active === active) {
+          handle.active = null;
+          // A non-turn completion also frees the session, so the accepted queue advances here too.
+          void dispatchNext(handle);
+        }
       }
       emit({
         type: 'operation.observed',

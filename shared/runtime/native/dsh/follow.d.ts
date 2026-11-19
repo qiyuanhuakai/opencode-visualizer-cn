@@ -13,5 +13,11 @@ export interface HistoryPage {
   readonly records: readonly JsonValue[]; readonly nativeHasMore: boolean; readonly cursor: number | null;
   readonly completeness: 'partial' | 'complete';
 }
+export interface TurnEndEvent {
+  readonly type: 'turn/end'; readonly seq: number;
+  readonly data?: { readonly reason?: { readonly kind?: unknown } };
+}
 export function createFollowState(): FollowState;
 export function historyPage(value: unknown, throughSeq: number, beforeSeq: number, limit: number): HistoryPage;
+/** The newest turn/end an authoritative snapshot covers strictly after `afterSeq`, or null. */
+export function terminalTurn(value: unknown, afterSeq: number): TurnEndEvent | null;

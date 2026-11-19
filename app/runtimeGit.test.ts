@@ -17,6 +17,9 @@ import {
   parseEnvironmentId,
 } from '../shared/runtime/identity.js';
 import type { WorkspaceRef, PathPolicy } from '../shared/runtime/identity.js';
+import { ProtocolError } from '../shared/runtime/capabilities.js';
+import type { TargetGitCommand } from '../bridge/runtime/targetGitCommand.js';
+import type { RuntimeStore, Item } from '../bridge/runtime/storage/runtimeStore.js';
 
 const target = parseEnvironmentId('11111111-1111-4111-8111-111111111111');
 const foreign = parseEnvironmentId('22222222-2222-4222-8222-222222222222');
@@ -71,6 +74,26 @@ async function fixture() {
   const service = createWorktreeService({ command, git, store, assertCurrent() {} });
   cleanup.push(() => service.close());
   return { root, repo, ref, policy, gitExec, command, store, git, service, workspace: ref(repo) };
+}
+async function durableState(store: RuntimeStore) {
+  const items: Item[] = [];
+  let cursor: string | null = null;
+  for (;;) {
+    const page = await store.page({ collection: 'operations', cursor, limit: 100 });
+    items.push(...page.items);
+    if (page.cursor === null) break;
+    cursor = page.cursor;
+  }
+  // A released lease keeps its row with a null value, so only live values count as held.
+  const held = (prefix: string) =>
+    items.filter((item) => item.key.startsWith(prefix) && item.value != null);
+  return { operations: held('git-op:'), leases: held('git-lease:') };
+}
+function authorizedService(store: RuntimeStore, command: TargetGitCommand) {
+  const git = createGitService({ command });
+  const service = createWorktreeService({ command, git, store, assertCurrent() {} });
+  cleanup.push(() => service.close());
+  return service;
 }
 describe('target Git topology', () => {
   it('parses literal NUL paths and flags when names contain spaces and newlines', () => {
@@ -383,6 +406,401 @@ describe('durable worktree mutations', () => {
       'leased',
     );
   });
+  it('returns the original operation when an identical create is retried after completion', async () => {
+    // Given a durable create that already completed and produced its destination.
+    const f = await fixture();
+    const accepted = await f.service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'retried writer',
+      idempotencyKey: 'retried',
+    });
+    expect((await f.service.wait(accepted.operationId)).outcome).toBe('completed');
+    // When the identical request is retried while its destination exists.
+    const replayed = await f.service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'retried writer',
+      idempotencyKey: 'retried',
+    });
+    // Then the original operation is recovered instead of a destination conflict.
+    expect(replayed.operationId).toBe(accepted.operationId);
+    expect(await f.service.wait(replayed.operationId)).toMatchObject({
+      phase: 'terminal',
+      outcome: 'completed',
+    });
+  });
+  it('returns the original operation when an identical create is retried while the mutation runs', async () => {
+    // Given a durable create whose native mutation is still in flight.
+    const f = await fixture();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const command: TargetGitCommand = {
+      ...f.command,
+      async start(request) {
+        const job = await f.command.start(request);
+        if (request.args[0] !== 'worktree' || request.args[1] !== 'add') return job;
+        const finished = job.wait();
+        return { ...job, async wait() { await gate; return finished; } };
+      },
+    };
+    const service = authorizedService(f.store, command);
+    const accepted = await service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'in flight',
+      idempotencyKey: 'in-flight',
+    });
+    // When the journal observed the running mutation and the caller repeats the request.
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if ((await service.journal.get(accepted.operationId)).phase === 'observed') break;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    expect((await service.journal.get(accepted.operationId)).phase).toBe('observed');
+    const replayed = await service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'in flight',
+      idempotencyKey: 'in-flight',
+    });
+    // Then the original operation is recovered without a second send or phase error.
+    expect(replayed.operationId).toBe(accepted.operationId);
+    release();
+    expect((await service.wait(replayed.operationId)).outcome).toBe('completed');
+  });
+  it('returns the original operation when an identical create is retried after the source head advanced', async () => {
+    // Given a durable create that already completed.
+    const f = await fixture();
+    const accepted = await f.service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'head advance',
+      idempotencyKey: 'head-advance',
+    });
+    const original = await f.service.wait(accepted.operationId);
+    // When the source repository advances and the caller repeats the identical request.
+    f.gitExec([
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.com',
+      'commit',
+      '--allow-empty',
+      '-m',
+      'advance',
+    ]);
+    const replayed = await f.service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'head advance',
+      idempotencyKey: 'head-advance',
+    });
+    // Then the original operation is recovered and keeps its first base commit.
+    expect(replayed.operationId).toBe(accepted.operationId);
+    expect(await f.service.wait(replayed.operationId)).toMatchObject({
+      phase: 'terminal',
+      outcome: 'completed',
+      baseCommit: original.baseCommit,
+    });
+  });
+  it('returns the original operation when an identical remove is retried after completion', async () => {
+    // Given a durable remove that already completed and deleted its worktree.
+    const f = await fixture();
+    const created = await f.service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'removed writer',
+      idempotencyKey: 'create-removed',
+    });
+    const destination = f.ref(path.join(f.root, 'removed writer'));
+    await f.service.wait(created.operationId);
+    await f.service.releaseWriter(destination, created.operationId);
+    const removed = await f.service.remove({
+      workspace: f.workspace,
+      worktree: destination,
+      idempotencyKey: 'remove-removed',
+    });
+    expect((await f.service.wait(removed.operationId)).outcome).toBe('completed');
+    // When the identical removal is retried after its worktree is gone.
+    const replayed = await f.service.remove({
+      workspace: f.workspace,
+      worktree: destination,
+      idempotencyKey: 'remove-removed',
+    });
+    // Then the original operation is recovered instead of a missing-worktree refusal.
+    expect(replayed.operationId).toBe(removed.operationId);
+    expect((await f.service.wait(replayed.operationId)).outcome).toBe('completed');
+  });
+  it('still rejects the same idempotency key with a different explicit request', async () => {
+    // Given a durable create that already completed.
+    const f = await fixture();
+    const first = await f.service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'identity one',
+      idempotencyKey: 'identity',
+    });
+    await f.service.wait(first.operationId);
+    // When a different destination reuses the same key.
+    await expect(
+      f.service.create({
+        workspace: f.workspace,
+        parent: f.ref(f.root),
+        name: 'identity two',
+        idempotencyKey: 'identity',
+      }),
+    ).rejects.toThrow('idempotency_mismatch');
+  });
+  it('fails terminally and releases leases when the destination appears after acceptance', async () => {
+    // Given a destination that another writer produces between acceptance and the send.
+    const f = await fixture();
+    let refusals = 0;
+    const command: TargetGitCommand = {
+      ...f.command,
+      async destination(parent, name) {
+        if (refusals++ === 0) throw new ProtocolError('conflict', 'git.destination_exists');
+        return f.command.destination(parent, name);
+      },
+    };
+    const service = authorizedService(f.store, command);
+    // When the pre-send re-verification refuses the create.
+    await expect(
+      service.create({
+        workspace: f.workspace,
+        parent: f.ref(f.root),
+        name: 'raced',
+        idempotencyKey: 'raced',
+      }),
+    ).rejects.toThrow('destination_exists');
+    // Then the refusal proves no mutation started: the operation is terminal and every lease is released.
+    const state = await durableState(f.store);
+    expect(state.operations).toMatchObject([
+      { value: { kind: 'repository-operation', phase: 'terminal', outcome: 'failed' } },
+    ]);
+    expect(state.leases).toEqual([]);
+    // And a later create with a new key still runs.
+    const recovered = await service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'after-race',
+      idempotencyKey: 'after-race',
+    });
+    expect((await service.wait(recovered.operationId)).outcome).toBe('completed');
+  });
+  it('keeps an uncertain post-send failure reconciling with its leases', async () => {
+    // Given a command whose mutation job loses its acknowledgement after the process exists.
+    const f = await fixture();
+    const command: TargetGitCommand = {
+      ...f.command,
+      async start(request) {
+        const job = await f.command.start(request);
+        if (request.args[0] !== 'worktree' || request.args[1] !== 'add') return job;
+        return { ...job, async wait() { throw new Error('lost acknowledgement'); } };
+      },
+    };
+    const service = authorizedService(f.store, command);
+    // When the send result is unknown after the native process was started.
+    const accepted = await service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'uncertain',
+      idempotencyKey: 'uncertain',
+    });
+    await expect(service.wait(accepted.operationId)).rejects.toThrow('lost acknowledgement');
+    // Then the operation stays reconciling with both leases, and the next mutation is refused.
+    const state = await durableState(f.store);
+    expect(state.operations).toMatchObject([
+      { value: { kind: 'repository-operation', phase: 'reconciling' } },
+    ]);
+    expect(state.leases).toHaveLength(2);
+    expect(state.leases).toMatchObject([
+      { value: { purpose: 'operation' } },
+      { value: { purpose: 'operation' } },
+    ]);
+    await expect(
+      service.create({
+        workspace: f.workspace,
+        parent: f.ref(f.root),
+        name: 'blocked',
+        idempotencyKey: 'blocked',
+      }),
+    ).rejects.toThrow('leased');
+  });
+});
+
+describe('accepted-stage resume across a moved source HEAD', () => {
+  it('failure checks out the base commit its acceptance recorded, not the HEAD at retry time', async () => {
+    // Given a durable acceptance whose acknowledgement was lost before the mutation was sent.
+    const f = await fixture();
+    const tracked = path.join(f.repo, 'tracked.txt');
+    await writeFile(tracked, 'version A', 'utf8');
+    f.gitExec(['add', 'tracked.txt']);
+    f.gitExec(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'A']);
+    const commitA = f.gitExec(['rev-parse', 'HEAD']).trim();
+
+    const originalMutate = f.store.mutateControl.bind(f.store);
+    let acknowledgementLost = false;
+    f.store.mutateControl = async (mutation) => {
+      const ack = await originalMutate(mutation);
+      if (!acknowledgementLost) {
+        acknowledgementLost = true;
+        throw new Error('lost acceptance acknowledgement');
+      }
+      return ack;
+    };
+    const argvSeen: string[] = [];
+    const command: TargetGitCommand = {
+      ...f.command,
+      async start(request) {
+        if (request.args[0] === 'worktree' && request.args[1] === 'add') argvSeen.push(...request.args);
+        return f.command.start(request);
+      },
+    };
+    const service = authorizedService(f.store, command);
+
+    // When the acceptance is durable but its acknowledgement never reaches the caller.
+    await expect(
+      service.create({
+        workspace: f.workspace,
+        parent: f.ref(f.root),
+        name: 'moved base',
+        idempotencyKey: 'moved-base',
+      }),
+    ).rejects.toThrow('lost acceptance acknowledgement');
+    expect(acknowledgementLost).toBe(true);
+    // And the durable record keeps the base commit the first attempt resolved.
+    const durable = await durableState(f.store);
+    expect(durable.operations).toMatchObject([{ value: { phase: 'accepted', baseCommit: commitA } }]);
+    expect(durable.leases).toHaveLength(2);
+
+    // And the source HEAD then moves, with the store state preserved and a fresh adapter.
+    await writeFile(tracked, 'version B', 'utf8');
+    f.gitExec(['add', 'tracked.txt']);
+    f.gitExec(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'B']);
+    const commitB = f.gitExec(['rev-parse', 'HEAD']).trim();
+    expect(commitB).not.toBe(commitA);
+
+    // Then the retried request must launch against the base commit the acceptance recorded.
+    const replayed = await service.create({
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'moved base',
+      idempotencyKey: 'moved-base',
+    });
+    const completed = await service.wait(replayed.operationId);
+    expect(completed).toMatchObject({ phase: 'terminal', outcome: 'completed', baseCommit: commitA });
+    expect(argvSeen[argvSeen.length - 1]).toBe(commitA);
+
+    // And the completed record, the writer lease and the native worktree HEAD all agree.
+    const worktree = path.join(f.root, 'moved base');
+    expect(f.gitExec(['-C', worktree, 'rev-parse', 'HEAD']).trim()).toBe(commitA);
+    expect(await readFile(path.join(worktree, 'tracked.txt'), 'utf8')).toBe('version A');
+  }, 60000);
+});
+
+describe('concurrent identical worktree creates', () => {
+  it('sends a racing duplicate against the base commit the first acceptance recorded', async () => {
+    // Given two identical create requests whose lookups both miss before either accepts.
+    const f = await fixture();
+    const tracked = path.join(f.repo, 'tracked.txt');
+    await writeFile(tracked, 'version A', 'utf8');
+    f.gitExec(['add', 'tracked.txt']);
+    f.gitExec(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'A']);
+    const commitA = f.gitExec(['rev-parse', 'HEAD']).trim();
+    // Each caller parks at its pre-acceptance authorization until the test releases it.
+    const releases: Array<() => void> = [];
+    const arrivals: Array<() => void> = [];
+    const arrived = () => new Promise<void>((resolve) => arrivals.push(resolve));
+    // The first acceptance commits durably but holds its acknowledgement.
+    let firstAcceptance = true;
+    let releaseAcknowledgement: () => void = () => undefined;
+    const acknowledged = new Promise<void>((resolve) => {
+      releaseAcknowledgement = resolve;
+    });
+    const argvSeen: string[] = [];
+    const command: TargetGitCommand = {
+      ...f.command,
+      async authorizeCommonDirectory(workspace) {
+        arrivals.shift()?.();
+        await new Promise<void>((resolve) => releases.push(resolve));
+        return f.command.authorizeCommonDirectory(workspace);
+      },
+      async start(request) {
+        if (request.args[0] === 'worktree' && request.args[1] === 'add')
+          argvSeen.push(...request.args);
+        return f.command.start(request);
+      },
+    };
+    const service = authorizedService(f.store, command);
+    const originalMutate = f.store.mutateControl.bind(f.store);
+    f.store.mutateControl = async (mutation) => {
+      const ack = await originalMutate(mutation);
+      if (firstAcceptance) {
+        firstAcceptance = false;
+        await acknowledged;
+      }
+      return ack;
+    };
+    const request = {
+      workspace: f.workspace,
+      parent: f.ref(f.root),
+      name: 'racing base',
+      idempotencyKey: 'racing-base',
+    };
+    // When the first request parks before accepting and the source HEAD advances.
+    const first = service.create(request);
+    await arrived();
+    await writeFile(tracked, 'version B', 'utf8');
+    f.gitExec(['add', 'tracked.txt']);
+    f.gitExec(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'B']);
+    const commitB = f.gitExec(['rev-parse', 'HEAD']).trim();
+    expect(commitB).not.toBe(commitA);
+    // And the second identical request also parks before its own acceptance.
+    const second = service.create(request);
+    await arrived();
+    // And the first request accepts durably at base A while its acknowledgement is held.
+    releases[0]();
+    let operationId = '';
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const operations = (await durableState(f.store)).operations;
+      if (operations.length > 0) {
+        operationId = operations[0].key;
+        break;
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    expect((await durableState(f.store)).operations).toMatchObject([
+      { value: { phase: 'accepted', baseCommit: commitA } },
+    ]);
+    // Then the second request adopts that record and performs the only send.
+    releases[1]();
+    for (let attempt = 0; attempt < 500; attempt++) {
+      if ((await service.journal.get(operationId)).phase !== 'accepted') break;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    releaseAcknowledgement();
+    const [a, b] = await Promise.all([first, second]);
+    // Both callers observe one operation and exactly one native mutation.
+    expect(a.operationId).toBe(b.operationId);
+    expect(argvSeen).toHaveLength(6);
+    const completed = await service.wait(a.operationId);
+    // And the single send, the completion record, the writer lease, the native HEAD and
+    // the checked-out bytes all describe the base commit the acceptance recorded.
+    expect(argvSeen[argvSeen.length - 1]).toBe(commitA);
+    expect(completed).toMatchObject({
+      phase: 'terminal',
+      outcome: 'completed',
+      baseCommit: commitA,
+    });
+    const worktree = path.join(f.root, 'racing base');
+    expect(f.gitExec(['-C', worktree, 'rev-parse', 'HEAD']).trim()).toBe(commitA);
+    expect(await readFile(path.join(worktree, 'tracked.txt'), 'utf8')).toBe('version A');
+    expect(await service.leases.read(encodeWorkspaceKey(f.ref(worktree)))).toMatchObject({
+      value: { owner: a.operationId, baseCommit: commitA, purpose: 'writer' },
+    });
+  }, 60000);
 });
 
 describe('Git topology refresh and retention', () => {
@@ -487,5 +905,262 @@ describe('repository mutation races', () => {
       'leased',
     );
     expect(await f.service.leases.read(key)).toMatchObject({ value: { owner: 'first-writer' } });
+  });
+});
+
+describe('completed Git job retention', () => {
+  it('retains native ownership after an observation failure until cancellation actually drains', async () => {
+    const f = await fixture();
+    const cancelled = Promise.withResolvers<void>();
+    let cancelling = false;
+    const command: TargetGitCommand = { ...f.command, async start(request) {
+      const job = await f.command.start(request);
+      return { ...job, async cancel() {
+        cancelling = true;
+        await job.cancel();
+        await cancelled.promise;
+      } };
+    } };
+    const service = authorizedService(f.store, command);
+    service.journal.observed = async () => { throw new Error('observation failed'); };
+    try {
+      const accepted = await service.create({ workspace: f.workspace, parent: f.ref(f.root), name: 'observation-failure', idempotencyKey: 'observation-failure' });
+      await expect.poll(() => cancelling).toBe(true);
+      let closed = false;
+      const closing = service.close().then(() => { closed = true; }, () => { closed = true; });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(closed).toBe(false);
+      cancelled.resolve();
+      await closing;
+      expect((await service.journal.get(accepted.operationId)).phase).toBe('reconciling');
+      await expect(service.journal.launch(accepted.operationId, async () => { throw new Error('must not resend'); })).rejects.toMatchObject({ code: 'reconcile_required' });
+    } finally { cancelled.resolve(); await service.close(); }
+  });
+
+  it('releases completed native jobs even when the caller never consumes wait', async () => {
+    const f = await fixture();
+    let cancellations = 0;
+    const command: TargetGitCommand = { ...f.command, async start(request) {
+      const job = await f.command.start(request);
+      return { ...job, async cancel() { cancellations++; await job.cancel(); } };
+    } };
+    const service = authorizedService(f.store, command);
+    const accepted = await service.create({ workspace: f.workspace, parent: f.ref(f.root), name: 'unconsumed', idempotencyKey: 'unconsumed' });
+    await expect.poll(async () => (await service.journal.get(accepted.operationId)).phase).toBe('terminal');
+    await new Promise<void>(resolve => setImmediate(resolve));
+    await service.close();
+    expect(cancellations).toBe(0);
+    // Completion is durable, so dropping process ownership must not lose a late read.
+    await expect(service.wait(accepted.operationId)).resolves.toMatchObject({ phase: 'terminal', outcome: 'completed' });
+  });
+
+  it('bounds unconsumed failures without retaining native job output or replaying uncertain sends', async () => {
+    const f = await fixture();
+    const command: TargetGitCommand = { ...f.command, async start(request) {
+      const job = await f.command.start(request);
+      if (request.args[0] !== 'worktree' || request.args[1] !== 'add') return job;
+      return { ...job, async wait() { await job.wait(); throw new Error('lost acknowledgement ' + 'x'.repeat(4097)); } };
+    } };
+    const service = authorizedService(f.store, command);
+    const ids: string[] = [];
+    try {
+    for (let index = 0; index < 9; index++) {
+      const repo = path.join(f.root, `repository-${index}`);
+      f.gitExec(['clone', '--quiet', '--', f.repo, repo]);
+      const accepted = await service.create({ workspace: f.ref(repo), parent: f.ref(f.root), name: `uncertain-${index}`, idempotencyKey: `uncertain-${index}` });
+      ids.push(accepted.operationId);
+      await expect.poll(async () => (await service.journal.get(accepted.operationId)).phase).toBe('reconciling');
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    await expect(service.wait(ids[0]!)).rejects.toMatchObject({ code: 'reconcile_required' });
+    const error = await service.wait(ids.at(-1)!).then(() => undefined, (error: Error) => error);
+    expect(error?.message).toContain('lost acknowledgement');
+    expect(error!.message.length).toBeLessThanOrEqual(4096);
+    expect((await service.journal.get(ids[0]!)).phase).toBe('reconciling');
+    } finally {
+      await Promise.allSettled(ids.map(id => service.wait(id)));
+    }
+  });
+});
+
+describe('worktree mutations across separate roots', () => {
+  type Permission = 'read' | 'write' | 'command';
+  // Given one main repository, two linked worktrees, and a destination parent as separate grant roots.
+  async function crossRoots(repositoryPermissions: readonly Permission[]) {
+    const f = await fixture();
+    const linked = path.join(f.root, 'linked');
+    f.gitExec(['worktree', 'add', '--detach', linked]);
+    const victim = path.join(f.root, 'victim');
+    f.gitExec(['worktree', 'add', '--detach', victim]);
+    const parent = path.join(f.root, 'destination parent');
+    await mkdir(parent);
+    const writable: readonly Permission[] = ['read', 'write', 'command'];
+    const command = await createTargetGitCommand({
+      target,
+      roots: [
+        { root: f.repo, pathPolicy: f.policy, permissions: repositoryPermissions },
+        { root: linked, pathPolicy: f.policy, permissions: writable },
+        { root: victim, pathPolicy: f.policy, permissions: writable },
+        { root: parent, pathPolicy: f.policy, permissions: writable },
+      ],
+      assertCurrent() {},
+    });
+    cleanup.push(() => command.close());
+    const git = createGitService({ command });
+    const service = createWorktreeService({ command, git, store: f.store, assertCurrent() {} });
+    cleanup.push(() => service.close());
+    return {
+      ...f,
+      writableCommand: f.command,
+      command,
+      git,
+      service,
+      linked,
+      victim,
+      parent,
+      writer: f.ref(linked),
+      parentRef: f.ref(parent),
+    };
+  }
+  it('refuses a create whose repository common directory is outside the write grant', async () => {
+    // Given a read-only main repository beside a writable linked worktree and destination parent.
+    const f = await crossRoots(['read', 'command']);
+    // Then the read-only repository itself refuses write authority.
+    await expect(f.command.authorize(f.workspace, 'write')).rejects.toThrow('permission');
+    // When a create is launched from the writable linked worktree.
+    const outcome = await f.service
+      .create({
+        workspace: f.writer,
+        parent: f.parentRef,
+        name: 'crossed',
+        idempotencyKey: 'crossed',
+      })
+      .then(
+        async (accepted) => `completed:${(await f.service.wait(accepted.operationId)).outcome}`,
+        (error: ProtocolError) => `refused:${error.code}:${error.field}`,
+      );
+    // Then no administrative bytes reach the read-only common directory.
+    expect({
+      outcome,
+      adminBytes: await stat(path.join(f.repo, '.git', 'worktrees', 'crossed', 'gitdir')).then(
+        () => 'written',
+        () => 'absent',
+      ),
+      worktreeBytes: await stat(path.join(f.parent, 'crossed')).then(
+        () => 'written',
+        () => 'absent',
+      ),
+    }).toEqual({
+      outcome: 'refused:unauthorized:git.permission',
+      adminBytes: 'absent',
+      worktreeBytes: 'absent',
+    });
+  });
+  it('refuses a remove whose repository common directory is outside the write grant', async () => {
+    // Given a read-only main repository and a clean linked worktree selected for removal.
+    const f = await crossRoots(['read', 'command']);
+    // When removal is launched from the writable linked worktree.
+    const outcome = await f.service
+      .remove({
+        workspace: f.writer,
+        worktree: f.ref(f.victim),
+        idempotencyKey: 'crossed-remove',
+      })
+      .then(
+        async (accepted) => `completed:${(await f.service.wait(accepted.operationId)).outcome}`,
+        (error: ProtocolError) => `refused:${error.code}:${error.field}`,
+      );
+    // Then the administrative records and the selected worktree bytes both survive.
+    expect({
+      outcome,
+      adminBytes: await stat(path.join(f.repo, '.git', 'worktrees', 'victim', 'gitdir')).then(
+        () => 'written',
+        () => 'absent',
+      ),
+      worktreeBytes: await stat(f.victim).then(() => 'written', () => 'absent'),
+    }).toEqual({
+      outcome: 'refused:unauthorized:git.permission',
+      adminBytes: 'written',
+      worktreeBytes: 'written',
+    });
+  });
+  it('allows a cross-root create when the repository common directory itself is writable', async () => {
+    // Given every root, including the main repository, holding write authority.
+    const f = await crossRoots(['read', 'write', 'command']);
+    // When a create crosses the linked worktree, the destination parent, and the repository.
+    const accepted = await f.service.create({
+      workspace: f.writer,
+      parent: f.parentRef,
+      name: 'allowed',
+      idempotencyKey: 'allowed',
+    });
+    // Then it completes and its administrative bytes land in the writable common directory.
+    expect((await f.service.wait(accepted.operationId)).outcome).toBe('completed');
+    expect((await stat(path.join(f.repo, '.git', 'worktrees', 'allowed', 'gitdir'))).isFile()).toBe(
+      true,
+    );
+    expect((await stat(path.join(f.parent, 'allowed'))).isDirectory()).toBe(true);
+  });
+  it('leaves no durable operation or lease when a create refusal precedes acceptance', async () => {
+    // Given a read-only main repository beside a writable linked worktree and destination parent.
+    const f = await crossRoots(['read', 'command']);
+    // When a create is refused by the read-only repository common directory.
+    const refusal = await f.service
+      .create({
+        workspace: f.writer,
+        parent: f.parentRef,
+        name: 'refused',
+        idempotencyKey: 'refused',
+      })
+      .then(
+        () => 'accepted',
+        (error: ProtocolError) => `refused:${error.code}:${error.field}`,
+      );
+    // Then the refusal precedes acceptance, so neither an operation nor a lease is recorded.
+    expect({ refusal, ...(await durableState(f.store)) }).toEqual({
+      refusal: 'refused:unauthorized:git.permission',
+      operations: [],
+      leases: [],
+    });
+    // And a later create with correct write authority and a new key still runs.
+    const service = authorizedService(f.store, f.writableCommand);
+    const recovered = await service.create({
+      workspace: f.workspace,
+      parent: f.parentRef,
+      name: 'recovered',
+      idempotencyKey: 'recovered',
+    });
+    expect((await service.wait(recovered.operationId)).outcome).toBe('completed');
+    expect((await stat(path.join(f.parent, 'recovered'))).isDirectory()).toBe(true);
+  });
+  it('leaves no durable operation or lease when a remove refusal precedes acceptance', async () => {
+    // Given a read-only main repository and a clean linked worktree selected for removal.
+    const f = await crossRoots(['read', 'command']);
+    // When removal is refused by the read-only repository common directory.
+    const refusal = await f.service
+      .remove({
+        workspace: f.writer,
+        worktree: f.ref(f.victim),
+        idempotencyKey: 'refused-remove',
+      })
+      .then(
+        () => 'accepted',
+        (error: ProtocolError) => `refused:${error.code}:${error.field}`,
+      );
+    // Then the refusal precedes acceptance, so neither an operation nor a lease is recorded.
+    expect({ refusal, ...(await durableState(f.store)) }).toEqual({
+      refusal: 'refused:unauthorized:git.permission',
+      operations: [],
+      leases: [],
+    });
+    // And a later removal with correct write authority and a new key still runs.
+    const service = authorizedService(f.store, f.writableCommand);
+    const removed = await service.remove({
+      workspace: f.workspace,
+      worktree: f.ref(f.victim),
+      idempotencyKey: 'recovered-remove',
+    });
+    expect((await service.wait(removed.operationId)).outcome).toBe('completed');
+    await expect(stat(f.victim)).rejects.toThrow('ENOENT');
   });
 });

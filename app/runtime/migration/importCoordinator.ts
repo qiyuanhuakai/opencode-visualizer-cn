@@ -1,4 +1,5 @@
-import type { ImportChunk, ImportService } from '../../../bridge/runtime/migration/importService.js';
+import type { ImportBatch, ImportChunk, ImportService } from '../../../bridge/runtime/migration/importService.js';
+import { IMPORT_BATCH_MAX_BYTES } from '../../../shared/runtime/migration/importLimits.js';
 import { DraftStore } from '../draftStore';
 import { legacyDigest } from './legacyExport';
 import { bindLegacySource, type ProvenMapping } from './legacyBinding';
@@ -24,9 +25,12 @@ export function createImportCoordinator(options: ImportCoordinatorOptions) {
   return {
     async run(): Promise<ImportResult> {
       assertTarget();
+      // Archive/checkpoint failures pause this same store even when the global
+      // writer gate remains frozen. Recover it before replaying the gate's sink.
+      if (local.paused) await local.retry();
       switch (legacyWriterPhase()) {
         case 'legacy': await freezeLegacyWriters({ clientOrigin, persist: write => persistPendingLegacyWrite(local, write) }); break;
-        case 'paused': await local.retry(); await retryFrozenLegacyWrites(); break;
+        case 'paused': await retryFrozenLegacyWrites(); break;
         case 'frozen': case 'cutover': break;
         case 'draining': throw new ImportCoordinatorError('incomplete_import');
         default: throw new ImportCoordinatorError('incomplete_import');
@@ -49,10 +53,12 @@ export function createImportCoordinator(options: ImportCoordinatorOptions) {
       await local.checkpoint(`backup:${importId}`, { token, inventory, drafts, trialRestore: { records: restoredRecords, chunks: restoredChunks }, sourceRetained: true });
       assertTarget(); await sourceMatches(token.revision);
       let offset = 0; let batch: ImportChunk[] = [];
+      const encoder = new TextEncoder();
+      const batchValue = (chunks: readonly ImportChunk[]): ImportBatch => ({ importId, environmentId: target.environmentId, sourceRevision: token.revision, offset, nextOffset: offset + chunks.length, total: inventory.boundChunks, chunks });
       async function sendBatch(): Promise<void> {
         if (!batch.length) return;
         assertTarget();
-        await target.service.accept({ importId, environmentId: target.environmentId, sourceRevision: token.revision, offset, nextOffset: offset + batch.length, total: inventory.boundChunks, chunks: batch });
+        await target.service.accept(batchValue(batch));
         assertTarget(); offset += batch.length; batch = [];
         await local.checkpoint(`target-progress:${importId}`, { offset, total: inventory.boundChunks });
       }
@@ -65,8 +71,12 @@ export function createImportCoordinator(options: ImportCoordinatorOptions) {
         let byteOffset = 0; let index = 0;
         for await (const bytes of local.readPart(record.header, raw)) {
           const content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-          batch.push({ sourceKey: record.metadata.sourceKey, offset: byteOffset, content, checksum: await legacyDigest(content), end: ++index === raw.chunks,
-            authority: record.metadata.authority, binding: binding.binding }); byteOffset += bytes.length;
+          const chunk = { sourceKey: record.metadata.sourceKey, offset: byteOffset, content, checksum: await legacyDigest(content), end: ++index === raw.chunks,
+            authority: record.metadata.authority, binding: binding.binding };
+          // JSON escaping and routing metadata count toward the receiver budget,
+          // independently of the original chunk sizes and the eight-chunk cap.
+          if (batch.length && encoder.encode(JSON.stringify(batchValue([...batch, chunk]))).byteLength > IMPORT_BATCH_MAX_BYTES) await sendBatch();
+          batch.push(chunk); byteOffset += bytes.length;
           if (batch.length === 8) await sendBatch();
         }
       }

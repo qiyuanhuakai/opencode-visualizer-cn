@@ -5,6 +5,7 @@ import { browserScenario } from './task-12-browser.mjs';
 
 export const sourceFiles = [
   'app/runtime/draftStore.ts',
+  'shared/runtime/migration/importLimits.js', 'shared/runtime/migration/importLimits.d.ts', 'app/runtime/migration/importCoordinator.batch.test.ts',
   ...['draftChunks', 'draftImport', 'importCoordinator', 'legacyBinding', 'nestedJson', 'sourceArchive', 'writerFreeze', 'legacyExport', 'legacyBrowserSource'].map(name => `app/runtime/migration/${name}.ts`),
   'bridge/runtime/migration/importService.js', 'bridge/runtime/migration/importService.d.ts', 'bridge/runtime/migration/manifest.js', 'bridge/runtime/migration/manifest.d.ts',
   'app/utils/storageKeys.ts', 'app/utils/backendHistoryStorage.ts', 'app/utils/composerDraftScheduler.ts',

@@ -19,5 +19,7 @@ export interface DshOperations {
   sessionMutation(input: { readonly session: SessionRef; readonly idempotencyKey: string; readonly method: string; readonly args: Json; readonly ongoing?: boolean; readonly capturedScope?: OperationScope }): Promise<DshMutationResult>;
   durable(input: { readonly session?: SessionRef; readonly parentOperationId?: string; readonly idempotencyKey: string; readonly method: string; readonly args: Json; readonly guard?: () => void; readonly capturedScope?: OperationScope | InstanceOperationScope }): Promise<DshMutationResult>;
   finish(session: SessionRef, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted'): Promise<void>;
+  /** The in-flight session/prompt operation that currently owns the session lease, or null. */
+  pendingPrompt(session: SessionRef): Promise<{ readonly operation: { readonly operationId: string; readonly method: string; readonly phase: string; readonly scope: OperationScope }; readonly scope: OperationScope } | null>;
 }
 export function createDshOperations(options: { readonly store: RuntimeStore; readonly transport: DshTransport; readonly environmentId: string; readonly harnessInstanceId: string; readonly epoch: string }): DshOperations;

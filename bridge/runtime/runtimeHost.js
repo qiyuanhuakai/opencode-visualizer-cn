@@ -108,7 +108,7 @@ export function createRuntimeHost({ environmentId, role, sources = [], cachedTop
   function stop() {
     if (stopPromise) return stopPromise;
     closeAdmission();
-    stopPromise = (async () => {
+    const attempt = (async () => {
       await mutations;
       await sourcesReady;
       await Promise.allSettled([...dispatchers].map(closeDispatcher).concat([...pendingCloses]));
@@ -119,7 +119,11 @@ export function createRuntimeHost({ environmentId, role, sources = [], cachedTop
         state = 'stopped';
       }
     })();
-    return stopPromise;
+    stopPromise = attempt;
+    attempt.catch(() => {
+      if (stopPromise === attempt) stopPromise = undefined;
+    });
+    return attempt;
   }
   return {
     start,

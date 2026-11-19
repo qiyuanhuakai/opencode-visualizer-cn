@@ -76,6 +76,7 @@ function canonicalPath(value, policy) {
   const path = text(value, 'canonicalPath');
   if (path.includes('\0')) throw new IdentityError('canonicalPath');
   let parts;
+  let canonical = path;
   switch (policy.platform) {
     case 'posix':
       if (!path.startsWith('/')) throw new IdentityError('canonicalPath');
@@ -85,6 +86,9 @@ function canonicalPath(value, policy) {
       if (path.includes('/')) throw new IdentityError('canonicalPath');
       if (/^[a-z]:\\/i.test(path)) {
         parts = path.length === 3 ? [] : path.slice(3).split('\\');
+      } else if (/^\\\\[^\\]+\\[^\\]+\\?$/.test(path)) {
+        parts = [];
+        canonical = path.endsWith('\\') ? path : `${path}\\`;
       } else if (/^\\\\[^\\]+\\[^\\]+/.test(path)) {
         parts = path.slice(2).split('\\');
       } else {
@@ -95,7 +99,7 @@ function canonicalPath(value, policy) {
       throw new IdentityError('platform');
   }
   if (parts.some((part) => part === '' || part === '.' || part === '..')) throw new IdentityError('canonicalPath');
-  return path;
+  return canonical;
 }
 
 function parsePathRef(value, pathField) {

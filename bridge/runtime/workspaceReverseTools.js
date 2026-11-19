@@ -27,6 +27,7 @@ export function createWorkspaceReverseTools() {
           let active = true;
           const sessions = new Set();
           const pending = new Set();
+          const inflight = new Set();
           function assertOwner() {
             scope.authorizeRuntime(workspaceKey, 'reverse');
             requireValue(active, 'reverse.closed', 'source_unavailable');
@@ -49,12 +50,27 @@ export function createWorkspaceReverseTools() {
             },
             handle(request) {
               assertOwner();
-              requireValue(sessions.has(request.params?.sessionId), 'reverse.session', 'unauthorized');
-              const permission = request.method === 'fs/read_text_file' ? 'read' : request.method === 'fs/write_text_file' ? 'write' : 'command';
-              scope.authorizeRuntime(workspaceKey, permission);
-              return handler(request, context);
+              // Shutdown waits for in-flight work, so a terminal whose cwd is still
+              // resolving cannot publish a process after the owner is gone.
+              const inFlight = (async () => {
+                requireValue(sessions.has(request.params?.sessionId), 'reverse.session', 'unauthorized');
+                const permission = request.method === 'fs/read_text_file' ? 'read' : request.method === 'fs/write_text_file' ? 'write' : 'command';
+                scope.authorizeRuntime(workspaceKey, permission);
+                return handler(request, context);
+              })();
+              inflight.add(inFlight);
+              inFlight.catch(() => undefined).finally(() => inflight.delete(inFlight));
+              return inFlight;
             },
-            async close() { active = false; await handler.stopAll(); handlers.delete(owner); },
+            async close() {
+              active = false;
+              // Releasing the agent arms the handler's late-terminal reclamation
+              // before the in-flight creations resume and register their processes.
+              await handler.releaseAgent(context.agentId);
+              await Promise.allSettled([...inflight]);
+              await handler.stopAll();
+              handlers.delete(owner);
+            },
           };
           handlers.add(owner);
           return owner;

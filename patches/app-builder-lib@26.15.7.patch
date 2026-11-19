@@ -1,0 +1,20 @@
+diff --git a/out/electron/ElectronFramework.js b/out/electron/ElectronFramework.js
+--- a/out/electron/ElectronFramework.js
++++ b/out/electron/ElectronFramework.js
+@@ -23,16 +23,10 @@
+     };
+ }
+ function createDownloadOpts(opts, platform, arch, electronVersion) {
+-    var _a;
+     const base = { platform, arch, version: electronVersion };
+     const dl = opts.electronDownload;
+     if (dl == null) {
+         return base;
+-    }
+-    if (Object.hasOwnProperty.call(dl, "mirrorOptions")) {
+-        // ElectronGetOptions: flatten mirrorOptions.mirror for the app-builder binary
+-        const { mirrorOptions } = dl;
+-        return { ...base, mirror: (_a = mirrorOptions === null || mirrorOptions === void 0 ? void 0 : mirrorOptions.mirror) !== null && _a !== void 0 ? _a : undefined };
+     }
+     return { ...base, ...dl };
+ }

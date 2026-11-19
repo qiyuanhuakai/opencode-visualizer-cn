@@ -21,8 +21,8 @@ async function* readMap(file) {
 }
 const historyPrefix = 'opencode.state.codexAuxiliaryHistory.v1.';
 function keyNamespace(key) {
-  const match = /^opencode\.state\.backendHistory\.v1\.([a-f0-9]{32})\./u.exec(key);
-  if (key.startsWith('opencode.state.backendHistory.v1.') && !match) throw new LegacyExportError('unknown_namespace');
+  const match = /^(?:opencode\.)?state\.backendHistory\.v1\.([a-f0-9]{32})\./u.exec(key);
+  if (/^(?:opencode\.)?state\.backendHistory\.v1\./u.test(key) && !match) throw new LegacyExportError('unknown_namespace');
   return match ? `backend-history-v1:${match[1]}` : key.startsWith(historyPrefix) ? 'legacy-thread-id' : 'unattached-legacy-local';
 }
 export function createElectronLegacySource(filePath) {
@@ -37,7 +37,7 @@ export function createElectronLegacySource(filePath) {
       if (db) for (const table of ['meta', 'kv', 'threads', 'messages', 'parts']) {
         // Each SQLite row is the smallest legacy persistence unit. Never hydrate all messages or parts.
         for (const row of db.prepare(`SELECT rowid AS _rowid,* FROM ${table} ORDER BY rowid`).iterate()) {
-          const namespace = row.namespace ?? 'unattached-legacy-local';
+          const namespace = row.namespace ?? (table === 'kv' ? keyNamespace(row.key) : 'unattached-legacy-local');
           const key = table === 'kv' ? row.key : JSON.stringify([table, row.namespace ?? '', row.thread_id ?? '', row.message_id ?? '', row.part_id ?? '', row.key ?? '']);
           const content = table === 'kv' ? row.value : JSON.stringify(Object.fromEntries(Object.entries(row).filter(([name]) => name !== '_rowid')));
           const tombstone = table === 'threads' && !db.prepare('SELECT 1 FROM messages WHERE namespace=? AND thread_id=? LIMIT 1').get(row.namespace, row.thread_id);

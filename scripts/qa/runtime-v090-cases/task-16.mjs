@@ -12,13 +12,14 @@ import { startKimiFixture } from './task-16-fixture.mjs';
 import { startNativeKimi, until } from './task-16-native.mjs';
 
 export const sourceFiles = [
-  ...['kimiWebDriver', 'kimiWebHistory', 'kimiWebTransport', 'kimiWebOperations'].flatMap((name) => [`bridge/runtime/drivers/${name}.js`, `bridge/runtime/drivers/${name}.d.ts`]),
+  ...['kimiWebDriver', 'kimiWebHistory', 'kimiWebTransport', 'kimiWebOperations', 'kimiWebRecovery'].flatMap((name) => [`bridge/runtime/drivers/${name}.js`, `bridge/runtime/drivers/${name}.d.ts`]),
   ...['protocol', 'transcript'].flatMap((name) => [`shared/runtime/native/kimiWeb/${name}.js`, `shared/runtime/native/kimiWeb/${name}.d.ts`]),
   'bridge/runtime/operationJournal.js', 'bridge/runtime/interactionStore.js', 'bridge/runtime/admissionQueue.js',
   'bridge/runtime/storage/runtimeStore.js', 'bridge/runtime/storage/runtimeDatabaseWorker.mjs',
   'bridge/runtime/storage/schema.js', 'bridge/runtime/storage/storeProtocol.js', 'bridge/runtime/storage/storeQueries.js', 'bridge/runtime/storage/localFilesystem.js',
   'bridge/kimiWebToken.js', 'bridge/webSocketFrames.js', 'bridge/codexWebSocketProxy.js', 'bridge/bridgeHttp.js',
   'app/runtime/drivers/kimiWebDriver.test.ts',
+  'app/runtime/drivers/kimiWebSessionRelease.test.ts', 'app/runtime/drivers/kimiWebReviewRecovery.test.ts',
 ];
 const scope = { environmentId: '11111111-1111-4111-8111-111111111111', harnessInstanceId: '22222222-2222-4222-8222-222222222222' };
 const epoch = '33333333-3333-4333-8333-333333333333';
@@ -393,7 +394,11 @@ export async function runLeaseOracle({ driverRoot, stateRoot, report }) {
     result.reopened = await store.ready;
     driver = await createDriver({ ...driverOptions, store });
     const nativeCount = fixture.calls.filter((item) => item.path.endsWith('/prompts')).length;
-    await assert.rejects(send('current'), (caught) => caught.code === 'conflict' && caught.reason === 'stale_generation');
+    result.restartProcessBefore = (await store.page({ collection: 'operations', limit: 100 })).items.filter(row => row.key.startsWith('process:'));
+    // Refuse at the existing task lease before trying to bind a new process owner.
+    await assert.rejects(send('current'), (caught) => caught.code === 'conflict' && caught.field === 'session_busy');
+    result.restartProcessAfter = (await store.page({ collection: 'operations', limit: 100 })).items.filter(row => row.key.startsWith('process:'));
+    assert.deepEqual(result.restartProcessAfter, result.restartProcessBefore, 'busy restart rewrote old process ownership');
     await driver.operations.journal.reconcile(current.operationId, result.parents.current.scope);
     result.restart = { nativeCountBefore: nativeCount, nativeCountAfter: fixture.calls.filter((item) => item.path.endsWith('/prompts')).length, operation: await driver.operations.journal.get(current.operationId) };
     assert.equal(result.restart.nativeCountAfter, nativeCount, 'restart replayed uncertain send');

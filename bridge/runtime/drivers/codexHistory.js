@@ -13,6 +13,24 @@ import { redactHistoryJson } from '../historyPrivacy.js';
 const MAX_PAGE = 2 * 1024 * 1024;
 const CHUNK = 64 * 1024;
 
+/**
+ * Codex answers thread/turns/list on a thread with no first user message with a -32600
+ * invalid_request carrying the explicit "not materialized yet" rejection (docs/codex.md:34).
+ * The fixed upstream reuses -32600 for ephemeral threads, unloaded threads and invalid ids, so
+ * the code alone is not the cause: appServerClient classifies the cause at the RPC boundary and
+ * drops the native message, leaving `unmaterialized` as the only unmaterialized signal. A
+ * different native code (e.g. -32602 invalid params) or a same-code refusal without that
+ * classification is not an unmaterialized thread and still fails.
+ */
+function isUnmaterializedThreadListError(error) {
+  return (
+    error instanceof ProtocolError &&
+    error.code === 'invalid_request' &&
+    error.unmaterialized === true &&
+    error.field === 'codex.rpc.thread/turns/list'
+  );
+}
+
 /** Pages native items, never thread/read(includeTurns). Cursors retain no resident transcript. */
 export function createCodexHistory({ request, processGeneration, epoch, assertCurrent }) {
   const key = randomBytes(32);
@@ -205,6 +223,9 @@ export function createCodexHistory({ request, processGeneration, epoch, assertCu
     } catch (error) {
       if (error instanceof ProtocolError && error.code === 'unsupported')
         return { items: [], cursor: null, completeness: 'unsupported', reason: error.field };
+      // Only the initial page of a not-yet-materialized thread reads as empty and complete.
+      if (!cursor && !state.turn && isUnmaterializedThreadListError(error))
+        return { items: [], cursor: null, completeness: 'complete' };
       throw error;
     }
   };
