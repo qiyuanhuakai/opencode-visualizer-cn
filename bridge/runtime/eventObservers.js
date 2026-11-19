@@ -18,6 +18,7 @@ export function createEventObserver({ binding: input, after, isCurrent, onClose 
   let consumed = after;
   let recovery = null;
   let closed = false;
+  let wakeRead = null;
   function check() {
     if (closed || !isCurrent()) throw new StoreError('replay_required', 'observer_generation');
   }
@@ -25,6 +26,7 @@ export function createEventObserver({ binding: input, after, isCurrent, onClose 
     recovery = reason;
     normal.length = 0;
     normalBytes = 0;
+    wakeRead?.();
   }
   const observer = {
     binding,
@@ -43,6 +45,7 @@ export function createEventObserver({ binding: input, after, isCurrent, onClose 
         }
         control.push({ encoded, bytes });
         controlBytes += bytes;
+        wakeRead?.();
         if (normalBytes + controlBytes + binaryBytes > OBSERVER_LIMITS.bytes) recover('control_backpressure');
       }
       if (recovery) return;
@@ -50,6 +53,7 @@ export function createEventObserver({ binding: input, after, isCurrent, onClose 
       if (frame.payload?.collection === 'session_summaries' && normal.some((entry) => entry.scope === frame.scope)) { recover('summary_coalesced'); return; }
       normal.push({ encoded, bytes, scope: frame.scope, seq: frame.seq });
       normalBytes += bytes;
+      wakeRead?.();
     },
     recover,
     read() {
@@ -68,6 +72,28 @@ export function createEventObserver({ binding: input, after, isCurrent, onClose 
       }
       const chunk = bulk.shift();
       return chunk ? { kind: 'binary', ...chunk } : null;
+    },
+    async waitRead(signal) {
+      if (wakeRead) throw new StoreError('conflict', 'observer_read_pending');
+      if (signal?.aborted) throw new StoreError('cancelled', 'observer_read_aborted');
+      const ready = observer.read();
+      if (ready !== null) return ready;
+      try {
+        await new Promise(resolve => {
+          const finish = () => {
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', finish);
+            resolve();
+          };
+          const timer = setTimeout(finish, 250);
+          wakeRead = finish;
+          signal?.addEventListener('abort', finish, { once: true });
+        });
+        if (signal?.aborted) throw new StoreError('cancelled', 'observer_read_aborted');
+        return observer.read();
+      } finally {
+        wakeRead = null;
+      }
     },
     resume(afterReplay) {
       check();
@@ -89,6 +115,7 @@ export function createEventObserver({ binding: input, after, isCurrent, onClose 
       inflight.set(key, { ...descriptor, bytes: encoded.byteLength });
       binaryBytes += encoded.byteLength;
       bulk.push({ ...descriptor, encoded });
+      wakeRead?.();
       return descriptor;
     },
     acknowledgeChunk(chunk) {
@@ -113,6 +140,7 @@ export function createEventObserver({ binding: input, after, isCurrent, onClose 
       normal.length = control.length = bulk.length = 0;
       inflight.clear();
       normalBytes = controlBytes = binaryBytes = 0;
+      wakeRead?.();
       onClose();
     },
     get state() { return { bytes: normalBytes + controlBytes + binaryBytes, normal: normal.length, control: control.length, bulk: bulk.length, inflight: inflight.size, through, consumed, recovery, closed }; },

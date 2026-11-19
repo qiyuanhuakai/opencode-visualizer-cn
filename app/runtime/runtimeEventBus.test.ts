@@ -24,6 +24,26 @@ async function fixture(run: (store: ReturnType<typeof createRuntimeStore>, bus: 
 }
 
 describe('durable runtime event bus', () => {
+  it('wakes a pending read on an event and releases the slot on abort or close', async () => {
+    const observer = createEventObserver({ binding, after: 0, isCurrent: () => true, onClose: () => {} });
+    try {
+      const waiting = observer.waitRead();
+      await expect(observer.waitRead()).rejects.toMatchObject({ code: 'conflict' });
+      const key = sessionScope('wake');
+      observer.push({ ...binding, version: 1, kind: 'event', seq: 1, entityRevision: 1, scope: key,
+        type: 'entity.patch', payload: { collection: 'session_summaries', key, deleted: false } });
+      await expect(waiting).resolves.toMatchObject({ kind: 'event', frame: { seq: 1 } });
+      const cancellation = new AbortController();
+      const aborted = observer.waitRead(cancellation.signal);
+      cancellation.abort();
+      await expect(aborted).rejects.toMatchObject({ code: 'cancelled' });
+      const closed = observer.waitRead();
+      observer.close();
+      await expect(closed).rejects.toMatchObject({ code: 'replay_required' });
+    } finally {
+      observer.close();
+    }
+  });
   it('preserves writes arriving during replay without rejecting a completed replay watermark', async () => {
     await fixture(async (store, bus) => {
       const observer = await bus.connect(binding, { after: 0, isCurrent: () => true });

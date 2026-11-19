@@ -269,7 +269,7 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
       }
       case 'runtime.observer.read': case 'runtime.observer.resume': case 'runtime.observer.close': {
         indexAccess(entry); const observer = entry.observer; requireValue(observer?.id === params.observerId && observer.value, 'runtime.observer', 'unauthorized');
-        if (frame.method === 'runtime.observer.read') return observer.value.read();
+        if (frame.method === 'runtime.observer.read') return observer.value.waitRead(signal);
         if (frame.method === 'runtime.observer.resume') { observer.value.resume(params.after); return { resumed: true }; }
         observer.value.close(); entry.observer = null; return { closed: true };
       }
