@@ -70,58 +70,6 @@ describe('App is the real container of the Host Thread surface', () => {
     expect(typeof (threadState as { openThread?: unknown }).openThread).toBe('function');
   });
 
-  it('binds @refresh-native-history on OutputPanel, so the event is not dropped', async () => {
-    const fixture = await mountHistoryApp([historyEntry('message-1', 'first')]);
-    mountedApps.push(fixture);
-    await selectSessionA(fixture);
-
-    const outputPanel = fixture.host.querySelector('.output-panel');
-    expect(outputPanel).not.toBeNull();
-    const listeners = (outputPanel as unknown as { __vnode?: { props?: Record<string, unknown> } }).__vnode?.props;
-    expect(listeners).toBeTruthy();
-    expect(typeof listeners?.onRefreshNativeHistory).toBe('function');
-  });
-
-  it('Refresh re-reads the located participant\'s OWN native history and backfills the panel', async () => {
-    const fixture = await mountHistoryApp([historyEntry('message-1', 'first-read-entry')]);
-    mountedApps.push(fixture);
-    await selectSessionA(fixture);
-
-    // When: the user opens the Host Thread for the selected session.
-    const toggle = fixture.host.querySelector<HTMLElement>('[data-testid="host-thread-toggle"]');
-    expect(toggle).not.toBeNull();
-    toggle?.click();
-    await vi.waitFor(() => {
-      expect(fixture.host.querySelector('[data-testid="thread-view"]')).not.toBeNull();
-    });
-    await vi.waitFor(() => {
-      expect(fixture.host.querySelector('[data-testid="native-history"]')).not.toBeNull();
-    });
-
-    // Then: the container produced a first read through the REAL backend.
-    expect(fixture.listSessionMessages).toHaveBeenCalledWith('session-a', { directory: '/repo' });
-    await vi.waitFor(() => {
-      expect(fixture.host.querySelector('[data-testid="native-history-entry"]')?.textContent?.trim()).toBe(
-        'first-read-entry',
-      );
-    });
-
-    // And: the group names the participant's OWN native session, never a merged one.
-    expect(
-      fixture.host.querySelector('[data-testid="native-history-session"]')?.textContent?.trim(),
-    ).toBe('session-a');
-
-    // When: the backend's history changes and the user clicks Refresh.
-    fixture.listSessionMessages.mockResolvedValue([historyEntry('message-2', 'reloaded-entry')]);
-    fixture.host.querySelector<HTMLElement>('[data-testid="browse-native-history"]')?.click();
-
-    // Then: the panel shows the RE-READ bytes, not the first read.
-    await vi.waitFor(() => {
-      expect(fixture.host.querySelector('[data-testid="native-history-entry"]')?.textContent?.trim()).toBe(
-        'reloaded-entry',
-      );
-    });
-  });
 });
 
 describe('App reads each participant history against its OWN target identity, in its OWN thread generation', () => {

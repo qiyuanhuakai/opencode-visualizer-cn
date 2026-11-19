@@ -46,8 +46,14 @@ it('connects through Bridge login and renders selected native history over the a
   expect(fixture.historyOpens.every(session => session.environmentId === fixture.environmentId)).toBe(true);
 }, 30000);
 
-it('opens the selected session as a Host Thread through the Bridge', async () => {
-  const fixture = await mountRuntimeApp([]);
+it('opens a Host Thread, refreshes a participant’s own history, and locates their session', async () => {
+  let participantText = 'Initial participant history';
+  const fixture = await mountRuntimeApp([], {
+    readHistory: async session => session.nativeSessionId === 'session-b' ? [{
+      info: { id: 'b-history', sessionID: 'session-b', role: 'user', time: { created: 101 } },
+      parts: [{ id: 'b-part', messageID: 'b-history', sessionID: 'session-b', type: 'text', text: participantText }],
+    }] : [],
+  });
   await fixture.connect();
   // Connecting discovers Git identity without requiring a session selection.
   await vi.waitFor(async () => {
@@ -80,8 +86,28 @@ it('opens the selected session as a Host Thread through the Bridge', async () =>
     expect(button?.disabled).toBe(false);
     return button!;
   });
+  const historyGroup = await vi.waitFor(() => {
+    const label = fixture.element.querySelector('[data-testid="native-history-session"][title="session-b"]');
+    const group = label?.closest('[data-testid="native-history-group"]');
+    expect(group).toBeTruthy();
+    return group!;
+  });
+  const refresh = historyGroup.querySelector<HTMLButtonElement>('[data-testid="browse-native-history"]')!;
+  refresh.click();
+  await vi.waitFor(() => {
+    expect(refresh.disabled).toBe(false);
+    expect(historyGroup.textContent).toContain('Initial participant history');
+  });
+  participantText = 'Refreshed participant history';
+  refresh.click();
+  await vi.waitFor(() => {
+    expect(refresh.disabled).toBe(false);
+    expect(historyGroup.textContent).toContain('Refreshed participant history');
+    expect(historyGroup.textContent).not.toContain('Initial participant history');
+    expect(fixture.historyPages.filter(page => page.session.nativeSessionId === 'session-b')).toHaveLength(2);
+  });
   locate.click();
-  await vi.waitFor(() => expect(fixture.historyOpens.at(-1)?.nativeSessionId).toBe('session-b'));
+  await vi.waitFor(() => expect(fixture.historyPages.filter(page => page.session.nativeSessionId === 'session-b')).toHaveLength(3));
 }, 30000);
 
 it('loads DSH account status from the management instance while OpenCode owns the conversation', async () => {

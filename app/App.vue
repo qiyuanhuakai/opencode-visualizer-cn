@@ -10924,7 +10924,9 @@ const runtimeConversation = useRuntimeConversation({ publish: entries => {
   if (session) storeThreadNativeWindow(session, entries);
 } });
 watch(runtimeConversation.loading, value => { isLoadingHistory.value = value; });
-onScopeDispose(() => { void runtimeConversation.dispose(); });
+onScopeDispose(() => {
+  void runtimeConversation.dispose().catch(error => log('Runtime history cleanup failed', error));
+});
 
 function runtimeBoundSession(binding: RuntimeActionBinding): SessionRef {
   if (binding.profileId !== activeProfileId.value) throw new Error('Bridge connection changed.');
