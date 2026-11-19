@@ -794,17 +794,20 @@ it('limits the modern prompt abort alias to the verified dispatcher profile', ()
   expect(parseNativeCapabilities({ backend: 'v2', server_version: '2.5.2' }, { paths: { '/api/v1/sessions/{session_id}/prompts/{tail}': { post: { operationId: 'otherAction' } } } }, ws).promptAbort).toBe(false);
 });
 
-it('reclaims native history slots after closing 33 distinct sessions', async () => {
+it.each(['history only', 'subscription first', 'history first'] as const)('reclaims 33 distinct history slots (%s)', async order => {
   const fixture = await controlledKimiWeb();
   const driver = await createKimiWebDriver(fixture.options);
   try {
     const open = driver.registration.driver.core.openHistory;
-    if (!open) throw new Error('missing native history producer');
+    const subscribe = driver.registration.driver.core.subscribe;
+    if (!open || !subscribe) throw new Error('missing native history producer');
     for (let index = 0; index < 33; index++) {
-      const handle = await open({
-        ...producerInput, session: { ...session, nativeSessionId: `capacity-${index}` },
-      }) as InternalNativeHistoryHandle;
+      const input = { ...producerInput, session: { ...session, nativeSessionId: `capacity-${index}` } };
+      const stream = order === 'history only' ? null : await subscribe(input) as { return(): Promise<unknown> };
+      const handle = await open(input) as InternalNativeHistoryHandle;
+      if (order === 'subscription first') await stream?.return();
       await handle.close();
+      if (order === 'history first') await stream?.return();
       expect(driver.diagnostics()).toMatchObject({ observers: 0, selected: 0, historySessions: 0 });
     }
   } finally { await driver.close(); await fixture.close(); }

@@ -80,6 +80,7 @@ export interface LocaleMessages {
       backup: string;
       backupProgress: string;
       result: string;
+      backupOnly: string;
       resultSummary: string;
       retained: string;
       storageUnavailable: string;

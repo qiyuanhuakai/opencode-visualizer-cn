@@ -560,8 +560,8 @@ export async function createKimiWebDriver(options) {
     const { pending, key, entry } = agentSlot(sessionId, agentId);
     if (!entry || entry.held === 0) return;
     entry.held--;
-    if (entry.permanent > 0 || entry.held > 0) return;
-    if (pending.size === 1) return reclaim(sessionId);
+    if (entry.held > 0) return;
+    if (entry.permanent > 0 || pending.size === 1) return reclaim(sessionId);
     if (agentId === 'main' && (runningTasks.has(sessionId) || uncertain.has(sessionId))) return;
     pending.delete(key);
     await teardown('unsubscribe_v2', { session_id: sessionId, transcript: { [agentId]: 'off' } });
