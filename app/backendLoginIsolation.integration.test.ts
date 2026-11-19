@@ -11,7 +11,7 @@ describe('Bridge login and logout isolation', () => {
       ['bridgeUrl', 'text'],
       ['bridgeToken', 'password'],
     ]);
-    expect(form.querySelector<HTMLInputElement>('#bridge-url')?.value).toBe('ws://127.0.0.1:4096/runtime');
+    expect(form.querySelector<HTMLInputElement>('#bridge-url')?.value).toBe('ws://127.0.0.1:23004/runtime');
     expect(fixture.element.querySelector('.app-login-backend')).toBeNull();
   }, 15000);
 

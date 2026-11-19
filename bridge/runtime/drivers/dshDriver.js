@@ -409,10 +409,14 @@ export function createDshDriver(options) {
         return { items, cursor: null, completeness: 'complete', source: 'native-summary-snapshot', total: items.length, expiresAt: now() + SNAPSHOT_TTL_MS };
       }
       if (snapshots.size >= SNAPSHOT_SLOTS || [...snapshots.values()].reduce((sum, value) => sum + value.bytes, bytes) > SNAPSHOT_BUDGET_BYTES) fail('source_unavailable', 'summary_snapshot_slots');
-      token = randomUUID(); snapshot = { items, lease, bytes, expiresAt: now() + SNAPSHOT_TTL_MS }; snapshots.set(token, snapshot);
+      token = randomUUID(); snapshot = { items, lease, bytes, highWater: 0, expiresAt: now() + SNAPSHOT_TTL_MS }; snapshots.set(token, snapshot);
     }
     const items = snapshot.items.slice(offset, offset + limit), next = offset + items.length;
     if (next >= snapshot.items.length) snapshots.delete(token);
+    else if (next > snapshot.highWater) {
+      snapshot.highWater = next;
+      snapshot.expiresAt = now() + SNAPSHOT_TTL_MS;
+    }
     return { items, cursor: next < snapshot.items.length ? `${token}:${next}` : null, completeness: next < snapshot.items.length ? 'partial' : 'complete',
       source: 'native-summary-snapshot', total: snapshot.items.length, expiresAt: snapshot.expiresAt };
   }

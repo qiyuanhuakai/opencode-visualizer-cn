@@ -78,7 +78,7 @@ export async function measureTree(page, connected) {
   await page.locator('[data-tree-row]').first().waitFor({ timeout: 30000 });
   const topologyMs = await page.evaluate((time) => performance.now() - time, connected.start);
   const expanded = new Set();
-  const selected = await until(async () => {
+  await until(async () => {
     const visible = page.locator('[data-row-kind="session"]');
     if (await visible.count()) return visible.first();
     const rows = await page.locator('[data-tree-row]').evaluateAll((elements) => elements.map((element) => ({
@@ -93,25 +93,21 @@ export async function measureTree(page, connected) {
   }, 'actual tree first selectable session');
   const firstSelectableMs = await page.evaluate((time) => performance.now() - time, connected.start);
   const renderedRows = await page.locator('[data-tree-row]').count();
-  return { topologyMs, firstSelectableMs, renderedRows, selected };
+  return { topologyMs, firstSelectableMs, renderedRows };
 }
 
-export async function measureInteractions(page, selected) {
-  const attempted = new Set();
-  selected = await until(async () => {
-    const candidates = page.locator('[data-row-kind="session"][data-harness="opencode"][data-directory]:not([data-directory=""])');
-    if (await candidates.count()) return candidates.first();
-    const groups = await page.locator('[data-tree-row]').evaluateAll(elements => elements.map(element => ({ key: element.getAttribute('data-row-key'), expanded: element.getAttribute('aria-expanded'), expandable: Boolean(element.querySelector('[data-testid="row-toggle"]:not(.is-leaf)')) })));
-    const candidate = groups.find(group => group.expandable && group.expanded !== 'true' && !attempted.has(group.key));
-    if (candidate) { attempted.add(candidate.key); await page.locator(`[data-row-key=${JSON.stringify(candidate.key)}]`).click(); }
-    return false;
-  }, 'authorized native history session');
-  const row = await selected.evaluate((element) => ({ key: element.getAttribute('data-row-key'), title: element.querySelector('.unified-row-label')?.textContent, harness: element.getAttribute('data-harness') }));
-  const selectedAt = await page.evaluate((key) => {
-    const now = performance.now();
-    document.querySelector(`[data-row-key=${JSON.stringify(key)}]`).click();
-    return now;
-  }, row.key);
+export async function measureInteractions(page, target) {
+  const search = page.getByTestId('unified-search-input');
+  await search.fill(target.title);
+  await search.press('Enter');
+  const title = page.getByText(target.title, { exact: true });
+  const result = page.getByTestId('search-result').filter({ has: title });
+  const selectedAt = await result.evaluate(element => {
+    const selectedAt = performance.now();
+    element.click();
+    return selectedAt;
+  }, undefined, { timeout: 30000 });
+  const row = { title: target.title, nativeSessionId: target.nativeSessionId, harness: target.source };
   await page.locator('textarea[role="combobox"]').waitFor({ timeout: 30000 });
   const selectionVisibleMs = await page.evaluate((time) => performance.now() - time, selectedAt);
   let historyMs = null;

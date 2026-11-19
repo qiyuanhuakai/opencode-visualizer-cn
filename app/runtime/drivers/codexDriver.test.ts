@@ -300,6 +300,30 @@ describe('Codex privacy and connection faults', () => {
     expect(client.closed).toBe(true);
     expect(notifications).toEqual([]);
   });
+  it('lets advancing discovery span a minute while expiring an idle cursor', async () => {
+    const { createCodexDiscovery } =
+      await import('../../../shared/runtime/native/codex/discovery.js');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(0);
+    let page = 0;
+    const list = createCodexDiscovery({
+      generation: 1,
+      summary: async () => null,
+      request: async () => ({ data: [{}], nextCursor: String(++page) }),
+    });
+    try {
+      const first = await list();
+      clock.mockReturnValue(45000);
+      const next = await list({ cursor: first.cursor });
+      clock.mockReturnValue(90000);
+      const third = await list({ cursor: next.cursor });
+      expect(third.cursor).toEqual(expect.any(String));
+      clock.mockReturnValue(150000);
+      await expect(list({ cursor: third.cursor })).rejects.toMatchObject({ code: 'replay_required' });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('marks repeated listing cursors partial rather than claiming a complete inventory', async () => {
     const { createCodexDiscovery } =
       await import('../../../shared/runtime/native/codex/discovery.js');

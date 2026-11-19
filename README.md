@@ -16,7 +16,7 @@
 1. 从 [GitHub Releases](https://github.com/qiyuanhuakai/opencode-visualizer-cn/releases) 下载并安装**两个包**：Vis Electron 桌面端（`Vis-…-Windows.exe` / `Vis-…-MacOS.dmg` / `Vis-…-Linux.deb` 或 `.AppImage`）和适用于后端所在系统的 `vis_bridge`（`VisBridge-…-Windows.exe` / `VisBridge-…-MacOS.pkg` / `VisBridge-…-Linux.deb` 或 `.rpm`）。使用安装包无需克隆仓库、安装 Node.js 或运行 `pnpm`。
 2. 安装并登录想使用的后端 CLI：OpenCode、Codex、Kimi Code（用于 Kimi Web）或 ACP Agent。只需安装你要使用的后端；bridge 会探测或启动可用服务。
 3. 在安装 `vis_bridge` 的系统终端运行 `vis_bridge start`。Windows 安装后先重新打开终端；如后端 CLI 位于 WSL，就在 WSL 中安装 Linux 版 bridge 并运行此命令，Windows 版 Vis Electron 可以连接该 bridge。
-4. 打开 Vis，选择后端并连接。默认地址：OpenCode 为 `http://localhost:4096`，Codex 为 `ws://localhost:23004/codex`，ACP 为 `ws://localhost:23004`，Kimi Web 为 `ws://localhost:23004/kimi-web/ws`。若 bridge 配置了 token，在登录页填写 Bridge token；bridge 不在当前系统时，改用实际可访问的主机地址。
+4. 打开 Vis，连接首屏的 Vis Bridge，默认地址为 `ws://127.0.0.1:23004/runtime`。如已配置 Bridge token，请在首屏填写。Bridge 位于其他主机或使用自定义端口时，请填写客户端能访问的 `/runtime` 地址。
 
 ---
 
@@ -431,7 +431,7 @@ This project is a third-party Web UI built around [OpenCode](https://github.com/
 1. Download and install **both packages** from [GitHub Releases](https://github.com/qiyuanhuakai/opencode-visualizer-cn/releases): the Vis Electron desktop app (`Vis-…-Windows.exe` / `Vis-…-MacOS.dmg` / `Vis-…-Linux.deb` or `.AppImage`) and the `vis_bridge` installer for the system hosting your backend (`VisBridge-…-Windows.exe` / `VisBridge-…-MacOS.pkg` / `VisBridge-…-Linux.deb` or `.rpm`). Prebuilt installers do not require cloning the repository, Node.js, or `pnpm`.
 2. Install and sign in to the backend CLI you want: OpenCode, Codex, Kimi Code (for Kimi Web), or an ACP agent. You only need the backend you intend to use; the bridge probes or starts available services.
 3. Run `vis_bridge start` in a system terminal where you installed the bridge. On Windows, reopen the terminal after installation. If your backend CLI is in WSL, install the Linux bridge inside WSL and run the command there; the Windows Vis Electron app can connect to it.
-4. Open Vis, select a backend, and connect. Default URLs: OpenCode `http://localhost:4096`, Codex `ws://localhost:23004/codex`, ACP `ws://localhost:23004`, and Kimi Web `ws://localhost:23004/kimi-web/ws`. If you configured a bridge token, enter it on the login screen. When the bridge runs outside the current system, use its reachable host address.
+4. Open Vis and connect to Vis Bridge on the first screen. The default address is `ws://127.0.0.1:23004/runtime`. Enter the Bridge token if configured. If the Bridge runs on another host or port, enter its reachable `/runtime` address.
 
 ---
 

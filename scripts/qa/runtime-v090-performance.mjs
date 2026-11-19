@@ -11,9 +11,11 @@
 // independent iterations, and reports every approved task-44 threshold as a
 // nearest-rank p95 with a real measured number. No threshold is inferred; a
 // miss is a bottleneck to fix, never a goalpost to move.
+import { execFileSync } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { productionSource, sourceSnapshot, validateSources } from './runtime-v090-evidence.mjs';
 
 import {
   createStack,
@@ -195,6 +197,12 @@ export function evaluateThresholds(label, remote, metrics, coverage, draftsLeg, 
 async function run() {
   const { profile, out: outFile, runs, remote } = parseArgs(process.argv);
   const config = PROFILES[profile];
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
+  const productionRevision = git('rev-parse', 'HEAD').trim();
+  const sourceFiles = git('ls-files', '-z', '--', 'app/runtime', 'app/dev/runtime-v090', 'shared/runtime', 'scripts/qa', 'package.json', 'pnpm-lock.yaml', 'vite.config.ts').split('\0').filter(Boolean);
+  const sourceHashes = sourceSnapshot(root, sourceFiles);
+  const sourceIdentity = productionSource(root, sourceHashes, productionRevision);
   // --out is the profile report JSON file; supporting evidence (lifecycle, draft
   // hash ledger, logs, CPU/bytes/db record, source-errors, raw samples) lands in
   // a per-profile directory under implementation/ so the three profiles never
@@ -321,6 +329,10 @@ async function run() {
   const report = {
     task: 44,
     profile,
+    measurementScope: 'runtime-storage-substrate',
+    productionRevision,
+    productionSource: sourceIdentity,
+    sourceHashes,
     status: allPassed ? 'passed' : 'failed',
     startedAt,
     finishedAt: new Date().toISOString(),
@@ -456,6 +468,8 @@ async function run() {
   await writeFile(path.join(out, 'run-log.json'), json(logs));
   await writeFile(path.join(out, 'cpu-bytes-db-longtask.json'), json({ cpu, heapPeakMiB: report.os.heapPeakMiB, rssPeakMiB: report.os.rssPeakMiB, idbBytesPeak, baseline }));
   await writeFile(path.join(out, 'raw-samples.json'), json(samples));
+  validateSources(sourceHashes, root);
+  if (git('rev-parse', 'HEAD').trim() !== productionRevision) throw new Error('Benchmark worktree revision changed during measurement');
   await writeFile(outFile, json(report));
 
   const failed = thresholds.filter((row) => !row.passed);

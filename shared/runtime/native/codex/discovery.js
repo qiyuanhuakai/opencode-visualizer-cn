@@ -96,6 +96,7 @@ export function createCodexDiscovery({ request, summary, generation, revision = 
         state.seen.clear();
       } else return { items, cursor: null, completeness: 'complete' };
       const token = `${generation}:${++serial}`;
+      state.expires = Date.now() + 60000;
       scans.set(token, state);
       return { items, cursor: token, completeness: 'partial', reason: 'more_pages' };
     } catch (error) {

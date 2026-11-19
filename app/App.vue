@@ -812,6 +812,7 @@ import type { PublicConnectionReference } from '../shared/runtime/runtimeWire.js
 import { parseSessionRef, encodeSessionKey, decodeSessionKey, decodeRepoKey, decodeWorkspaceKey } from '../shared/runtime/identity.js';
 import type { EnvironmentId, HarnessInstanceId, SessionRef } from '../shared/runtime/identity.js';
 import { managementCandidate } from './runtime/connectionProfile';
+import { DEFAULT_RUNTIME_BRIDGE_URL } from './runtime/connectionUrl';
 import {
   useRuntimeSessionTree,
   type HarnessEntry,
@@ -9849,7 +9850,7 @@ function backend() {
  * `currentBackendIdentity` the local-file edit path already uses, so a target
  * switch moves the workspace boundary and the edit boundary together.
  */
-const bridgeLoginUrl = ref(storageGet('vis.runtime.bridgeUrl') || 'ws://127.0.0.1:4096/runtime');
+const bridgeLoginUrl = ref(storageGet('vis.runtime.bridgeUrl') || DEFAULT_RUNTIME_BRIDGE_URL);
 const bridgeLoginToken = ref('');
 const bridgeReference = shallowRef<PublicConnectionReference | null>(null);
 const runtimePins = shallowRef<ReturnType<typeof createRuntimePins> | null>(null);
