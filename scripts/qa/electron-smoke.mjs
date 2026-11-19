@@ -333,6 +333,7 @@ async function main() {
     const noChildWindow = afterOpen.count === 1 && beforeOpen.count === 1;
     record('window-open-creates-no-child-window', noChildWindow, `windows before=${beforeOpen.count} after=${afterOpen.count}`);
 
+    const capturePidBefore = process.env.VIS_SMOKE_BUILD_IDENTITY ? await app.evaluate(() => process.pid) : null;
     await page.screenshot({ path: SCREENSHOT_PATH });
     consoleLines.push(`[driver] screenshot saved to ${SCREENSHOT_PATH}`);
     if (process.env.VIS_SMOKE_BUILD_IDENTITY) {
@@ -351,10 +352,12 @@ async function main() {
         appAsarSha256: sha256(main.appPath),
         screenshotSha256: sha256(SCREENSHOT_PATH),
         main,
-        launchedPid: app.process().pid,
+        capturePidBefore,
+        launcherPid: app.process().pid,
+        isolatedProfileMatched: profileMatches,
       };
       const capture = receipt.packagedCapture;
-      record('candidate-package-capture', capture.main.pid === capture.launchedPid &&
+      record('candidate-package-capture', capture.main.pid === capture.capturePidBefore && capture.isolatedProfileMatched &&
         realpathSync(main.executablePath) === realpathSync(executablePath) &&
         path.basename(main.appPath) === 'app.asar' &&
         capture.executableSha256 === build.executableSha256 && capture.appAsarSha256 === build.appAsarSha256,
