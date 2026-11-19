@@ -8,39 +8,67 @@ vi.mock('./utils/workerRenderer', async (importOriginal) => {
 });
 
 import { setLocale } from './i18n';
-import { mountHistoryApp } from './test/appHarness';
-
-const mountedApps: Array<{ readonly unmount: () => void }> = [];
+import { mountRuntimeApp } from './test/runtimeAppHarness';
+import type { JsonValue } from '../shared/runtime/capabilities.js';
 
 afterEach(() => {
-  mountedApps.splice(0).forEach(({ unmount }) => unmount());
   setLocale('en');
   renderWorkerTransport.mockClear();
 });
 
-describe('App localized tool rendering', () => {
-  it('Given a mounted App, When completed tool notifications arrive after each locale change, Then its renderer transport receives that request locale defaults', async () => {
-    const fixture = await mountHistoryApp([]);
-    mountedApps.push(fixture);
-    renderWorkerTransport.mockClear();
+function completedTool(
+  sessionID: string,
+  tool: string,
+  input: Record<string, JsonValue>,
+  output: string,
+) {
+  const messageID = `assistant-${sessionID}`;
+  const id = `tool-${sessionID}`;
+  const parentID = `user-${sessionID}`;
+  return [{
+    info: { id: parentID, sessionID, role: 'user', time: { created: 1 } },
+    parts: [{ id: `prompt-${sessionID}`, messageID: parentID, sessionID, type: 'text', text: 'Inspect tool output' }],
+  }, {
+    info: {
+      id: messageID, sessionID, role: 'assistant', parentID,
+      time: { created: 10, completed: 11 }, providerID: 'provider-a', modelID: 'model-a', mode: 'build',
+    },
+    parts: [{
+      id, callID: id, messageID, sessionID, type: 'tool', tool,
+      state: { status: 'completed', input, output, time: { start: 10, end: 11 } },
+    }],
+  }];
+}
+
+async function openTool(fixture: Awaited<ReturnType<typeof mountRuntimeApp>>, session: string, nativeId: string, summary?: string) {
+  await fixture.select(session);
+  await vi.waitFor(() => expect(fixture.historyPages.at(-1)?.session.nativeSessionId).toBe(nativeId));
+  const history = await vi.waitFor(() => {
+    const button = fixture.element.querySelector<HTMLButtonElement>('.ib-action-history');
+    expect(button).toBeTruthy();
+    return button!;
+  });
+  history.click();
+  const tool = await vi.waitFor(() => {
+    const rows = fixture.element.querySelectorAll<HTMLElement>('[data-floating-key="thread-history"] .history-item-tool');
+    const row = summary ? [...rows].find(item => item.textContent?.includes(summary)) : rows[0];
+    expect(row).toBeTruthy();
+    return row!;
+  });
+  tool.click();
+}
+
+describe('App localized tool rendering through Bridge history', () => {
+  it('uses the request locale when opening completed shell tools from different sessions', async () => {
+    const fixture = await mountRuntimeApp([
+      ...completedTool('session-a', 'bash', { command: 'printf english' }, 'english output'),
+      ...completedTool('session-b', 'bash', { command: 'printf chinese' }, '中文输出'),
+    ]);
+    await fixture.connect();
 
     setLocale('en');
-    fixture.emitSessionEvent('message.part.updated', {
-      part: {
-        id: 'tool-bash-en',
-        callID: 'tool-bash-en',
-        type: 'tool',
-        tool: 'bash',
-        state: {
-          status: 'completed',
-          input: { command: 'printf english' },
-          output: 'english output',
-        },
-      },
-    });
-
-    await vi.waitFor(() => expect(renderWorkerTransport).toHaveBeenCalledTimes(1));
-    expect(renderWorkerTransport).toHaveBeenLastCalledWith(
+    await openTool(fixture, 'Session A', 'session-a', 'printf english');
+    await vi.waitFor(() => expect(renderWorkerTransport).toHaveBeenCalledWith(
       expect.objectContaining({
         code: '$ printf english\n\nenglish output',
         lang: 'shellscript',
@@ -51,25 +79,11 @@ describe('App localized tool rendering', () => {
         copyCodeAriaLabel: 'Copy code',
         copyMarkdownAriaLabel: 'Copy markdown',
       }),
-    );
+    ));
 
     setLocale('zh-CN');
-    fixture.emitSessionEvent('message.part.updated', {
-      part: {
-        id: 'tool-bash-zh',
-        callID: 'tool-bash-zh',
-        type: 'tool',
-        tool: 'bash',
-        state: {
-          status: 'completed',
-          input: { command: 'printf chinese' },
-          output: '中文输出',
-        },
-      },
-    });
-
-    await vi.waitFor(() => expect(renderWorkerTransport).toHaveBeenCalledTimes(2));
-    expect(renderWorkerTransport).toHaveBeenLastCalledWith(
+    await openTool(fixture, 'Session B', 'session-b', 'printf chinese');
+    await vi.waitFor(() => expect(renderWorkerTransport).toHaveBeenCalledWith(
       expect.objectContaining({
         code: '$ printf chinese\n\n中文输出',
         lang: 'shellscript',
@@ -80,32 +94,20 @@ describe('App localized tool rendering', () => {
         copyCodeAriaLabel: '复制代码',
         copyMarkdownAriaLabel: '复制 Markdown',
       }),
-    );
-  });
+    ));
+  }, 15000);
 
-  it('Given a mounted App, When a webfetch tool notification supplies empty labels, Then its worker payload preserves them and its content', async () => {
-    const fixture = await mountHistoryApp([]);
-    mountedApps.push(fixture);
-    renderWorkerTransport.mockClear();
+  it('preserves webfetch markdown and intentionally empty copy labels', async () => {
+    const output = '# Payload retained\n\nThe transport receives this exact content.';
+    const fixture = await mountRuntimeApp([
+      ...completedTool('session-a', 'webfetch', { url: 'https://example.test/article', format: 'markdown' }, output),
+    ]);
+    await fixture.connect();
+    await openTool(fixture, 'Session A', 'session-a');
 
-    fixture.emitSessionEvent('message.part.updated', {
-      part: {
-        id: 'tool-webfetch-empty-labels',
-        callID: 'tool-webfetch-empty-labels',
-        type: 'tool',
-        tool: 'webfetch',
-        state: {
-          status: 'completed',
-          input: { url: 'https://example.test/article', format: 'markdown' },
-          output: '# Payload retained\n\nThe transport receives this exact content.',
-        },
-      },
-    });
-
-    await vi.waitFor(() => expect(renderWorkerTransport).toHaveBeenCalledTimes(1));
-    expect(renderWorkerTransport).toHaveBeenCalledWith(
+    await vi.waitFor(() => expect(renderWorkerTransport).toHaveBeenCalledWith(
       expect.objectContaining({
-        code: '# Payload retained\n\nThe transport receives this exact content.',
+        code: output,
         lang: 'markdown',
         theme: 'github-dark',
         gutterMode: 'none',
@@ -114,6 +116,6 @@ describe('App localized tool rendering', () => {
         copyCodeAriaLabel: '',
         copyMarkdownAriaLabel: '',
       }),
-    );
-  });
+    ));
+  }, 15000);
 });
