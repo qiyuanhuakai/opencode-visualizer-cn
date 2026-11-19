@@ -16,7 +16,7 @@ export type RequestMethod = Exclude<RuntimeMethod, MutationMethod>;
 export type RequestOptions = { readonly signal?: AbortSignal; readonly selectionCurrent?: () => boolean; readonly onDrained?: () => void };
 export type RuntimeScope = { readonly binding: Binding; readonly generation: number; readonly isCurrent: () => boolean };
 type Collection = RuntimeParams['runtime.snapshot']['collection'];
-type Target = { readonly hello: Hello; readonly state: ProtocolState; readonly generation: number; paging: boolean; indexSnapshot?: Readonly<{ token: string; revision: number; watermark: number; expiresAt: number }> };
+type Target = { readonly hello: Hello; readonly state: ProtocolState; readonly generation: number; paging: boolean; legacyObserverRead?: true; indexSnapshot?: Readonly<{ token: string; revision: number; watermark: number; expiresAt: number }> };
 type Pending = {
   readonly target: Target; readonly method: RuntimeMethod; readonly current: () => boolean;
   readonly slot: 'normal' | 'reserved';
@@ -372,7 +372,14 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
         requireValue(!reading && !attached.paging, 'observer.busy', 'conflict');
         reading = true;
         try {
-          const delivery = await request(target, 'runtime.observer.read', { observerId }, options);
+          const params = attached.legacyObserverRead ? { observerId } : { observerId, resolveSummary: true as const };
+          const delivery = await request(target, 'runtime.observer.read', params, options).catch(error => {
+            if (attached.legacyObserverRead || !(error instanceof RuntimeRequestError)
+              || error.code !== 'invalid_request' || error.field !== 'fields') throw error;
+            // Older Bridges reject the optional field before reading the observer.
+            attached.legacyObserverRead = true;
+            return request(target, 'runtime.observer.read', { observerId }, options);
+          });
           active();
           if (delivery === null) return null;
           switch (delivery.kind) {

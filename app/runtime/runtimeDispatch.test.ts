@@ -434,6 +434,25 @@ describe('runtime real WebSocket dispatch', () => {
     const page = await connection.request('runtime.snapshot', { collection: 'workspaces' }); if (!page.ok) throw new Error('Snapshot failed');
     expect(await second.request('runtime.snapshot', { collection: 'workspaces', token: (page.result as { token: string }).token })).toMatchObject({ ok: false, typedError: { code: 'replay_required' } });
   });
+  it('attaches a qualified summary only when the observer opts in', async () => {
+    const { connection, services } = await runtime();
+    const session = parseSessionRef({ environmentId: services.target, harnessInstanceId: services.registry.list()[0].harnessInstanceId, nativeSessionId: 'observer-summary' });
+    const key = encodeSessionKey(session);
+    const snapshot = await connection.request('runtime.snapshot', { collection: 'session_summaries' });
+    if (!snapshot.ok) throw new Error('Snapshot unavailable');
+    const opened = await connection.request('runtime.observer.open', { after: (snapshot.result as { watermark: number }).watermark });
+    if (!opened.ok) throw new Error('Missing observer');
+    for (const resolveSummary of [true, undefined]) {
+      const value = { session, title: resolveSummary ? 'resolved' : 'legacy' };
+      const pending = connection.request('runtime.observer.read', { ...opened.result as object, ...(resolveSummary ? { resolveSummary } : {}) });
+      await services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key, value }] });
+      const result = await pending;
+      expect(result).toMatchObject({ ok: true, result: { kind: 'event', frame: { payload: { key } } } });
+      if (!result.ok) throw new Error('Observer read failed');
+      if (resolveSummary) expect(result.result).toMatchObject({ canonical: { collection: 'session_summaries', key, value } });
+      else expect(result.result).not.toHaveProperty('canonical');
+    }
+  });
   it('enforces trusted permission grants before file and native invocation', async () => {
     const { services } = await graph();
     const host = createRuntimeHost({ environmentId: services.target, role: 'local', services, grants: [{ ...services.grant, permissions: ['runtime:read'] }] }); host.start(); cleanups.push(() => host.stop());

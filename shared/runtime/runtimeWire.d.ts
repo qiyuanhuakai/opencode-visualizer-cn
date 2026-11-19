@@ -20,7 +20,7 @@ export type NativeCall = { readonly harnessInstanceId: HarnessInstanceId; readon
 export type NativeExtensionCall = NativeCall & { readonly operation: string };
 export type ChannelDescriptor = { readonly channelId: number; readonly direction: 'upload' | 'download'; readonly service: 'file' | 'pty'; readonly credits: 4; readonly chunkBytes: 65536; readonly offset: number };
 export type WireChunk = { readonly channelId: number; readonly offset: number; readonly length: number };
-export type ObserverDelivery = null | { readonly kind: 'event' | 'control'; readonly frame: RuntimeEvent } | { readonly kind: 'replay_required'; readonly after: number; readonly through: number; readonly reason: string } | ({ readonly kind: 'binary' } & WireChunk);
+export type ObserverDelivery = null | { readonly kind: 'event'; readonly frame: RuntimeEvent; readonly canonical?: CanonicalEntity } | { readonly kind: 'control'; readonly frame: RuntimeEvent } | { readonly kind: 'replay_required'; readonly after: number; readonly through: number; readonly reason: string } | ({ readonly kind: 'binary' } & WireChunk);
 export type NativeMutationResult = { readonly operationId: string; readonly value: JsonValue };
 export type CanonicalEntity = { readonly collection: IndexCollection; readonly key: string; readonly revision: number; readonly value?: JsonValue; readonly chunked?: boolean; readonly bytes?: number };
 type Empty = Readonly<Record<string, never>>;
@@ -50,7 +50,7 @@ export interface RuntimeParams {
   readonly 'runtime.replay': { readonly after: number; readonly limit?: number };
   readonly 'runtime.entity.resolve': { readonly event: RuntimeEvent };
   readonly 'runtime.observer.open': { readonly after: number };
-  readonly 'runtime.observer.read': ObserverRef;
+  readonly 'runtime.observer.read': ObserverRef & { readonly resolveSummary?: true };
   readonly 'runtime.observer.resume': ObserverRef & { readonly after: number };
   readonly 'runtime.observer.close': ObserverRef;
   readonly 'runtime.channel.open': { readonly service: 'file'; readonly workspaceKey: WorkspaceKey; readonly path: string; readonly size: number; readonly sha256: string; readonly replace?: boolean } | { readonly service: 'pty'; readonly ptyId: string };

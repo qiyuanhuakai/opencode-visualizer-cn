@@ -160,7 +160,7 @@ export function createRuntimeState(options: RuntimeStateOptions) {
     if (frame.type !== 'entity.patch') return;
     requireValue(record(frame.payload) && typeof frame.payload.collection === 'string' && typeof frame.payload.key === 'string', 'state.patch');
     if (!collection(frame.payload.collection)) return;
-    const canonical = prefetched ?? await client.request(entry.target, 'runtime.entity.resolve', { event: frame }, { signal: entry.controller.signal, selectionCurrent: () => current(entry) });
+    const canonical = prefetched ?? delivery.canonical ?? await client.request(entry.target, 'runtime.entity.resolve', { event: frame }, { signal: entry.controller.signal, selectionCurrent: () => current(entry) });
     check(entry);
     requireValue(applicationGeneration === entry.applicationGeneration && entry.fence !== undefined, 'state.application', 'reconcile_required');
     requireValue(canonical.collection === frame.payload.collection && canonical.key === frame.payload.key && canonical.revision >= frame.entityRevision, 'state.canonical', 'replay_required');

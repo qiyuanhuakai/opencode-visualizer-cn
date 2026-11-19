@@ -154,6 +154,19 @@ describe('runtime state through production client and frame codecs', () => {
     expect(wire.methods.has('session.history')).toBe(false);
   });
 
+  it('applies a canonical summary delivered with its event without issuing a resolve request', async () => {
+    const { state, wire } = await fixture(10);
+    await state.start(target);
+    const key = encodeSessionKey(session(0));
+    const value = { session: session(0), title: 'resolved summary' };
+    const frame = wire.event(0, value);
+    wire.deliveries.set(target, [{ kind: 'event', frame, canonical: {
+      collection: 'session_summaries', key, revision: frame.entityRevision, value,
+    } }]);
+    await vi.advanceTimersByTimeAsync(25);
+    expect(read(state).items.find(item => item.key === key)?.value).toEqual(value);
+    expect(wire.methods.get('runtime.entity.resolve')).toBeUndefined();
+  });
   it('prefetches bounded replay reads but applies no later row before an earlier read finishes', async () => {
     const { state, wire } = await fixture(10);
     await state.start(target);

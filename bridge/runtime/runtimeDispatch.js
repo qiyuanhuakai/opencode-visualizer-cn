@@ -75,6 +75,14 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
     permission(entry, 'runtime:read');
     requireValue(entry.graph.grant.workspaceKeys.every(key => entry.grant.workspaceKeys.includes(key)), 'runtime.index_scope', 'unauthorized');
   }
+  async function resolveEntity(entry, event) {
+    const patch = event.payload;
+    requireValue(INDEX_COLLECTIONS.includes(patch.collection), 'runtime.collection', 'unauthorized');
+    const row = await entry.graph.events.log.resolve({ ...patch, epoch: entry.binding.epoch, entityRevision: event.entityRevision });
+    requireValue(!row.chunked, 'runtime.entity_chunked', 'replay_required');
+    const value = project(patch.collection, row);
+    return { ...(value ?? { key: row.key, revision: row.revision, value: null }), collection: patch.collection };
+  }
   async function snapshots(entry) { entry.snapshots ??= entry.graph.snapshots.connect(entry.binding, entry.isCurrent); return entry.snapshots; }
   function history(entry) {
     entry.history ??= createHistoryService({
@@ -256,10 +264,7 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
       case 'runtime.snapshot.release': indexAccess(entry); return (await snapshots(entry)).release(params);
       case 'runtime.entity.resolve': {
         indexAccess(entry); match(params.event);
-        const patch = params.event.payload; requireValue(INDEX_COLLECTIONS.includes(patch.collection), 'runtime.collection', 'unauthorized');
-        const row = await graph.events.log.resolve({ ...patch, epoch: entry.binding.epoch, entityRevision: params.event.entityRevision });
-        requireValue(!row.chunked, 'runtime.entity_chunked', 'replay_required');
-        const value = project(patch.collection, row); return { ...(value ?? { key: row.key, revision: row.revision, value: null }), collection: patch.collection };
+        return resolveEntity(entry, params.event);
       }
       case 'runtime.observer.open': {
         indexAccess(entry); requireValue(!entry.observer, 'runtime.observer_duplicate', 'conflict');
@@ -269,7 +274,17 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
       }
       case 'runtime.observer.read': case 'runtime.observer.resume': case 'runtime.observer.close': {
         indexAccess(entry); const observer = entry.observer; requireValue(observer?.id === params.observerId && observer.value, 'runtime.observer', 'unauthorized');
-        if (frame.method === 'runtime.observer.read') return observer.value.waitRead(signal);
+        if (frame.method === 'runtime.observer.read') {
+          requireValue(!observer.reading, 'runtime.observer_reading', 'conflict');
+          observer.reading = true;
+          try {
+            const delivery = await observer.value.waitRead(signal);
+            if (!params.resolveSummary || delivery?.kind !== 'event' || delivery.frame.payload?.collection !== 'session_summaries') return delivery;
+            const canonical = await resolveEntity(entry, delivery.frame).catch(() => undefined);
+            requireValue(entry.observer === observer, 'runtime.observer', 'reconcile_required');
+            return canonical ? { ...delivery, canonical } : delivery;
+          } finally { observer.reading = false; }
+        }
         if (frame.method === 'runtime.observer.resume') { observer.value.resume(params.after); return { resumed: true }; }
         observer.value.close(); entry.observer = null; return { closed: true };
       }
