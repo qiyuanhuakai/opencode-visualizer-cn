@@ -46,7 +46,13 @@ async function fixture() {
 describe('the selected workspace catalog carries the repo identity the Host Thread gates on (F3-P2-2)', () => {
   it('seeds unknown roots without eager probes, then resolves git and non-git through selected-session requests', async () => {
     // Given: one granted root that IS a real git repository and one that is not.
-    const { repo, plain } = await fixture();
+    const { root, repo, plain } = await fixture();
+    const metadataRepo = path.join(root, 'metadata');
+    const brokenWorktree = path.join(root, 'broken-worktree');
+    execFileSync('git', ['clone', '--quiet', repo, metadataRepo]);
+    execFileSync('git', ['worktree', 'add', '--quiet', '--detach', brokenWorktree], { cwd: metadataRepo });
+    await rm(metadataRepo, { recursive: true });
+    expect(() => execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: brokenWorktree, stdio: 'pipe' })).toThrow();
     const restricted = path.join(plain, 'restricted');
     execFileSync('git', ['init', '--quiet'], { cwd: plain });
     await mkdir(restricted);
@@ -64,6 +70,7 @@ describe('the selected workspace catalog carries the repo identity the Host Thre
         { root: repo, permissions: ['read', 'write', 'command', 'pty', 'reverse'] },
         { root: restricted, permissions: ['read', 'write', 'command', 'pty', 'reverse'] },
         { root: outsideGit, permissions: ['read', 'command'] },
+        { root: brokenWorktree, permissions: ['read', 'command'] },
       ],
       config: { version: 1, nativeServices: { opencode: false, codex: false, 'kimi-web': false, dsh: false }, acpAgents: [] },
       nativeSupervisor: supervisor,
@@ -76,7 +83,7 @@ describe('the selected workspace catalog carries the repo identity the Host Thre
     // Startup stays progressive: no Git scan of every registered root.
     await services.start();
     const initial = await services.index.topology({ collection: 'workspaces' });
-    expect(initial.items).toHaveLength(3);
+    expect(initial.items).toHaveLength(4);
     expect(initial.items.every(item => (item.value as { gitKind?: string }).gitKind === 'unknown')).toBe(true);
     await probeSelectedSession(services, repo);
     const selected = await services.index.topology({ collection: 'workspaces' });
@@ -106,6 +113,7 @@ describe('the selected workspace catalog carries the repo identity the Host Thre
     // And: the selected root that is not a repository is probed honestly as
     // non-git with no repoKey, rather than being left undescribed.
     expect(byPath.get(await realpath(restricted))).toMatchObject({ gitKind: 'unknown', repoKey: null });
+    expect(byPath.get(await realpath(brokenWorktree))).toMatchObject({ gitKind: 'unknown', repoKey: null });
     const plainEntry = byPath.get(await realpath(outsideGit));
     expect(plainEntry).toBeDefined();
     expect(plainEntry!.gitKind).toBe('non-git');
