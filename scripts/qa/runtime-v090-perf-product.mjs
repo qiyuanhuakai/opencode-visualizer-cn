@@ -8,6 +8,7 @@ import { buildApp, serveApp } from './runtime-v090-perf-app.mjs';
 import { connectApp, measureInteractions, measureTree, openBrowser } from './runtime-v090-perf-browser.mjs';
 import { indexInventory, prepareFixture, repository, startBridge, startNative } from './runtime-v090-perf-harness.mjs';
 import { summaryAt } from '../../app/dev/runtime-v090/fixtures/inventory.mjs';
+import { SLO } from './runtime-v090-benchmark.mjs';
 import { shapeRuntimeNetwork } from './runtime-v090-perf-network.mjs';
 
 const { values } = parseArgs({ options: { count: { type: 'string' }, out: { type: 'string' }, rtt: { type: 'string', default: '0' } } });
@@ -40,6 +41,22 @@ try {
   cleanup.push(() => rm(fixture, { recursive: true, force: true }));
   const native = await startNative(fixture, count, output);
   cleanup.push(() => native.close());
+  const emptyBridge = await startBridge(fixture, path.join(fixture, 'empty-bridge-state'), path.join(output, 'empty-bridge'), true);
+  try {
+    const emptyBrowser = await openBrowser(path.join(output, 'empty-renderer'));
+    try {
+      await connectApp(emptyBrowser.page, web.origin, emptyBridge.descriptor.port);
+      report.baseline = {
+        bridgeRssBytes: emptyBridge.rss().rssBytes,
+        renderer: await emptyBrowser.heap(),
+      };
+    } finally {
+      await emptyBrowser.close();
+    }
+  } finally {
+    await emptyBridge.close();
+  }
+
   const state = path.join(fixture, 'bridge-state');
   const bridge = await startBridge(fixture, state, path.join(output, 'bridge'));
   cleanup.push(() => bridge.close());
@@ -48,8 +65,8 @@ try {
   const browser = await openBrowser(path.join(output, 'renderer'));
   cleanup.push(() => browser.close());
 
-  const rss = [bridge.rss().rssBytes];
-  const monitor = setInterval(() => rss.push(bridge.rss().rssBytes), 1000);
+  let rssPeak = bridge.rss().rssBytes;
+  const monitor = setInterval(() => { rssPeak = Math.max(rssPeak, bridge.rss().rssBytes); }, 250);
   try {
     const connected = await connectApp(browser.page, web.origin, network.port);
     report.tree = await measureTree(browser.page, connected);
@@ -57,11 +74,23 @@ try {
     report.inventory = indexInventory(state, count);
     report.interactions = await measureInteractions(browser.page, { ...summaryAt(5), title: 'Vis measured native history session' });
     report.renderer = await browser.heap();
-    report.bridgeObservedRssPeakBytes = Math.max(...rss, bridge.rss().rssBytes);
+    report.bridgeObservedRssPeakBytes = Math.max(rssPeak, bridge.rss().rssBytes);
+    const label = count > 10000 ? '100k' : '10k';
+    const mib = 1024 * 1024;
+    const bridgeAdditionalRssMiB = Math.max(0, report.bridgeObservedRssPeakBytes - report.baseline.bridgeRssBytes) / mib;
+    const rendererAdditionalHeapMiB = Math.max(0, report.renderer.usedSize - report.baseline.renderer.usedSize) / mib;
+    report.memory = {
+      bridgeAdditionalRssMiB,
+      bridgeBudgetMiB: SLO.bridgeRssMiB[label],
+      rendererAdditionalHeapMiB,
+      rendererBudgetMiB: SLO.rendererHeapMiB[label],
+      passed: bridgeAdditionalRssMiB <= SLO.bridgeRssMiB[label] && rendererAdditionalHeapMiB <= SLO.rendererHeapMiB[label],
+    };
     report.network = { ...network.stats };
     if (report.index.failures.length || !report.inventory.coverage || report.inventory.workspaces !== 200) {
       throw new Error('Production index did not enumerate the complete fixture');
     }
+    if (!report.memory.passed) throw new Error('Production memory sample exceeded the profile budget');
     report.status = 'passed';
   } finally {
     clearInterval(monitor);
