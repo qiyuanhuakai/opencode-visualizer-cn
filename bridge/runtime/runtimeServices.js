@@ -19,7 +19,7 @@ export async function createRuntimeServices(options) {
   const epoch = randomUUID(), instanceId = randomUUID();
   const keys = ['opencode', 'codex', 'kimi-web', 'dsh', ...(options.config.acpAgents.length ? options.config.acpAgents.map(agent => 'acp:' + agent.id) : ['acp:unconfigured'])];
   const registrations = await loadRuntimeRegistrations(options.stateRoot, keys);
-  let active = true, closed;
+  let active = true, closed, repositoryDiscovery;
   const store = createRuntimeStore({ stateDirectory: options.stateRoot, environmentId: options.environmentId, ownerId: instanceId, epoch, takeover: options.runtimeStoreTakeover });
   const cleanup = [];
   try {
@@ -122,11 +122,19 @@ export async function createRuntimeServices(options) {
       },
       async inspect(base, targets) {
         const harnesses = await Promise.all(drivers.registry.list().map(async manifest => ({ manifest, inspection: await drivers.registry.invoke({ environmentId: manifest.environmentId, harnessInstanceId: manifest.harnessInstanceId, channel: 'core', operation: 'inspect', params: manifest.kind === 'acp' ? drivers.authority(manifest.harnessInstanceId) : {} }) })));
+        if (options.role !== 'manager') repositoryDiscovery ??= (async () => {
+          for (const root of workspace.workspaces) {
+            if (!active) break;
+            try { await catalog.probe(root.key, { visible: true, identityOnly: true }); }
+            catch { /* Optional repository identity stays unknown for this root. */ }
+          }
+        })();
         return parseRuntimeResult('runtime.inspect', { ...base, role: options.role, connectionProfileId: registrations.connectionProfileId, targets, harnesses, transports: options.remoteServices?.capabilities ?? { direct: true, ssh: false, slurm: false } });
       },
       close() {
         closed ??= (async () => {
           active = false;
+          await repositoryDiscovery;
           const errors = [];
           for (const release of [...cleanup].reverse()) try { await release(); } catch (error) { errors.push(error); }
           if (errors.length) throw new AggregateError(errors, 'Runtime service shutdown failed');

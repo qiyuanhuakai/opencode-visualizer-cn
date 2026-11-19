@@ -368,7 +368,11 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   const history = options.history;
   const state = createRuntimeState({
     ...options,
-    onCanonical: entity => { if (entity.collection === 'harnesses') mergeHarness(entity.key, entity.value, entity.revision); options.onCanonical?.(entity); },
+    onCanonical: entity => {
+      if (entity.collection === 'harnesses') mergeHarness(entity.key, entity.value, entity.revision);
+      if (entity.collection === 'workspaces') mergeWorkspace(entity.key, entity.value, entity.revision);
+      options.onCanonical?.(entity);
+    },
     ...(history ? {
       history: {
         usage: history.usage,
@@ -383,6 +387,14 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   const viewError = shallowRef<ErrorCode | null>(null);
   const sessions = shallowRef<readonly UnifiedSessionRow[]>([]);
   const workspaces = shallowRef<readonly WorkspaceEntry[]>([]);
+  const workspaceRows = new Map<string, { revision: number; value: WorkspaceEntry | null }>();
+  function mergeWorkspace(key: string, value: unknown, revision: number): void {
+    if ((workspaceRows.get(key)?.revision ?? -1) >= revision) return;
+    workspaceRows.set(key, { revision, value: parseWorkspaceEntry(value) });
+  }
+  function updateWorkspaces(): void {
+    workspaces.value = Object.freeze([...workspaceRows.values()].flatMap(row => row.value ? [row.value] : []));
+  }
   const harnesses = shallowRef<readonly HarnessEntry[]>([]);
   const harnessRevisions = new Map<string, number>();
   function mergeHarness(key: string, value: unknown, revision: number): void {
@@ -426,6 +438,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     return next;
   }
   function refreshFromState(): void {
+    updateWorkspaces();
     const view = state.view('session_summaries', target);
     try {
       viewStatus.value = view.status;
@@ -481,12 +494,10 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     for (const value of harnessValues) {
       if (typeof value.revision === 'number') mergeHarness(String(value.key), value.value, value.revision);
     }
-    const mapped: WorkspaceEntry[] = [];
     for (const value of workspaceValues) {
-      const parsed = parseWorkspaceEntry(value.value);
-      if (parsed) mapped.push(parsed);
+      if (typeof value.revision === 'number') mergeWorkspace(String(value.key), value.value, value.revision);
     }
-    workspaces.value = Object.freeze(mapped);
+    updateWorkspaces();
   }
   async function start(): Promise<void> {
     unsubscribe = state.subscribe(() => { if (!disposed) refreshFromState(); });

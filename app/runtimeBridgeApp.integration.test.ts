@@ -20,6 +20,13 @@ it('connects through Bridge login and renders selected native history over the a
 it('opens the selected session as a Host Thread through the Bridge', async () => {
   const fixture = await mountRuntimeApp([]);
   await fixture.connect();
+  // Connecting discovers Git identity without requiring a session selection.
+  await vi.waitFor(async () => {
+    const topology = await fixture.workspaceTopology();
+    expect(topology.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ value: expect.objectContaining({ gitKind: 'git', repoKey: expect.any(String) }) }),
+    ]));
+  });
   await fixture.select('Session A');
   const opener = await vi.waitFor(() => {
     const button = fixture.element.querySelector<HTMLButtonElement>('[data-testid="open-runtime-thread"]');

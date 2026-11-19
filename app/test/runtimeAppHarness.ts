@@ -164,7 +164,7 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
       result.click();
     }, { timeout: 10000 });
   }
-  return { element, endpoint, directory, environmentId: services.target, historyOpens, historyCloses, historyPages, nativeQueries, connect, select, unmount };
+  return { element, endpoint, directory, workspaceTopology: () => services.index.topology({ collection: 'workspaces' }), environmentId: services.target, historyOpens, historyCloses, historyPages, nativeQueries, connect, select, unmount };
 }
 
 function expectLogin(element: HTMLElement) {
