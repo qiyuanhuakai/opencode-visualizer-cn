@@ -29,6 +29,40 @@ function reserved(method: RuntimeMethod) {
   return method === 'runtime.history.close' || method === 'session.cancel' || method === 'interaction.respond' || method === 'runtime.channel.ack' || method === 'runtime.channel.cancel' || method === 'runtime.observer.resume' || method === 'runtime.observer.close' || method === 'runtime.target.detach';
 }
 
+async function decodeStartupPages(compressed: { readonly data: string; readonly bytes: number }) {
+  const compressedBytes = Uint8Array.from(atob(compressed.data), byte => byte.charCodeAt(0));
+  // Feed the decompressor in bounded increments even if the peer supplies
+  // an invalid declared size smaller than the represented pages.
+  let inputOffset = 0;
+  const source = new ReadableStream<Uint8Array<ArrayBuffer>>({
+    pull(controller) {
+      if (inputOffset === compressedBytes.length) {
+        controller.close();
+        return;
+      }
+      const next = Math.min(inputOffset + 4096, compressedBytes.length);
+      controller.enqueue(compressedBytes.subarray(inputOffset, next));
+      inputOffset = next;
+    },
+  });
+  const reader = source.pipeThrough(new DecompressionStream('gzip')).getReader();
+  const output = new Uint8Array(compressed.bytes);
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      requireValue(size + value.length <= output.length, 'snapshot.bootstrap_size');
+      output.set(value, size);
+      size += value.length;
+    }
+    requireValue(size === output.length, 'snapshot.bootstrap_size');
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(output));
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
+
 export class RuntimeRequestError extends ProtocolError {
   constructor(code: ErrorCode, readonly requestId: string, readonly uncertain: boolean, readonly receipt?: string, readonly serverMessage?: string) {
     const prefix = `${code}: `;
@@ -276,11 +310,29 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     requireValue(management !== undefined, 'connection.hello', 'reconcile_required');
     return management;
   }
-  async function inspect() {
-    const result = await request(managementTarget(), 'runtime.inspect', {});
+  const bootstrapPages = new WeakMap<ReturnType<typeof getTarget>, readonly Snapshot[]>();
+  async function inspect(bootstrapTree = false) {
+    const target = managementTarget();
+    const attached = getTarget(target);
+    bootstrapTree &&= attached.hello.capabilities.methods.includes('runtime.snapshot');
+    const result = await request(target, 'runtime.inspect', bootstrapTree ? { bootstrapTree: true, ...(typeof DecompressionStream === 'function' ? { bootstrapEncoding: 'gzip' } : {}) } : {}).catch(error => {
+      if (!bootstrapTree || !(error instanceof RuntimeRequestError) || error.code !== 'invalid_request' || error.field !== 'fields') throw error;
+      return request(target, 'runtime.inspect', {});
+    });
+    const { treeBootstrap, treeBootstrapGzip, ...inspection } = result;
+    let pages = treeBootstrap;
+    if (treeBootstrapGzip) {
+      try {
+        const decoded = await decodeStartupPages(treeBootstrapGzip);
+        pages = parseRuntimeResult('runtime.inspect', { ...inspection, treeBootstrap: decoded }).treeBootstrap;
+      } catch {
+        // The independently validated inspection can still establish a connection.
+      }
+    }
+    if (pages) bootstrapPages.set(attached, pages);
     grants.clear();
-    for (const grant of result.targets) grants.set(grant.target, grant);
-    return result;
+    for (const grant of inspection.targets) grants.set(grant.target, grant);
+    return inspection;
   }
   async function attach(target: EnvironmentId) {
     requireValue(grants.has(target), 'target.grant', 'unauthorized');
@@ -414,6 +466,12 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     let releaseView: (() => Promise<void>) | undefined;
     try {
       if (attached.indexSnapshot) await retireView(attached, attached.indexSnapshot.token);
+      const bootstrap = bootstrapPages.get(attached);
+      if (bootstrap && options.initialSummaryLimit === 32 && bootstrap[0].expiresAt > Date.now()
+        && names.slice(0, 3).join(',') === 'harnesses,workspaces,session_summaries') {
+        bootstrapPages.delete(attached);
+        names.slice(0, 3).forEach((collection, index) => prefetched.set(collection, Promise.resolve(bootstrap[index])));
+      }
       for (const collection of names) {
         let cursor: string | null = null;
         do {
@@ -428,7 +486,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
             // are downloaded. Event reads still begin after snapshot commit.
             openingObserver = observe(target, { ...options, after: first.watermark, onDelivery: options.onDelivery ?? (() => {}) });
             void openingObserver.catch(() => undefined);
-            if (names.length >= 3) {
+            if (names.length >= 3 && prefetched.size === 0) {
               // Queue at most two independent first pages on this same token.
               // Apply them in collection order so session rows see topology.
               for (const nextCollection of names.slice(1, 3)) {
@@ -438,7 +496,10 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
               }
             }
           }
-          requireValue(page.token === first.token && page.revision === first.revision && page.watermark === first.watermark && page.target === attached.hello.target && page.epoch === attached.hello.epoch && page.generation === attached.hello.generation, 'snapshot.atomic', 'replay_required');
+          requireValue(page.target === attached.hello.target && page.epoch === attached.hello.epoch
+            && page.generation === attached.hello.generation, 'snapshot.binding', 'replay_required');
+          requireValue(!first || (page.token === first.token && page.revision === first.revision
+            && page.watermark === first.watermark), 'snapshot.atomic', 'replay_required');
           requireValue(page.expiresAt > Date.now() && (page.cursor === null || page.cursor !== cursor), 'snapshot.expired', 'replay_required');
           const keepPaging = await options.onPage(collection, page);
           requireValue(current(attached) && (options.selectionCurrent?.() ?? true), 'snapshot.selection', 'reconcile_required');

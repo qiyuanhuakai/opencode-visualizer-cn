@@ -6,7 +6,7 @@ import { createRuntimeConnection, type RuntimeConnectionOptions, type RuntimeCon
 import { adoptConnectionReference, connectionError, parseConnectionReference, RuntimeConnectionError } from '../runtime/connectionProfile';
 import { createPendingSelection, type RuntimeSelection } from '../runtime/pendingSelection';
 
-export function useRuntimeConnection(options: RuntimeConnectionOptions & Readonly<{ selection?: RuntimeSelection }>) {
+export function useRuntimeConnection(options: RuntimeConnectionOptions & Readonly<{ selection?: RuntimeSelection; bootstrapTree?: boolean }>) {
   const selectedReference = parseConnectionReference(options.reference);
   const connection = createRuntimeConnection({ ...options, reference: selectedReference });
   const client = createRuntimeClient({ connection });
@@ -27,7 +27,7 @@ export function useRuntimeConnection(options: RuntimeConnectionOptions & Readonl
         inspection.value = null;
         reference.value = null;
         pendingSelection?.suspend(); selection.value = pendingSelection?.state ?? null;
-        verified = client.inspect().then(currentInspection => {
+        verified = client.inspect(options.bootstrapTree).then(currentInspection => {
           if (disposed || revision !== current || connection.status.generation !== event.generation || connection.status.state !== 'ready') throw new RuntimeConnectionError('cancelled');
           const adopted = adoptConnectionReference(provenReference ?? selectedReference, event.hello, currentInspection);
           provenReference = adopted;
