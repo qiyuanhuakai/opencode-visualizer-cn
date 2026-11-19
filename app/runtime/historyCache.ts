@@ -14,7 +14,7 @@ type PageEntry = { readonly value: HistoryPage; readonly memory: MemoryLease; re
 type Active = {
   readonly capture: SelectionCapture; readonly owner: HistoryOwner; readonly memory: MemoryLease;
   readonly work: Set<Promise<void>>; readonly removeAbort: () => void;
-  live: boolean; ready: boolean; reading: boolean; polling: boolean; after: number; closing?: Promise<void>;
+  live: boolean; ready: boolean; liveInvalidation: boolean; reading: boolean; polling: boolean; after: number; closing?: Promise<void>;
 };
 // 512KiB wire: <=1MiB UTF16, <=1MiB node/property storage (4096 nodes).
 // JSON.parse + protocol clone + history clone + temporary stringify/UTF8 +
@@ -98,12 +98,13 @@ export function createHistoryCache(source: HistorySource, budget: MemoryBudget) 
         const owner = source.open(capture);
         const onAbort = () => { if (active?.capture === capture) invalidate(); };
         capture.signal.addEventListener('abort', onAbort, { once: true });
-        const value: Active = { capture, owner, memory, work: new Set(), live: true, ready: false, reading: false, polling: false, after: 0,
+        const value: Active = { capture, owner, memory, work: new Set(), live: true, ready: false, liveInvalidation: false, reading: false, polling: false, after: 0,
           removeAbort: () => capture.signal.removeEventListener('abort', onAbort) };
         active = value; memory.commit();
         const opened = track(value, owner.ready, data, result => {
           if (current(value)) {
             value.ready = true;
+            value.liveInvalidation = result.capabilities.live === 'invalidate';
             status = { status: result.capabilities.archive === 'unsupported' ? 'unsupported' : 'partial', ...(result.reason ? { reason: result.reason } : {}) };
           }
           return result;
@@ -201,7 +202,9 @@ export function createHistoryCache(source: HistorySource, budget: MemoryBudget) 
     return result;
   }
   async function poll() {
-    const value = selected(); requireValue(!value.polling, 'history.poll_pending', 'conflict'); value.polling = true;
+    const value = selected();
+    requireValue(value.liveInvalidation, 'history.live', 'unsupported');
+    requireValue(!value.polling, 'history.poll_pending', 'conflict'); value.polling = true;
     let operation;
     try { operation = value.owner.poll(value.after); }
     catch (error) { value.polling = false; throw error; }
@@ -222,6 +225,7 @@ export function createHistoryCache(source: HistorySource, budget: MemoryBudget) 
   }
   return {
     select, invalidate, page, readChunk, poll,
+    get canPoll(): boolean { return !!active && current(active) && active.ready && active.liveInvalidation; },
     get status(): HistoryStatus { return status; },
     get(pageId: string) { const entry = pages.get(pageId); return entry ? output(entry) : null; },
     retry() { requireValue(retryAction !== undefined, 'history.retry', 'invalid_request'); return retryAction(); },

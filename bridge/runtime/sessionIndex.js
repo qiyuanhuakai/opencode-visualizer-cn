@@ -9,7 +9,7 @@ import { createRuntimeEventBus } from './eventBus.js';
 import { createRuntimeSnapshots } from './snapshots.js';
 import { sourceIdentity, sourceAuthority } from './sessionSummaries.js';
 
-export function createSessionIndex({ store, registry, catalog, resolveWorkspace }) {
+export function createSessionIndex({ store, registry, catalog, resolveWorkspace, recoverSource }) {
   const scheduler = createDiscoveryScheduler();
   const events = createRuntimeEventBus({ store });
   const snapshots = createRuntimeSnapshots({ store });
@@ -20,6 +20,7 @@ export function createSessionIndex({ store, registry, catalog, resolveWorkspace 
   const mutations = createIndexMutations({ store, catalog, resolveWorkspace, onCommit: nudgeEvents });
   const discovery = createIndexDiscovery({ store, scheduler, mutations });
   const sources = new Map();
+  const retries = new Map();
   let closed = false;
   async function attach({ harnessInstanceId: input, authority, subscribe = true }) {
     const harnessInstanceId = parseHarnessInstanceId(input);
@@ -45,11 +46,12 @@ export function createSessionIndex({ store, registry, catalog, resolveWorkspace 
       serial++;
       if (refresh !== null || detached || closed) return;
       refresh = setTimeout(() => {
+        if (intake.state.failure && !intake.state.subscribed) { refresh = null; return; }
         intake.flush().then(() => handle.discover(lastRequest)).catch(() => {}).finally(() => { refresh = null; });
       }, 20);
       refresh.unref?.();
     }
-    intake = createNativeEventIntake({ source, mutations, dirty, onControl: nudgeEvents, onFailure: (reason) => {
+    intake = createNativeEventIntake({ source, mutations, dirty, invalidate: () => { serial++; }, onControl: nudgeEvents, onFailure: (reason) => {
       if (!failureWork) failureWork = mutations.progress(identity, {}, { status: 'partial', count: 0, reason, authority: sourceAuthority(authority()) }, source.assertCurrent).catch(() => {}).finally(() => { failureWork = null; });
     } });
     const handle = {
@@ -57,6 +59,13 @@ export function createSessionIndex({ store, registry, catalog, resolveWorkspace 
       publish: intake.publish,
       flush: intake.flush,
       discover(request = {}) { source.assertCurrent(); lastRequest = request; return discovery.discover(source, request); },
+      async retry() {
+        source.assertCurrent();
+        if (subscribe && identity.kind !== 'dsh' && manifest.core.subscribe.state === 'supported' && !intake.state.subscribed) {
+          await intake.subscribe(() => registry.invoke({ ...invocationScope, channel: 'core', operation: 'subscribe', params: identity.kind === 'acp' ? { ...sourceAuthority(authority()), subscriberId: `index:${randomUUID()}` } : {} }));
+        }
+        return handle.discover(lastRequest);
+      },
       async close() {
         if (detached) return;
         detached = true;
@@ -76,6 +85,17 @@ export function createSessionIndex({ store, registry, catalog, resolveWorkspace 
   }
   return {
     attach,
+    retry(harnessInstanceId) {
+      if (closed) throw new StoreError('source_unavailable', 'index_harness');
+      if (!retries.has(harnessInstanceId)) retries.set(harnessInstanceId, Promise.resolve().then(async () => {
+        if (closed) throw new StoreError('source_unavailable', 'index_harness');
+        if (!sources.has(harnessInstanceId)) await recoverSource?.(harnessInstanceId);
+        const source = sources.get(harnessInstanceId);
+        if (closed || !source) throw new StoreError('source_unavailable', 'index_harness');
+        return source.retry();
+      }).finally(() => retries.delete(harnessInstanceId)));
+      return retries.get(harnessInstanceId);
+    },
     async createDshSource({ create, authority }) {
       const pending = [];
       let bytes = 0;

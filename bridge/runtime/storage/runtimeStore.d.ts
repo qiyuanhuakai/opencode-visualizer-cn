@@ -7,7 +7,9 @@ export interface StoreOptions {
   readonly installRoot?: string; readonly requestTimeoutMs?: number; readonly storageBudgetBytes?: number;
 }
 export interface Change { readonly collection: Collection; readonly key: string; readonly value: Json; readonly expectedRevision?: number }
-export interface Mutation { readonly intentId: string; readonly changes: readonly Change[] }
+/** Transactional revision check without a write, revision increment or replay event. */
+export interface RevisionCheck { readonly collection: Collection; readonly key: string; readonly expectedRevision: number; readonly checkOnly: true; readonly value?: never }
+export interface Mutation { readonly intentId: string; readonly changes: readonly (Change | RevisionCheck)[] }
 export interface Ack { readonly phase: 'durable-accepted'; readonly intentId: string; readonly revision: number; readonly watermark: number }
 export interface Item { readonly key: string; readonly revision: number; readonly value?: Json; readonly chunked?: boolean; readonly bytes?: number }
 export interface PageOptions { readonly collection: Collection; readonly cursor?: string | null; readonly limit?: number; readonly token?: string }

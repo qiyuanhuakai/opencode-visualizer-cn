@@ -5,8 +5,8 @@ import type { LegacySource, LegacyPiece } from '../../../shared/runtime/migratio
 
 const databases = [['opencode.codexAuxiliaryHistory', 'snapshots'], ['opencode.backendHistory', 'histories']] as const;
 function namespaceFor(key: string): string {
-  const match = /^opencode\.state\.backendHistory\.v1\.([a-f0-9]{32})\./u.exec(key);
-  if (key.startsWith('opencode.state.backendHistory.v1.') && !match) throw new LegacyExportError('unknown_namespace');
+  const match = /^(?:opencode\.)?state\.backendHistory\.v1\.([a-f0-9]{32})\./u.exec(key);
+  if (/^(?:opencode\.)?state\.backendHistory\.v1\./u.test(key) && !match) throw new LegacyExportError('unknown_namespace');
   return match ? `backend-history-v1:${match[1]}` : 'unattached-legacy-local';
 }
 function openExisting(factory: IDBFactory, name: string): Promise<IDBDatabase> {

@@ -154,6 +154,18 @@ function dispatchErrors(socket: DispatcherSocket): string[] {
 }
 
 describe('useRuntimeSessionTree over the real dispatch/client/connection/state', () => {
+  it('updates source readiness from the existing observer without another topology scan', async () => {
+    const { tree, socket, services } = await treeFixture();
+    await tree.start();
+    const harness = services.registry.list()[0];
+    const prior = await services.store.get({ collection: 'harnesses', key: harness.harnessInstanceId });
+    if (!prior || !prior.value || typeof prior.value !== 'object' || Array.isArray(prior.value)) throw new Error('Missing harness row');
+    await services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'harnesses', key: harness.harnessInstanceId, expectedRevision: prior.revision,
+      value: { ...prior.value, indexDiscovery: [{ status: 'complete', count: 2000, scopeKey: '{}' }] } }] });
+    await waitFor(() => tree.harnesses.value.find(entry => entry.harnessInstanceId === harness.harnessInstanceId)?.status === 'complete');
+    expect(observerOpens(socket)).toBe(1);
+    expect(dispatchErrors(socket)).toEqual([]);
+  });
   it('starts without a duplicate observer and populates the harness/workspace topology', async () => {
     const { tree, socket } = await treeFixture();
     try {

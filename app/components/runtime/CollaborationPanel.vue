@@ -9,39 +9,58 @@
     ref="dialogRef"
     class="collab-root modal-backdrop"
     data-runtime-ui
+    :aria-label='rt("Team and change review")'
     data-testid="collaboration-panel"
     :data-thread-id="threadId ?? ''"
     :data-team-id="team?.teamId ?? ''"
     @close="$emit('close')"
-    @cancel.prevent
+    @cancel.prevent="handleClose"
     @click.self="handleClose"
   >
     <div class="modal">
       <header class="modal-header">
-        <div class="modal-title">Team &amp; change review</div>
+        <div class="modal-title">{{ rt("Team & change review") }}</div>
         <span v-if="team" class="collab-meta mono" data-testid="collab-team-meta">
-          {{ team.name }} · {{ shortId(threadId ?? '') }} · {{ tasks.length }} tasks
+          {{ team.name }} · {{ shortId(threadId ?? '') }} · {{ tasks.length }} {{ rt("tasks") }}
         </span>
-        <button type="button" class="modal-close-button" data-testid="collab-close" @click="handleClose">
+        <button type="button" class="modal-close-button" data-testid="collab-close" :aria-label='rt("Close team and change review")' @click="handleClose">
           <Icon icon="lucide:x" :width="14" :height="14" />
         </button>
       </header>
 
       <p v-if="error" class="modal-error" role="alert" data-testid="collab-error">
         <Icon icon="lucide:alert-triangle" :width="14" :height="14" />
-        <span>{{ error }}</span>
+        <span>{{ rt(error) }}</span>
       </p>
+
+      <section v-if="fanouts?.length" class="fanout-history">
+        <Dropdown :model-value="fanout?.fanoutId" :label="fanout ? fanoutLabel(fanout) : rt('Fan-out history')" :aria-label="rt('Fan-out history')" auto-close :disabled="busy" @update:model-value="selectFanout">
+          <DropdownItem v-for="(entry, index) in fanouts" :key="entry.fanoutId" :value="entry.fanoutId">{{ (fanoutPage?.offset ?? 0) + index + 1 }} · {{ fanoutLabel(entry) }}</DropdownItem>
+        </Dropdown>
+        <nav v-if="fanoutPage && fanoutPage.total > 50" class="runtime-pagination" :aria-label="rt('Fan-out pages')">
+          <button type="button" class="action-button" :disabled="busy || fanoutPage.offset === 0" @click="emit('fanout-page', Math.max(0, fanoutPage.offset - 50))">{{ rt('Previous fan-outs') }}</button>
+          <span>{{ fanoutPage.offset + 1 }}–{{ Math.min(fanoutPage.offset + 50, fanoutPage.total) }} / {{ fanoutPage.total }}</span>
+          <button type="button" class="action-button" :disabled="busy || fanoutPage.nextCursor === null" @click="emit('fanout-page', fanoutPage.nextCursor ?? 0)">{{ rt('Next fan-outs') }}</button>
+        </nav>
+      </section>
 
       <TeamEditor
         :team="team"
         :budgets="budgets"
         :fanout="fanout"
+        :fanout-action="fanoutAction"
         :busy="busy"
         :available-members="availableMembers"
         @add-member="emit('add-member', $event)"
         @create-task="emit('create-task', $event)"
         @fan-out="emit('fan-out', $event)"
       />
+
+      <nav v-if="memberPage && memberPage.total > 50" class="runtime-pagination" :aria-label="rt('Member pages')">
+        <button type="button" :disabled="busy || memberPage.offset === 0" @click="emit('member-page', Math.max(0, memberPage.offset - 50))">{{ rt('Previous members') }}</button>
+        <span>{{ memberPage.offset + 1 }}–{{ Math.min(memberPage.offset + 50, memberPage.total) }} / {{ memberPage.total }}</span>
+        <button type="button" :disabled="busy || memberPage.nextCursor === null" @click="emit('member-page', memberPage.nextCursor ?? 0)">{{ rt('Next members') }}</button>
+      </nav>
 
       <TaskGraph
         :tasks="tasks"
@@ -55,11 +74,25 @@
         @cancel="emit('cancel', $event)"
       />
 
+      <nav v-if="taskPage && taskPage.total > 50" class="runtime-pagination" :aria-label='rt("Task pages")'>
+        <button type="button" :disabled="busy || taskPage.offset === 0" @click="emit('task-page', Math.max(0, taskPage.offset - 50))">{{ rt("Previous tasks") }}</button>
+        <span>{{ taskPage.offset + 1 }}–{{ Math.min(taskPage.offset + 50, taskPage.total) }} / {{ taskPage.total }}</span>
+        <button type="button" :disabled="busy || taskPage.nextCursor === null" @click="emit('task-page', taskPage.nextCursor ?? 0)">{{ rt("Next tasks") }}</button>
+      </nav>
+
+      <nav v-if="selectedTask && attemptPage && attemptPage.total > 50" class="runtime-pagination" :aria-label='rt("Attempt pages")'>
+        <button type="button" :disabled="busy || attemptPage.offset === 0" @click="emit('attempt-page', Math.max(0, attemptPage.offset - 50))">{{ rt("Previous attempts") }}</button>
+        <span>{{ attemptPage.offset + 1 }}–{{ Math.min(attemptPage.offset + 50, attemptPage.total) }} / {{ attemptPage.total }}</span>
+        <button type="button" :disabled="busy || attemptPage.nextCursor === null" @click="emit('attempt-page', attemptPage.nextCursor ?? 0)">{{ rt("Next attempts") }}</button>
+      </nav>
+
       <AttemptDetails
         v-if="selectedTask"
         :task="selectedTask"
         :attempts="attempts"
         :busy="busy"
+        :can-capture="writer !== null"
+        @capture-deliverable="emit('capture-deliverable', $event)"
         @dispatch="emit('dispatch', $event)"
         @send="emit('send', $event)"
         @finish="emit('finish', $event)"
@@ -72,7 +105,12 @@
         :task="selectedTask"
         :writer="writer"
         :busy="busy"
+        :artifact-status="artifactStatus"
+        :artifact-workflow="artifactWorkflow"
+        @artifact-action="emit('artifact-action', $event)"
+        @apply-artifact="emit('apply-artifact', $event)"
         @allocate-writer="emit('allocate-writer', $event)"
+        @writer-recovery="emit('writer-recovery', $event)"
         @approve="emit('approve', $event)"
       />
     </div>
@@ -80,9 +118,12 @@
 </template>
 
 <script setup lang="ts">
+import { useRuntimeUi } from '../../locales/runtimeUi';
+const { rt } = useRuntimeUi();
 import { ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import type { SessionRef } from '../../../shared/runtime/identity.js';
+import type { ArtifactAction, ArtifactWorkflowView } from '../../runtime/hostArtifactViews';
 import type {
   CollaborationAttemptView,
   CollaborationBudgetView,
@@ -95,6 +136,8 @@ import TeamEditor from './TeamEditor.vue';
 import TaskGraph from './TaskGraph.vue';
 import AttemptDetails from './AttemptDetails.vue';
 import ArtifactReview from './ArtifactReview.vue';
+import Dropdown from '../Dropdown.vue';
+import DropdownItem from '../Dropdown/Item.vue';
 
 const props = defineProps<{
   open?: boolean;
@@ -107,13 +150,29 @@ const props = defineProps<{
   attempts: readonly CollaborationAttemptView[];
   budgets: CollaborationBudgetView | null;
   fanout: CollaborationFanoutView | null;
+  fanouts?: readonly CollaborationFanoutView[];
+  fanoutPage?: { offset: number; total: number; nextCursor: number | null };
+  fanoutAction?: (action: import('../../runtime/hostCollaborationViews').FanoutAction) => Promise<void>;
   writer: CollaborationWriterView | null;
   busy?: boolean;
   error?: string;
   availableMembers?: readonly { participantId: string; session: SessionRef; harnessKind: string }[];
+  artifactStatus?: string;
+  artifactWorkflow?: ArtifactWorkflowView;
+  taskPage?: { offset: number; total: number; nextCursor: number | null };
+  attemptPage?: { offset: number; total: number; nextCursor: number | null };
+  memberPage?: { offset: number; total: number; nextCursor: number | null };
 }>();
 
 const emit = defineEmits<{
+  (event: 'fanout-page', offset: number): void;
+  (event: 'select-fanout', fanoutId: string): void;
+  (event: 'member-page', offset: number): void;
+  (event: 'task-page', offset: number): void;
+  (event: 'attempt-page', offset: number): void;
+  (event: 'artifact-action', input: ArtifactAction): void;
+  (event: 'capture-deliverable', taskId: string): void;
+  (event: 'apply-artifact', input: { taskId: string; artifactHash: string; target: string; dryRun: boolean }): void;
   (event: 'close'): void;
   (event: 'select-task', taskId: string): void;
   (event: 'add-member', input: { role: 'lead' | 'worker'; harnessKind: string; session: SessionRef; participantId: string }): void;
@@ -129,8 +188,15 @@ const emit = defineEmits<{
   (event: 'reject', input: { taskId: string; reason: string }): void;
   (event: 'cancel', input: { taskId: string; reason?: string }): void;
   (event: 'allocate-writer', input: { taskId: string; repository: string }): void;
+  (event: 'writer-recovery', input: { leaseId: string; action: 'reconcile' | 'create-missing' | 'reconnect' }): void;
   (event: 'approve', input: { taskId: string; reviewerId: string }): void;
 }>();
+
+function selectFanout(value: unknown): void { if (typeof value === 'string') emit('select-fanout', value); }
+function fanoutLabel(entry: CollaborationFanoutView): string {
+  const created = entry.createdAt ? new Date(entry.createdAt).toLocaleString() : shortId(entry.fanoutId);
+  return `${rt(entry.state)} · ${entry.recipientCount ?? entry.targets.length} · ${created}${entry.promptPreview ? ` · ${entry.promptPreview.slice(0, 64)}` : ''}`;
+}
 
 const dialogRef = ref<HTMLDialogElement | null>(null);
 
@@ -161,6 +227,22 @@ function shortId(value: string): string {
 </script>
 
 <style scoped>
+.runtime-pagination {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.runtime-pagination button {
+  padding: 4px 8px;
+  min-height: 28px;
+  border: 1px solid var(--ui-form-button-border);
+  border-radius: var(--radius-control);
+  background: var(--ui-form-button-bg);
+  color: var(--ui-form-button-text);
+}
+
 .modal-backdrop {
   border: none;
   padding: 0;
@@ -244,7 +326,7 @@ function shortId(value: string): string {
   gap: 8px;
   margin: 0;
   font-size: var(--type-sm, 12px);
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
   word-break: break-word;
 }
 

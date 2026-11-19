@@ -78,15 +78,38 @@
         <ThreadPanel
           v-if="threadState && threadState.summary.value"
           variant="panel"
-          :open="true"
+          :open="threadPanelOpen ?? false"
           :thread="threadState.summary.value"
           :targets="threadState.targets.value"
           :handoff="threadState.handoff.value"
           :handoff-ops="threadState.handoffOps.value"
+          :handoffs="threadState.handoffs?.value"
+          :handoff-page="threadState.handoffPage?.value"
+          :checkpoint="threadState.checkpoint?.value"
+          :current-target="threadState.currentTarget?.value"
+          :evidence-target-error="threadState.evidenceTargetError?.value"
+          :read-evidence-page="threadState.readEvidencePage"
+          :capture-evidence="threadState.captureEvidence"
+          :captured-evidence="threadState.capturedEvidence?.value"
+          :remove-evidence="threadState.removeCapturedEvidence"
+          :native-history="threadNativeHistory ?? []"
           :timeline="threadState.timelinePage.value"
-          :draft-text="''"
+          :timeline-offset="threadState.timelineOffset?.value"
+          :participant-page="threadState.participantPage?.value"
+          :draft-text="threadDraftText ?? ''"
+          :handoff-entries="threadHandoffEntries ?? []"
+          :available-sessions="threadAvailableSessions ?? []"
+          :harness-labels="threadHarnessLabels"
+          :fanout-enabled="true"
+          :selected-session="threadState.selectedSession.value"
+          :selected-session-resolution="threadState.selectedSessionResolution.value"
+          @fanout="$emit('open-team-dispatch')"
           :busy="threadState.busy.value"
           :error="threadState.error.value"
+          @timeline-page="threadState.loadTimelinePage?.($event)"
+          @handoff-page="threadState.loadHandoffPage?.($event)"
+          @select-handoff="threadState.selectHandoff?.($event)"
+          @participant-page="threadState.loadParticipantPage?.($event)"
           @select-target="onThreadSelectTarget"
           @activate="onThreadActivate"
           @leave="onThreadLeave"
@@ -98,7 +121,7 @@
           @observe-handoff="onThreadObserveHandoff"
           @cancel-handoff="onThreadCancelHandoff"
           @locate-session="onThreadLocateSession"
-          @browse-native-history="() => undefined"
+          @browse-native-history="participantId => $emit('browse-thread-history', participantId)"
           @close="onThreadClose"
         />
 
@@ -161,6 +184,12 @@ const msg = useMessages();
 const { t } = useI18n();
 
 const props = defineProps<{
+  threadNativeHistory?: readonly import('../composables/useRuntimeThread').NativeHistoryGroup[];
+  threadHarnessLabels?: Readonly<Record<string, string>>;
+  threadPanelOpen?: boolean;
+  threadDraftText?: string;
+  threadHandoffEntries?: readonly unknown[];
+  threadAvailableSessions?: readonly { session: SessionRef; label: string; harness: string }[];
   isFollowing: boolean;
   statusText: string;
   isStatusError: boolean;
@@ -204,6 +233,10 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  (event: 'close-thread-panel'): void;
+  (event: 'locate-thread-session', session: SessionRef): void;
+  (event: 'open-team-dispatch'): void;
+  (event: 'browse-thread-history', participantId: string): void;
   (event: 'scroll'): void;
   (event: 'wheel', eventArg: WheelEvent): void;
   (event: 'touchmove'): void;
@@ -243,7 +276,7 @@ function onThreadJoin(session: SessionRef): void {
 
 function onThreadLocateSession(session: SessionRef): void {
   if (threadState === null) return;
-  threadState.setSelectedSession(session);
+  emit('locate-thread-session', session);
 }
 
 function onThreadBeginHandoff(input: {
@@ -297,8 +330,7 @@ function onThreadCancelHandoff(reason?: string): void {
 }
 
 function onThreadClose(): void {
-  if (threadState === null) return;
-  threadState.closeThread();
+  emit('close-thread-panel');
 }
 
 function onForkMessage(payload: { sessionId: string; messageId: string }): void {

@@ -24,6 +24,7 @@ import {
   runCoverage,
   runSourceErrors,
   nearestRankP95,
+  cpuPercentOfOneCore,
   describeEnvironment,
   SLO,
   DATASET,
@@ -207,6 +208,7 @@ async function run() {
   const startedMs = Date.now();
 
   const stack = await createStack({ out, log });
+  const cpuStartedMs = performance.now();
   const cpuBefore = stack.measureRss();
   let baseline; let coverage; let draftsLeg; let sourceErrors; let seeded;
   const samples = [];
@@ -246,7 +248,7 @@ async function run() {
     if (remote) await stack.setNetwork({ offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
   } finally {
     const cpuAfter = stack.measureRss();
-    bottleneck = { cpuBefore, cpuAfter };
+    bottleneck = { cpuBefore, cpuAfter, elapsedSec: (performance.now() - cpuStartedMs) / 1000 };
     await stack.close();
   }
 
@@ -308,12 +310,12 @@ async function run() {
   // CPU% over the measured window from the /proc jiffy delta of the browser tree.
   const cpuWindow = bottleneck;
   const cpuDeltaJiffies = cpuWindow.cpuAfter.cpuJiffies - cpuWindow.cpuBefore.cpuJiffies;
-  const elapsedSec = (Date.now() - startedMs) / 1000;
+  const elapsedSec = cpuWindow.elapsedSec;
   const cpu = {
     method: '/proc utime+stime jiffy delta over the Vis-owned browser tree / wall-clock window',
     cpuDeltaJiffies,
     elapsedSec: Math.round(elapsedSec * 100) / 100,
-    cpuPctOfOneCore: elapsedSec > 0 ? Math.round((cpuDeltaJiffies / 100 / elapsedSec) * 100) / 100 : null,
+    cpuPctOfOneCore: cpuPercentOfOneCore(cpuDeltaJiffies, elapsedSec),
     processCountPeak: Math.max(cpuWindow.cpuBefore.processCount, cpuWindow.cpuAfter.processCount),
   };
 

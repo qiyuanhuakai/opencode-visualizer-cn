@@ -559,6 +559,7 @@ export function createIntegrationService(options = {}) {
 
       // 2 — the repository lock: two integrations against one target are serialized here.
       state.grant = await locks.acquire({ repository, operationId });
+      await options.assertTargetAvailable?.({ repository, target });
 
       // 3 — the target-clean / HEAD re-check, before anything is written.
       state.targetBefore = await observeTarget(repository, target);
@@ -688,6 +689,7 @@ export function createIntegrationService(options = {}) {
       }
       state.fastForwardIsFF = true;
       state.fastForwardTo = state.commitSha;
+      await options.assertTargetAvailable?.({ repository, target });
       const updated = await runGit({
         cwd: repository,
         args: ['update-ref', `refs/heads/${target}`, state.commitSha, base],
@@ -809,6 +811,8 @@ export function createIntegrationService(options = {}) {
   }
 
   return {
+    exportRecords: () => [...resultsById.values()].map(value => structuredClone(value)),
+    restoreRecords(records) { for (const record of [...records].sort((left, right) => left.startedAt - right.startedAt)) resultsById.set(record.operationId, Object.freeze(structuredClone(record))); stats.operations = resultsById.size; stats.integrated = records.filter(record => record.ok).length; stats.refused = records.filter(record => !record.ok).length; },
     INTEGRATION_LIMITS,
     integrate,
     operation,

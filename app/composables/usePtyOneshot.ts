@@ -6,6 +6,7 @@ type UsePtyOneshotOptions = {
   activeDirectory: Ref<string>;
   activeBackendKind: Ref<BackendKind>;
   translate?: (key: string, params?: Record<string, unknown>) => string;
+  runtimeCommand?: (command: string, args: string[]) => Promise<string> | undefined;
 };
 
 type PtyInfo = {
@@ -35,7 +36,10 @@ function getOptions() {
 }
 
 function init(options: UsePtyOneshotOptions) {
-  if (boundOptions) return;
+  if (boundOptions) {
+    if (options.runtimeCommand) boundOptions = { ...boundOptions, runtimeCommand: options.runtimeCommand };
+    return;
+  }
   boundOptions = options;
 }
 
@@ -128,6 +132,8 @@ export function usePtyOneshot(options?: UsePtyOneshotOptions) {
   getOptions();
 
   async function runOneShotPtyCommand(command: string, args: string[]): Promise<string> {
+    const runtime = getOptions().runtimeCommand?.(command, args);
+    if (runtime) return runtime;
     const { activeDirectory } = getOptions();
     const directory = activeDirectory.value || undefined;
     const backend = getBackendAdapter(getOptions().activeBackendKind.value);

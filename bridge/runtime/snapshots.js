@@ -67,6 +67,14 @@ export function createRuntimeSnapshots({ store }) {
           current();
           return result;
         },
+        async release(input) {
+          current(); token(input);
+          if (!tokens.has(input.token)) throw new StoreError('replay_required', 'snapshot_connection_token');
+          const result = await store.releaseSnapshot({ token: input.token, epoch: binding.epoch });
+          tokens.delete(input.token);
+          current();
+          return result;
+        },
         async replay(input) {
           current();
           const result = await replay.frame(binding, input);

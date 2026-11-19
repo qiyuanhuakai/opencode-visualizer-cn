@@ -187,6 +187,7 @@ describe('cancelling a connection must NOT cancel a borrowed job', () => {
   function countingScheduler(jobId: string) {
     const cancelCalls: Array<{ intentId: string; jobId: string }> = [];
     const queryCalls: Array<{ intentId: string; uuid: string }> = [];
+    const describeCalls: string[] = [];
     return {
       scheduler: {
         async submit() {
@@ -196,6 +197,10 @@ describe('cancelling a connection must NOT cancel a borrowed job', () => {
           queryCalls.push(request);
           return { matches: [{ jobId, state: 'RUNNING' }] };
         },
+        async describe(id: string) {
+          describeCalls.push(id);
+          return { jobId: id, state: 'RUNNING' };
+        },
         async cancel(request: { intentId: string; jobId: string }) {
           cancelCalls.push(request);
           return { cancelled: true };
@@ -203,6 +208,7 @@ describe('cancelling a connection must NOT cancel a borrowed job', () => {
       },
       cancelCalls,
       queryCalls,
+      describeCalls,
     };
   }
 
@@ -244,7 +250,9 @@ describe('cancelling a connection must NOT cancel a borrowed job', () => {
       expect(after?.attached).toBe(false);
       expect(after?.ownership).toBe('borrowed');
       // The job is still alive on the scheduler.
-      expect(scheduler.queryCalls.length).toBeGreaterThan(0);
+      expect(scheduler.describeCalls).toEqual(['24680']);
+      expect(scheduler.queryCalls).toHaveLength(0);
+      expect(after?.queue).toBe('RUNNING');
     } finally {
       await store.close();
     }

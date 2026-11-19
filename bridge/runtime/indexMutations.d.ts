@@ -11,6 +11,7 @@ export interface DiscoveryScan {
   assertCurrent(): void;
 }
 export interface IndexMutations {
+  activity(input: { readonly source: SourceIdentity; readonly authority: SourceAuthority; readonly session: SessionRef; readonly status: 'running' | 'idle'; assertCurrent(): void }): Promise<boolean>;
   apply(scan: DiscoveryScan, items: readonly SessionSummary[]): Promise<number>;
   complete(scan: DiscoveryScan, proof: { readonly completeness: 'complete'; readonly cursor: null; readonly stable: true }): Promise<{ readonly count: number; readonly deleted: number }>;
   event(input: { readonly source: SourceIdentity; readonly authority: SourceAuthority; assertCurrent(): void } & ({ readonly deleted: true; readonly session: SessionRef } | { readonly deleted: false; readonly summary: SessionSummary })): Promise<boolean>;

@@ -16,6 +16,7 @@ export interface PersistentStorageIpcOptions {
   };
   readonly assertTrustedRenderer: (event: PersistentStorageIpcEvent) => void;
   readonly getStorage: () => PersistentStorage | SessionStorage;
+  readonly getLiveStorage: () => PersistentStorage;
   readonly broadcastChange: (change: PersistentStorageChange, sourceWebContentsId?: number) => void;
   readonly getLocalApplicationPath: () => string | null;
   readonly localApplicationPathKey: string;
@@ -23,3 +24,8 @@ export interface PersistentStorageIpcOptions {
 }
 
 export function registerPersistentStorageIpc(options: PersistentStorageIpcOptions): void;
+
+export function readConfiguredMaxLocalFileBytes(
+  getStorage: () => Pick<PersistentStorage | SessionStorage, 'getItem'>,
+  getLiveStorage: () => PersistentStorage,
+): Promise<number>;

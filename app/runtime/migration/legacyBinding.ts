@@ -18,7 +18,7 @@ export async function describeLocalBinding(local: Readonly<{ key: string; namesp
   if (local.key === 'opencode.drafts.question.v1') return { sourceKey, kind: 'question' };
   let nativeSessionId: string | undefined;
   let scopeFingerprint: string | undefined;
-  const scoped = /^opencode\.state\.backendHistory\.v1\.([a-f0-9]{32})\.(.+)$/u.exec(local.key);
+  const scoped = /^(?:opencode\.)?state\.backendHistory\.v1\.([a-f0-9]{32})\.(.+)$/u.exec(local.key);
   if (scoped) {
     try { nativeSessionId = decodeURIComponent(scoped[2]); } catch { return { sourceKey, kind: 'local' }; }
     scopeFingerprint = await legacyDigest('backend-history-v1:' + scoped[1]);
@@ -26,7 +26,7 @@ export async function describeLocalBinding(local: Readonly<{ key: string; namesp
     try {
       const tuple: unknown = JSON.parse(local.key);
       if (Array.isArray(tuple) && tuple.length === 2 && typeof tuple[0] === 'string') {
-        const scope = /^opencode\.state\.backendHistory\.v1\.([a-f0-9]{32})\.(.+)$/u.exec(tuple[0]);
+        const scope = /^(?:opencode\.)?state\.backendHistory\.v1\.([a-f0-9]{32})\.(.+)$/u.exec(tuple[0]);
         if (scope && local.namespace === 'backend-history-v1:' + scope[1]) nativeSessionId = decodeURIComponent(scope[2]);
       } else if (Array.isArray(tuple) && typeof tuple[2] === 'string') nativeSessionId = tuple[2];
     } catch { return { sourceKey, kind: 'local' }; }

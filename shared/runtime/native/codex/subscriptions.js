@@ -66,6 +66,7 @@ export function createCodexSubscriptions() {
     close() {
       closed = true;
       for (const state of subscribers) {
+        state.queue.length = 0;
         state.done = true;
         state.waiter?.resolve({ value: undefined, done: true });
         state.waiter = null;

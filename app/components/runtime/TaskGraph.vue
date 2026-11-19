@@ -5,8 +5,8 @@
     review pending (submitted, awaiting a verdict), accepted (a reviewer approved it). The phase is
     never recomputed here and a native terminal event can never render as `accepted`.
   -->
-  <section class="task-graph" data-runtime-ui data-testid="task-graph" aria-label="Task graph">
-    <div class="section-title">Tasks</div>
+  <section class="task-graph" data-runtime-ui data-testid="task-graph" :aria-label='rt("Task graph")'>
+    <div class="section-title">{{ rt("Tasks") }}</div>
     <ul v-if="tasks.length > 0" class="task-list">
       <li
         v-for="task in tasks"
@@ -22,9 +22,9 @@
         <button type="button" class="task-select" data-testid="task-select" @click="emit('select-task', task.taskId)">
           <span class="phase-chip" :class="'phase-' + task.phase" data-testid="phase-chip">{{ phaseLabel(task.phase) }}</span>
           <span class="task-title">{{ task.title }}</span>
-          <span v-if="task.blockedBy.length > 0" class="task-blocked mono" data-testid="task-blocked">blocked by {{ task.blockedBy.length }}</span>
-          <span v-if="task.pausedReasons.length > 0" class="task-paused" data-testid="task-paused">paused: {{ task.pausedReasons.join(', ') }}</span>
-          <span v-if="task.ambiguous" class="task-ambiguous" data-testid="task-ambiguous">ambiguous</span>
+          <span v-if="task.blockedBy.length > 0" class="task-blocked mono" data-testid="task-blocked">{{ rt("blocked by") }} {{ task.blockedBy.length }}</span>
+          <span v-if="task.pausedReasons.length > 0" class="task-paused" data-testid="task-paused">{{ rt("paused:") }} {{ task.pausedReasons.join(', ') }}</span>
+          <span v-if="task.ambiguous" class="task-ambiguous" data-testid="task-ambiguous">{{ rt("ambiguous") }}</span>
         </button>
         <div class="task-actions">
           <button
@@ -34,7 +34,7 @@
             :disabled="task.phase !== 'pending' && task.phase !== 'paused'"
             @click="emit('dispatch', task.taskId)"
           >
-            Dispatch
+            {{ rt("Dispatch") }}
           </button>
           <button
             type="button"
@@ -43,7 +43,7 @@
             :disabled="task.phase !== 'agent-finished'"
             @click="emit('submit-review', { taskId: task.taskId, reviewer: 'reviewer' })"
           >
-            Submit review
+            {{ rt("Submit review") }}
           </button>
           <button
             type="button"
@@ -52,7 +52,7 @@
             :disabled="!canAccept(task)"
             @click="acceptTask(task)"
           >
-            Accept
+            {{ rt("Accept") }}
           </button>
           <button
             type="button"
@@ -61,7 +61,7 @@
             :disabled="task.phase !== 'review-pending'"
             @click="emit('reject', { taskId: task.taskId, reason: 'rejected by reviewer' })"
           >
-            Reject
+            {{ rt("Reject") }}
           </button>
           <button
             type="button"
@@ -70,7 +70,7 @@
             :disabled="task.phase === 'accepted' || task.phase === 'cancelled'"
             @click="emit('cancel', { taskId: task.taskId, reason: 'cancelled by reviewer' })"
           >
-            Cancel
+            {{ rt("Cancel") }}
           </button>
         </div>
         <fieldset v-if="task.phase === 'review-approved'" class="acceptance-criteria">
@@ -87,14 +87,13 @@
         </fieldset>
       </li>
     </ul>
-    <p v-else class="empty-note" data-testid="task-graph-empty">No tasks yet.</p>
+    <p v-else class="empty-note" data-testid="task-graph-empty">{{ rt("No tasks yet.") }}</p>
   </section>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { useI18n } from 'vue-i18n';
-import { runtimeUiMessages } from '../../locales/runtimeUi';
+import { useRuntimeUi } from '../../locales/runtimeUi';
 import type { CollaborationTaskView, TaskPhase } from '../../composables/useRuntimeCollaboration';
 
 defineProps<{
@@ -112,7 +111,7 @@ const emit = defineEmits<{
   (event: 'cancel', input: { taskId: string; reason?: string }): void;
 }>();
 
-const { t } = useI18n({ useScope: 'local', messages: runtimeUiMessages });
+const { t, rt } = useRuntimeUi();
 const PHASE_LABELS: Readonly<Record<TaskPhase, string>> = Object.freeze({
   pending: 'Pending',
   dispatched: 'Dispatched',
@@ -126,7 +125,7 @@ const PHASE_LABELS: Readonly<Record<TaskPhase, string>> = Object.freeze({
 });
 
 function phaseLabel(phase: TaskPhase): string {
-  return PHASE_LABELS[phase] ?? phase;
+  return rt(PHASE_LABELS[phase] ?? phase);
 }
 
 function firstDeliverableId(task: CollaborationTaskView): string {
@@ -252,27 +251,27 @@ function acceptTask(task: CollaborationTaskView): void {
 }
 
 .phase-chip.phase-agent-finished {
-  color: var(--theme-status-info, #7dd3fc);
+  color: var(--codex-status-info, var(--theme-text-primary));
   border-color: color-mix(in srgb, var(--theme-status-info, #7dd3fc) 45%, transparent);
   background: color-mix(in srgb, var(--theme-status-info, #7dd3fc) 10%, transparent);
 }
 
 .phase-chip.phase-review-pending,
 .phase-chip.phase-review-approved {
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
   border-color: color-mix(in srgb, var(--theme-status-warning, #fcd34d) 45%, transparent);
   background: color-mix(in srgb, var(--theme-status-warning, #fcd34d) 10%, transparent);
 }
 
 .phase-chip.phase-accepted {
-  color: var(--theme-status-success, #4ade80);
+  color: var(--codex-status-success, var(--theme-text-primary));
   border-color: color-mix(in srgb, var(--theme-status-success, #4ade80) 45%, transparent);
   background: color-mix(in srgb, var(--theme-status-success, #4ade80) 12%, transparent);
 }
 
 .phase-chip.phase-failed,
 .phase-chip.phase-cancelled {
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
   border-color: color-mix(in srgb, var(--theme-status-error, #f87171) 45%, transparent);
 }
 
@@ -285,7 +284,7 @@ function acceptTask(task: CollaborationTaskView): void {
 .task-paused,
 .task-ambiguous {
   font-size: var(--type-caption, 10px);
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
 }
 
 .task-actions {

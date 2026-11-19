@@ -1,9 +1,9 @@
 <template>
-  <section class="remote-actions" data-runtime-ui data-testid="remote-bridge-actions" aria-label="Remote bridge actions">
+  <section class="remote-actions" data-runtime-ui data-testid="remote-bridge-actions" :aria-label='rt("Remote bridge actions")'>
     <header class="actions-header">
-      <span class="actions-title">Remote bridge</span>
+      <span class="actions-title">{{ rt("Remote bridge") }}</span>
       <span v-if="plan" class="actions-plan" data-testid="remote-bridge-plan">
-        {{ plan.action }} · {{ plan.location }} · {{ plan.channel }}
+        {{ rt(plan.action) }} · {{ rt(plan.location) }} · {{ plan.channel }}
       </span>
     </header>
 
@@ -16,7 +16,7 @@
         :title="detachTitle"
         @click="$emit('detach')"
       >
-        Detach
+        {{ rt("Detach") }}
       </button>
       <button
         type="button"
@@ -26,7 +26,7 @@
         :title="stopTitle"
         @click="$emit('stop')"
       >
-        Stop
+        {{ rt(slurm?.ownership === 'borrowed' ? 'Stop Vis service' : 'Stop') }}
       </button>
       <button
         type="button"
@@ -36,7 +36,7 @@
         :title="reconnectTitle"
         @click="$emit('reconnect')"
       >
-        Reconnect
+        {{ rt("Reconnect") }}
       </button>
       <button
         type="button"
@@ -46,7 +46,7 @@
         :title="updateTitle"
         @click="$emit('update')"
       >
-        Update bridge
+        {{ rt("Update bridge") }}
       </button>
     </div>
 
@@ -58,20 +58,21 @@
     </p>
 
     <p class="actions-note" data-testid="remote-detach-note">
-      Detach stops tracking only. It never cancels the job, and it never signals a borrowed
-      allocation — disconnect is not a stop request.
+      {{ rt("Detach stops tracking only. It never cancels the job, and it never signals a borrowed allocation — disconnect is not a stop request.") }}
     </p>
   </section>
 </template>
 
 <script setup lang="ts">
+import { useRuntimeUi } from '../../locales/runtimeUi';
+const { rt } = useRuntimeUi();
 import { computed } from 'vue';
 import type {
   RemoteBridgeUpdatePlan,
   RuntimeConnectionStatus,
   SlurmLifecycleStatus,
 } from '../../composables/useRuntimeProfiles';
-import { stopRefusalReason, updateRefusalReason } from '../../composables/useRuntimeProfiles';
+import { updateRefusalReason } from '../../composables/useRuntimeProfiles';
 
 const props = withDefaults(
   defineProps<{
@@ -96,27 +97,23 @@ const attached = computed(() => props.slurm !== null && props.slurm.attached);
 
 /** Detach is the only action always available on an attached intent. */
 const canDetach = computed(() => attached.value && !props.busy);
-const detachTitle = computed(() =>
-  attached.value ? 'Stop tracking this job without cancelling it' : 'No attached execution to detach');
+const detachTitle = computed(() => rt(
+  attached.value ? 'Stop tracking this job without cancelling it' : 'No attached execution to detach'));
 
 /**
- * Stop is owned-only.
- *
- * `stopRefusalReason` reads the intent's OWN `ownership` field, so a borrowed allocation is
- * refused before any signal can be produced rather than refused by a status string after the
- * fact. A terminal job and a job with no scheduler id are refused for the same reason.
+ * Borrowed allocations use the Bridge's owned-service-step stop, never allocation cancellation.
  */
 const stopRefusal = computed<string | null>(() => {
   const slurm = props.slurm;
   if (slurm === null || !slurm.attached) return null;
-  const refusal = stopRefusalReason(slurm);
-  if (refusal === 'borrowed') return 'Borrowed allocation: this client never signals it.';
-  if (refusal === 'terminal') return `Terminal (${slurm.terminal}): nothing left to stop.`;
-  if (refusal === 'no-job') return 'No scheduler job id yet: the submit has not been confirmed.';
+  if (slurm.terminal) return rt('Terminal ({state}): nothing left to stop.', { state: slurm.terminal });
+  if (!slurm.jobId) return rt('No scheduler job id yet: the submit has not been confirmed.');
   return null;
 });
 const canStop = computed(() => attached.value && stopRefusal.value === null && !props.busy);
-const stopTitle = computed(() => stopRefusal.value ?? 'Cancel the job this client owns');
+const stopTitle = computed(() => stopRefusal.value ?? rt(props.slurm?.ownership === 'borrowed'
+  ? 'Stop only the Vis service step; keep the borrowed allocation running.'
+  : 'Cancel the job this client owns'));
 
 /**
  * Reconnect requires the live job and the bridge instance it was bound to.
@@ -129,20 +126,20 @@ const canReconnect = computed(() => {
   if (slurm === null) return false;
   return slurm.bridgeInstanceId !== null && !props.busy;
 });
-const reconnectTitle = computed(() =>
+const reconnectTitle = computed(() => rt(
   canReconnect.value
     ? 'Re-attach to the live job and its bound bridge instance'
-    : 'Reconnect needs the live job and its bound bridge instance');
+    : 'Reconnect needs the live job and its bound bridge instance'));
 
 const updateRefusal = computed<string | null>(() => {
-  if (props.plan === null) return 'No bridge probe yet: the update path is unknown.';
+  if (props.plan === null) return rt('No bridge probe yet: the update path is unknown.');
   const refusal = updateRefusalReason(props.plan);
-  if (refusal === 'unsupported') return 'The installed bridge is not compatible with this client.';
-  if (refusal === 'not-explicit') return 'Bridge updates are never automatic.';
+  if (refusal === 'unsupported') return rt('The installed bridge is not compatible with this client.');
+  if (refusal === 'not-explicit') return rt('Bridge updates are never automatic.');
   return null;
 });
 const canUpdate = computed(() => updateRefusal.value === null && !props.busy);
-const updateTitle = computed(() => updateRefusal.value ?? `Explicitly ${props.plan?.action ?? 'update'} the remote bridge`);
+const updateTitle = computed(() => updateRefusal.value ?? rt('Explicitly {action} the remote bridge', { action: rt(props.plan?.action ?? 'update') }));
 </script>
 
 <style scoped>
@@ -212,7 +209,7 @@ const updateTitle = computed(() => updateRefusal.value ?? `Explicitly ${props.pl
   margin: 0;
   font-size: var(--type-sm, 12px);
   line-height: 1.45;
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
   word-break: break-word;
 }
 

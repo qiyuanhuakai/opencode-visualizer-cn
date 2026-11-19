@@ -153,6 +153,7 @@ function fanoutView(record) {
   const recipients = record.recipients;
   return Object.freeze({
     fanoutId: record.fanoutId,
+    ...(record.teamId ? { teamId: record.teamId, threadId: record.threadId } : {}),
     prompt: record.prompt,
     state: deriveFanoutState(recipients),
     targets: Object.freeze(recipients.map(recipientView)),
@@ -241,7 +242,8 @@ export function createFanoutService({ deliver } = {}) {
       });
     }
     const fanoutId = randomUUID();
-    const record = { fanoutId, prompt, recipients, deduped, createdAt: at, updatedAt: at };
+    const binding = input.teamId === undefined && input.threadId === undefined ? {} : { teamId: normalizeFanoutId(input.teamId), threadId: normalizeFanoutId(input.threadId) };
+    const record = { fanoutId, ...binding, prompt, recipients, deduped, createdAt: at, updatedAt: at };
     fanoutsById.set(fanoutId, record);
     stats.fanouts += 1;
     stats.recipients += recipients.length;
@@ -382,6 +384,18 @@ export function createFanoutService({ deliver } = {}) {
   }
 
   return {
+    exportRecords() { return [...fanoutsById.values()].map(record => structuredClone(record)); },
+    restoreRecords(records) {
+      if (fanoutsById.size) throw new CollaborationError('conflict', 'fanout_restore_nonempty');
+      for (const input of records) {
+        const record = structuredClone(input); normalizeFanoutId(record.fanoutId);
+        for (const recipient of record.recipients) {
+          if (recipient.dispatched && recipient.outcome === 'pending') { recipient.outcome = 'ambiguous'; recipient.resolution = { code: 'reconcile_required', field: 'fanout_restart_ambiguous' }; }
+        }
+        fanoutsById.set(record.fanoutId, record);
+      }
+      stats.fanouts = fanoutsById.size; stats.recipients = [...fanoutsById.values()].reduce((sum, record) => sum + record.recipients.length, 0);
+    },
     createFanout,
     fanout,
     fanouts,

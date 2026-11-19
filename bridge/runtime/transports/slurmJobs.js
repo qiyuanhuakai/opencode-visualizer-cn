@@ -357,14 +357,15 @@ export function createSlurmJobController(options = {}) {
     };
     const durable = await store.writeIntent(intent);
     requireValue(durable.intentId === intentId, 'store.intent');
+    const prepared = options.prepareSubmission ? await options.prepareSubmission({ intentId, resources, request }) : request;
     const script = buildSbatchScript({
       intentId,
       resources,
-      command: request.command,
-      args: request.args,
+      command: prepared.command,
+      args: prepared.args,
       cwd: request.computeWorkingRoot,
-      env: request.env,
-      output: request.output,
+      env: prepared.env,
+      output: prepared.output,
     });
     const argv = buildSbatchArgv({ intentId, resources });
 
@@ -393,7 +394,9 @@ export function createSlurmJobController(options = {}) {
     requireValue(intent !== undefined, 'intent', 'source_unavailable');
     let outcome;
     try {
-      outcome = await scheduler.query({ intentId, uuid: intent.uuid ?? intent.intentId });
+      outcome = intent.ownership === 'borrowed'
+        ? { matches: [await scheduler.describe(intent.jobId)] }
+        : await scheduler.query({ intentId, uuid: intent.uuid ?? intent.intentId, jobId: intent.jobId });
     } catch {
       return store.updateIntent(intent.intentId, { reconcile: 'unconfirmed' });
     }
@@ -410,8 +413,12 @@ export function createSlurmJobController(options = {}) {
       state: mapped.terminal === null ? mapped.queue : mapped.terminal,
       jobId: match.jobId ?? intent.jobId ?? null,
       queue: mapped.queue,
+      schedulerState: match.state,
       terminal: mapped.terminal,
       requeued: mapped.requeued,
+      computeNode: match.nodes ?? null,
+      restartCount: match.restarts ?? 0,
+      schedulerComment: match.comment ?? null,
       reconcile: null,
     });
   }

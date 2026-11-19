@@ -17,8 +17,9 @@ html [data-runtime-ui] textarea[class]::placeholder {
 html [data-runtime-ui] input[class]:focus-visible,
 html [data-runtime-ui] textarea[class]:focus-visible {
   border-color: var(--ui-form-control-focus-border);
-  outline: 2px solid var(--ui-form-control-focus-ring);
+  outline: 2px solid var(--ui-form-control-focus-border);
   outline-offset: 1px;
+  box-shadow: var(--ui-form-control-focus-ring);
 }
 
 html [data-runtime-ui] button.action-button {
@@ -65,9 +66,20 @@ html [data-runtime-ui] .phase-chip.phase-accepted {
   color: var(--codex-status-success, var(--theme-text-primary));
 }
 
-@media (pointer: coarse) {
+@media (pointer: coarse), (max-width: 640px) {
   html [data-runtime-ui] button,
+  html [data-runtime-ui] button.action-button,
   html [data-runtime-ui] input:not([type='checkbox']):not([type='radio']) {
     min-height: 44px;
+  }
+  html [data-runtime-ui] button,
+  html [data-runtime-ui] button.action-button {
+    min-width: 44px;
+  }
+  html [data-runtime-ui] label:has(input[type='checkbox']),
+  html [data-runtime-ui] label:has(input[type='radio']) {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
   }
 }

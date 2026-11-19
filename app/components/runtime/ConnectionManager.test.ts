@@ -162,6 +162,23 @@ describe('Browser and Electron expose the SAME capability entry', () => {
     expect(row?.textContent).toContain('ssh');
     expect(row?.textContent).toContain('11111111…');
   });
+
+  it('emits an explicit enable request for the selected disabled profile', async () => {
+    const profile = sshProfile({ enabled: false });
+    const requests: unknown[] = [];
+    const root = mount(ConnectionManager, {
+      open: true, client: 'browser', profiles: [profile],
+      capabilityEntry: capabilityEntryFor('browser', true), managedTransport: true,
+      selectedProfileId: profile.profileId,
+      onSetEnabled: (request: unknown) => requests.push(request),
+    });
+    const checkbox = root.querySelector<HTMLInputElement>('[data-testid="profile-enabled"]');
+    expect(checkbox?.checked).toBe(false);
+    checkbox?.click();
+    await nextTick();
+    expect(requests).toEqual([{ profileId: profile.profileId, enabled: true }]);
+    expect(profile.enabled).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -223,7 +240,7 @@ describe('cancelling a connection must NOT cancel a borrowed job', () => {
     requiresExplicitAction: true,
   });
 
-  it('offers detach on a borrowed allocation and refuses stop before any signal', () => {
+  it('offers detach and a separately explicit Vis-service stop on borrowed allocations', () => {
     const emitted: string[] = [];
     const root = mount(RemoteBridgeActions, {
       slurm: slurmLifecycle({ ownership: 'borrowed' }),
@@ -236,18 +253,20 @@ describe('cancelling a connection must NOT cancel a borrowed job', () => {
     const detach = root.querySelector<HTMLButtonElement>('[data-testid="remote-detach"]');
     const stop = root.querySelector<HTMLButtonElement>('[data-testid="remote-stop"]');
     expect(detach?.disabled).toBe(false);
-    expect(stop?.disabled).toBe(true);
+    expect(stop?.disabled).toBe(false);
+    expect(stop?.textContent?.trim()).toBe('Stop Vis service');
+    expect(stop?.title).toContain('keep the borrowed allocation running');
 
     detach?.click();
     expect(emitted).toEqual(['detach']);
 
-    const refusal = root.querySelector('[data-testid="remote-stop-refusal"]');
-    expect(refusal?.textContent).toContain('Borrowed');
-    expect(refusal?.textContent).toContain('never signals');
+    expect(root.querySelector('[data-testid="remote-stop-refusal"]')).toBeNull();
+    stop?.click();
+    expect(emitted).toEqual(['detach', 'stop']);
     expect(root.querySelector('[data-testid="remote-detach-note"]')?.textContent).toContain('never cancels');
   });
 
-  it('cancels the connection without ever offering a stop affordance on it', async () => {
+  it('cancels the connection independently from the explicit borrowed-service stop', async () => {
     const cancelled: unknown[] = [];
     const root = mount(ConnectionManager, {
       open: true,
@@ -268,7 +287,7 @@ describe('cancelling a connection must NOT cancel a borrowed job', () => {
     expect(cancelled).toHaveLength(1);
     // The cancel path is the detach path: the borrowed job is still attached and un-signalled.
     const actions = root.querySelector('[data-testid="remote-bridge-actions"]');
-    expect(actions?.querySelector<HTMLButtonElement>('[data-testid="remote-stop"]')?.disabled).toBe(true);
+    expect(actions?.querySelector<HTMLButtonElement>('[data-testid="remote-stop"]')?.textContent?.trim()).toBe('Stop Vis service');
     expect(actions?.querySelector<HTMLButtonElement>('[data-testid="remote-detach"]')?.disabled).toBe(false);
   });
 
@@ -420,10 +439,10 @@ describe('a password / OTP is never cached', () => {
     expect(JSON.stringify(draft)).not.toContain('password');
   });
 
-  it('refuses an SSH profile until the host has been probed for its stable environment', async () => {
+  it('refuses an SSH profile until its actual environment UUID is supplied', async () => {
     const saved: unknown[] = [];
     const root = mount(SshHostForm, { available: true, environmentId: '', onSave: (draft: unknown) => saved.push(draft) });
-    expect(root.querySelector('[data-testid="ssh-environment-unresolved"]')?.textContent).toContain('stable environment');
+    expect(root.querySelector('[data-testid="ssh-environment-unresolved"]')?.textContent).toContain('valid environment UUID');
     expect(root.querySelector<HTMLButtonElement>('[data-testid="ssh-host-save"]')?.disabled).toBe(true);
     expect(saved).toHaveLength(0);
   });
@@ -720,6 +739,8 @@ describe('the Slurm execution form shows an explicit resource and time preview',
     set('slurm-memory', '4224');
     set('slurm-time', '01:00:00');
     set('slurm-gres', 'none');
+    set('slurm-working-root', '/compute/work');
+    set('slurm-state-root', '/compute/state');
     await nextTick();
     root.querySelector<HTMLButtonElement>('[data-testid="slurm-form-submit"]')?.click();
     await nextTick();
@@ -727,6 +748,7 @@ describe('the Slurm execution form shows an explicit resource and time preview',
     expect(submitted).toEqual([{
       resources: { partition: 'cpu', account: 'research', cpus: 5, memory: '4224', time: '01:00:00', gres: 'none' },
       ownership: 'owned',
+      mode: 'relay', computeWorkingRoot: '/compute/work', computeStateRoot: '/compute/state',
     }]);
     // What was displayed is what was requested.
     expect(root.querySelector('[data-testid="slurm-resource-preview"]')?.getAttribute('data-cpus')).toBe('5');
@@ -746,8 +768,11 @@ describe('the Slurm execution form shows an explicit resource and time preview',
     set('slurm-memory', '4096');
     set('slurm-time', '');
     set('slurm-gres', '');
+    set('slurm-working-root', '/compute/work');
+    set('slurm-state-root', '/compute/state');
     await nextTick();
-    root.querySelector<HTMLButtonElement>('[data-testid="slurm-form-submit"]')?.click();
+    expect(root.querySelector<HTMLButtonElement>('[data-testid="slurm-form-submit"]')?.disabled).toBe(true);
+    root.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     await nextTick();
     expect(submitted).toHaveLength(0);
     const problems = root.querySelector('[data-testid="slurm-form-problems"]');
@@ -785,7 +810,7 @@ describe('the Slurm execution form binds the preview to the request it submits',
   });
 
   function fill(root: HTMLDivElement, values: Record<string, string>) {
-    for (const [testId, value] of Object.entries(values)) {
+    for (const [testId, value] of Object.entries({ 'slurm-working-root': '/compute/work', 'slurm-state-root': '/compute/state', ...values })) {
       const input = root.querySelector<HTMLInputElement>(`[data-testid="${testId}"]`)!;
       input.value = value;
       input.dispatchEvent(new Event('input'));
@@ -837,7 +862,8 @@ describe('the Slurm execution form binds the preview to the request it submits',
     expect(submitted).toHaveLength(0);
     expect(displayed.gres).toBe('none');
     expect(displayed.timeSeconds).toBe('3600');
-    expect(root.querySelector('[data-testid="slurm-form-problems"]')?.textContent).toContain('preview');
+    expect(root.querySelector<HTMLButtonElement>('[data-testid="slurm-form-submit"]')?.disabled).toBe(true);
+    expect(root.querySelector('[data-testid="slurm-preview-stale"]')?.textContent).toContain('preview');
   });
 
   it('asks for a fresh preview whenever the resource draft changes, so the preview can be re-bound', async () => {
@@ -885,6 +911,7 @@ describe('the Slurm execution form binds the preview to the request it submits',
     expect(submitted).toEqual([{
       resources: { partition: 'cpu', account: 'research', cpus: 5, memory: '4224', time: '10:00:00', gres: 'gpu:a100:2' },
       ownership: 'owned',
+      mode: 'relay', computeWorkingRoot: '/compute/work', computeStateRoot: '/compute/state',
     }]);
     const displayed = previewAttributes(live.root);
     expect(displayed.gres).toBe('gpu:a100:2');

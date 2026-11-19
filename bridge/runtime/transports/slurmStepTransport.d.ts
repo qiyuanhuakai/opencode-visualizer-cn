@@ -53,6 +53,7 @@ export function buildStepArgv(options: {
   compute?: SlurmComputeBudget;
   gres?: string;
   program?: string;
+  programArgs?: readonly string[];
   args?: readonly string[];
   relay?: SlurmRelayStepBinding;
 }): readonly string[];
@@ -86,6 +87,7 @@ export interface SlurmStepSpec {
   readonly intentId?: string;
   readonly epoch?: number;
   readonly program?: string;
+  readonly programArgs?: readonly string[];
   readonly args?: readonly string[];
   readonly capabilities?: Record<string, boolean>;
 }
@@ -126,4 +128,5 @@ export function createSlurmStepTransport(options?: {
   timeoutMs?: number;
   uuid?: () => string;
   relaySocketPath?: string;
+  stdioEncoding?: 'base64-lines';
 }): SlurmStepTransport;

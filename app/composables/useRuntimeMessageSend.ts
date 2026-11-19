@@ -14,6 +14,7 @@
 // target-level check), never on `SelectionCapture.isCurrent()` or
 // `SelectionCapture.signal` (both of which `selectionScope.ts` flips on the
 // next `select()`).
+import { nativeSendArgs } from '../runtime/nativeSend';
 import { requireValue } from '../../shared/runtime/capabilities.js';
 import type { JsonValue } from '../../shared/runtime/capabilities.js';
 import type { HarnessKind } from '../../shared/runtime/harnessContract.js';
@@ -79,7 +80,7 @@ function sendArgs(input: RuntimeSendInput): Readonly<Record<string, JsonValue>> 
 }
 
 /** The context plus the optional harness kind that selects a real adapter (finding B). */
-export type RuntimeSendContext = RuntimeActionContext & Readonly<{ harnessKind?: HarnessKind }>;
+export type RuntimeSendContext = RuntimeActionContext & Readonly<{ harnessKind?: HarnessKind; harnessKindFor?: (session: SessionRef) => HarnessKind }>;
 
 export function useRuntimeMessageSend(ctx: RuntimeSendContext, adapter?: RuntimeSendAdapter | null) {
   const router = createSessionActionRouter(ctx);
@@ -92,7 +93,9 @@ export function useRuntimeMessageSend(ctx: RuntimeSendContext, adapter?: Runtime
   const harness: RuntimeSendAdapter | null =
     adapter ?? (ctx.harnessKind === 'codex' ? codexSendAdapter() : null);
 
-  function encodeSend(input: RuntimeSendInput): Readonly<Record<string, JsonValue>> {
+  function encodeSend(session: SessionRef, input: RuntimeSendInput): Readonly<Record<string, JsonValue>> {
+    const kind = ctx.harnessKindFor?.(session) ?? ctx.harnessKind;
+    if (kind) return nativeSendArgs(kind, input);
     return harness ? harness.send(input) : sendArgs(input);
   }
 
@@ -134,13 +137,13 @@ export function useRuntimeMessageSend(ctx: RuntimeSendContext, adapter?: Runtime
   }
 
   function send(session: SessionRef, input: RuntimeSendInput): SessionMutation {
-    return sendWith(session, encodeSend(input));
+    return sendWith(session, encodeSend(session, input));
   }
 
   function sendCaptured(input: RuntimeSendInput): SessionMutation {
     const capture = ctx.capture();
     requireValue(capture !== null, 'action.selection', 'cancelled');
-    return sendWith(capture.selection.session, encodeSend(input), capture);
+    return sendWith(capture.selection.session, encodeSend(capture.selection.session, input), capture);
   }
 
   function cancelTurn(session: SessionRef, parentOperationId?: string): SessionMutation {
@@ -156,11 +159,11 @@ export function useRuntimeMessageSend(ctx: RuntimeSendContext, adapter?: Runtime
     send,
     sendCaptured,
     queue(session: SessionRef, input: RuntimeSendInput): SessionMutation {
-      return sendWith(session, encodeSend({ ...input, queue: true }));
+      return sendWith(session, encodeSend(session, { ...input, queue: true }));
     },
     slash: commandWith,
     attach(session: SessionRef, attachments: readonly JsonValue[], input: RuntimeSendInput = {}): SessionMutation {
-      return sendWith(session, encodeSend({ ...input, attachments }));
+      return sendWith(session, encodeSend(session, { ...input, attachments }));
     },
     cancelTurn,
     compact(session: SessionRef): SessionMutation { return commandWith(session, 'compact'); },

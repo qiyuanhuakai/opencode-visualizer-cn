@@ -1,0 +1,34 @@
+<script setup lang="ts">
+import { useRuntimeUi } from '../../locales/runtimeUi';
+const { rt } = useRuntimeUi();
+import { useI18n } from 'vue-i18n';
+const url = defineModel<string>('url', { required: true });
+const token = defineModel<string>('token', { required: true });
+defineProps<{ error: string }>();
+defineEmits<{ connect: [] }>();
+const { t } = useI18n();
+</script>
+
+<template>
+  <form class="bridge-login" data-runtime-ui data-testid="bridge-login" @submit.prevent="$emit('connect')">
+    <h1>vis_bridge</h1>
+    <p>{{ t('app.runtimeConnection.description') }}</p>
+    <label for="bridge-url">{{ rt("Bridge URL") }}</label>
+    <input id="bridge-url" v-model="url" class="bridge-control" name="bridgeUrl" required spellcheck="false" autocomplete="url" placeholder="ws://127.0.0.1:4096/runtime" />
+    <label for="bridge-token">{{ t('app.login.codexBridgeToken') }}</label>
+    <input id="bridge-token" v-model="token" class="bridge-control" name="bridgeToken" type="password" autocomplete="current-password" />
+    <p v-if="error" role="alert" class="bridge-error">{{ error }}</p>
+    <button type="submit" class="action-button primary">{{ t('app.login.connect') }}</button>
+  </form>
+</template>
+
+<style scoped>
+.bridge-login { display: grid; gap: var(--space-2); color: var(--theme-login-text, var(--theme-text-primary)); text-align: left; }
+h1 { font-size: var(--type-heading); font-weight: 600; }
+p, label { font-size: var(--type-sm); }
+p { color: var(--theme-login-text-muted, var(--theme-text-muted)); }
+input, button { border: 1px solid var(--theme-border-default); border-radius: var(--radius-control); padding: var(--space-2) var(--space-3); background: var(--theme-surface-panel); color: var(--theme-text-primary); font: inherit; }
+button { cursor: pointer; }
+button:hover { background: var(--theme-surface-hover); }
+.bridge-error { color: var(--theme-status-error); overflow-wrap: anywhere; }
+</style>

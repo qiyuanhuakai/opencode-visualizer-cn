@@ -63,6 +63,7 @@ export interface LocaleMessages {
         error: string;
       };
     };
+    runtimeBridgeMenu: { title: string; connections: string; migration: string; agentSettings: string };
     runtimeMigration: {
       title: string;
       description: string;
@@ -81,6 +82,9 @@ export interface LocaleMessages {
       result: string;
       resultSummary: string;
       retained: string;
+      storageUnavailable: string;
+      storageFull: string;
+      storagePaused: string;
       start: string;
       retry: string;
     };
@@ -1533,6 +1537,8 @@ export interface LocaleMessages {
     viewSubagentTitle: string;
   };
   subagentHistory: {
+    loadFailed: string;
+    nextPage: string;
     title: string;
     close: string;
     empty: string;

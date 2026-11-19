@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { resolveRuntimeHelper } from './runtimeHelper.js';
+import { protectFile } from './protectedFile.js';
 
 import { ProtocolError, requireValue } from '../../../shared/runtime/capabilities.js';
 import { evaluateHostKey } from './knownHosts.js';
@@ -68,22 +71,51 @@ export async function createSecretChannel(secrets, options = {}) {
   if (values.length === 0) {
     return Object.freeze({ env: Object.freeze({}), filePath: undefined, async cleanup() {} });
   }
+  requireValue(values.every(value => Buffer.byteLength(value) <= 4096 && !/[\0\r\n]/u.test(value)), 'auth.secret');
   const directory = options.directory ?? tmpdir();
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  const filePath = path.join(directory, `vis-ssh-secret-${randomUUID()}`);
-  await writeFile(filePath, values.join('\n'), { encoding: 'utf8', mode: 0o600 });
-  await chmod(filePath, 0o600).catch(() => {});
+  const secretDirectory = await mkdtemp(path.join(directory, 'vis-ssh-secret-'));
+  const filePath = path.join(secretDirectory, randomUUID());
+  try {
+    await protectFile(secretDirectory, true);
+    await writeFile(filePath, values.join('\n'), { encoding: 'utf8', mode: 0o600 });
+    await protectFile(filePath);
+  } catch (error) { await rm(secretDirectory, { recursive: true, force: true }); throw error; }
+  let helperDirectory, askpassPath = options.askpassPath;
+  if (!askpassPath && process.platform === 'win32') {
+    const sea = process.getBuiltinModule?.('node:sea')?.isSea?.() === true;
+    askpassPath = sea ? process.execPath : path.resolve('dist-bridge', 'vis_bridge.exe');
+    if (!existsSync(askpassPath)) {
+      await rm(secretDirectory, { recursive: true, force: true });
+      throw new ProtocolError('source_unavailable', 'auth.shipped_askpass');
+    }
+  }
+  if (!askpassPath) {
+    try {
+      helperDirectory = await mkdtemp(path.join(tmpdir(), 'vis-ssh-askpass-'));
+      askpassPath = path.join(helperDirectory, 'askpass');
+      const quote = value => `'${value.replace(/'/gu, "'\\''")}'`;
+      const helper = resolveRuntimeHelper('sshAskpass.mjs');
+      await writeFile(askpassPath, `#!/bin/sh\nexec ${quote(helper.node)} ${quote(helper.script)}\n`, { mode: 0o700 });
+    } catch (error) {
+      await rm(secretDirectory, { recursive: true, force: true });
+      if (helperDirectory) await rm(helperDirectory, { recursive: true, force: true });
+      throw error;
+    }
+  }
   const env = Object.freeze({
-    SSH_ASKPASS: options.askpassPath ?? 'ssh-askpass',
+    SSH_ASKPASS: askpassPath,
     SSH_ASKPASS_REQUIRE: 'force',
     VIS_SSH_ASKPASS_FILE: filePath,
+    VIS_SSH_ASKPASS_MODE: 'one-shot-v1',
     DISPLAY: options.display ?? ':0',
   });
   return Object.freeze({
     env,
     filePath,
     async cleanup() {
-      await rm(filePath, { force: true });
+      await rm(secretDirectory, { recursive: true, force: true });
+      if (helperDirectory) await rm(helperDirectory, { recursive: true, force: true });
     },
   });
 }

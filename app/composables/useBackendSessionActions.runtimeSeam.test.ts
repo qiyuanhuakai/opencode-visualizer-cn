@@ -35,9 +35,45 @@ function mutableRuntime(
 }
 
 describe('legacy useBackendSessionActions seam delegates by full SessionRef', () => {
+  it('starts a runtime rename dialog with the qualified human session title', async () => {
+    const router = makeRouter(), showPrompt = vi.fn(async () => null);
+    const { actions } = createSessionActionsFixture({ runtime: { ...makeRuntime(router), title: () => 'Human native title' }, showPrompt });
+    await actions.renameSession(SESSION.nativeSessionId);
+    expect(showPrompt).toHaveBeenCalledWith('topPanel.sessionActions.rename', 'Human native title');
+    expect(router.rename).not.toHaveBeenCalled();
+  });
+  it('does not delete a runtime session when confirmation is declined', async () => {
+    const router = makeRouter();
+    const { actions } = createSessionActionsFixture({ runtime: makeRuntime(router), showConfirm: vi.fn(async () => false) });
+    await actions.deleteSession(SESSION.nativeSessionId);
+    expect(router.delete).not.toHaveBeenCalled();
+  });
+  it('captures the qualified delete target before the confirmation dialog changes selection', async () => {
+    const router = makeRouter();
+    const { runtime, select } = mutableRuntime(router);
+    const { actions } = createSessionActionsFixture({ runtime, showConfirm: vi.fn(async () => { select(parseSessionRef({ ...SESSION, harnessInstanceId: '44444444-4444-4444-8444-444444444444' })); return true; }) });
+    await actions.deleteSession(SESSION.nativeSessionId);
+    expect(router.delete).toHaveBeenCalledWith({ profileId: PROFILE, session: SESSION });
+  });
+  it('shows a qualified checkpoint failure and suppresses an obsolete failure after selection changes', async () => {
+    const router = makeRouter();
+    router.fork.mockRejectedValueOnce(new Error('native checkpoint missing'));
+    const { runtime, select } = mutableRuntime(router);
+    const { actions, mocks } = createSessionActionsFixture({ runtime });
+    await actions.handleForkMessage({ sessionId: SESSION.nativeSessionId, messageId: 'prompt' });
+    expect(mocks.setSessionError).toHaveBeenCalledWith(expect.stringContaining('app.error.sessionForkFailed'));
+    mocks.setSessionError.mockClear();
+    let reject!: (error: Error) => void;
+    router.fork.mockReturnValueOnce(new Promise((_, rejectPromise) => { reject = rejectPromise; }));
+    const action = actions.handleForkMessage({ sessionId: SESSION.nativeSessionId, messageId: 'prompt' });
+    select(parseSessionRef({ ...SESSION, nativeSessionId: 'other-session' }));
+    reject(new Error('late checkpoint failure'));
+    await action;
+    expect(mocks.setSessionError).not.toHaveBeenCalled();
+  });
   it('archive/delete/compact/fork/revert delegate to the router and skip the legacy backend call', async () => {
     const router = makeRouter();
-    const { actions, mocks } = createSessionActionsFixture({ runtime: makeRuntime(router) });
+    const { actions, mocks } = createSessionActionsFixture({ runtime: makeRuntime(router), showConfirm: vi.fn(async () => true) });
     await actions.archiveSession(SESSION.nativeSessionId);
     await actions.deleteSession(SESSION.nativeSessionId);
     await actions.handleCompactSession(SESSION.nativeSessionId);
@@ -56,7 +92,7 @@ describe('legacy useBackendSessionActions seam delegates by full SessionRef', ()
   it('a NON-selected target is routed, never the currently selected session', async () => {
     const router = makeRouter();
     const { runtime } = mutableRuntime(router, SESSION);
-    const { actions } = createSessionActionsFixture({ runtime });
+    const { actions } = createSessionActionsFixture({ runtime, showConfirm: vi.fn(async () => true) });
     // The selection is SESSION, but the operation is for a different native id.
     await actions.deleteSession('other-native-id');
     await actions.archiveSession('other-native-id');

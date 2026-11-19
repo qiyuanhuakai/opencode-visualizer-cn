@@ -46,9 +46,16 @@ export function parseRequest(method, input = {}) {
       for (const change of params.changes) {
         requireStore(change !== null && typeof change === 'object' && !Array.isArray(change), 'change');
         collection(change.collection); text(change.key);
-        requireStore(Object.hasOwn(change, 'value'), 'value');
+        if (change.checkOnly !== undefined) {
+          // Omitting value also makes an older write-only worker reject this
+          // request before its transaction, rather than silently dropping a fence.
+          requireStore(change.checkOnly === true && !Object.hasOwn(change, 'value')
+            && Object.keys(change).every(key => ['collection', 'key', 'expectedRevision', 'checkOnly'].includes(key)), 'check_only');
+          requireStore(Number.isSafeInteger(change.expectedRevision) && change.expectedRevision >= 0, 'revision');
+        } else requireStore(Object.hasOwn(change, 'value'), 'value');
         if (change.expectedRevision !== undefined) requireStore(Number.isSafeInteger(change.expectedRevision) && change.expectedRevision >= 0, 'revision');
       }
+      requireStore(params.changes.some(change => change.checkOnly !== true), 'changes');
       break;
     case 'get': case 'readChunk':
       collection(params.collection); text(params.key);

@@ -87,14 +87,23 @@ export function createBrowserHash(algorithm: string): Digest {
   }
   // Accumulate so a multi-`update` digest is the digest of the concatenation,
   // which is what the callers rely on.
-  const parts: (string | Uint8Array)[] = [];
+  const parts: Uint8Array[] = [];
+  const encoder = new TextEncoder();
+  let totalBytes = 0;
   return {
     update(chunk: string | Uint8Array) {
-      parts.push(chunk);
+      const bytes = typeof chunk === 'string' ? encoder.encode(chunk) : Uint8Array.from(chunk);
+      parts.push(bytes);
+      totalBytes += bytes.length;
       return this;
     },
     digest(encoding: DigestEncoding): string {
-      const merged = parts.map((part) => (typeof part === 'string' ? part : new TextDecoder().decode(part))).join('');
+      const merged = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const part of parts) {
+        merged.set(part, offset);
+        offset += part.length;
+      }
       const hex = evidenceHash(merged);
       if (encoding === 'hex') return hex;
       const raw = Uint8Array.from(hex.match(/../gu)!.map((byte) => Number.parseInt(byte, 16)));

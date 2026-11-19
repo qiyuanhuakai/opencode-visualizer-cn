@@ -17,7 +17,7 @@ import { fork } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
 import { packageVisBridgeInstaller } from '../scripts/package-vis-bridge-installer.mjs';
-import { computeRuntimeWorkerClosure } from '../scripts/vis-bridge-runtime-staging.mjs';
+import { computeRuntimeWorkerClosure, computeRuntimeHelperClosure } from '../scripts/vis-bridge-runtime-staging.mjs';
 
 const ENVIRONMENT_ID = '11111111-1111-4111-8111-111111111111';
 const OWNER_ID = '22222222-2222-4222-8222-222222222222';
@@ -53,7 +53,9 @@ describe.runIf(dpkgDebAvailable)('vis_bridge DEB sidecar payload', () => {
       chmodSync(bridgePath, 0o755);
       chmodSync(path.join(nodePtyPath, 'prebuilds', `linux-${architecture}`, 'pty.node'), 0o755);
       const repositoryRoot = process.cwd();
-      for (const relativePath of await computeRuntimeWorkerClosure(repositoryRoot)) {
+      const helpers = await computeRuntimeHelperClosure(repositoryRoot);
+      const sourceClosure = new Set([...await computeRuntimeWorkerClosure(repositoryRoot), ...helpers]);
+      for (const relativePath of sourceClosure) {
         const destination = path.join(root, ...relativePath.split('/'));
         mkdirSync(path.dirname(destination), { recursive: true });
         copyFileSync(path.join(repositoryRoot, ...relativePath.split('/')), destination);
@@ -91,6 +93,12 @@ describe.runIf(dpkgDebAvailable)('vis_bridge DEB sidecar payload', () => {
       // installed tree is self-contained.
       expect(readFileSync(path.join(extractionPath, 'usr', 'lib', 'vis_bridge', 'shared', 'runtime', 'protocol.js'), 'utf8').length)
         .toBeGreaterThan(0);
+      // The installer must also retain the real remote child entry points and
+      // every relative import, not just the SQLite worker's narrower closure.
+      for (const relativePath of helpers) {
+        expect(readFileSync(path.join(extractionPath, 'usr', 'lib', 'vis_bridge', relativePath)))
+          .toEqual(readFileSync(path.join(repositoryRoot, relativePath)));
+      }
 
       // And: the installed /runtime handshake — the extracted worker forked
       // through the extracted sidecar completes a durable store round-trip. A

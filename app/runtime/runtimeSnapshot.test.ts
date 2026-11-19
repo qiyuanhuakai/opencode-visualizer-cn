@@ -19,6 +19,22 @@ async function withStore(run: (store: ReturnType<typeof createRuntimeStore>, dir
 }
 
 describe('runtime common-watermark snapshots', () => {
+  it('releases only a connection-owned token and admits repeated fresh views within the original quota', async () => {
+    await withStore(async store => {
+      const snapshots = createRuntimeSnapshots({ store });
+      const owner = await snapshots.connect({ target: environmentId, epoch, generation: 1 }, () => true);
+      const foreign = await snapshots.connect({ target: environmentId, epoch, generation: 2 }, () => true);
+      try {
+        for (let index = 0; index < 8; index++) {
+          const page = await owner.page({ collection: 'workspaces' });
+          await expect(foreign.release({ token: page.token })).rejects.toMatchObject({ code: 'replay_required' });
+          expect(await owner.page({ collection: 'workspaces', token: page.token })).toMatchObject({ token: page.token });
+          expect(await owner.release({ token: page.token })).toEqual({ released: true });
+          await expect(owner.page({ collection: 'workspaces', token: page.token })).rejects.toMatchObject({ code: 'replay_required' });
+        }
+      } finally { await owner.close(); await foreign.close(); }
+    });
+  });
   it('waits for an in-flight page on close and releases its late materialization before rejecting the stale page', async () => {
     await withStore(async (store, directory) => {
       let resume = () => {}, started = () => {};

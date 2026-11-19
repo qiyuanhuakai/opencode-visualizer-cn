@@ -13,6 +13,24 @@ import { redactHistoryJson } from '../historyPrivacy.js';
 const MAX_PAGE = 2 * 1024 * 1024;
 const CHUNK = 64 * 1024;
 
+/**
+ * Codex answers thread/turns/list on a thread with no first user message with a -32600
+ * invalid_request carrying the explicit "not materialized yet" rejection (docs/codex.md:34).
+ * The fixed upstream reuses -32600 for ephemeral threads, unloaded threads and invalid ids, so
+ * the code alone is not the cause: appServerClient classifies the cause at the RPC boundary and
+ * drops the native message, leaving `unmaterialized` as the only unmaterialized signal. A
+ * different native code (e.g. -32602 invalid params) or a same-code refusal without that
+ * classification is not an unmaterialized thread and still fails.
+ */
+function isUnmaterializedThreadListError(error) {
+  return (
+    error instanceof ProtocolError &&
+    error.code === 'invalid_request' &&
+    error.unmaterialized === true &&
+    error.field === 'codex.rpc.thread/turns/list'
+  );
+}
+
 /** Pages native items, never thread/read(includeTurns). Cursors retain no resident transcript. */
 export function createCodexHistory({ request, processGeneration, epoch, assertCurrent }) {
   const key = randomBytes(32);
@@ -205,6 +223,8 @@ export function createCodexHistory({ request, processGeneration, epoch, assertCu
     } catch (error) {
       if (error instanceof ProtocolError && error.code === 'unsupported')
         return { items: [], cursor: null, completeness: 'unsupported', reason: error.field };
+      if (!cursor && !state.turn && isUnmaterializedThreadListError(error))
+        return { items: [], cursor: null, completeness: 'complete' };
       throw error;
     }
   };
@@ -247,6 +267,22 @@ function* rechunk(piece) {
  */
 export function createCodexHistoryStream(options) {
   const { session, request, requestHistory, processGeneration, assertCurrent, randomUUID } = options;
+  const key = encodeSessionKey(session);
+  const invalidations = new Set(['turn/started', 'turn/completed', 'item/started', 'item/completed', 'thread/deleted']);
+  const waiters = new Set();
+  let observer, pump, failure, through = 0, reading = false;
+  function wake() { for (const settle of waiters) settle(); }
+  function awaitChange(signal) {
+    if (signal?.aborted) return Promise.reject(new ProtocolError('cancelled', 'codex.history_read'));
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => { waiters.delete(onChange); signal?.removeEventListener('abort', onAbort); };
+      const onChange = () => { if (!settled) { settled = true; cleanup(); resolve(); } };
+      const onAbort = () => { if (!settled) { settled = true; cleanup(); reject(new ProtocolError('cancelled', 'codex.history_read')); } };
+      waiters.add(onChange);
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
+  }
   const secrets = (options.secrets ?? []).filter((value) => typeof value === 'string' && value.length);
   const threadId = textValue(session.nativeSessionId, 'codex.history_session');
   const pages = new Set();
@@ -285,6 +321,27 @@ export function createCodexHistoryStream(options) {
     await fenced(signal);
     opened = true;
     store = streamStore;
+    if (options.subscribe) {
+      observer = options.subscribe();
+      pump = (async () => {
+        try {
+          while (!closed) {
+            let next = await observer.next();
+            if (closed) break;
+            if (next.done) { failure = new ProtocolError('source_unavailable', 'codex.history_observer_closed'); break; }
+            const event = next.value;
+            if (event?.session && encodeSessionKey(event.session) === key && (invalidations.has(event.type) || event.type === 'error' && event.payload?.willRetry === false)) {
+              requireValue(event.epoch === options.epoch && event.processGeneration === processGeneration, 'codex.history_observer_generation', 'replay_required');
+              requireValue(through < Number.MAX_SAFE_INTEGER, 'codex.history_sequence', 'replay_required');
+              through++;
+              wake();
+            }
+            next = undefined;
+          }
+        } catch (error) { failure = error instanceof ProtocolError ? error : new ProtocolError('replay_required', 'codex.history_observer'); }
+        finally { wake(); }
+      })();
+    }
     return { fence: { id: randomUUID(), sourceGeneration: processGeneration } };
   }
   async function page({ cursor, releasePageIds = [], signal }) {
@@ -305,8 +362,12 @@ export function createCodexHistoryStream(options) {
         threadId,
         cursor: state.turnCursor,
         limit: 1,
-        sortDirection: 'asc',
+        sortDirection: 'desc',
         itemsView: 'notLoaded',
+      }).catch(error => {
+        if (before === null && state.turnCursor === null && isUnmaterializedThreadListError(error))
+          return { data: [], nextCursor: null };
+        throw error;
       });
       await fenced(signal);
       requireValue(Array.isArray(turns?.data) && turns.data.length <= 1, 'codex.history.turn_page');
@@ -344,8 +405,8 @@ export function createCodexHistoryStream(options) {
       threadId,
       turnId: state.turn.id,
       cursor: state.itemCursor,
-      limit: 1,
-      sortDirection: 'asc',
+      limit: 200,
+      sortDirection: 'desc',
     });
     const output = await store.ingest({
       source: redactedSource(raw.stream, signal),
@@ -358,7 +419,7 @@ export function createCodexHistoryStream(options) {
     });
     await fenced(signal);
     const envelope = raw.envelope();
-    requireValue(output.records.length <= 1, 'codex.history.item_amplification', 'reconcile_required');
+    requireValue(output.records.length <= 200, 'codex.history.item_amplification', 'reconcile_required');
     requireValue(
       output.records.length > 0 || envelope.nextCursor === null,
       'codex.history.empty_progress',
@@ -418,12 +479,29 @@ export function createCodexHistoryStream(options) {
     await fenced(signal);
     return output;
   }
-  async function read() {
-    throw new ProtocolError('unsupported', 'codex.history_live');
+  async function read({ after, signal }) {
+    requireValue(options.subscribe, 'codex.history_live', 'unsupported');
+    await fenced(signal);
+    requireValue(opened, 'codex.history_open', 'replay_required');
+    integerValue(after, 'codex.history_after');
+    requireValue(after <= through, 'codex.history_after');
+    requireValue(!reading, 'codex.history_read_pending', 'conflict');
+    reading = true;
+    try {
+      for (;;) {
+        if (failure) return { through, changed: through > after, status: failure.code === 'replay_required' ? 'replay_required' : 'source_unavailable' };
+        if (through > after) return { through, changed: true, status: 'current' };
+        await awaitChange(signal);
+        await fenced(signal);
+      }
+    } finally { reading = false; }
   }
   async function close() {
     if (closed) return;
     closed = true;
+    wake();
+    const detached = await Promise.allSettled([observer?.return?.(), pump]);
+    observer = undefined; pump = undefined;
     const owned = [...pages];
     pages.clear();
     for (const id of owned) {
@@ -434,9 +512,11 @@ export function createCodexHistoryStream(options) {
       }
     }
     store = undefined;
+    const failed = detached.find(result => result.status === 'rejected');
+    if (failed) throw failed.reason;
   }
   return Object.freeze({
-    capabilities: Object.freeze({ archive: 'paged', recordStream: true, live: 'unsupported' }),
+    capabilities: Object.freeze({ archive: 'paged', recordStream: true, live: options.subscribe ? 'invalidate' : 'unsupported' }),
     open,
     page,
     chunk,

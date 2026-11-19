@@ -12,6 +12,7 @@ import { BACKEND_OPERATION_OWNERS, NATIVE_EXTENSIONS, WORKSPACE_OPERATIONS } fro
 import type { NativeOperation, WorkspaceOperation } from '../../shared/runtime/nativeExtensions.js';
 import { parseEnvironmentId, parseHarnessInstanceId, parseSessionRef } from '../../shared/runtime/identity.js';
 import type { EnvironmentId, HarnessInstanceId } from '../../shared/runtime/identity.js';
+import { DSH_UI_OPERATIONS } from '../../shared/runtime/native/dsh/uiOperations.js';
 import {
   HARNESS_CONTROLS,
   WORKSPACE_CONTROLS,
@@ -76,7 +77,7 @@ const REGISTRY: Readonly<Record<HarnessKind, HarnessManifest>> = Object.freeze({
   // kimi-web: usage monitor + skills, no provider auth.
   'kimi-web': manifest('kimi-web', ['getSkillStatus', 'updateSkill', 'getGlobalConfig', 'updateGlobalConfig']),
   // dsh: usage + provider config, no auth terminal.
-  dsh: manifest('dsh', ['dsh.providers.list', 'dsh.models.list', 'dsh.models.select', 'dsh.plugins.list', 'dsh.agentPresets.list', 'dsh.permissions.catalog', 'getGlobalConfig', 'updateGlobalConfig', 'getMcpStatus', 'updateMcp']),
+  dsh: manifest('dsh', ['forkSession', 'updateSession', ...Object.keys(DSH_UI_OPERATIONS).map(method => `dsh.ui.${method.replace('/', '.')}`), 'dsh.providers.list', 'dsh.models.list', 'dsh.models.select', 'dsh.plugins.list', 'dsh.agentPresets.list', 'dsh.agentPresets.select', 'dsh.permissions.catalog', 'dsh.permissions.select', 'getGlobalConfig', 'updateGlobalConfig', 'getMcpStatus', 'updateMcp']),
 });
 
 describe('task-23 criterion 1: native settings/provider/auth/skills/MCP/usage stay capability-gated', () => {

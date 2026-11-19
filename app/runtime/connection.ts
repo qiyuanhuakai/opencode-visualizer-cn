@@ -15,7 +15,7 @@ export type RuntimeConnection = Readonly<{
   subscribe(listener: (event: RuntimeConnectionEvent) => void): () => void;
   reserveOutbound(bytes: number): () => void;
   setFramePreflight(preflight: RawFramePreflight): () => void;
-  disconnect(): void; dispose(): void;
+  reconnect(): void; disconnect(): void; dispose(): void;
   status: RuntimeConnectionStatus; bufferedAmount: number;
 }>;
 export type RuntimeConnectionOptions = Readonly<{
@@ -40,6 +40,7 @@ export function createRuntimeConnection(options: RuntimeConnectionOptions): Runt
   let retained = 0;
   let budgetOwner = {};
   let retries = 0;
+  let previouslyReady = false;
   let removeSocketListeners = () => {};
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let reconnect: ReturnType<typeof setTimeout> | undefined;
@@ -64,6 +65,13 @@ export function createRuntimeConnection(options: RuntimeConnectionOptions): Runt
     if (publicError) emit({ kind: 'error', error: publicError, generation: status.generation });
     emit({ kind: 'disconnected', generation: status.generation });
   }
+  function scheduleReconnect(generation: number) {
+    if (!previouslyReady || disposed || retries >= 3) return;
+    const delay = [250, 1000, 4000][retries++];
+    reconnect = timers.setTimeout(() => {
+      if (!disposed && status.generation === generation && (status.state === 'disconnected' || status.state === 'error')) void begin().catch(() => undefined);
+    }, delay);
+  }
   function begin(): Promise<Hello> {
     if (disposed) return Promise.reject(new RuntimeConnectionError('cancelled'));
     if (pending) return pending.promise;
@@ -77,7 +85,7 @@ export function createRuntimeConnection(options: RuntimeConnectionOptions): Runt
     let rejectHello: (error: RuntimeConnectionError) => void = () => {};
     const promise = new Promise<Hello>((resolve, reject) => { resolveHello = resolve; rejectHello = reject; });
     pending = { promise, resolve: resolveHello, reject: rejectHello };
-    deadline = timers.setTimeout(() => { if (current()) end(new RuntimeConnectionError('timeout')); }, 15000);
+    deadline = timers.setTimeout(() => { if (current()) { end(new RuntimeConnectionError('timeout')); scheduleReconnect(generation); } }, 15000);
     void Promise.resolve().then(() => options.resolveAuthentication(reference)).then(authentication => {
       if (!current()) return;
       if (clock() - started >= 15000) { end(new RuntimeConnectionError('timeout')); return; }
@@ -104,24 +112,22 @@ export function createRuntimeConnection(options: RuntimeConnectionOptions): Runt
             if (deadline !== undefined) timers.clearTimeout(deadline);
             deadline = undefined;
             status = Object.freeze({ state: 'ready', generation });
+            previouslyReady = true;
+            retries = 0;
             const waiting = pending; pending = undefined;
             emit({ kind: 'hello', hello: frame, generation }); waiting?.resolve(frame); return;
           }
           if (frame.kind === 'hello') throw new RuntimeConnectionError('conflict');
           const publicFrame = frame.kind === 'result' && !frame.ok
-            ? { ...frame, typedError: { code: frame.typedError.code, message: `Runtime response: ${frame.typedError.code}` } }
+            ? { ...frame, typedError: { code: frame.typedError.code, message: new RegExp(`^${frame.typedError.code}: [a-zA-Z0-9_.-]{1,128}$`).test(frame.typedError.message) ? frame.typedError.message : `Runtime response: ${frame.typedError.code}` } }
             : frame;
           emit({ kind: 'frame', frame: publicFrame, generation });
         } catch (error) { if (owns()) end(connectionError(error)); }
       };
-      const onError = () => { if (owns()) end(new RuntimeConnectionError('source_unavailable')); };
+      const onError = () => { if (owns()) { end(new RuntimeConnectionError('source_unavailable')); scheduleReconnect(generation); } };
       const onClose = () => {
         if (!owns()) return;
-        const wasReady = status.state === 'ready'; end();
-        if (wasReady && retries < 3 && !disposed) {
-          const delay = [250, 1000, 4000][retries++];
-          reconnect = timers.setTimeout(() => { if (!disposed && status.generation === generation && status.state === 'disconnected') void begin().catch(() => undefined); }, delay);
-        }
+        end(); scheduleReconnect(generation);
       };
       owned.addEventListener('message', onMessage); owned.addEventListener('error', onError); owned.addEventListener('close', onClose);
       removeSocketListeners = () => {
@@ -141,7 +147,7 @@ export function createRuntimeConnection(options: RuntimeConnectionOptions): Runt
   return {
     get status() { return status; },
     get bufferedAmount() { return retained + (socket?.bufferedAmount ?? 0); },
-    connect() { retries = 0; return begin(); },
+    connect() { retries = 0; previouslyReady = false; return begin(); },
     send(frame) {
       const owned = requireReady();
       let data: string | Uint8Array<ArrayBuffer>;
@@ -169,7 +175,8 @@ export function createRuntimeConnection(options: RuntimeConnectionOptions): Runt
       if (disposed) throw new RuntimeConnectionError('cancelled');
       listeners.add(listener); return () => { listeners.delete(listener); };
     },
-    disconnect() { if (!disposed) { end(); status = Object.freeze({ state: 'disconnected', generation: status.generation + 1 }); } },
+    reconnect() { if (!disposed) { const generation = status.generation; end(); scheduleReconnect(generation); } },
+    disconnect() { if (!disposed) { previouslyReady = false; end(); status = Object.freeze({ state: 'disconnected', generation: status.generation + 1 }); } },
     dispose() { if (!disposed) { end(); preflight = undefined; disposed = true; status = Object.freeze({ state: 'disconnected', generation: status.generation + 1 }); listeners.clear(); } },
   };
 }

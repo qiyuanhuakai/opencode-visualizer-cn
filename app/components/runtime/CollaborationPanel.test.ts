@@ -243,9 +243,8 @@ describe('task 42 — Agent finished / Task review pending / accepted are three 
     await view.state.sendTask(taskId);
     await settle();
 
-    // The native-end action is DISABLED until a real native event id exists, so the UI structurally
-    // cannot fabricate the agent-finished transition without one (task 35's observe-button standard).
-    expect(view.root.querySelector<HTMLButtonElement>('[data-testid="attempt-finish"]')?.disabled).toBe(true);
+    expect(view.root.querySelector('[data-testid="attempt-finish"]')).toBeNull();
+    expect(view.root.querySelector('[data-testid="native-event-input"]')).toBeNull();
 
     // A native end with a real native event id moves the task to AGENT FINISHED (never accepted).
     view.state.finishTask(taskId, 'native-evt-1');
@@ -562,15 +561,6 @@ describe('task 42 — the eight PR #198 review findings', () => {
     return button;
   }
 
-  async function typeNativeEventId(view: Mounted, value: string): Promise<void> {
-    const input = view.root.querySelector<HTMLInputElement>('[data-testid="native-event-input"]');
-    if (input === null) throw new Error('no native event input in the mounted panel');
-    input.value = value;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    // Let the v-model land and the dependent disabled binding re-render before the next click.
-    await settle();
-  }
-
   /** Create one task through the container action (TeamEditor renders no create button). */
   async function createOneTask(view: Mounted, title: string): Promise<string> {
     view.state.createTask({ title, criteria: [{ id: 'c1', text: 'x', required: true }] });
@@ -597,8 +587,7 @@ describe('task 42 — the eight PR #198 review findings', () => {
     await settle();
     buttonOf(view, 'attempt-send').click();
     await settle();
-    await typeNativeEventId(view, 'native-evt-w1');
-    buttonOf(view, 'attempt-finish').click();
+    view.state.finishTask(taskId, 'native-evt-w1');
     await settle();
     expect(phaseOf(view, taskId)).toBe('agent-finished');
     // A REAL deliverable is registered through the composable (the container's job — W2 proves the
@@ -649,8 +638,7 @@ describe('task 42 — the eight PR #198 review findings', () => {
     await settle();
     buttonOf(view, 'attempt-send').click();
     await settle();
-    await typeNativeEventId(view, 'native-evt-w2');
-    buttonOf(view, 'attempt-finish').click();
+    view.state.finishTask(taskId, 'native-evt-w2');
     await settle();
     expect(phaseOf(view, taskId)).toBe('agent-finished');
 
@@ -696,7 +684,8 @@ describe('task 42 — the eight PR #198 review findings', () => {
     expect(approve.textContent?.trim()).toBe('Approve review');
     const note = view.root.querySelector('[data-testid="approve-note"]')?.textContent ?? '';
     expect(note).toContain('records the review verdict');
-    expect(note).toContain('not wired');
+    expect(note).toContain('explicitly apply');
+    expect(buttonOf(view, 'prepare-artifact-review').disabled).toBe(true);
     expect(note).toContain('Nothing is pushed automatically');
     approve.click();
     await settle();

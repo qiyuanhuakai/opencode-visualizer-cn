@@ -207,6 +207,11 @@ export function nearestRankP95(values) {
 const CLK_TCK = 100; // standard Linux USER_HZ for /proc jiffies.
 export { CLK_TCK };
 
+export function cpuPercentOfOneCore(cpuDeltaJiffies, elapsedSeconds, ticksPerSecond = CLK_TCK) {
+  if (elapsedSeconds <= 0) return null;
+  return Math.round((cpuDeltaJiffies / ticksPerSecond / elapsedSeconds) * 10000) / 100;
+}
+
 function readProcStat(pid) {
   try {
     const raw = readFileSync(`/proc/${pid}/stat`, 'utf8');

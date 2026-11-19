@@ -21,6 +21,7 @@ import { BACKEND_OPERATION_OWNERS, NATIVE_EXTENSIONS, WORKSPACE_OPERATIONS } fro
 import type { LegacyCapability, NativeOperation, WorkspaceOperation } from '../../shared/runtime/nativeExtensions.js';
 import { parseEnvironmentId, parseHarnessInstanceId, parseSessionRef } from '../../shared/runtime/identity.js';
 import type { EnvironmentId, HarnessInstanceId, SessionRef } from '../../shared/runtime/identity.js';
+import { DSH_UI_OPERATIONS } from '../../shared/runtime/native/dsh/uiOperations.js';
 
 /** Which scope a control applies to. The shared Scope contract is fixed. */
 export type ControlScope =
@@ -43,7 +44,9 @@ export type ControlGroup =
   | 'commands'
   | 'plugins'
   | 'lsp'
-  | 'status';
+  | 'status'
+  | 'session'
+  | 'goals';
 
 /**
  * The legacy capability a control is gated on, or `null` when the task-4
@@ -65,7 +68,21 @@ export type WorkspaceControlEntry = Readonly<{
 }>;
 
 /** Every backend-specific control entered into the task-4 mapping. */
+const dshUiGroups: Readonly<Record<string, ControlGroup>> = {
+  settings: 'settings', credentials: 'auth', llm: 'provider', pluginManager: 'plugins',
+  pluginInventory: 'plugins', account: 'usage', goals: 'goals', session: 'session',
+  commands: 'commands', skills: 'skills', sessionFeedback: 'session',
+};
+const dshUiControls = Object.fromEntries(Object.keys(DSH_UI_OPERATIONS).map(method => {
+  const operation = `dsh.ui.${method.replace('/', '.')}`;
+  const group = dshUiGroups[method.split('/')[0]!];
+  if (!group) throw new Error(`Unmapped DSH UI operation: ${method}`);
+  return [operation, { operation, capability: null, group }];
+}));
 export const HARNESS_CONTROLS: Readonly<Record<string, HarnessControlEntry>> = Object.freeze({
+  ...dshUiControls,
+  forkSession: { operation: 'forkSession', capability: 'sessionFork', group: 'session' },
+  updateSession: { operation: 'updateSession', capability: null, group: 'session' },
   // ── model ──────────────────────────────────────────────────────────────
   'codex.models': { operation: 'codex.models', capability: 'providerConfig', group: 'model' },
   'dsh.models.list': { operation: 'dsh.models.list', capability: 'providerConfig', group: 'model' },
@@ -85,6 +102,7 @@ export const HARNESS_CONTROLS: Readonly<Record<string, HarnessControlEntry>> = O
   createAgentAuthPty: { operation: 'createAgentAuthPty', capability: 'terminal', group: 'auth' },
   authenticateAgent: { operation: 'authenticateAgent', capability: 'providerConfig', group: 'auth' },
   'dsh.agentPresets.list': { operation: 'dsh.agentPresets.list', capability: 'providerConfig', group: 'auth' },
+  'dsh.agentPresets.select': { operation: 'dsh.agentPresets.select', capability: 'providerConfig', group: 'auth' },
   // ── skills ─────────────────────────────────────────────────────────────
   getSkillStatus: { operation: 'getSkillStatus', capability: null, group: 'skills' },
   updateSkill: { operation: 'updateSkill', capability: null, group: 'skills' },
@@ -122,6 +140,7 @@ export const HARNESS_CONTROLS: Readonly<Record<string, HarnessControlEntry>> = O
   listPendingPermissions: { operation: 'listPendingPermissions', capability: 'permissions', group: 'status' },
   listPendingQuestions: { operation: 'listPendingQuestions', capability: 'questions', group: 'status' },
   'dsh.permissions.catalog': { operation: 'dsh.permissions.catalog', capability: 'permissions', group: 'status' },
+  'dsh.permissions.select': { operation: 'dsh.permissions.select', capability: 'permissions', group: 'status' },
 });
 
 /** Every workspace control entered into the task-4 mapping (never backend-kind dependent). */

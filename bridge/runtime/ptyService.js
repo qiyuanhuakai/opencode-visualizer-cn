@@ -13,8 +13,21 @@ function boundary(bytes, offset) {
 export function createPtyService() {
   const sessions = new Map();
   let active = true;
+  async function stop(entry) {
+    if (globalThis.process.platform !== 'win32') return stopProcessTree(entry.child);
+    // ConPTY owns native pipes/workers in addition to its shell process. Its
+    // kill method accepts no POSIX signal, including after the shell exits.
+    entry.process.kill();
+    if (entry.exited) return;
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { entry.child.off('exit', exited); reject(new Error('Windows PTY did not stop.')); }, 10000);
+      function exited() { clearTimeout(timer); resolve(); }
+      entry.child.once('exit', exited);
+      if (entry.exited) { entry.child.off('exit', exited); exited(); }
+    });
+  }
   function remove(entry) {
-    entry.removing ??= stopProcessTree(entry.child).then(() => {
+    entry.removing ??= stop(entry).then(() => {
       sessions.delete(entry.id);
       entry.subscribers.clear();
     }, error => { entry.removing = undefined; throw error; });
@@ -37,7 +50,7 @@ export function createPtyService() {
       return { entry, subscriber };
     }
     return {
-      async create({ workspaceKey, command, args = [], cwd = '.' }) {
+      async create({ workspaceKey, command = globalThis.process.platform === 'win32' ? globalThis.process.env.COMSPEC || 'cmd.exe' : globalThis.process.env.SHELL || '/bin/sh', args = [], cwd = '.' }) {
         scope.authorize(workspaceKey, 'pty');
         textValue(command, 'command');
         requireValue(Array.isArray(args) && args.every(arg => typeof arg === 'string'), 'args');
@@ -59,6 +72,19 @@ export function createPtyService() {
           entry.start = entry.end - entry.buffer.length;
         });
         process.onExit(event => { entry.exited = true; entry.exitCode = event.exitCode; child.exitCode = event.exitCode; child.emit('exit', event.exitCode); });
+        if (globalThis.process.platform === 'win32') {
+          try {
+            // node-pty initially reports PID 0 while its ConPTY worker connects.
+            const deadline = Date.now() + 10000;
+            while (!process.pid && Date.now() < deadline) {
+              scope.assertCurrent();
+              requireValue(active, 'pty.closed', 'source_unavailable');
+              await new Promise(resolve => setTimeout(resolve, 10));
+            }
+            scope.assertCurrent();
+            requireValue(active && process.pid > 0, 'pty.start', 'source_unavailable');
+          } catch (error) { await remove(entry); throw error; }
+        }
         return { ptyId: id, pid: process.pid };
       },
       subscribe(id) {

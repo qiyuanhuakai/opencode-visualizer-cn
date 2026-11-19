@@ -5,6 +5,7 @@ import zhTW from '../locales/zh-TW';
 import ja from '../locales/ja';
 import eo from '../locales/eo';
 import { desktopMessages } from '../locales/desktop';
+import { runtimeEntryMessages } from '../locales/runtimeEntry';
 import { storageGet, storageSet, storageKey } from '../utils/storageKeys';
 import type { Locale } from './types';
 
@@ -30,11 +31,11 @@ export const i18n = createI18n<any>({
   locale: getStoredLocale(),
   fallbackLocale: 'en',
   messages: {
-    en: { ...en, ...desktopMessages.en },
-    'zh-CN': { ...zhCN, ...desktopMessages['zh-CN'] },
-    'zh-TW': { ...zhTW, ...desktopMessages['zh-TW'] },
-    ja: { ...ja, ...desktopMessages.ja },
-    eo: { ...eo, ...desktopMessages.eo },
+    en: { ...en, ...desktopMessages.en, ...runtimeEntryMessages.en },
+    'zh-CN': { ...zhCN, ...desktopMessages['zh-CN'], ...runtimeEntryMessages['zh-CN'] },
+    'zh-TW': { ...zhTW, ...desktopMessages['zh-TW'], ...runtimeEntryMessages['zh-TW'] },
+    ja: { ...ja, ...desktopMessages.ja, ...runtimeEntryMessages.ja },
+    eo: { ...eo, ...desktopMessages.eo, ...runtimeEntryMessages.eo },
   },
 });
 

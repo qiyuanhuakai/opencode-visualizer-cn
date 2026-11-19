@@ -182,7 +182,7 @@ import {
 } from '../backends/codex/codexAdapter';
 import { DSH_CAPABILITY_REGISTRY } from '../backends/dsh/capabilities';
 import { getActiveDshCapabilityRegistry } from '../backends/dsh/capabilityRegistry';
-import type { BackendKind } from '../backends/types';
+import type { BackendAdapter, BackendKind } from '../backends/types';
 import {
   DEFAULT_KIMI_WEB_BRIDGE_URL,
   KIMI_WEB_CAPABILITIES,
@@ -227,6 +227,7 @@ type KimiWebSessionStateReader = {
 
 const props = defineProps<{
   open: boolean;
+  nativeAdapter?: Partial<BackendAdapter>;
   initialTab?: TabId;
   initialUsageView?: 'daily' | 'weekly' | 'cumulative';
   sessionId?: string;
@@ -306,7 +307,7 @@ const codexContextPercent = computed(() => {
 });
 
 function backend() {
-  return getBackendAdapter(props.activeBackendKind);
+  return props.nativeAdapter ?? getBackendAdapter(props.activeBackendKind);
 }
 
 function requireBackendMethod<T extends (...args: never[]) => unknown>(method: T | undefined, name: string): T {

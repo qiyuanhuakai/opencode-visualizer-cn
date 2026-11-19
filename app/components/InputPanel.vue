@@ -307,7 +307,7 @@
         the reserved fan-out marker stays visible next to them until task 42 enables it. The row
         only renders when a container wired the thread state.
       -->
-      <div v-if="threadState && threadState.summary.value" class="input-thread-row" data-testid="input-thread-row">
+      <div v-if="threadState && threadState.summary.value && threadState.composerActive?.value !== false" class="input-thread-row" data-testid="input-thread-row">
         <ThreadTargetRow
           variant="composer"
           :open="true"
@@ -416,7 +416,7 @@
             <Dropdown
               v-model="modelValue"
               :placeholder="
-                hasModelOptions ? $t('inputPanel.selectModel') : $t('inputPanel.loadingModels')
+                hasModelOptions ? $t('inputPanel.selectModel') : props.modelOptionsLoading === false ? rt('Agent default model') : $t('inputPanel.loadingModels')
               "
               :disabled="props.disabled || !hasModelOptions"
               button-class="input-control input-dropdown-button"
@@ -434,7 +434,7 @@
                       findModelOption(id)?.providerLabel ?? findModelOption(id)?.providerID
                     }}</span
                   >
-                  <span class="model-button-name">{{ findModelOption(id)?.displayName }}</span>
+                  <span class="model-button-name">{{ findModelOption(id)?.displayName ?? (props.modelOptionsLoading === false ? rt('Agent default model') : $t('inputPanel.loadingModels')) }}</span>
                 </div>
               </template>
               <template #default>
@@ -614,6 +614,7 @@ import {
   type RuntimeSendInput,
   type RuntimeSessionRuntime,
 } from '../composables/useRuntimeSessionActions';
+import { useRuntimeUi } from '../locales/runtimeUi';
 import { useRuntimeThreadState } from '../composables/useRuntimeThread';
 
 // Task 35: the thread surfaces are lazily loaded so the composer's entry chunk keeps its size;
@@ -645,6 +646,7 @@ type ThinkingChoice = { key: string; value: string | undefined; label: string };
 type AgentPickerState = 'loading' | 'unsupported' | 'ready';
 
 const { t } = useI18n();
+const { rt } = useRuntimeUi();
 const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
 
 const props = defineProps<{
@@ -675,6 +677,7 @@ const props = defineProps<{
   modelOptions: ModelOption[];
   thinkingOptions: Array<string | undefined>;
   hasModelOptions: boolean;
+  modelOptionsLoading?: boolean;
   hasThinkingOptions: boolean;
   canAttach?: boolean;
   attachmentAccept?: string;

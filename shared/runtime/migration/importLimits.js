@@ -1,0 +1,1 @@
+export const IMPORT_BATCH_MAX_BYTES = 900000;

@@ -6,6 +6,7 @@ export type DialedTransport = {
   readonly environmentId: EnvironmentId | string;
   readonly connectionId?: string;
   readonly close?: () => unknown | Promise<unknown>;
+  readonly onClose?: (listener: () => void) => void;
 };
 export type OpenTransport = (profile: ConnectionProfile) => DialedTransport | Promise<DialedTransport>;
 export type ConnectionState = 'disconnected' | 'connected' | 'failed';

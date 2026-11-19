@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { parseConnectionProfileId, parseSessionRef } from '../../../shared/runtime/identity.js';
+import { IMPORT_BATCH_MAX_BYTES } from '../../../shared/runtime/migration/importLimits.js';
 export class ImportError extends Error {
   constructor(code) { super(code); this.name = 'ImportError'; this.code = code; }
 }
@@ -53,11 +54,11 @@ export function validateBatch(batch, environmentId) {
     || batch.nextOffset <= batch.offset || batch.nextOffset > batch.total || batch.nextOffset - batch.offset > 100
     || !Array.isArray(batch.chunks) || batch.chunks.length !== batch.nextOffset - batch.offset) throw new ImportError('invalid_batch');
   for (const chunk of batch.chunks) validateChunk(chunk, environmentId);
-  if (Buffer.byteLength(JSON.stringify(batch)) > 900000) throw new ImportError('batch_too_large');
+  if (Buffer.byteLength(JSON.stringify(batch)) > IMPORT_BATCH_MAX_BYTES) throw new ImportError('batch_too_large');
 }
 export async function readImportValue(store, item) {
   if (item.value !== undefined) return item.value;
-  if (!item.chunked || item.bytes > 900000) throw new ImportError('corrupt_import');
+  if (!item.chunked || item.bytes > IMPORT_BATCH_MAX_BYTES) throw new ImportError('corrupt_import');
   const chunks = []; let offset = 0;
   do { const chunk = await store.readChunk({ collection: 'imports', key: item.key, revision: item.revision, offset }); chunks.push(Buffer.from(chunk.data, 'base64')); offset = chunk.nextOffset; } while (offset !== null);
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));

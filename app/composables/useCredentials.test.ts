@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { effectScope } from 'vue';
+import { storageGet } from '../utils/storageKeys';
+import { encodeLiveSetting, liveSettingKey } from '../../shared/runtime/liveSettings.js';
 
 describe('useCredentials', () => {
   let storageListeners: Array<(event: StorageEvent) => void>;
@@ -63,10 +65,86 @@ describe('useCredentials', () => {
     vi.unstubAllGlobals();
   });
 
+  function readStored(key: string) { return storageGet(key.slice('opencode.'.length)) ?? undefined; }
+
+  function peerEvent(change: { key: string; newValue: string | null }): StorageEvent {
+    const key = liveSettingKey(change.key.slice('opencode.'.length));
+    const newValue = encodeLiveSetting(change.newValue);
+    electronStore.set(key, newValue);
+    return new StorageEvent('storage', { key, newValue });
+  }
+
   async function importFresh() {
     const mod = await import('./useCredentials');
     return mod.useCredentials();
   }
+
+  it('applies a live event and ignores a stale event after credential removal', async () => {
+    const credentials = await importFresh();
+    const payload = JSON.stringify({ url: 'http://peer.test', username: 'fixture-user', password: 'fixture-only' });
+    const key = liveSettingKey('auth.credentials.v1');
+    electronStore.set(key, encodeLiveSetting(payload));
+    for (const listener of storageListeners) listener(new StorageEvent('storage', { key, newValue: encodeLiveSetting(payload) }));
+    expect(credentials.username.value === 'fixture-user').toBe(true);
+    expect(credentials.password.value.length > 0).toBe(true);
+    electronStore.set(key, encodeLiveSetting(null));
+    electronStore.set('opencode.auth.credentials.v1', payload);
+    for (const listener of storageListeners) listener(new StorageEvent('storage', { key: 'opencode.auth.credentials.v1', newValue: payload }));
+    expect(credentials.username.value).toBe('');
+    expect(credentials.password.value).toBe('');
+  });
+
+  it('keeps live clear effective after reload with a populated legacy alias', async () => {
+    const credentials = await importFresh();
+    credentials.save('http://fixture.test', 'fixture-user', 'fixture-only');
+    const alias = JSON.stringify({ url: 'http://fixture.test', username: 'fixture-old', password: 'fixture-old-only' });
+    electronStore.set('opencode.credentials.v1', alias);
+    credentials.clear();
+    vi.resetModules();
+    const restored = await importFresh();
+    restored.load();
+    expect(restored.username.value).toBe('');
+    expect(restored.password.value).toBe('');
+    expect(electronStore.get('opencode.credentials.v1') === alias).toBe(true);
+  });
+
+  it('preserves the legacy alias on migration failure', async () => {
+    const alias = JSON.stringify({ url: 'http://fixture.test', username: 'fixture-user', password: 'fixture-only' });
+    electronStore.set('opencode.credentials.v1', alias);
+    const api = window.electronAPI?.persistentStorage;
+    if (!api) throw new Error('Missing native storage fixture');
+    vi.mocked(api.setItem).mockReturnValue(false);
+    const { migrateLegacyCredentials } = await import('./credentialStorage');
+    expect(migrateLegacyCredentials()).toBeNull();
+    expect(electronStore.get('opencode.credentials.v1') === alias).toBe(true);
+  });
+
+  it('preserves the alias when credential migration fails after saving the URL', async () => {
+    const alias = JSON.stringify({ url: 'http://fixture.test', username: 'fixture-user', password: 'fixture-only' });
+    electronStore.set('opencode.credentials.v1', alias);
+    const api = window.electronAPI?.persistentStorage;
+    if (!api) throw new Error('Missing native storage fixture');
+    vi.mocked(api.setItem).mockImplementation((key, value) => {
+      if (key === liveSettingKey('auth.credentials.v1')) return false;
+      electronStore.set(key, value);
+      return true;
+    });
+    const { migrateLegacyCredentials } = await import('./credentialStorage');
+    expect(migrateLegacyCredentials()).toBeNull();
+    expect(electronStore.has(liveSettingKey('auth.serverUrl.v1'))).toBe(true);
+    expect(electronStore.has(liveSettingKey('credentials.v1'))).toBe(false);
+    expect(electronStore.get('opencode.credentials.v1') === alias).toBe(true);
+  });
+
+  it('ignores a corrupt live event without clearing active credentials', async () => {
+    const credentials = await importFresh();
+    credentials.save('http://fixture.test', 'fixture-user', 'fixture-only');
+    const key = liveSettingKey('auth.credentials.v1');
+    electronStore.set(key, '{');
+    for (const listener of storageListeners) listener(new StorageEvent('storage', { key, newValue: '{' }));
+    expect(credentials.username.value === 'fixture-user').toBe(true);
+    expect(credentials.password.value.length > 0).toBe(true);
+  });
 
   it('removes scoped credential listeners after one instance is disposed before scope shutdown', async () => {
     const { useCredentials } = await import('./useCredentials');
@@ -94,7 +172,7 @@ describe('useCredentials', () => {
     const credentials = await importFresh();
     credentials.saveCodex('ws://selected.test/codex', 'private-candidate');
     credentials.dispose(); credentials.dispose();
-    for (const listener of storageListeners) listener({ key: 'opencode.auth.codexBridgeUrl.v1', newValue: 'ws://unrelated.test/codex' } as StorageEvent);
+    for (const listener of storageListeners) listener(peerEvent({ key: 'opencode.auth.codexBridgeUrl.v1', newValue: 'ws://unrelated.test/codex' }));
     expect(storageListeners).toHaveLength(0);
     expect(credentials.codexBridgeUrl.value).toBe('ws://selected.test/codex');
   });
@@ -111,7 +189,7 @@ describe('useCredentials', () => {
     expect(await candidate?.resolveAuthentication()).toEqual({ bridgeToken: 'private-candidate' });
     credentials.saveDsh('ws://dsh.test/dsh/ws', 'dsh-private'); credentials.clear();
     expect(getRuntimeConnectionCandidate()).toBeNull();
-    expect(electronStore.get('opencode.auth.codexBridgeToken.v1')).toBe('private-candidate');
+    expect(readStored('opencode.auth.codexBridgeToken.v1')).toBe('private-candidate');
     credentials.dispose();
   });
 
@@ -120,8 +198,10 @@ describe('useCredentials', () => {
 
     credentials.save('http://localhost:4312/', 'alice', 'secret');
 
-    expect(electronStore.get('opencode.auth.credentials.v1')).toContain('http://localhost:4312/');
-    expect(electronStore.get('opencode.auth.serverUrl.v1')).toBe('http://localhost:4312/');
+    expect(readStored('opencode.auth.credentials.v1')).toContain('http://localhost:4312/');
+    expect(readStored('opencode.auth.serverUrl.v1')).toBe('http://localhost:4312/');
+    expect(electronStore.has('opencode.auth.credentials.v1')).toBe(false);
+    expect(electronStore.has('opencode.auth.serverUrl.v1')).toBe(false);
     expect(credentials.baseUrl.value).toBe('http://localhost:4312');
     expect(localStore.size).toBe(0);
   });
@@ -149,8 +229,8 @@ describe('useCredentials', () => {
     expect(credentials.url.value).toBe('http://localhost:5555');
     expect(credentials.username.value).toBe('');
     expect(credentials.password.value).toBe('');
-    expect(electronStore.get('opencode.auth.credentials.v1')).toBeUndefined();
-    expect(electronStore.get('opencode.auth.serverUrl.v1')).toBe('http://localhost:5555');
+    expect(readStored('opencode.auth.credentials.v1')).toBeUndefined();
+    expect(readStored('opencode.auth.serverUrl.v1')).toBe('http://localhost:5555');
   });
 
   it('migrates legacy credentials storage into the new keys', async () => {
@@ -169,12 +249,13 @@ describe('useCredentials', () => {
     expect(credentials.url.value).toBe('http://localhost:4096');
     expect(credentials.username.value).toBe('legacy-user');
     expect(credentials.password.value).toBe('legacy-pass');
-    expect(electronStore.get('opencode.auth.serverUrl.v1')).toBe('http://localhost:4096');
-    expect(electronStore.get('opencode.auth.credentials.v1')).toContain('legacy-user');
-    expect(electronStore.get('opencode.credentials.v1')).toBeUndefined();
+    expect(readStored('opencode.auth.serverUrl.v1')).toBe('http://localhost:4096');
+    expect(readStored('opencode.auth.credentials.v1')).toContain('legacy-user');
+    expect(readStored('opencode.credentials.v1')).toBeUndefined();
+    expect(electronStore.has('opencode.credentials.v1')).toBe(true);
   });
 
-  it('reacts to cross-window storage updates', async () => {
+  it('reacts to legacy cross-window storage updates without a live overlay', async () => {
     const credentials = await importFresh();
 
     const payload = JSON.stringify({
@@ -183,11 +264,12 @@ describe('useCredentials', () => {
       password: 'pw',
     });
 
+    electronStore.set('opencode.auth.credentials.v1', payload);
     for (const listener of storageListeners) {
-      listener({
+      listener(new StorageEvent('storage', {
         key: 'opencode.auth.credentials.v1',
         newValue: payload,
-      } as StorageEvent);
+      }));
     }
 
     expect(credentials.url.value).toBe('http://localhost:9000');
@@ -206,9 +288,9 @@ describe('useCredentials', () => {
     expect(first.codexBridgeUrl.value).toBe('ws://localhost:23004/codex');
     expect(first.codexBridgeToken.value).toBe('');
     expect(first.isConfigured.value).toBe(true);
-    expect(electronStore.get('opencode.auth.acpAgentId.v1')).toBe('oh-my-pi');
-    expect(electronStore.get('opencode.auth.acpBridgeUrl.v1')).toBe('ws://localhost:23004');
-    expect(electronStore.get('opencode.auth.acpBridgeToken.v1')).toBe('bridge-secret');
+    expect(readStored('opencode.auth.acpAgentId.v1')).toBe('oh-my-pi');
+    expect(readStored('opencode.auth.acpBridgeUrl.v1')).toBe('ws://localhost:23004');
+    expect(readStored('opencode.auth.acpBridgeToken.v1')).toBe('bridge-secret');
 
     vi.resetModules();
     const second = await importFresh();
@@ -241,9 +323,9 @@ describe('useCredentials', () => {
     credentials.load();
 
     expect(credentials.acpBridgeUrl.value).toBe('ws://bridge.test:23004');
-    expect(electronStore.get('opencode.auth.acpBridgeUrl.v1')).toBe('ws://bridge.test:23004');
+    expect(readStored('opencode.auth.acpBridgeUrl.v1')).toBe('ws://bridge.test:23004');
     expect(credentials.acpBridgeToken.value).toBe('legacy-secret');
-    expect(electronStore.get('opencode.auth.acpBridgeToken.v1')).toBe('legacy-secret');
+    expect(readStored('opencode.auth.acpBridgeToken.v1')).toBe('legacy-secret');
   });
 
   it('falls back to OpenCode when persisted ACP credentials have no agent id', async () => {
@@ -266,11 +348,11 @@ describe('useCredentials', () => {
     expect(first.kimiWebBridgeUrl.value).toBe('ws://localhost:23004/kimi-web/ws');
     expect(first.kimiWebBridgeToken.value).toBe('kimi-bridge-secret');
     expect(first.isConfigured.value).toBe(true);
-    expect(electronStore.get('opencode.auth.backendKind.v1')).toBe('kimi-web');
-    expect(electronStore.get('opencode.auth.kimiWebBridgeUrl.v1')).toBe(
+    expect(readStored('opencode.auth.backendKind.v1')).toBe('kimi-web');
+    expect(readStored('opencode.auth.kimiWebBridgeUrl.v1')).toBe(
       'ws://localhost:23004/kimi-web/ws',
     );
-    expect(electronStore.get('opencode.auth.kimiWebBridgeToken.v1')).toBe('kimi-bridge-secret');
+    expect(readStored('opencode.auth.kimiWebBridgeToken.v1')).toBe('kimi-bridge-secret');
 
     vi.resetModules();
     const second = await importFresh();
@@ -288,11 +370,11 @@ describe('useCredentials', () => {
     credentials.saveKimiWeb('  ws://localhost:23004/kimi-web/ws  ', '   ');
 
     expect(credentials.kimiWebBridgeUrl.value).toBe('ws://localhost:23004/kimi-web/ws');
-    expect(electronStore.get('opencode.auth.kimiWebBridgeToken.v1')).toBeUndefined();
+    expect(readStored('opencode.auth.kimiWebBridgeToken.v1')).toBeUndefined();
 
     credentials.saveKimiWeb('ws://localhost:23004/kimi-web/ws', '');
     expect(credentials.kimiWebBridgeToken.value).toBe('');
-    expect(electronStore.get('opencode.auth.kimiWebBridgeToken.v1')).toBeUndefined();
+    expect(readStored('opencode.auth.kimiWebBridgeToken.v1')).toBeUndefined();
   });
 
   it('rejects an empty kimi-web bridge URL before activating the backend', async () => {
@@ -302,8 +384,8 @@ describe('useCredentials', () => {
       'Kimi Web bridge URL is required.',
     );
     expect(credentials.backendKind.value).toBe('opencode');
-    expect(electronStore.get('opencode.auth.backendKind.v1')).toBeUndefined();
-    expect(electronStore.get('opencode.auth.kimiWebBridgeUrl.v1')).toBeUndefined();
+    expect(readStored('opencode.auth.backendKind.v1')).toBeUndefined();
+    expect(readStored('opencode.auth.kimiWebBridgeUrl.v1')).toBeUndefined();
   });
 
   it('clears the kimi-web bridge token but keeps the persisted URL', async () => {
@@ -315,8 +397,8 @@ describe('useCredentials', () => {
     expect(credentials.kimiWebBridgeUrl.value).toBe('ws://localhost:23004/kimi-web/ws');
     expect(credentials.kimiWebBridgeToken.value).toBe('');
     expect(credentials.isConfigured.value).toBe(true);
-    expect(electronStore.get('opencode.auth.kimiWebBridgeToken.v1')).toBeUndefined();
-    expect(electronStore.get('opencode.auth.kimiWebBridgeUrl.v1')).toBe(
+    expect(readStored('opencode.auth.kimiWebBridgeToken.v1')).toBeUndefined();
+    expect(readStored('opencode.auth.kimiWebBridgeUrl.v1')).toBe(
       'ws://localhost:23004/kimi-web/ws',
     );
   });
@@ -326,47 +408,47 @@ describe('useCredentials', () => {
     credentials.saveKimiWeb('ws://localhost:23004/kimi-web/ws', 'old-secret');
 
     for (const listener of storageListeners) {
-      listener({
+      listener(peerEvent({
         key: 'opencode.auth.codexBridgeToken.v1',
         newValue: 'codex-secret',
-      } as StorageEvent);
+      }));
     }
     expect(credentials.kimiWebBridgeToken.value).toBe('old-secret');
 
     for (const listener of storageListeners) {
-      listener({
+      listener(peerEvent({
         key: 'opencode.auth.kimiWebBridgeToken.v1',
         newValue: 'new-secret',
-      } as StorageEvent);
+      }));
     }
     expect(credentials.kimiWebBridgeToken.value).toBe('new-secret');
 
     for (const listener of storageListeners) {
-      listener({
+      listener(peerEvent({
         key: 'opencode.auth.kimiWebBridgeUrl.v1',
         newValue: 'ws://bridge.test:23004/kimi-web/ws',
-      } as StorageEvent);
+      }));
     }
     expect(credentials.kimiWebBridgeUrl.value).toBe('ws://bridge.test:23004/kimi-web/ws');
 
     for (const listener of storageListeners) {
-      listener({ key: 'opencode.auth.backendKind.v1', newValue: 'kimi-web' } as StorageEvent);
+      listener(peerEvent({ key: 'opencode.auth.backendKind.v1', newValue: 'kimi-web' }));
     }
     expect(credentials.backendKind.value).toBe('kimi-web');
 
     for (const listener of storageListeners) {
-      listener({
+      listener(peerEvent({
         key: 'opencode.auth.kimiWebBridgeUrl.v1',
         newValue: null,
-      } as StorageEvent);
+      }));
     }
     expect(credentials.kimiWebBridgeUrl.value).toBe('ws://localhost:23004/kimi-web/ws');
 
     for (const listener of storageListeners) {
-      listener({
+      listener(peerEvent({
         key: 'opencode.auth.kimiWebBridgeToken.v1',
         newValue: null,
-      } as StorageEvent);
+      }));
     }
     expect(credentials.kimiWebBridgeToken.value).toBe('');
   });
@@ -379,11 +461,11 @@ describe('useCredentials', () => {
     expect(first.dshBridgeUrl.value).toBe('ws://bridge.test:23004/dsh/ws');
     expect(first.dshBridgeToken.value).toBe('dsh-bridge-secret');
     expect(first.isConfigured.value).toBe(true);
-    expect(electronStore.get('opencode.auth.backendKind.v1')).toBe('dsh');
-    expect(electronStore.get('opencode.auth.dshBridgeUrl.v1')).toBe(
+    expect(readStored('opencode.auth.backendKind.v1')).toBe('dsh');
+    expect(readStored('opencode.auth.dshBridgeUrl.v1')).toBe(
       'ws://bridge.test:23004/dsh/ws',
     );
-    expect(electronStore.get('opencode.auth.dshBridgeToken.v1')).toBe('dsh-bridge-secret');
+    expect(readStored('opencode.auth.dshBridgeToken.v1')).toBe('dsh-bridge-secret');
 
     vi.resetModules();
     const second = await importFresh();
@@ -401,7 +483,7 @@ describe('useCredentials', () => {
     credentials.saveDsh('  ws://localhost:23004/dsh/ws  ', '   ');
 
     expect(credentials.dshBridgeUrl.value).toBe('ws://localhost:23004/dsh/ws');
-    expect(electronStore.get('opencode.auth.dshBridgeToken.v1')).toBeUndefined();
+    expect(readStored('opencode.auth.dshBridgeToken.v1')).toBeUndefined();
   });
 
   it('rejects an empty dsh bridge URL before activating the backend', async () => {
@@ -409,8 +491,8 @@ describe('useCredentials', () => {
 
     expect(() => credentials.saveDsh('   ', 'token')).toThrow('dsh bridge URL is required.');
     expect(credentials.backendKind.value).toBe('opencode');
-    expect(electronStore.get('opencode.auth.backendKind.v1')).toBeUndefined();
-    expect(electronStore.get('opencode.auth.dshBridgeUrl.v1')).toBeUndefined();
+    expect(readStored('opencode.auth.backendKind.v1')).toBeUndefined();
+    expect(readStored('opencode.auth.dshBridgeUrl.v1')).toBeUndefined();
   });
 
   it('clears the dsh bridge token but keeps the persisted URL', async () => {
@@ -427,8 +509,8 @@ describe('useCredentials', () => {
     const restored = await importFresh();
     restored.load();
     expect(restored.isConfigured.value).toBe(false);
-    expect(electronStore.get('opencode.auth.dshBridgeToken.v1')).toBeUndefined();
-    expect(electronStore.get('opencode.auth.dshBridgeUrl.v1')).toBe(
+    expect(readStored('opencode.auth.dshBridgeToken.v1')).toBeUndefined();
+    expect(readStored('opencode.auth.dshBridgeUrl.v1')).toBe(
       'ws://bridge.test:23004/dsh/ws',
     );
   });
@@ -467,47 +549,47 @@ describe('useCredentials', () => {
     credentials.saveDsh('ws://bridge.test:23004/dsh/ws', 'old-secret');
 
     for (const listener of storageListeners) {
-      listener({
+      listener(peerEvent({
         key: 'opencode.auth.kimiWebBridgeToken.v1',
         newValue: 'kimi-secret',
-      } as StorageEvent);
+      }));
     }
     expect(credentials.dshBridgeToken.value).toBe('old-secret');
 
     for (const listener of storageListeners) {
-      listener({
+      listener(peerEvent({
         key: 'opencode.auth.dshBridgeToken.v1',
         newValue: 'new-secret',
-      } as StorageEvent);
+      }));
     }
     expect(credentials.dshBridgeToken.value).toBe('new-secret');
 
     for (const listener of storageListeners) {
-      listener({
+      listener(peerEvent({
         key: 'opencode.auth.dshBridgeUrl.v1',
         newValue: 'ws://other.test:23004/dsh/ws',
-      } as StorageEvent);
+      }));
     }
     expect(credentials.dshBridgeUrl.value).toBe('ws://other.test:23004/dsh/ws');
 
     for (const listener of storageListeners) {
-      listener({ key: 'opencode.auth.backendKind.v1', newValue: 'dsh' } as StorageEvent);
+      listener(peerEvent({ key: 'opencode.auth.backendKind.v1', newValue: 'dsh' }));
     }
     expect(credentials.backendKind.value).toBe('dsh');
 
     for (const listener of storageListeners) {
-      listener({
+      listener(peerEvent({
         key: 'opencode.auth.dshBridgeUrl.v1',
         newValue: null,
-      } as StorageEvent);
+      }));
     }
     expect(credentials.dshBridgeUrl.value).toBe('ws://localhost:23004/dsh/ws');
 
     for (const listener of storageListeners) {
-      listener({
+      listener(peerEvent({
         key: 'opencode.auth.dshBridgeToken.v1',
         newValue: null,
-      } as StorageEvent);
+      }));
     }
     expect(credentials.dshBridgeToken.value).toBe('');
   });
@@ -520,12 +602,12 @@ describe('useCredentials', () => {
 
     const written = [...electronStore.keys()].filter((key) => !before.has(key));
     expect(written.sort()).toEqual([
-      'opencode.auth.backendKind.v1',
-      'opencode.auth.dshAutoConnect.v1',
-      'opencode.auth.dshBridgeToken.v1',
-      'opencode.auth.dshBridgeUrl.v1',
+      'vis.live-settings.v1.auth.backendKind.v1',
+      'vis.live-settings.v1.auth.dshAutoConnect.v1',
+      'vis.live-settings.v1.auth.dshBridgeToken.v1',
+      'vis.live-settings.v1.auth.dshBridgeUrl.v1',
     ]);
-    expect(written.every((key) => key.startsWith('opencode.auth.'))).toBe(true);
+    expect(written.every((key) => key.startsWith('vis.live-settings.v1.auth.'))).toBe(true);
     expect(localStore.size).toBe(0);
   });
 });

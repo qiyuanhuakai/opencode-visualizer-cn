@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { createServer as createPortProbe } from 'node:net';
 import { createWebSocketAccept, createRawWebSocketPeer } from '../../../bridge/webSocketFrames.js';
 
-export async function startKimiFixture({ recordResource = async () => {}, count = 105 } = {}) {
+export async function startKimiFixture({ recordResource = async () => {}, count = 105, advanced = false } = {}) {
   const calls = [], wire = [], peers = new Set(), sockets = new Set();
   const mode = { missingV2: false, repeatCursor: false, failCatalog: false, holdHistory: false, holdCatalog: false, forceV2Resync: false, loseSendAck: false, holdSend: false, loseControlAck: false, malformedEnvelope: false };
   let token = 'fixture-token-one', serverId = 'fixture-native-server', nextId = count, pongCount = 0, pingCount = 0, closed = false;
@@ -23,6 +23,11 @@ export async function startKimiFixture({ recordResource = async () => {}, count 
     '/api/v1/sessions/{session_id}/approvals/{approval_id}': { post: {} }, '/api/v1/sessions/{session_id}/questions/{tail}': { post: {} },
     '/api/v1/models': { get: {} }, '/api/v1/sessions/{session_id}/status': { get: {} },
   };
+  if (advanced) {
+    for (const suffix of [':fork', ':compact', ':btw', ':undo', ':archive', ':restore', ':delete', '/profile', '/children', '/tasks/{task_id}:cancel']) paths[`/api/v1/sessions/{session_id}${suffix}`] = { post: {} };
+    for (const suffix of ['/messages', '/children', '/tasks', '/agents', '/file-history/changes', '/file-history/content', '/goal']) paths[`/api/v1/sessions/{session_id}${suffix}`] = { ...paths[`/api/v1/sessions/{session_id}${suffix}`], get: {} };
+    paths['/api/v1/auth'] = { get: {} };
+  }
   const snapshot = (id) => {
     const item = sessions.get(id), state = stream(id);
     return { epoch: state.epoch, as_of_seq: state.seq, session: { id, title: item.meta.title, metadata: { cwd: item.workspace.cwd }, workspace_id: item.workspace.id, busy: !!state.active, archived: item.meta.archived }, messages: { items: [], has_more: false }, in_flight_turn: state.active ? { turn_id: state.turnId, assistant_text: state.assistant, thinking_text: '', running_tools: [] } : null, subagents: [], pending_approvals: [], pending_questions: [] };
@@ -70,6 +75,7 @@ export async function startKimiFixture({ recordResource = async () => {}, count 
       calls.push({ method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), ...(body === undefined ? {} : { body }), authorized });
       if (!authorized) { write(res, null, 40112, 401); return; }
       if (url.pathname === '/api/v1/meta') return write(res, { server_id: serverId, server_version: '2.1.1', backend: 'v2', capabilities: { websocket: true } });
+      if (advanced && url.pathname === '/api/v1/auth') return write(res, { models_ready: true, authenticated: true });
       if (url.pathname === '/openapi.json') { res.end(JSON.stringify({ paths })); return; }
       if (url.pathname === '/asyncapi.json') { res.end(JSON.stringify({ components: { messages: { subscribe: { name: 'subscribe' }, ...(!mode.missingV2 ? { subscribe_v2: { name: 'subscribe_v2' } } : {}) } } })); return; }
       if (url.pathname === '/api/v2/sessions') {
@@ -99,6 +105,38 @@ export async function startKimiFixture({ recordResource = async () => {}, count 
       const id = decodeURIComponent(match[1]), action = match[2];
       if (!sessions.has(id)) return write(res, null, 40401);
       const state = stream(id);
+      if (advanced) {
+        if (action === ':fork' || action === '/children' && req.method === 'POST') {
+          const forkedId = `native-forked-${++nextId}`;
+          sessions.set(forkedId, { ...structuredClone(sessions.get(id)), id: forkedId, parent_session_id: id });
+          streams.set(forkedId, { ...structuredClone(state), active: null, epoch: `epoch-${forkedId}` });
+          emit({ type: 'event.workspace.updated', payload: {} });
+          return write(res, { ...snapshot(forkedId).session, workspace: sessions.get(forkedId).workspace, meta: sessions.get(forkedId).meta });
+        }
+        if (action === '/profile') {
+          Object.assign(sessions.get(id).meta, body);
+          const change = body?.agent_config;
+          if (typeof change?.goal_objective === 'string') state.goal = { goalId: `goal-${id}`, objective: change.goal_objective, status: 'active', turnsUsed: 0, tokensUsed: 0, wallClockMs: 0 };
+          if (state.goal && change?.goal_control === 'pause') state.goal.status = 'paused';
+          if (state.goal && change?.goal_control === 'resume') state.goal.status = 'active';
+          if (state.goal && change?.goal_control === 'cancel') { state.goal.status = 'complete'; state.goal.terminalReason = 'cancelled'; }
+          emit({ type: 'event.workspace.updated', payload: {} });
+          return write(res, snapshot(id).session);
+        }
+        if (action === ':archive' || action === ':restore') { sessions.get(id).meta.archived = action === ':archive'; emit({ type: 'event.workspace.updated', payload: {} }); return write(res, snapshot(id).session); }
+        if (action === ':delete') { sessions.delete(id); streams.delete(id); emit({ type: 'event.workspace.updated', payload: {} }); return write(res, null); }
+        if (action === ':compact') return write(res, { compacted: true });
+        if (action === ':btw') return write(res, { agent_id: 'agent-in-session' });
+        if (action === ':undo') { state.items.splice(Math.max(0, state.items.length - Number(body.count))); state.transcriptSeq++; return write(res, { undone: true }); }
+        if (action === '/messages') return write(res, { items: state.items.map((item, index) => ({ id: item.triggerPromptId ?? `prompt-${index}`, role: 'user', content: [{ type: 'text', text: item.prompt ?? 'Fixture prompt' }], metadata: { origin: { kind: 'user' } } })).reverse(), has_more: false });
+        if (action === '/children') return write(res, { items: [...sessions.values()].filter(item => item.parent_session_id === id), has_more: false });
+        if (action === '/tasks') return write(res, { items: state.tasks });
+        if (action === '/agents') return write(res, { items: [{ agent_id: 'main' }, { agent_id: 'agent-in-session' }] });
+        if (action === '/file-history/changes') return write(res, { recorded: true, changes: [{ path: 'proof.txt', status: 'modified' }] });
+        if (action === '/file-history/content') return write(res, { content: { content: url.searchParams.get('phase') === 'start' ? 'before\n' : 'after\n' } });
+        if (action === '/goal') return write(res, state.goal ?? null);
+        if (/^\/tasks\/[^/]+:cancel$/.test(action)) return write(res, { cancelled: true });
+      }
       if (action === '/snapshot') return write(res, snapshot(id));
       if (action === '/status') return write(res, { busy: !!state.active });
       if (action === '/transcript') {

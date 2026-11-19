@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, mkdir, copyFile } from 'node:fs/promises';
 import path from 'node:path';
 import { generateFixture, checkFixture } from '../runtime-v090-fixtures.mjs';
 import { encodeFrame, decodeFrame } from '../../../shared/runtime/protocol.js';
+import { encodeSessionKey } from '../../../shared/runtime/identity.js';
 import { browserScenario } from '../runtime-v090-browser.mjs';
 import { artifact, digest, legacyContract, normalizeVitest, sourceSnapshot, writeJson } from '../runtime-v090-evidence.mjs';
 import { captureProcess } from '../runtime-v090-process.mjs';
 
-export const sourceFiles = ['shared/runtime/protocol.js', 'shared/runtime/protocolState.js', 'shared/runtime/capabilities.js', 'shared/runtime/identity.js', 'scripts/qa/runtime-v090-fixtures.mjs', 'app/dev/runtime-v090/fixtures/inventory.mjs', 'app/dev/runtime-v090/fixtures/seed090.json'];
+export const sourceFiles = ['shared/runtime/protocol.js', 'shared/runtime/protocolState.js', 'shared/runtime/capabilities.js', 'shared/runtime/identity.js', 'scripts/qa/runtime-v090-fixtures.mjs', 'app/dev/runtime-v090/fixtures/inventory.mjs', 'app/dev/runtime-v090/fixtures/seed090.json', 'app/utils/themeTokens.ts', 'app/utils/themeRegistry.ts', 'app/utils/regionTheme.ts', 'app/utils/themeFileValidation.ts', 'app/utils/colorValue.ts', 'app/utils/floatingWindowTheme.ts', 'app/utils/storageKeys.ts'];
 
 export async function run(context) {
   const temporary = await mkdtemp(path.join(context.temporaryRoot, 'fixture-owner-'));
@@ -22,7 +23,9 @@ export async function run(context) {
       const checked = await checkFixture(directory);
       check('fixture API verifies seed090 native inventory', [checked.verified, checked.sessions, checked.worktrees, checked.sources], [true, 10000, 200, 5]);
       const row = JSON.parse((await readFile(path.join(directory, 'summaries.ndjson'), 'utf8')).split('\n')[0]);
-      const frame = { kind: 'event', version: 1, target: '11111111-1111-4111-8111-111111111111', epoch: 'qa-6', generation: 1, seq: 1, entityRevision: 1, scope: 'session', type: 'fixture', payload: row };
+      const target = '11111111-1111-4111-8111-111111111111';
+      const scope = encodeSessionKey({ environmentId: target, harnessInstanceId: '22222222-2222-4222-8222-222222222222', nativeSessionId: row.nativeSessionId });
+      const frame = { kind: 'event', version: 1, target, epoch: 'qa-6', generation: 1, seq: 1, entityRevision: 1, scope, type: 'fixture', payload: row };
       check('production protocol roundtrip of actual fixture row', decodeFrame(encodeFrame(frame)), frame);
       const browser = await browserScenario(context, frame);
       scenarios.push(...browser.scenarios); artifacts.push(...browser.artifacts);
@@ -47,14 +50,21 @@ export async function run(context) {
       catch (error) { if (!(error instanceof assert.AssertionError)) throw error; rejected = true; }
       check(`reject ${name}`, rejected, true);
     }
-    for (const [name, args] of [
+    // Later implementation legitimately registers task48/F4. Test missing
+    // registration in an owned runner copy, never execute those real tasks as
+    // an expected-failure probe in a fully implemented checkout.
+    const missing = path.join(temporary, 'missing-registration');
+    await mkdir(path.join(missing, 'scripts', 'qa'), { recursive: true });
+    await writeFile(path.join(missing, 'package.json'), JSON.stringify({ type: 'module' }));
+    for (const name of ['runtime-v090.mjs', 'runtime-v090-evidence.mjs', 'runtime-v090-legacy.mjs', 'runtime-v090-process.mjs']) await copyFile(path.join(context.root, 'scripts', 'qa', name), path.join(missing, 'scripts', 'qa', name));
+    for (const [name, args, executionRoot] of [
       ['unknown task', ['--task', '49', '--case', 'happy']], ['unknown case', ['--task', '6', '--case', 'pretend']],
-      ['unregistered task', ['--task', '48', '--case', 'happy']], ['unimplemented verifier', ['--verify', 'F4']],
+      ['unregistered task', ['--task', '48', '--case', 'happy'], missing], ['unimplemented verifier', ['--verify', 'F4'], missing],
       ['mutually exclusive selectors', ['--task', '6', '--verify', 'F1']], ['malformed argument', ['--task', '6; echo PASS', '--case', 'happy']],
       ['long command injection', ['--task', `$(touch ${temporary}/injected)${'x'.repeat(16000)}`, '--case', 'happy']],
     ]) {
       const log = path.join(context.outDir, `failure-${name.replaceAll(' ', '-')}.log`);
-      const child = await captureProcess([process.execPath, 'scripts/qa/runtime-v090.mjs', ...args, '--out', path.join(temporary, 'rejected.json')], { root: context.root, log, env: { ...process.env, VIS_RUNTIME_QA_WORKER: '0' } });
+      const child = await captureProcess([process.execPath, 'scripts/qa/runtime-v090.mjs', ...args, '--out', path.join(temporary, 'rejected.json')], { root: executionRoot ?? context.root, log, env: { ...process.env, VIS_RUNTIME_QA_WORKER: '0' } });
       check(`subprocess rejects ${name}`, child.exitCode, 1);
       writeJson(`${log}.receipt.json`, { ...child, sourceHashes: receipt.sourceHashes, scenarioCount: 1 });
       artifacts.push(artifact(`${log}.receipt.json`, 'negative-execution-receipt'));

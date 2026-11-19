@@ -46,6 +46,10 @@ export async function createFixture(register, wire, options = {}) {
         let value;
         if (method === 'session/list') value = { items: state.summaries };
         else if (method === 'session/modelCatalog') value = state.catalog;
+        else if (options.advanced && method === 'agentPresets/list') value = { presets: [{ id: 'minimal', name: 'Minimal', isDefault: true }] };
+        else if (options.advanced && method === 'agentPresets/select') value = args.agentPreset;
+        else if (options.advanced && method === 'commands/list') value = [];
+        else if (options.advanced && method === 'permissionPresets/catalog') value = { options: [{ value: 'safe', name: 'Safe' }] };
         else if (method === 'session/selectModel') value = { selected: { provider: args.request.provider, model: args.request.model } };
         else if (method === 'session/page') {
           const entry = state.snapshots.get(args.request.address.sessionId) ?? snapshot(args.request.address.sessionId);
@@ -115,7 +119,9 @@ export async function createFixture(register, wire, options = {}) {
       for (const entry of streams) entry.controller.abort();
       for (const socket of clients) socket.destroy();
       await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-      await installedGateway.close(); await Promise.allSettled(tasks); await assertPortReleased(port);
+      await installedGateway.close(); await Promise.allSettled(tasks);
+      await waitUntil(() => clients.size === 0 && streams.size === 0, 'owned fixture connections drained', 5000);
+      await assertPortReleased(port);
       return { port, portReleased: true, clients: clients.size, streams: streams.size, nativePending: installedGateway.gateway.pendingRemoteEvents.size };
     },
   };

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createApp, nextTick } from 'vue';
+import { createApp, nextTick, reactive } from 'vue';
 import { createI18n } from 'vue-i18n';
 import SessionTree from '../SessionTree.vue';
 import {
@@ -8,12 +8,14 @@ import {
   buildUnifiedTree,
   flattenUnifiedTree,
   parseUnifiedSessionRow,
+  parseHarnessEntry,
   useRuntimeSessionTree,
   type HarnessKind,
   type UnifiedSessionRow,
   type UnifiedTreeNode,
+  type UnifiedSearchState,
 } from '../../composables/useRuntimeSessionTree';
-import { encodeSessionKey, parseConnectionProfileId } from '../../../shared/runtime/identity.js';
+import { encodeRepoKey, encodeSessionKey, parseConnectionProfileId } from '../../../shared/runtime/identity.js';
 import type { ConnectionProfileId, EnvironmentId, HarnessInstanceId, SessionRef } from '../../../shared/runtime/identity.js';
 
 vi.mock('@iconify/vue', () => ({ Icon: () => null }));
@@ -196,7 +198,7 @@ const i18n = createI18n({ legacy: false, locale: 'en', messages: { en: {} } });
 async function mountTree(props: AnyRecord): Promise<{ root: HTMLElement; unmount(): void; emitted: Map<string, unknown[]> }> {
   const emitted = new Map<string, unknown[]>();
   const handlers: AnyRecord = {};
-  for (const name of ['toggle-key', 'select-key', 'retry-source', 'filter-change', 'search', 'load-more-children', 'reload']) {
+  for (const name of ['toggle-key', 'select-key', 'retry-source', 'filter-change', 'search', 'search-more', 'load-more-children', 'reload']) {
     const prop = `on${name.replace(/-(\w)/g, (_match, letter: string) => letter.toUpperCase()).replace(/^(\w)/, (_match, letter: string) => letter.toUpperCase())}`;
     handlers[prop] = (payload: unknown) => {
       const list = emitted.get(name) ?? [];
@@ -226,6 +228,39 @@ const mounted: Array<{ unmount(): void }> = [];
 afterEach(() => { for (const entry of mounted.splice(0)) entry.unmount(); document.body.innerHTML = ''; });
 
 describe('task 21 — unified session tree acceptance', () => {
+  it('keeps the next-page control focusable while loading and ignores duplicate activations', async () => {
+    const searchState = reactive<{ -readonly [Key in keyof UnifiedSearchState]: UnifiedSearchState[Key] }>({ status: 'complete', query: 'title', matches: [], totalMatched: 500, hasMore: true, cursor: '200', scanned: 500, pages: 3, error: null });
+    const view = await mountTree({ treeRows: [], searchState });
+    mounted.push(view);
+    const next = view.root.querySelector<HTMLButtonElement>('[data-testid=search-more]')!;
+    next.focus();
+    searchState.status = 'searching';
+    await nextTick();
+    expect(next.disabled).toBe(false);
+    expect(next.getAttribute('aria-disabled')).toBe('true');
+    expect(next.getAttribute('aria-busy')).toBe('true');
+    next.click();
+    expect(view.emitted.has('search-more')).toBe(false);
+    searchState.status = 'complete';
+    await nextTick();
+    expect(document.activeElement).toBe(next);
+    next.click();
+    expect(view.emitted.get('search-more')).toHaveLength(1);
+  });
+  it('keeps matches beyond the fiftieth reachable and exposes the bounded next search window', async () => {
+    const matches = Array.from({ length: 101 }, (_, index) => parseUnifiedSessionRow(sessionKey(index, 'codex'), summaryValue(index, 'codex'), 'codex')!);
+    const view = await mountTree({ treeRows: [], searchState: { status: 'complete', query: 'title', matches, totalMatched: 250, hasMore: true, cursor: '101', scanned: 250, pages: 2, error: null } });
+    mounted.push(view);
+    const results = view.root.querySelectorAll<HTMLButtonElement>('[data-testid=search-result]');
+    expect(results).toHaveLength(101);
+    results[100]!.click();
+    expect(view.emitted.get('select-key')).toEqual([matches[100]!.key]);
+    const next = view.root.querySelector<HTMLButtonElement>('[data-testid=search-more]');
+    expect(next?.disabled).toBe(false);
+    next?.click();
+    expect(view.emitted.get('search-more')).toHaveLength(1);
+    expect(view.root.querySelector('[data-testid=search-summary]')?.textContent).toContain('101 / 250');
+  });
   it('same repo shows sessions from all five harnesses with per-session source badges', async () => {
     const client = new FakeClient();
     seedTopology(client);
@@ -581,7 +616,27 @@ describe('task 21 — unified session tree acceptance', () => {
     // Clicking the native row emits the canonical session key, never the decorated key.
     (nativeElement as HTMLElement).click();
     await nextTick();
+    const parentElement = mountedTree.root.querySelector(`[data-tree-row][data-row-key="${hostKey}"]`);
+    const toggle = parentElement?.querySelector<HTMLElement>('[data-testid="row-toggle"]');
+    if (!toggle) throw new Error('Missing parent expansion control');
+    toggle.click();
+    await nextTick();
+    expect(mountedTree.emitted.get('toggle-key')).toEqual([hostKey]);
+    expect(parentElement?.getAttribute('role')).toBe('treeitem');
+    expect(parentElement?.getAttribute('aria-expanded')).toBe('true');
     expect(mountedTree.emitted.get('select-key')).toEqual([canonicalKey]);
     await tree.dispose();
+  });
+});
+
+
+describe('Bridge repository labels and disabled sources', () => {
+  it('uses the decoded common directory name and marks configured-disabled harnesses separately', () => {
+    const key = encodeRepoKey({ environmentId: ENV, canonicalCommonDir: '/srv/readable-repository/.git', pathPolicy: { platform: 'posix', caseSensitive: true, volumeId: 'vol' } });
+    const row = parseUnifiedSessionRow(encodeSessionKey({ environmentId: ENV, harnessInstanceId: HARNESS_IDS.opencode, nativeSessionId: 'session' }), { session: { environmentId: ENV, harnessInstanceId: HARNESS_IDS.opencode, nativeSessionId: 'session' }, directory: '/srv/readable-repository', title: 'Session' }, 'opencode');
+    if (!row) throw new Error('Missing fixture session');
+    const nodes = buildUnifiedTree([row], [{ path: '/srv/readable-repository', repoKey: key, gitKind: 'git', orphan: false }]);
+    expect(nodes[0]).toMatchObject({ kind: 'repo', name: 'readable-repository' });
+    expect(parseHarnessEntry(HARNESS_IDS.codex, { kind: 'codex', indexDiscovery: [{ status: 'partial', reason: 'disabled' }] })).toMatchObject({ status: 'disabled' });
   });
 });

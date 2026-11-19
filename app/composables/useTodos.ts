@@ -1,7 +1,7 @@
 import { ref } from 'vue';
 import type { ComputedRef, Ref } from 'vue';
 import { getBackendAdapter } from '../backends/registry';
-import type { BackendKind } from '../backends/types';
+import type { BackendAdapter, BackendKind } from '../backends/types';
 
 export type TodoItem = {
   content: string;
@@ -14,6 +14,7 @@ export function useTodos(options: {
   allowedSessionIds: ComputedRef<Set<string>>;
   activeDirectory: Ref<string>;
   activeBackendKind: Ref<BackendKind>;
+  backend?: () => Partial<BackendAdapter>;
 }) {
   const todosBySessionId = ref<Record<string, TodoItem[]>>({});
   const todoLoadingBySessionId = ref<Record<string, boolean>>({});
@@ -58,7 +59,7 @@ export function useTodos(options: {
     await Promise.all(
       sessionIds.map(async (id) => {
         try {
-          const getSessionTodos = getBackendAdapter(options.activeBackendKind.value).getSessionTodos;
+          const getSessionTodos = (options.backend?.() ?? getBackendAdapter(options.activeBackendKind.value)).getSessionTodos;
           const data = getSessionTodos ? await getSessionTodos(id, directory) : [];
           nextTodos[id] = normalizeTodoItems(data);
         } catch (error) {

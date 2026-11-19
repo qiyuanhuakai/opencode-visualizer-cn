@@ -13,10 +13,12 @@ export interface IndexedSource {
   publish: NativeEventIntake['publish'];
   flush: NativeEventIntake['flush'];
   discover(request?: DiscoveryRequest): Promise<DiscoveryResult>;
+  retry(): Promise<DiscoveryResult>;
   close(): Promise<void>;
   readonly state: { readonly serial: number; readonly intake: NativeEventIntake['state'] };
 }
 export interface SessionIndex {
+  retry(harnessInstanceId: string): Promise<DiscoveryResult>;
   attach(input: { readonly harnessInstanceId: string; readonly authority: () => SourceAuthority; readonly subscribe?: boolean }): Promise<IndexedSource>;
   createDshSource<T extends HarnessRegistration & { close(): Promise<unknown> }>(input: { readonly create: (options: { readonly onEvent: (event: unknown) => void }) => T | Promise<T>; readonly authority: () => SourceAuthority }): Promise<{ readonly source: IndexedSource; readonly native: T }>;
   topology(input?: { readonly collection?: 'harnesses' | 'workspaces'; readonly cursor?: string | null; readonly limit?: number }): Promise<Page>;
@@ -27,4 +29,4 @@ export interface SessionIndex {
   close(): Promise<void>;
   readonly state: { readonly sources: number; readonly discovery: number; readonly scheduler: DiscoveryScheduler['state']; readonly events: RuntimeEventBus['state']; readonly closed: boolean };
 }
-export function createSessionIndex(options: { readonly store: RuntimeStore; readonly registry: HarnessRegistry; readonly catalog: WorkspaceCatalog; readonly resolveWorkspace: (input: { readonly source: SourceIdentity; readonly directory: string }) => Promise<WorkspaceRef> }): SessionIndex;
+export function createSessionIndex(options: { readonly store: RuntimeStore; readonly registry: HarnessRegistry; readonly catalog: WorkspaceCatalog; readonly resolveWorkspace: (input: { readonly source: SourceIdentity; readonly directory: string }) => Promise<WorkspaceRef>; readonly recoverSource?: (harnessInstanceId: string) => Promise<void> }): SessionIndex;

@@ -64,6 +64,7 @@ describe('ConnectionEntry is one single Bridge entry point', () => {
       profiles,
       open: true,
       status: 'idle',
+      boundSourceKeys: new Set(['opencode.state.backendHistory.v1.deadbeef.ses-1']),
       onBind: (value: unknown) => bound.push(value),
     });
     const row = root.querySelectorAll<HTMLButtonElement>('[data-testid="connection-profile-row"]')[1]!;
@@ -135,13 +136,14 @@ describe('MigrationWizard browses, binds and migrates legacy data with a retry p
     expect(rows[1]?.textContent).toContain('History');
   });
 
-  it('binds a legacy source to a target and marks the binding, so the same native id cannot bind twice', async () => {
+  it('emits binding intent and only marks a parent-confirmed binding', async () => {
     const bound: unknown[] = [];
     const root = mount(MigrationWizard, {
       open: true,
       inventory,
       mappings,
       status: 'idle',
+      boundSourceKeys: new Set(['opencode.state.backendHistory.v1.deadbeef.ses-1']),
       onBind: (value: unknown) => bound.push(value),
     });
     const row = root.querySelectorAll<HTMLButtonElement>('[data-testid="migration-source-row"]')[1]!;

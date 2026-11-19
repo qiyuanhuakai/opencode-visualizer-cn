@@ -10,6 +10,8 @@ import {
   getFileExport,
   inputValue,
   changeValue,
+  persistedSnippets,
+  publishSnippetStorage,
 } from './SettingsModal.snippets.shared';
 
 const fileExport = getFileExport();
@@ -28,13 +30,7 @@ describe('SettingsModal snippets conflicts', () => {
     await nextTick();
     expect(settings.textTransformers.value[0]?.trigger).toBe('::review');
     const external = [{ ...initialSnippets[0], name: 'External review' }, initialSnippets[1]];
-    localStorage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(external));
-    window.dispatchEvent(
-      new StorageEvent('storage', {
-        key: 'opencode.settings.textTransformers.v1',
-        newValue: JSON.stringify(external),
-      }),
-    );
+    publishSnippetStorage(JSON.stringify(external));
     await nextTick();
 
     // Then: runtime state accepts the external update while the unsaved draft remains local.
@@ -70,7 +66,7 @@ describe('SettingsModal snippets conflicts', () => {
       trigger: '::review',
     });
     expect(
-      JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]')[0],
+      JSON.parse(persistedSnippets() ?? '[]')[0],
     ).toMatchObject({ name: 'External review', trigger: '::review' });
 
     // When: the user explicitly reloads the externally saved row.
@@ -94,13 +90,7 @@ describe('SettingsModal snippets conflicts', () => {
     await nextTick();
     inputValue(host.querySelector('[data-snippet-field="name"]')!, 'Local overwrite');
     const external = [{ ...initialSnippets[0], name: 'External again' }, initialSnippets[1]];
-    localStorage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(external));
-    window.dispatchEvent(
-      new StorageEvent('storage', {
-        key: 'opencode.settings.textTransformers.v1',
-        newValue: JSON.stringify(external),
-      }),
-    );
+    publishSnippetStorage(JSON.stringify(external));
 
     // When: the stale change is submitted and then explicitly overwritten.
     changeValue(host.querySelector('[data-snippet-field="name"]')!, 'Local overwrite');
@@ -111,7 +101,7 @@ describe('SettingsModal snippets conflicts', () => {
     // Then: only the explicit overwrite replaces the external row and persists the draft.
     expect(settings.textTransformers.value[0]?.name).toBe('Local overwrite');
     expect(
-      JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]')[0],
+      JSON.parse(persistedSnippets() ?? '[]')[0],
     ).toMatchObject({ name: 'Local overwrite' });
   });
 
@@ -121,13 +111,7 @@ describe('SettingsModal snippets conflicts', () => {
     host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
     await nextTick();
     inputValue(host.querySelector('[data-snippet-field="name"]')!, 'Local recovery overwrite');
-    localStorage.setItem('opencode.settings.textTransformers.v1', 'not-json');
-    window.dispatchEvent(
-      new StorageEvent('storage', {
-        key: 'opencode.settings.textTransformers.v1',
-        newValue: 'not-json',
-      }),
-    );
+    publishSnippetStorage('not-json');
     await nextTick();
 
     // When: an ordinary change and Back both attempt to commit the still-valid local draft.
@@ -137,7 +121,7 @@ describe('SettingsModal snippets conflicts', () => {
     await nextTick();
 
     // Then: recovery data and the local draft remain intact behind the conflict latch.
-    expect(localStorage.getItem('opencode.settings.textTransformers.v1')).toBe('not-json');
+    expect(persistedSnippets()).toBe('not-json');
     expect(host.querySelector('.transformer-detail')).not.toBeNull();
     expect(host.querySelector('.transformer-detail')?.textContent).toContain(
       en.settings.textTransformers.conflictError,
@@ -153,7 +137,7 @@ describe('SettingsModal snippets conflicts', () => {
     // Then: the valid draft deliberately replaces recovery data and clears the conflict.
     expect(settings.textTransformers.value[0]?.name).toBe('Local recovery overwrite');
     expect(
-      JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]')[0],
+      JSON.parse(persistedSnippets() ?? '[]')[0],
     ).toMatchObject({ name: 'Local recovery overwrite' });
     expect(host.querySelector('.transformer-conflict-overwrite')).toBeNull();
   });
@@ -165,13 +149,7 @@ describe('SettingsModal snippets conflicts', () => {
     await nextTick();
     inputValue(host.querySelector('[data-snippet-field="name"]')!, 'Local retry candidate');
     const external = [{ ...initialSnippets[0], name: 'External winner' }, initialSnippets[1]];
-    localStorage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(external));
-    window.dispatchEvent(
-      new StorageEvent('storage', {
-        key: 'opencode.settings.textTransformers.v1',
-        newValue: JSON.stringify(external),
-      }),
-    );
+    publishSnippetStorage(JSON.stringify(external));
     await nextTick();
     changeValue(host.querySelector('[data-snippet-field="name"]')!, 'Local retry candidate');
     await nextTick();
@@ -189,7 +167,7 @@ describe('SettingsModal snippets conflicts', () => {
     // Then: Close cannot retry implicitly; the external row, draft, and conflict all remain.
     expect(settings.textTransformers.value[0]?.name).toBe('External winner');
     expect(
-      JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]')[0]?.name,
+      JSON.parse(persistedSnippets() ?? '[]')[0]?.name,
     ).toBe('External winner');
     expect(host.querySelector<HTMLInputElement>('[data-snippet-field="name"]')?.value).toBe(
       'Local retry candidate',
@@ -258,13 +236,7 @@ describe('SettingsModal snippets conflicts', () => {
   it('rejects imports while malformed external recovery data is pending', async () => {
     // Given: valid runtime state has rejected malformed external raw storage.
     const { host, settings } = await mountSnippetSettings();
-    localStorage.setItem('opencode.settings.textTransformers.v1', 'not-json');
-    window.dispatchEvent(
-      new StorageEvent('storage', {
-        key: 'opencode.settings.textTransformers.v1',
-        newValue: 'not-json',
-      }),
-    );
+    publishSnippetStorage('not-json');
     await nextTick();
     const importInput = host.querySelector<HTMLInputElement>('.transformer-import-input')!;
     const file = createJsonFile('recovery-import.json', {
@@ -289,7 +261,7 @@ describe('SettingsModal snippets conflicts', () => {
     );
 
     // Then: raw recovery and runtime remain unchanged and no success state is reported.
-    expect(localStorage.getItem('opencode.settings.textTransformers.v1')).toBe('not-json');
+    expect(persistedSnippets()).toBe('not-json');
     expect(settings.textTransformers.value).toEqual(initialSnippets);
     expect(host.querySelector('.transformer-import-status')?.textContent).not.toContain('Imported');
   });

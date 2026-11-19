@@ -42,6 +42,7 @@
         :view-error="props.viewError ?? null"
         @retry="(harnessInstanceId) => emit('retry-source', harnessInstanceId)"
       />
+      <RuntimePins v-if="pinState" :pins="pinState" @select="emit('select-qualified', $event)" />
       <div class="unified-meta" data-testid="unified-meta">
         <span v-if="props.viewStatus === 'loading'" class="unified-meta-loading">
           <Icon class="unified-spin" icon="lucide:loader-2" :width="12" :height="12" />
@@ -58,17 +59,18 @@
           class="unified-meta-search"
           data-testid="search-summary"
         >
-          {{ searchState.matches.length }} {{ $t('runtime.sessionTree.matches', 'matches') }} · {{ searchState.scanned }} {{ $t('runtime.sessionTree.scanned', 'scanned') }} · {{ searchState.pages }} {{ $t('runtime.sessionTree.pages', 'pages') }}
+          {{ searchState.matches.length }} / {{ searchState.totalMatched }} {{ $t('runtime.sessionTree.matches', 'matches') }} · {{ searchState.scanned }} {{ $t('runtime.sessionTree.scanned', 'scanned') }} · {{ searchState.pages }} {{ $t('runtime.sessionTree.pages', 'pages') }}
         </span>
       </div>
       <ul v-if="searchState && searchState.status === 'complete' && searchState.matches.length" class="unified-search-results" data-testid="search-results">
-        <li v-for="match in searchState.matches.slice(0, 50)" :key="match.key">
+        <li v-for="match in searchState.matches" :key="match.key">
           <button type="button" class="unified-search-result" data-testid="search-result" @click="emit('select-key', match.key)">
             <HarnessBadge class="unified-search-result-badge" :harness="match.harness" compact />
             <span class="unified-search-result-title">{{ match.title }}</span>
           </button>
         </li>
       </ul>
+      <button v-if="searchState?.hasMore" type="button" class="unified-filter-trigger unified-search-next" data-testid="search-more" :aria-disabled="searchState.status !== 'complete'" :aria-busy="searchState.status === 'searching'" @click="requestNextSearch">{{ rt('Next page') }}</button>
     </div>
     <div
       ref="scrollRef"
@@ -86,9 +88,14 @@
           :key="entry.row.key"
           class="unified-row"
           data-tree-row
+          role="treeitem"
+          :aria-level="entry.row.depth + 1"
+          :aria-expanded="entry.row.expandable ? isExpanded(entry.row.key) : undefined"
+          :aria-selected="selectedKeys.has(selectionKey(entry.row))"
           :data-row-key="entry.row.key"
           :data-row-kind="entry.row.node.kind"
           :data-harness="entry.row.node.kind === 'session' || entry.row.node.kind === 'native' ? entry.row.node.session.harness : undefined"
+          :data-directory="entry.row.node.kind === 'session' || entry.row.node.kind === 'native' ? entry.row.node.session.directory : undefined"
           :data-depth="entry.row.depth"
           :data-focused="focusIndex === entry.index ? 'true' : undefined"
           :data-selected="selectedKeys.has(selectionKey(entry.row)) ? 'true' : undefined"
@@ -101,7 +108,7 @@
           @click="onRowClick(entry.row)"
         >
           <span class="unified-row-indent" :style="{ width: `${4 + entry.row.depth * 12}px` }"></span>
-          <span v-if="entry.row.expandable" class="unified-row-toggle" data-testid="row-toggle">
+          <span v-if="entry.row.expandable" class="unified-row-toggle" data-testid="row-toggle" @click.stop="emit('toggle-key', entry.row.key)">
             <Icon :icon="isExpanded(entry.row.key) ? 'lucide:chevron-down' : 'lucide:chevron-right'" width="12" height="12" />
           </span>
           <span v-else class="unified-row-toggle is-leaf"></span>
@@ -307,6 +314,7 @@
 
 <script setup lang="ts">
 import { Icon } from '@iconify/vue';
+import { useRuntimeUi } from '../locales/runtimeUi';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { ContainerPinPayload } from '../types/pin';
 import type { SessionTreeProject, SessionTreeSandbox } from '../types/session-tree';
@@ -321,6 +329,9 @@ import type { HarnessEntry } from '../composables/useRuntimeSessionTree';
 import Dropdown from './Dropdown.vue';
 import DiscoveryStatus from './runtime/DiscoveryStatus.vue';
 import HarnessBadge from './runtime/HarnessBadge.vue';
+import RuntimePins from './runtime/RuntimePins.vue';
+import type { RuntimePinsState } from '../composables/useRuntimePins';
+import type { QualifiedSession } from '../runtime/selectionScope';
 
 const ROW_HEIGHT = 28;
 const OVERSCAN = 8;
@@ -341,6 +352,7 @@ const props = withDefaults(
     viewError?: string | null;
     filterKinds?: ReadonlySet<SessionHarness>;
     searchState?: UnifiedSearchState | null;
+    pinState?: RuntimePinsState;
   }>(),
   {
     treeRows: undefined,
@@ -357,6 +369,7 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{
+  (event: 'select-qualified', selection: QualifiedSession): void;
   (event: 'toggle-expand', path: string): void;
   (event: 'select-session', payload: { projectId: string; sessionId: string }): void;
   (event: 'pin-project', projectId: string): void;
@@ -371,9 +384,14 @@ const emit = defineEmits<{
   (event: 'retry-source', harnessInstanceId: string): void;
   (event: 'filter-change', kinds: SessionHarness[]): void;
   (event: 'search', query: string): void;
+  (event: 'search-more'): void;
   (event: 'load-more-children', key: string): void;
 }>();
 
+const { rt } = useRuntimeUi();
+function requestNextSearch() {
+  if (props.searchState?.status === 'complete') emit('search-more');
+}
 const unified = computed(() => props.treeRows !== undefined);
 const searchQuery = ref('');
 const scrollRef = ref<HTMLElement | null>(null);
@@ -938,6 +956,13 @@ function sessionStatusIcon(status: 'busy' | 'idle' | 'retry' | 'unknown'): strin
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.unified-search-next { margin: 0 6px 4px; justify-content: center; }
+.unified-search-next[aria-disabled='true'] { opacity: .5; cursor: wait; }
+.unified-search-next:focus-visible { outline: 2px solid var(--theme-side-accent); outline-offset: 2px; }
+@media (pointer: coarse), (max-width: 640px) {
+  .unified-search-next { min-height: 44px; }
 }
 
 .unified-scroll {

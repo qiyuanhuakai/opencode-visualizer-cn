@@ -16,6 +16,8 @@ export type RuntimeRoot = Parameters<typeof createWorkspaceService>[0]['roots'][
 export interface RuntimeServices {
   readonly target: string; readonly epoch: string; readonly instanceId: string; readonly role: TargetGrant['role']; readonly connectionProfileId: string;
   readonly workspace: RuntimeWorkspace; readonly store: RuntimeStore; readonly index: SessionIndex; readonly registry: HarnessRegistry;
+  readonly hostServices: import('./hostServices.js').HostServices;
+  readonly remoteServices?: import('./remoteServices.js').RemoteServices;
   readonly acceptance: RuntimeAcceptance; readonly capabilities: Capabilities; readonly grant: TargetGrant;
   readonly snapshots: RuntimeSnapshots; readonly events: RuntimeEventBus;
   authority(harnessInstanceId: string): NativeAuthority;
@@ -27,5 +29,7 @@ export function createRuntimeServices(options: {
   readonly environmentId: string; readonly stateRoot: string; readonly role: TargetGrant['role']; readonly roots: readonly RuntimeRoot[];
   readonly config: BridgeConfig; readonly nativeSupervisor: ProcessSupervisor; readonly acpManager: AcpRuntimeProcessManager;
   readonly runtime: Pick<RuntimeHost, 'mutate'>; readonly factories?: Readonly<Record<string, RuntimeDriverFactory>>;
+  readonly runtimeStoreTakeover?: { readonly expectedFence: number };
   readonly permissions?: readonly string[];
+  readonly remoteServices?: import('./remoteServices.js').RemoteServices;
 }): Promise<RuntimeServices>;

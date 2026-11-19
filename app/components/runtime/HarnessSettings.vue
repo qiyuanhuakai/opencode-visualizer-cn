@@ -3,11 +3,11 @@
     <header class="harness-settings-header">
       <HarnessBadge class="harness-settings-badge" :harness="harnessKind" :detail="instanceLabel" />
       <div class="harness-settings-heading">
-        <span class="harness-settings-title">{{ title }}</span>
+        <span class="harness-settings-title">{{ rt(title) }}</span>
         <span v-if="scopeDescription" class="harness-settings-scope" data-testid="harness-settings-scope">{{ scopeDescription }}</span>
       </div>
       <span v-if="unsupportedCount > 0" class="harness-settings-summary" data-testid="harness-settings-unsupported-count">
-        {{ unsupportedCount }} / {{ rows.length }} unavailable
+        {{ rt('{count} / {total} unavailable', { count: unsupportedCount, total: rows.length }) }}
       </span>
     </header>
 
@@ -23,12 +23,12 @@
         :data-source-kind="row.support.state === 'unsupported' && row.support.source ? row.support.source.kind : harnessKind"
       >
         <div class="harness-settings-row-main">
-          <span class="harness-settings-row-label">{{ row.label }}</span>
+          <span class="harness-settings-row-label">{{ rt(row.label) }}</span>
           <span class="harness-settings-row-operation">{{ row.operation }}</span>
         </div>
         <div class="harness-settings-row-state">
           <template v-if="row.support.state === 'supported'">
-            <span class="harness-settings-available" data-testid="harness-control-available">available</span>
+            <span class="harness-settings-available" data-testid="harness-control-available">{{ rt("available") }}</span>
             <button
               v-if="row.actionLabel"
               type="button"
@@ -37,11 +37,11 @@
               data-testid="harness-control-action"
               @click="emit('save', row.control)"
             >
-              {{ row.actionLabel }}
+              {{ rt(row.actionLabel) }}
             </button>
           </template>
           <span v-else class="harness-settings-unavailable" data-testid="harness-control-unavailable">
-            unavailable
+            {{ rt("unavailable") }}
           </span>
         </div>
         <p v-if="row.support.state === 'unsupported'" class="harness-settings-source" data-testid="harness-control-source">
@@ -53,10 +53,12 @@
 </template>
 
 <script setup lang="ts">
+import { useRuntimeUi } from '../../locales/runtimeUi';
+const { rt } = useRuntimeUi();
 import { computed } from 'vue';
 import type { HarnessManifest, HarnessKind as ContractHarnessKind } from '../../../shared/runtime/harnessContract.js';
 import type { ControlSupport } from '../../composables/useRuntimeCapabilities';
-import { describeControlSupport, resolveControlSupport } from '../../composables/useRuntimeCapabilities';
+import { resolveControlSupport } from '../../composables/useRuntimeCapabilities';
 import type { ControlScope } from '../../composables/useRuntimeCapabilities';
 import { HARNESS_LABELS } from '../../composables/useRuntimeSessionTree';
 import HarnessBadge from './HarnessBadge.vue';
@@ -83,7 +85,7 @@ const emit = defineEmits<{
   (event: 'save', control: string): void;
 }>();
 
-const ariaLabel = computed(() => `${props.title || HARNESS_LABELS[props.harnessKind]} native settings`);
+const ariaLabel = computed(() => rt('{name} native settings', { name: props.title || HARNESS_LABELS[props.harnessKind] }));
 const instanceLabel = computed(() => {
   const target = props.scope.kind === 'session'
     ? props.scope.session.harnessInstanceId
@@ -91,9 +93,9 @@ const instanceLabel = computed(() => {
   return target ? target.slice(0, 8) : undefined;
 });
 const scopeDescription = computed(() => {
-  if (props.scope.kind === 'session') return `session ${props.scope.session.nativeSessionId}`;
-  if (props.scope.kind === 'instance') return `harness instance ${props.scope.harnessInstanceId.slice(0, 8)}`;
-  return `workspace ${props.scope.canonicalPath}`;
+  if (props.scope.kind === 'session') return rt('session {id}', { id: props.scope.session.nativeSessionId });
+  if (props.scope.kind === 'instance') return rt('harness instance {id}', { id: props.scope.harnessInstanceId.slice(0, 8) });
+  return rt('workspace {path}', { path: props.scope.canonicalPath });
 });
 
 type Row = Readonly<{
@@ -123,7 +125,15 @@ const unsupportedCount = computed(() => rows.value.filter((row) => row.support.s
 
 function sourceLine(support: ControlSupport): string {
   if (support.state !== 'unsupported') return '';
-  return describeControlSupport(support);
+  const source = support.source;
+  if (support.channel === 'workspace') {
+    return source?.kind === 'workspace'
+      ? rt('Workspace {path} on {environment}: {reason}', { path: source.canonicalPath, environment: source.environmentId, reason: rt(support.reason) })
+      : rt('Workspace: {reason}', { reason: rt(support.reason) });
+  }
+  return source && source.kind !== 'workspace'
+    ? `${source.kind} (${source.environmentId} / ${source.harnessInstanceId}): ${rt(support.reason)}`
+    : `${support.control}: ${rt(support.reason)}`;
 }
 </script>
 
@@ -176,7 +186,7 @@ function sourceLine(support: ControlSupport): string {
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
 }
 
 .harness-settings-list {
@@ -234,7 +244,7 @@ function sourceLine(support: ControlSupport): string {
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--theme-status-success, #86efac);
+  color: var(--codex-status-success, var(--theme-text-primary));
 }
 
 .harness-settings-unavailable {
@@ -242,7 +252,7 @@ function sourceLine(support: ControlSupport): string {
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
 }
 
 .harness-settings-action {
@@ -265,7 +275,7 @@ function sourceLine(support: ControlSupport): string {
   margin: 0;
   font-size: 10px;
   line-height: 1.5;
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
   word-break: break-word;
 }
 

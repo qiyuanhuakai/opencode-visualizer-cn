@@ -42,6 +42,20 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
     if (previous) previous.active = false;
     live.set(key, token);
   }
+  // Trusted recovery only: the Runtime atomically migrated this persisted process
+  // together with its task. Recreate the local token without a second generation claim.
+  async function resumeProcess(input) {
+    const scope = parseOperationScope(input);
+    await assertStoreScope(scope);
+    const key = processKey(scope);
+    const prior = await readRecord(store, 'operations', key);
+    if (!prior?.value.alive || prior.value.epoch !== scope.epoch || prior.value.generation !== scope.processGeneration)
+      throw new StoreError('reconcile_required', 'stale_generation');
+    await compareRecord(store, 'operations', key, prior, prior.value);
+    const previous = live.get(key);
+    if (previous) previous.active = false;
+    live.set(key, { scope, active: true });
+  }
   async function authority(scope, reserved = true) {
     await assertStoreScope(scope);
     const token = live.get(processKey(scope));
@@ -91,8 +105,14 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
     }
     throw new StoreError('conflict', 'concurrent_update');
   }
-  async function pending({ scope: input, nativeRequestId, payload }) {
+  async function readParent(value) {
+    if (value.parentOperationId === undefined) return undefined;
+    const parent = await readRecord(store, 'operations', value.parentOperationId);
+    return parent?.value && ['sent', 'observed', 'reconciling'].includes(parent.value.phase) && fingerprint(parent.value.scope) === fingerprint(value.scope) ? parent : null;
+  }
+  async function pending({ scope: input, nativeRequestId, payload, parentOperationId }) {
     const scope = parseOperationScope(input);
+    if (parentOperationId !== undefined && (typeof parentOperationId !== 'string' || !parentOperationId || parentOperationId.length > 512)) throw new StoreError('invalid_request', 'interaction_parent');
     if (
       !(
         typeof nativeRequestId === 'string' &&
@@ -112,7 +132,8 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
         scope,
         nativeRequestId,
         payloadRef: prepared.ref,
-        digest: fingerprint(clean),
+        digest: fingerprint(parentOperationId === undefined ? clean : { payload: clean, parentOperationId }),
+        ...(parentOperationId === undefined ? {} : { parentOperationId }),
         phase: 'pending',
       };
       const prior = await readRecord(store, 'interactions', key, false);
@@ -123,6 +144,8 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
         return key;
       }
       await writePayload(store, 'interactions', prepared, false, signal);
+      const parent = await readParent(value);
+      if (parent === null) throw new StoreError('conflict', 'interaction_parent_ended');
       if (!token.active || signal.aborted)
         throw new StoreError('reconcile_required', 'stale_generation');
       try {
@@ -137,8 +160,9 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
               collection: 'operations',
               key: processKey(scope),
               expectedRevision: record.revision,
-              value: record.value,
+              checkOnly: true,
             },
+            ...(parent ? [{ collection: 'operations', key: parentOperationId, expectedRevision: parent.revision, checkOnly: true }] : []),
           ],
           false,
         );
@@ -151,6 +175,32 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
       return key;
     });
   }
+  // A native resolution can retire an unclaimed prompt, but cannot steal a reply
+  // already admitted by this process (its own native ACK may arrive before HTTP).
+  async function invalidatePending(input, nativeRequestId) {
+    const scope = parseOperationScope(input);
+    const key = keyFor(scope, nativeRequestId);
+    await assertStoreScope(scope);
+    const existing = await readRecord(store, 'interactions', key, false);
+    if (!existing || existing.value.kind !== 'interaction' || existing.value.phase !== 'pending') return;
+    return admission.run({ reserved: true }, async (signal) => {
+      const { token } = await authority(scope);
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const prior = await readRecord(store, 'interactions', key);
+        if (!prior || prior.value.phase !== 'pending') return;
+        if (fingerprint(prior.value.scope) !== fingerprint(scope)) throw new StoreError('conflict', 'scope_fence');
+        if (!token.active || signal.aborted) throw new StoreError('reconcile_required', 'stale_generation');
+        try {
+          // The key includes epoch/generation: even a late retirement cannot touch a successor's interaction.
+          await compareRecord(store, 'interactions', key, prior, { ...prior.value, phase: 'invalidated' });
+          return;
+        } catch (error) {
+          if (!isRevisionConflict(error)) throw error;
+        }
+      }
+      throw new StoreError('conflict', 'concurrent_update');
+    });
+  }
   async function get(key) {
     const record = await readRecord(store, 'interactions', key, false);
     if (record?.value?.kind !== 'interaction')
@@ -159,13 +209,14 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
     await assertStoreScope(scope);
     const token = live.get(processKey(scope));
     const process = await readRecord(store, 'operations', processKey(scope), false);
+    const parent = await readParent(record.value);
     const valid =
       token?.active &&
       token.scope.processGeneration === scope.processGeneration &&
       token.scope.epoch === scope.epoch &&
       process?.value.alive &&
       process.value.generation === scope.processGeneration &&
-      process.value.epoch === scope.epoch;
+      process.value.epoch === scope.epoch && parent !== null;
     return admission.run({ size: record.value.payloadRef.bytes }, async () => {
       const payload = await readPayload(store, 'interactions', record.value.payloadRef);
       return (!valid || !token?.active) && record.value.phase !== 'replied'
@@ -199,6 +250,8 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
           throw new StoreError('conflict', 'scope_fence');
         if (prior.value.phase !== 'pending')
           throw new StoreError('conflict', 'interaction_claimed');
+        const parent = await readParent(prior.value);
+        if (parent === null) throw new StoreError('conflict', 'interaction_parent_ended');
         if (!token.active || signal.aborted)
           throw new StoreError('reconcile_required', 'stale_generation');
         await writePayload(store, 'interactions', prepared, true, signal);
@@ -215,8 +268,9 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
               collection: 'operations',
               key: processKey(scope),
               expectedRevision: process.revision,
-              value: process.value,
+              checkOnly: true,
             },
+            ...(parent ? [{ collection: 'operations', key: prior.value.parentOperationId, expectedRevision: parent.revision, checkOnly: true }] : []),
           ],
         );
         claimedByThisCall = true;
@@ -249,5 +303,5 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
         throw error;
       });
   }
-  return { bindProcess, processExited, pending, get, reply };
+  return { bindProcess, resumeProcess, processExited, pending, invalidatePending, get, reply };
 }

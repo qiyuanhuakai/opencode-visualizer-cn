@@ -19,6 +19,7 @@ export async function createOpenCodeDriver(options) {
   requireValue(['http:', 'https:'].includes(origin.protocol) && !origin.username && !origin.password && !origin.search && !origin.hash, 'opencode.endpoint');
   const lifetime = new AbortController();
   let closed = false, seq = 0, sourceState = 'starting', streamTask, streamController, reconnect, reader, discovery;
+  let closing;
   let ordinaryRequests = 0, controlRequests = 0;
   const active = new Map(); const bound = new Map(); const historyCursors = new Map();
   const nativeEvents = new Set();
@@ -142,12 +143,22 @@ export async function createOpenCodeDriver(options) {
     finally { await nativeReader.cancel(); nativeReader.releaseLock(); }
   }
   async function close() {
-    if (closed) return;
-    closed = true; lifetime.abort(); sourceState = 'failed'; discovery?.close(); subscriptions.close();
-    if (streamTask) await streamTask;
-    await reader?.close();
-    for (const { session, promise } of bound.values()) { await promise; await interactions.processExited(operationScope(session)); }
-    bound.clear(); active.clear(); historyCursors.clear(); await instances.close();
+    if (closing) return closing;
+    closed = true; sourceState = 'failed';
+    closing = Promise.resolve().then(async () => {
+      lifetime.abort(); discovery?.close(); subscriptions.close();
+      if (streamTask) await streamTask;
+      await reader?.close();
+      const releases = await Promise.allSettled([...bound].map(async ([key, { session, promise }]) => {
+        await promise.catch(() => undefined);
+        await interactions.processExited(operationScope(session));
+        bound.delete(key);
+      }));
+      const errors = releases.filter(result => result.status === 'rejected').map(result => result.reason);
+      if (errors.length) throw new AggregateError(errors, 'OpenCode interaction cleanup failed');
+      active.clear(); historyCursors.clear(); await instances.close();
+    }).catch(error => { closing = undefined; throw error; });
+    return closing;
   }
   async function startStream() {
     streamController?.abort(); if (streamTask) await streamTask;
@@ -160,6 +171,11 @@ export async function createOpenCodeDriver(options) {
       throw error;
     });
     sourceState = 'ready';
+  }
+  async function recoverStream() {
+    requireValue(!closed, 'opencode.closed', 'source_unavailable');
+    reconnect ??= (async () => { await fence(); await startStream(); discovery.retry(); })().finally(() => { reconnect = undefined; });
+    await reconnect;
   }
   let health, document;
   try {
@@ -200,7 +216,7 @@ export async function createOpenCodeDriver(options) {
   }
   const core = {
     async inspect(input) { context(input); await fence(); return { state: sourceState, protocolVersion: 1 }; },
-    async listSessionPage(input) { const { params } = context(input); const page = await discovery.listSessionPage(params); return { ...page, items: page.items.map((item) => ({ ...item, session: sessionRef(item.summary.id) })) }; },
+    async listSessionPage(input) { const { params } = context(input); if (sourceState === 'failed' && params.cursor == null) await recoverStream(); const page = await discovery.listSessionPage(params); return { ...page, items: page.items.map((item) => ({ ...item, session: sessionRef(item.summary.id) })) }; },
     async getSession(input) { const { session, params } = context(input, true); await fence(); const item = summary(await request(`/session/${encodeURIComponent(session.nativeSessionId)}`, { query: { directory: params.directory } })); requireValue(item.id === session.nativeSessionId, 'opencode.session_response', 'reconcile_required'); return { session, summary: item, ...current() }; },
     async readHistoryPage(input) {
       const { session, params } = context(input, true); await fence(); const limit = pageLimit(params.limit);
@@ -239,7 +255,7 @@ export async function createOpenCodeDriver(options) {
       requireValue(['permission.asked', 'question.asked'].includes(pending.payload.type), 'opencode.interaction_type');
       return interactions.reply(params.interactionId, operationScope(session), params.answer, async ({ nativeRequestId, answer, signal }) => { await fence(); await request(`/${kind}/${encodeURIComponent(nativeRequestId)}/${kind === 'question' && answer.reject === true ? 'reject' : 'reply'}`, { method: 'POST', body: answer, query: { directory: pending.payload.directory }, signal, control: true }); await fence(); });
     },
-    subscribe(input) { const { session } = context(input); return subscriptions.subscribe((event) => !session || (event.session && encodeSessionKey(event.session) === encodeSessionKey(session))); },
+    async subscribe(input) { const { session } = context(input); requireValue(!closed, 'opencode.closed', 'source_unavailable'); if (sourceState === 'failed') await recoverStream(); return subscriptions.subscribe((event) => !session || (event.session && encodeSessionKey(event.session) === encodeSessionKey(session))); },
     async close(input) { context(input); await close(); return null; },
   };
   const native = {};
@@ -254,5 +270,5 @@ export async function createOpenCodeDriver(options) {
   });
   const registration = validateHarnessRegistration({ manifest: { ...identity, kind: 'opencode', protocolVersion: 1, core: Object.fromEntries(Object.keys(CORE_OPERATIONS).map((name) => [name, { state: 'supported' }])), extensions, capabilities: { sessions: { state: 'supported' }, permissions: { state: 'supported' }, questions: { state: 'supported' }, sessionFork: { state: 'supported' }, sessionRevert: { state: 'supported' }, sessionRename: { state: 'supported' }, sessionArchive: { state: 'supported' }, sessionUnarchive: { state: 'supported' }, sessionDelete: { state: 'supported' }, sessionPin: unsupported('OpenCode 1.18.34 session.update does not expose pinned'), sessionUnpin: unsupported('OpenCode 1.18.34 session.update does not expose pinned'), sessionCompact: unsupported('not exposed by the previous OpenCode adapter'), todos: { state: 'supported' }, status: { state: 'supported' }, providerConfig: { state: 'supported' } } }, driver: { core, native } });
   options.runtime.resources.register(`opencode:${identity.harnessInstanceId}:${options.processGeneration}`, 'owned', close);
-  return { registration, nativeVersion: health.version, close, async retryDiscovery() { reconnect ??= (async () => { await instances.assertCurrent(); await startStream(); discovery.retry(); })().finally(() => { reconnect = undefined; }); await reconnect; }, get bufferedBytes() { return subscriptions.bufferedBytes; } };
+  return { registration, nativeVersion: health.version, close, retryDiscovery: recoverStream, get bufferedBytes() { return subscriptions.bufferedBytes; } };
 }

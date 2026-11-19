@@ -23,7 +23,7 @@ export interface SlurmTcpTransport {
   program(): string;
   forwardArgv(forward: SlurmForward): readonly string[];
   environment(channel?: unknown): Record<string, string>;
-  open(input: { forward: SlurmForward; binding?: RelayBinding | Record<string, unknown> }): Promise<SlurmTcpConnection>;
+  open(input: { forward: SlurmForward; binding?: RelayBinding | Record<string, unknown>; direct?: boolean; computeNode?: string }): Promise<SlurmTcpConnection>;
   state(connectionId: string): string;
 }
 

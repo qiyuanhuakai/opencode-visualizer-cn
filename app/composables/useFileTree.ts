@@ -10,7 +10,7 @@ import type {
   BranchEntry,
 } from '../types/git';
 import { getBackendAdapter } from '../backends/registry';
-import type { BackendKind } from '../backends/types';
+import type { BackendAdapter, BackendKind } from '../backends/types';
 import { normalizeDirectory } from '../utils/path';
 import { uniqueBy } from '../utils/array';
 import { createWorkspaceRefreshLoop } from '../utils/workspaceRefreshLoop';
@@ -81,6 +81,8 @@ type UseFileTreeOptions = {
   activeDirectory: Ref<string>;
   activeBackendKind: Ref<BackendKind>;
   refreshEnabled?: Readonly<Ref<boolean>>;
+  backend?: () => BackendAdapter;
+  runtimeWorkspace?: Readonly<Ref<boolean>>;
 };
 
 type DirectorySidebarSnapshot = {
@@ -149,6 +151,7 @@ function getOptions(): UseFileTreeOptions {
 }
 
 function usesAdapterFileTreeStatus() {
+  if (getOptions().runtimeWorkspace?.value) return false;
   const backendKind = getOptions().activeBackendKind.value;
   // dsh lists via adapter `listFiles` (bridge `/dsh` prefix), never a PTY
   // `git ls-files`; its `workspaceFiles` answers carry no Git metadata.
@@ -156,7 +159,7 @@ function usesAdapterFileTreeStatus() {
 }
 
 function activeBackendAdapter() {
-  return getBackendAdapter(getOptions().activeBackendKind.value);
+  return getOptions().backend?.() ?? getBackendAdapter(getOptions().activeBackendKind.value);
 }
 
 function normalizeRelativePath(path: string) {

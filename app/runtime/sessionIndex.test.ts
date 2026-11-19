@@ -6,9 +6,10 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createRuntimeStore } from '../../bridge/runtime/storage/runtimeStore.js';
 import { createSessionIndex } from '../../bridge/runtime/sessionIndex.js';
+import { createWorkspaceCatalog } from '../../bridge/runtime/workspaceCatalog.js';
 import { createHarnessRegistry, CORE_OPERATIONS, unsupported } from '../../shared/runtime/harnessContract.js';
 import type { HarnessKind, HarnessManifest, CoreOperation, HarnessContext, Support } from '../../shared/runtime/harnessContract.js';
-import { encodeWorkspaceKey, parseEnvironmentId, parseHarnessInstanceId, parseSessionRef, encodeSessionKey } from '../../shared/runtime/identity.js';
+import { parseEnvironmentId, parseHarnessInstanceId, parseSessionRef, encodeSessionKey } from '../../shared/runtime/identity.js';
 import { nativePage, sourceIdentity } from '../../bridge/runtime/sessionSummaries.js';
 import { createNativeEventIntake } from '../../bridge/runtime/nativeEventIntake.js';
 
@@ -30,16 +31,7 @@ async function fixture(list: (context: HarnessContext) => Promise<unknown>, run:
   registry.register({ manifest: manifest(kind), driver: { core: { listSessionPage: list }, native: {} } });
   const directories: string[] = [];
   const generation = { value: 1 };
-  const index = createSessionIndex({ store, registry, catalog: {
-    async register({ workspace }) {
-      const key = encodeWorkspaceKey(workspace);
-      const prior = await store.get({ collection: 'workspaces', key });
-      await store.mutate({ intentId: randomUUID(), changes: [{ collection: 'workspaces', key, expectedRevision: prior?.revision ?? 0, value: { workspace } }] });
-      return key;
-    },
-    page: (input = {}) => store.page({ ...input, collection: 'workspaces' }),
-    async probe() { throw new Error('background Git probe'); },
-  }, resolveWorkspace: async ({ directory: canonicalPath }) => {
+  const index = createSessionIndex({ store, registry, catalog: createWorkspaceCatalog({ store, git: { async probe() { throw new Error('background Git probe'); } } }), resolveWorkspace: async ({ directory: canonicalPath }) => {
     directories.push(canonicalPath);
     return { environmentId, canonicalPath, pathPolicy: { platform: 'posix', caseSensitive: true, volumeId: 'test-volume' } };
   } });
@@ -48,6 +40,29 @@ async function fixture(list: (context: HarnessContext) => Promise<unknown>, run:
 }
 
 describe('progressive native summary index', () => {
+  it('patches native activity on the existing qualified summary without enumerating the source again', async () => {
+    let lists = 0;
+    await fixture(async () => {
+      lists++;
+      return { items: [{ session: session('external'), title: 'Native external turn', directory: '/repo', status: 'idle' }], cursor: null, completeness: 'complete' };
+    }, async ({ index, store }) => {
+      const source = await index.attach({ harnessInstanceId, authority: () => ({ epoch, processGeneration: 1 }), subscribe: false });
+      await source.discover();
+      const key = encodeSessionKey(session('external'));
+      const initial = await store.get({ collection: 'session_summaries', key });
+      if (!initial?.value || typeof initial.value !== 'object' || !('workspaceKey' in initial.value)) throw new Error('Indexed workspace is missing');
+      expect(source.publish({ type: 'session.activity', session: session('external'), status: 'running' })).toBe(true);
+      await source.flush();
+      expect((await store.get({ collection: 'session_summaries', key }))?.value).toMatchObject({ title: 'Native external turn', status: 'running', workspaceKey: initial.value.workspaceKey });
+      expect(source.publish({ type: 'session.activity', session: session('external'), status: 'idle' })).toBe(true);
+      expect(source.publish({ type: 'session.activity', session: session('not-indexed'), status: 'running' })).toBe(true);
+      await source.flush();
+      expect((await store.get({ collection: 'session_summaries', key }))?.value).toMatchObject({ status: 'idle' });
+      expect(await store.get({ collection: 'session_summaries', key: encodeSessionKey(session('not-indexed')) })).toBeNull();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(lists).toBe(1);
+    }, 'kimi-web');
+  });
   it('publishes each page and newly discovered directories before enumeration finishes', async () => {
     let page = 0;
     let release: () => void = () => {};
@@ -119,6 +134,11 @@ describe('progressive native summary index', () => {
       expect(page.items[0]).not.toHaveProperty('source');
     }
   });
+  it('keeps empty native directories orphaned and preserves ACP archived parent metadata', () => {
+    const source = sourceIdentity({ kind: 'acp', environmentId, harnessInstanceId });
+    const page = nativePage(source, { items: [{ session: session('child'), native: { sessionId: 'child', cwd: '', _meta: { archived: true, parentId: 'parent' } } }], status: 'complete', cursor: null });
+    expect(page.items[0]).toMatchObject({ directory: null, archived: true, parentSession: session('parent') });
+  });
   it('keeps an explicit native deletion ahead of the already captured old page', async () => {
     let captured: () => void = () => {};
     const entered = new Promise<void>((resolve) => { captured = resolve; });
@@ -159,6 +179,32 @@ describe('progressive native summary index', () => {
       expect((await index.page()).items).toHaveLength(1);
     });
   });
+  it('continues a legal empty native page into the archived Codex list', async () => {
+    const requests: unknown[] = [];
+    await fixture(async ({ params }) => {
+      requests.push(params);
+      if (requests.length === 1) return { items: [], cursor: 'codex-archived-scan', completeness: 'partial', reason: 'more_pages' };
+      return { items: [row('archived-only')], cursor: null, completeness: 'complete' };
+    }, async ({ index, store }) => {
+      const source = await index.attach({ harnessInstanceId, authority: () => ({ epoch, processGeneration: 1 }), subscribe: false });
+      expect(await source.discover()).toMatchObject({ status: 'complete', count: 1 });
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toMatchObject({ cursor: 'codex-archived-scan' });
+      expect((await store.get({ collection: 'session_summaries', key: encodeSessionKey(session('archived-only')) }))?.value).toMatchObject({ title: 'archived-only' });
+    });
+  });
+  it('still fences an empty native page that repeats its cursor', async () => {
+    let calls = 0;
+    await fixture(async () => {
+      calls++;
+      return { items: [], cursor: 'stalled', completeness: 'partial' };
+    }, async ({ index }) => {
+      const source = await index.attach({ harnessInstanceId, authority: () => ({ epoch, processGeneration: 1 }), subscribe: false });
+      expect(await source.discover()).toMatchObject({ status: 'partial', count: 0, reason: 'index_cursor_cycle' });
+      expect(calls).toBe(2);
+      expect((await index.page()).items).toHaveLength(0);
+    });
+  });
   it('does not interpret a native sequence as the durable store sequence', async () => {
     await fixture(async () => ({ items: [], cursor: null, completeness: 'complete' }), async ({ index, store }) => {
       const source = await index.attach({ harnessInstanceId, authority: () => ({ epoch, processGeneration: 1 }), subscribe: false });
@@ -187,7 +233,7 @@ describe('progressive native summary index', () => {
     const failures: string[] = [];
     const intake = createNativeEventIntake({
       source: { identity: sourceIdentity({ kind: 'opencode', environmentId, harnessInstanceId }), authority: () => ({ epoch, processGeneration: 1 }), serial: () => 0, assertCurrent() {}, async list() { throw new Error('unexpected list'); } },
-      mutations: { async apply() { throw new Error('unexpected page'); }, async complete() { throw new Error('unexpected complete'); }, async progress() { throw new Error('unexpected progress'); }, async event() { await hold; return true; } },
+      mutations: { async activity() { throw new Error('unexpected activity'); }, async apply() { throw new Error('unexpected page'); }, async complete() { throw new Error('unexpected complete'); }, async progress() { throw new Error('unexpected progress'); }, async event() { await hold; return true; } },
       dirty() {}, onControl() { controls++; }, onFailure(reason) { failures.push(reason); },
     });
     try {
@@ -203,5 +249,20 @@ describe('progressive native summary index', () => {
       release(); await intake.flush();
       expect(intake.state).toMatchObject({ count: 0, bytes: 0 });
     } finally { release(); await intake.close(); }
+  });
+  it('releases an ended subscription so explicit recovery receives new events', async () => {
+    let controls = 0;
+    const intake = createNativeEventIntake({
+      source: { identity: sourceIdentity({ kind: 'opencode', environmentId, harnessInstanceId }), authority: () => ({ epoch, processGeneration: 1 }), serial: () => 0, assertCurrent() {}, async list() { throw new Error('unexpected list'); } },
+      mutations: { async activity() { throw new Error('unexpected activity'); }, async apply() { throw new Error('unexpected page'); }, async complete() { throw new Error('unexpected complete'); }, async progress() { throw new Error('unexpected progress'); }, async event() { throw new Error('unexpected mutation'); } },
+      dirty() {}, onControl() { controls++; }, onFailure() {},
+    });
+    try {
+      await intake.subscribe(async function* () { yield await Promise.reject(new Error('native stream lost')); });
+      await expect.poll(() => intake.state.subscribed).toBe(false);
+      await intake.subscribe(async function* () { yield { type: 'permission.asked', seq: 1, epoch, processGeneration: 1 }; });
+      await expect.poll(() => controls).toBe(1);
+      await expect.poll(() => intake.state.subscribed).toBe(false);
+    } finally { await intake.close(); }
   });
 });

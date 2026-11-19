@@ -212,6 +212,23 @@ export function createThreadService({ resolveSession } = {}) {
   }
 
   return {
+    exportRecords() { return [...threadsById.values()].map(thread => structuredClone(thread)); },
+    restoreRecords(records) {
+      assertOpen();
+      if (threadsById.size) throw new ThreadError('conflict', 'thread_restore_nonempty');
+      for (const input of records) {
+        const thread = structuredClone(input);
+        parseThreadId(thread.threadId);
+        for (const participant of thread.participants) {
+          asSession(participant.session);
+          const key = threadBindingKey(participant.session);
+          if (threadsByBinding.has(key)) throw new ThreadError('conflict', 'thread_restore_binding');
+          threadsByBinding.set(key, thread);
+        }
+        threadsById.set(thread.threadId, thread);
+      }
+      stats.threads = threadsById.size; stats.bindings = threadsByBinding.size;
+    },
     bind,
     join,
     leave,

@@ -103,12 +103,19 @@ export function createConnectionManager(options = {}) {
           connectionId: dialed.connectionId ?? `conn-${generation}`,
           close: dialed.close,
         });
+        const registered = connections.get(key);
+        dialed.onClose?.(() => {
+          if (connections.get(key) === registered) connections.set(key, { state: 'disconnected', environmentId: expected, generation });
+        });
         return statusOf(profile);
       } catch (error) {
         // Retire THIS dial's pending entry on every failure path. The entry is registered before
         // openTransport runs, so without this cleanup a rejected dial would be reused forever: the
         // next connect would await the same settled rejection and never open a new transport.
-        if (pendingDials.get(key) === entry) pendingDials.delete(key);
+        if (pendingDials.get(key) === entry) {
+          pendingDials.delete(key);
+          if (!connections.has(key)) fail(profile, expected, generation);
+        }
         throw error;
       }
     })();

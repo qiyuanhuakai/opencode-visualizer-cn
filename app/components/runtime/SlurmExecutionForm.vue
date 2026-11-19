@@ -1,20 +1,37 @@
 <template>
   <form class="slurm-form" data-runtime-ui data-testid="slurm-execution-form" @submit.prevent="submit">
     <header class="form-header">
-      <span class="form-title">Slurm execution</span>
+      <span class="form-title">{{ rt("Slurm execution") }}</span>
       <span v-if="!available" class="form-unavailable" data-testid="slurm-form-unavailable">
-        unavailable · {{ unavailableReason }}
+        {{ rt("unavailable ·") }} {{ rt(unavailableReason) }}
       </span>
     </header>
 
     <p class="form-hint">
-      Resources are requested explicitly. <code>time</code> and <code>gres</code> are always
-      submitted — a blank or inherited value is never sent, so the preview is the request.
+      {{ rt("Resources are requested explicitly.") }} <code>time</code> {{ rt("and") }} <code>gres</code> {{ rt("are always submitted — a blank or inherited value is never sent, so the preview is the request.") }}
     </p>
+
+    <label class="field">
+      <span class="field-label">{{ rt('Connection mode') }}</span>
+      <Dropdown v-model="form.mode" :label="rt(form.mode === 'relay' ? 'Slurm stdio relay' : 'Compute TCP')" :disabled="disabled || !available" data-testid="slurm-mode">
+        <DropdownItem value="relay">{{ rt('Slurm stdio relay') }}</DropdownItem>
+        <DropdownItem value="tcp">{{ rt('Compute TCP') }}</DropdownItem>
+      </Dropdown>
+    </label>
+    <label class="field">
+      <span class="field-label">{{ rt('Compute working directory') }}</span>
+      <input v-model="form.computeWorkingRoot" class="field-input" data-testid="slurm-working-root" required :disabled="disabled || !available" autocomplete="off" spellcheck="false" />
+      <span class="field-hint">{{ rt('Existing absolute directory on the compute node.') }}</span>
+    </label>
+    <label class="field">
+      <span class="field-label">{{ rt('Compute state directory') }}</span>
+      <input v-model="form.computeStateRoot" class="field-input" data-testid="slurm-state-root" required :disabled="disabled || !available" autocomplete="off" spellcheck="false" />
+      <span class="field-hint">{{ rt('Absolute directory for runtime state and installation, separate from the working directory.') }}</span>
+    </label>
 
     <div class="field-row">
       <label class="field">
-        <span class="field-label">Partition</span>
+        <span class="field-label">{{ rt("Partition") }}</span>
         <input
           v-model="form.partition"
           class="field-input"
@@ -26,12 +43,12 @@
         />
       </label>
       <label class="field">
-        <span class="field-label">Account</span>
+        <span class="field-label">{{ rt("Account") }}</span>
         <input
           v-model="form.account"
           class="field-input"
           type="text"
-          placeholder="optional"
+          :placeholder='rt("optional")'
           data-testid="slurm-account"
           :disabled="disabled || !available"
           autocomplete="off"
@@ -42,7 +59,7 @@
 
     <div class="field-row">
       <label class="field">
-        <span class="field-label">CPUs</span>
+        <span class="field-label">{{ rt("CPUs") }}</span>
         <input
           v-model.number="form.cpus"
           class="field-input"
@@ -54,12 +71,12 @@
         />
       </label>
       <label class="field">
-        <span class="field-label">Memory</span>
+        <span class="field-label">{{ rt("Memory") }}</span>
         <input
           v-model="form.memory"
           class="field-input"
           type="text"
-          placeholder="4096 or 4096M"
+          :placeholder='rt("4096 or 4096M")'
           data-testid="slurm-memory"
           :disabled="disabled || !available"
           autocomplete="off"
@@ -70,7 +87,7 @@
 
     <div class="field-row">
       <label class="field">
-        <span class="field-label">Time limit</span>
+        <span class="field-label">{{ rt("Time limit") }}</span>
         <input
           v-model="form.time"
           class="field-input"
@@ -94,20 +111,26 @@
           autocomplete="off"
           spellcheck="false"
         />
-        <span class="field-hint">Explicit, never inherited. <code>none</code> is written out.</span>
+        <span class="field-hint">{{ rt("Explicit, never inherited.") }} <code>none</code> {{ rt("is written out.") }}</span>
       </label>
     </div>
 
     <label class="field">
-      <span class="field-label">Ownership</span>
-      <Dropdown v-model="form.ownership" :disabled="disabled || !available" data-testid="slurm-ownership">
+      <span class="field-label">{{ rt("Ownership") }}</span>
+      <Dropdown v-model="form.ownership" :label="rt(ownerships.find(entry => entry.value === form.ownership)?.label ?? 'Ownership')" :disabled="disabled || !available" data-testid="slurm-ownership">
         <DropdownItem v-for="entry in ownerships" :key="entry.value" :value="entry.value">
-          <span>{{ entry.label }}</span>
+          <span>{{ rt(entry.label) }}</span>
         </DropdownItem>
       </Dropdown>
       <span class="field-hint">
-        A borrowed allocation is never cancelled by this client, including on disconnect.
+        {{ rt("A borrowed allocation is never cancelled by this client, including on disconnect.") }}
       </span>
+    </label>
+
+    <label v-if="form.ownership === 'borrowed'" class="field">
+      <span class="field-label">{{ rt('Existing Slurm job ID') }}</span>
+      <input v-model="form.jobId" class="field-input" data-testid="slurm-job-id" required inputmode="numeric" pattern="[0-9]+" :disabled="disabled || !available" autocomplete="off" />
+      <span class="field-hint">{{ rt('Use a running allocation with enough resources for the compute service and relay reserve.') }}</span>
     </label>
 
     <section
@@ -126,22 +149,22 @@
       :data-partition="preview.partition"
       :data-account="preview.account ?? ''"
     >
-      <span class="preview-title">Submission preview</span>
+      <span class="preview-title">{{ rt("Submission preview") }}</span>
       <dl class="preview-grid">
         <div class="preview-cell">
-          <dt>Nodes / tasks</dt>
+          <dt>{{ rt("Nodes / tasks") }}</dt>
           <dd data-testid="slurm-preview-nodes">{{ preview.nodes }} / {{ preview.ntasks }}</dd>
         </div>
         <div class="preview-cell">
-          <dt>CPUs</dt>
+          <dt>{{ rt("CPUs") }}</dt>
           <dd data-testid="slurm-preview-cpus">{{ preview.cpus }}</dd>
         </div>
         <div class="preview-cell">
-          <dt>Memory</dt>
+          <dt>{{ rt("Memory") }}</dt>
           <dd data-testid="slurm-preview-memory">{{ preview.memory }} ({{ preview.memoryMiB }} MiB)</dd>
         </div>
         <div class="preview-cell">
-          <dt>Time limit</dt>
+          <dt>{{ rt("Time limit") }}</dt>
           <dd data-testid="slurm-preview-time">{{ timePreview }}</dd>
         </div>
         <div class="preview-cell">
@@ -149,45 +172,47 @@
           <dd data-testid="slurm-preview-gres">{{ preview.gres }}</dd>
         </div>
         <div class="preview-cell">
-          <dt>Account</dt>
+          <dt>{{ rt("Account") }}</dt>
           <dd data-testid="slurm-preview-account">{{ preview.account ?? '—' }}</dd>
         </div>
       </dl>
       <p class="preview-note" data-testid="slurm-preview-note">
-        {{ previewNote }}
+        {{ rt(previewNote) }}
       </p>
       <p v-if="previewStale" class="preview-stale" role="status" data-testid="slurm-preview-stale">
-        This preview no longer describes the request above. Submit is disabled until a preview for
-        the current resources arrives.
+        {{ rt("This preview no longer describes the request above. Submit is disabled until a preview for the current resources arrives.") }}
       </p>
     </section>
 
     <p v-if="problems.length" class="form-problems" role="alert" data-testid="slurm-form-problems">
-      <span v-for="problem in problems" :key="problem" class="form-problem">{{ problem }}</span>
+      <span v-for="problem in problems" :key="problem" class="form-problem">{{ rt(problem) }}</span>
     </p>
 
     <footer class="form-actions">
       <button type="button" class="action-button" data-testid="slurm-form-cancel" :disabled="disabled" @click="$emit('cancel')">
-        Cancel
+        {{ rt("Cancel") }}
       </button>
       <button
         type="submit"
         class="action-button save"
         data-testid="slurm-form-submit"
-        :disabled="disabled || !available || preview === null"
+        :disabled="disabled || !available || preview === null || !deploymentReady || !previewDescribesDraft"
       >
-        Submit
+        {{ rt("Submit") }}
       </button>
     </footer>
   </form>
 </template>
 
 <script setup lang="ts">
+import { useRuntimeUi } from '../../locales/runtimeUi';
+const { rt } = useRuntimeUi();
 import { computed, reactive, ref, watch } from 'vue';
 import Dropdown from '../Dropdown.vue';
 import DropdownItem from '../Dropdown/Item.vue';
 import type { SlurmOwnership, SlurmResourceInput, SlurmResourcePreview } from '../../composables/useRuntimeProfiles';
 import { slurmTimePreview, validateSlurmResourceInput } from '../../composables/useRuntimeProfiles';
+import type { ManagedSlurmRequest } from '../../composables/useManagedRemote';
 
 const props = withDefaults(
   defineProps<{
@@ -201,7 +226,7 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{
-  (event: 'submit', request: Readonly<{ resources: SlurmResourceInput; ownership: SlurmOwnership }>): void;
+  (event: 'submit', request: ManagedSlurmRequest): void;
   (event: 'cancel'): void;
   (event: 'preview-request', draft: Readonly<{ resources: SlurmResourceInput; ownership: SlurmOwnership }>): void;
 }>();
@@ -219,9 +244,19 @@ const form = reactive({
   time: '',
   gres: 'none',
   ownership: 'owned' as SlurmOwnership,
+  mode: 'relay',
+  computeWorkingRoot: '',
+  computeStateRoot: '',
+  jobId: '',
 });
 
 const problems = ref<readonly string[]>([]);
+const deploymentReady = computed(() =>
+  (form.mode === 'relay' || form.mode === 'tcp')
+  && form.computeWorkingRoot.trim().startsWith('/')
+  && form.computeStateRoot.trim().startsWith('/')
+  && form.computeWorkingRoot.trim() !== form.computeStateRoot.trim()
+  && (form.ownership === 'owned' || /^\d+$/u.test(form.jobId.trim())));
 
 /** The request the form would submit right now, normalized exactly the way `submit` sends it. */
 const draft = computed<SlurmResourceInput>(() => Object.freeze({
@@ -285,10 +320,14 @@ watch([draft, () => form.ownership], () => {
 
 function submit() {
   if (props.disabled || !props.available) return;
+  if (!deploymentReady.value || (form.mode !== 'relay' && form.mode !== 'tcp')) {
+    problems.value = ['Specify distinct absolute compute directories and a valid job ID for a borrowed allocation.'];
+    return;
+  }
   const resources = draft.value;
   const invalid = validateSlurmResourceInput(resources);
   if (invalid.length > 0) {
-    problems.value = Object.freeze(invalid.map((field) => `${field} is required`));
+    problems.value = Object.freeze(invalid.map((field) => rt('{field} is required', { field: rt(field) })));
     return;
   }
   if (props.preview === null) {
@@ -300,7 +339,11 @@ function submit() {
     return;
   }
   problems.value = [];
-  emit('submit', { resources, ownership: form.ownership });
+  emit('submit', {
+    resources, ownership: form.ownership, mode: form.mode,
+    computeWorkingRoot: form.computeWorkingRoot.trim(), computeStateRoot: form.computeStateRoot.trim(),
+    ...(form.ownership === 'borrowed' ? { jobId: form.jobId.trim() } : {}),
+  });
 }
 </script>
 
@@ -333,7 +376,7 @@ function submit() {
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
 }
 
 .form-hint {
@@ -455,7 +498,7 @@ function submit() {
   margin: 0;
   font-size: var(--type-caption, 10px);
   line-height: 1.4;
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
 }
 
 .form-problems {
@@ -464,7 +507,7 @@ function submit() {
   gap: 2px;
   margin: 0;
   font-size: var(--type-sm, 12px);
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
   word-break: break-word;
 }
 

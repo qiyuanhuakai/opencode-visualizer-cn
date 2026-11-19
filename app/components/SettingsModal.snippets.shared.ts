@@ -1,6 +1,25 @@
 import { createApp, defineComponent, h, nextTick, ref } from 'vue';
 import { afterEach, beforeEach, expect, vi } from 'vitest';
 import en from '../locales/en';
+import { decodeLiveSetting, encodeLiveSetting, liveSettingKey } from '../../shared/runtime/liveSettings.js';
+
+const snippetKey = liveSettingKey('settings.textTransformers.v1');
+
+/** Read the durable live value; the legacy seed must remain unchanged. */
+export function persistedSnippets(): string | null {
+  const raw = localStorage.getItem(snippetKey);
+  if (raw === null) return localStorage.getItem('opencode.settings.textTransformers.v1');
+  const record = decodeLiveSetting(raw);
+  if (record.kind === 'error') throw new Error('Invalid live snippet record');
+  return record.kind === 'value' ? record.value : null;
+}
+
+/** Model a peer window writing the actual live namespace before its event arrives. */
+export function publishSnippetStorage(value: string) {
+  const raw = encodeLiveSetting(value);
+  localStorage.setItem(snippetKey, raw);
+  window.dispatchEvent(new StorageEvent('storage', { key: snippetKey, newValue: raw }));
+}
 
 const fileExport = vi.hoisted(() => ({
   downloadJsonFile: vi.fn(),

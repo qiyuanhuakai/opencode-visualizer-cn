@@ -15,7 +15,7 @@ import { createOperationJournal, fingerprint } from '../../../bridge/runtime/ope
 import { createInteractionStore } from '../../../bridge/runtime/interactionStore.js';
 import { createCodexSessionOperations } from '../../../shared/runtime/native/codex/sessionOperations.js';
 import { createCodexCancellation } from '../../../shared/runtime/native/codex/cancelOperations.js';
-import { jsonValue } from '../../../shared/runtime/capabilities.js';
+import { jsonValue, ProtocolError } from '../../../shared/runtime/capabilities.js';
 import type { JsonValue } from '../../../shared/runtime/capabilities.js';
 import { record } from '../../../shared/runtime/native/codex/boundaries.js';
 import { describe, expect, it } from 'vitest';
@@ -1264,4 +1264,153 @@ describe('Codex history cancellation before the first byte (upper client/produce
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
   }, 20000);
+});
+
+
+describe('Codex history unmaterialized thread reads', () => {
+  const session = parseSessionRef({
+    environmentId: '11111111-1111-4111-8111-111111111111',
+    harnessInstanceId: '22222222-2222-4222-8222-222222222222',
+    nativeSessionId: 'native-empty',
+  });
+  // Mirrors appServerClient's classification: the explicit "not materialized yet" marker sets
+  // `unmaterialized` only alongside the -32600 native code, so a different code stays a plain
+  // refusal without the classification.
+  const unmaterialized = (nativeCode: number) =>
+    Object.assign(new ProtocolError('invalid_request', 'codex.rpc.thread/turns/list'), {
+      nativeCode,
+      ...(nativeCode === -32600 ? { unmaterialized: true } : {}),
+    });
+  it('reads a brand-new thread with no first message as an empty complete page', async () => {
+    // Given Codex answers thread/turns/list on an unmaterialized thread with -32600.
+    const { createCodexHistory } = await import('../../../bridge/runtime/drivers/codexHistory.js');
+    const read = createCodexHistory({
+      processGeneration: 1,
+      epoch: 'epoch',
+      assertCurrent() {},
+      request: async (method: string): Promise<JsonValue> => {
+        if (method === 'thread/turns/list') throw unmaterialized(-32600);
+        throw new Error('unexpected method');
+      },
+    });
+    // When the initial history page is read.
+    const page = await read({ session });
+    // Then the thread reads as an empty, complete history instead of failing.
+    expect(page).toEqual({ items: [], cursor: null, completeness: 'complete' });
+  });
+  it('rejects an unrelated invalid_request instead of reporting empty history', async () => {
+    // Given a -32602 invalid params rejection on the same method (not unmaterialized).
+    const { createCodexHistory } = await import('../../../bridge/runtime/drivers/codexHistory.js');
+    const read = createCodexHistory({
+      processGeneration: 1,
+      epoch: 'epoch',
+      assertCurrent() {},
+      request: async (method: string): Promise<JsonValue> => {
+        if (method === 'thread/turns/list') throw unmaterialized(-32602);
+        throw new Error('unexpected method');
+      },
+    });
+    // When the initial history page is read.
+    // Then the failure surfaces instead of being swallowed as an empty page.
+    await expect(read({ session })).rejects.toThrow('codex.rpc.thread/turns/list');
+  });
+  it('never converts an unmaterialized rejection into an empty page mid-pagination', async () => {
+    // Given a first page that proves more turns remain, then an unmaterialized rejection.
+    const { createCodexHistory } = await import('../../../bridge/runtime/drivers/codexHistory.js');
+    let first = true;
+    const read = createCodexHistory({
+      processGeneration: 1,
+      epoch: 'epoch',
+      assertCurrent() {},
+      request: async (method: string): Promise<JsonValue> => {
+        if (method === 'thread/turns/list') {
+          if (first) {
+            first = false;
+            return { data: [{ id: 't', status: 'completed', items: [] }], nextCursor: 'turn-2' };
+          }
+          throw unmaterialized(-32600);
+        }
+        return {
+          data: [{ turnId: 't', item: { id: 'a', type: 'agentMessage', text: 'a' } }],
+          nextCursor: null,
+        };
+      },
+    });
+    const page = await read({ session });
+    expect(page.cursor).toBeTruthy();
+    // When the continuation page hits the same rejection.
+    // Then only the initial page may convert it, so the continuation still fails.
+    await expect(read({ session, cursor: page.cursor })).rejects.toThrow(
+      'codex.rpc.thread/turns/list',
+    );
+  });
+  // Drives the real RPC boundary: only the native transport is substituted, so a native -32600
+  // frame is classified by appServerClient before the history reader ever sees it.
+  const nativeChain = async (nativeError: { code: number; message: string }) => {
+    const { createAppServerClient } =
+      await import('../../../shared/runtime/native/codex/appServerClient.js');
+    const { createCodexHistory } = await import('../../../bridge/runtime/drivers/codexHistory.js');
+    let receive: (raw: string) => void = () => {};
+    const client = createAppServerClient({
+      transport: {
+        subscribe(callback) {
+          receive = callback;
+          return () => {};
+        },
+        send(raw) {
+          const id = (JSON.parse(raw) as { id: number }).id;
+          queueMicrotask(() => receive(JSON.stringify({ id, error: nativeError })));
+        },
+        close() {},
+      },
+      onMessage() {},
+    });
+    return createCodexHistory({
+      processGeneration: 1,
+      epoch: 'epoch',
+      assertCurrent() {},
+      request: async (method: string): Promise<JsonValue> => client.request(method, {}),
+    });
+  };
+  const sameCodeRefusals = [
+    {
+      name: 'an ephemeral thread without persistent history',
+      nativeError: { code: -32600, message: 'ephemeral threads do not support thread/turns/list' },
+    },
+    {
+      name: 'a thread that is not loaded in this connection',
+      nativeError: { code: -32600, message: 'thread not loaded: native-empty' },
+    },
+    {
+      name: 'an illegal thread id',
+      nativeError: { code: -32600, message: 'invalid thread id: not-a-uuid' },
+    },
+  ];
+  it.each(sameCodeRefusals)('rejects $name with an explicit code, not empty history', async ({
+    nativeError,
+  }) => {
+    // Given a -32600 refusal on the same method that is not the explicit unmaterialized signal.
+    const read = await nativeChain(nativeError);
+    // When the initial history page is read.
+    const failure = await read({ session }).catch((error: unknown) => error);
+    // Then the refusal surfaces instead of masquerading as a complete empty history.
+    expect(failure).toBeInstanceOf(ProtocolError);
+    expect(failure).toMatchObject({
+      code: 'invalid_request',
+      field: 'codex.rpc.thread/turns/list',
+      nativeCode: -32600,
+    });
+  });
+  it('reads a genuinely unmaterialized thread through the real RPC boundary as empty and complete', async () => {
+    // Given the fixed version's explicit -32600 rejection for a thread with no first message.
+    const read = await nativeChain({
+      code: -32600,
+      message:
+        'thread native-empty is not materialized yet; thread/turns/list is unavailable before first user message',
+    });
+    // When the initial history page is read.
+    const page = await read({ session });
+    // Then the thread still reads as an empty, complete history.
+    expect(page).toEqual({ items: [], cursor: null, completeness: 'complete' });
+  });
 });

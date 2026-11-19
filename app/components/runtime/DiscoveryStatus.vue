@@ -8,8 +8,8 @@
       @click="open = !open"
     >
       <Icon class="discovery-status-summary-icon" :icon="errorCount > 0 ? 'lucide:triangle-alert' : 'lucide:radio-tower'" :width="13" :height="13" />
-      <span class="discovery-status-summary-label">{{ $t('runtime.sessionTree.sources', 'Sources') }}</span>
-      <span class="discovery-status-summary-count" data-testid="source-ready-count">{{ readyCount }}/{{ props.sources.length }}</span>
+      <span class="discovery-status-summary-label">{{ rt('Sources') }}</span>
+      <span class="discovery-status-summary-count" data-testid="source-ready-count">{{ readyCount }}/{{ enabledCount }}</span>
     </button>
     <ul v-if="open" class="discovery-status-list">
       <li
@@ -30,8 +30,8 @@
           data-testid="source-retry"
           :data-harness="source.kind"
           :disabled="props.retrying.has(source.harnessInstanceId)"
-          :title="$t('runtime.sessionTree.retrySource', 'Retry source')"
-          :aria-label="`${$t('runtime.sessionTree.retrySource', 'Retry source')}: ${HARNESS_LABELS[source.kind]}`"
+          :title="rt('Retry source')"
+          :aria-label="`${rt('Retry source')}: ${HARNESS_LABELS[source.kind]}`"
           @click.stop="emit('retry', source.harnessInstanceId)"
         >
           <Icon
@@ -46,7 +46,7 @@
     </ul>
     <div v-if="props.viewError" class="discovery-status-error" role="alert" data-testid="source-view-error">
       <Icon :icon="'lucide:circle-alert'" :width="13" :height="13" />
-      <span>{{ $t('runtime.sessionTree.viewError', 'Session index error') }}: {{ props.viewError }}</span>
+      <span>{{ rt('Session index error') }}: {{ props.viewError }}</span>
     </div>
   </div>
 </template>
@@ -57,6 +57,9 @@ import { Icon } from '@iconify/vue';
 import { HARNESS_LABELS } from '../../composables/useRuntimeSessionTree';
 import type { HarnessEntry } from '../../composables/useRuntimeSessionTree';
 import HarnessBadge from './HarnessBadge.vue';
+import { useRuntimeUi } from '../../locales/runtimeUi';
+
+const { rt } = useRuntimeUi();
 
 const props = withDefaults(defineProps<{
   sources: readonly HarnessEntry[];
@@ -67,14 +70,16 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ (event: 'retry', harnessInstanceId: string): void }>();
 const open = ref(false);
 const readyCount = computed(() => props.sources.filter((source) => source.status === 'complete').length);
+const enabledCount = computed(() => props.sources.filter((source) => source.status !== 'disabled').length);
 const errorCount = computed(() => props.sources.filter((source) => source.status === 'error').length);
 watch(errorCount, (count) => { if (count > 0) open.value = true; });
 
 function stateLabel(status: HarnessEntry['status']): string {
-  if (status === 'complete') return 'ready';
-  if (status === 'error') return 'failed';
-  if (status === 'partial') return 'partial';
-  return 'loading';
+  if (status === 'complete') return rt('ready');
+  if (status === 'error') return rt('failed');
+  if (status === 'partial') return rt('partial');
+  if (status === 'disabled') return rt('disabled');
+  return rt('loading');
 }
 </script>
 
@@ -103,7 +108,7 @@ function stateLabel(status: HarnessEntry['status']): string {
 }
 
 .discovery-status-summary.has-error {
-  color: var(--theme-status-danger, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
 }
 
 .discovery-status-summary-icon {
@@ -175,7 +180,7 @@ function stateLabel(status: HarnessEntry['status']): string {
 }
 
 .discovery-status-row.is-error .discovery-status-state {
-  color: var(--theme-status-danger, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
 }
 
 .discovery-status-retry {
@@ -223,7 +228,7 @@ function stateLabel(status: HarnessEntry['status']): string {
   padding: 4px 6px;
   border-radius: 6px;
   background: color-mix(in srgb, var(--theme-status-danger, #f87171) 12%, transparent);
-  color: var(--theme-status-danger, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
   font-size: calc(var(--sidebar-font-size, 12px) - 1px);
 }
 </style>

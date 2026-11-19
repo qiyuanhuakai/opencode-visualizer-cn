@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 
 import { buildVisBridgeBinary } from '../scripts/build-vis-bridge.mjs';
 import { packageVisBridgeInstaller } from '../scripts/package-vis-bridge-installer.mjs';
-import { computeRuntimeWorkerClosure } from '../scripts/vis-bridge-runtime-staging.mjs';
+import { computeRuntimeWorkerClosure, computeRuntimeHelperClosure } from '../scripts/vis-bridge-runtime-staging.mjs';
 
 const projectRoot = path.resolve(import.meta.dirname, '..');
 const nativeQaEnabled = process.env.VIS_BRIDGE_NATIVE_UPDATE_QA === '1'
@@ -76,7 +76,8 @@ async function stageFixtureDependencies(fixtureRoot: string): Promise<void> {
   // fixture root must carry the REAL worker closure computed from this checkout
   // (never a re-implementation): a fixture without it cannot even build, which
   // is exactly how both Linux gates failed. Mirrors the RPM/DEB fixtures.
-  for (const relativePath of await computeRuntimeWorkerClosure(projectRoot)) {
+  const sourceClosure = new Set([...await computeRuntimeWorkerClosure(projectRoot), ...await computeRuntimeHelperClosure(projectRoot)]);
+  for (const relativePath of sourceClosure) {
     const destination = path.join(fixtureRoot, ...relativePath.split('/'));
     mkdirSync(path.dirname(destination), { recursive: true });
     copyFileSync(path.join(projectRoot, ...relativePath.split('/')), destination);

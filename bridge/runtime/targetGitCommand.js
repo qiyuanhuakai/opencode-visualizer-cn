@@ -8,6 +8,7 @@ import {
 } from '../../shared/runtime/identity.js';
 import { requireValue, ProtocolError } from '../../shared/runtime/capabilities.js';
 import { detachedProcessOptions, stopProcessTree } from '../processTree.js';
+import { gitLine } from './gitOutputParser.js';
 
 export class GitCommandError extends Error {
   constructor(reason, result = {}) {
@@ -87,7 +88,27 @@ export async function createTargetGitCommand({
     current();
     return workspace;
   }
-  async function destination(parent, name) {
+  // A repository mutation records administrative state in the repository's common
+  // directory, which for a linked worktree is a different root than the command cwd.
+  // Resolve that directory on the target and require its own write grant: cwd
+  // authority and repository leases never substitute for the directory that
+  // actually receives the bytes.
+  async function authorizeCommonDirectory(ref) {
+    const probe = await start({
+      workspace: ref,
+      args: ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+    });
+    const result = await probe.wait();
+    if (result.exitCode !== 0) throw new GitCommandError('common_dir', result);
+    const canonicalCommonDir = await realpath(gitLine(result.stdout));
+    const policy = await policyFor(canonicalCommonDir);
+    await authorize({ ...ref, canonicalPath: canonicalCommonDir, pathPolicy: policy }, 'write');
+  }
+  // Authorize the destination parent and resolve the child path without testing
+  // the filesystem. The existence check belongs to the pre-send re-verification:
+  // an idempotent retry of a completed create must reach the journal, which owns
+  // the answer, instead of being refused by the bytes its own success produced.
+  async function destinationRef(parent, name) {
     requireValue(
       typeof name === 'string' &&
         name.length > 0 &&
@@ -98,14 +119,17 @@ export async function createTargetGitCommand({
       'git.destination',
     );
     const workspace = await authorize(parent, 'write');
-    const canonicalPath = path.join(workspace.canonicalPath, name);
+    return { ...workspace, canonicalPath: path.join(workspace.canonicalPath, name) };
+  }
+  async function destination(parent, name) {
+    const resolved = await destinationRef(parent, name);
     try {
-      await lstat(canonicalPath);
+      await lstat(resolved.canonicalPath);
       throw new ProtocolError('conflict', 'git.destination_exists');
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error;
     }
-    return { ...workspace, canonicalPath };
+    return resolved;
   }
   async function start({ workspace, args, mutation = false }) {
     requireValue(
@@ -119,7 +143,10 @@ export async function createTargetGitCommand({
       'git.argv',
     );
     const ref = await authorize(workspace);
-    if (mutation) await authorize(ref, 'write');
+    if (mutation) {
+      await authorize(ref, 'write');
+      await authorizeCommonDirectory(ref);
+    }
     current();
     const env = Object.fromEntries(
       Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
@@ -181,8 +208,10 @@ export async function createTargetGitCommand({
   }
   return {
     authorize,
+    authorizeCommonDirectory,
     policyFor,
     destination,
+    destinationRef,
     start,
     async run(request) {
       return (await start(request)).wait();

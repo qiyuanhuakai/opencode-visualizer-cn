@@ -109,6 +109,7 @@ export async function createAcpMutations({
       method,
       payload: input.payload,
       parent: input.parent ?? null,
+      interaction: input.interaction ?? null,
     });
     const prepared = preparePayload(input.payload, `body:${key}:${digest}`);
     const control = !!input.parent;
@@ -264,38 +265,56 @@ export async function createAcpMutations({
         phase: 'observed',
         resultRef: resultBody.ref,
       });
-      const terminalGuards = [
-        await authority(),
-        {
-          collection: 'operations',
-          key: leaseId,
-          expectedRevision: owned.revision,
-          value: control ? owned.value : null,
-        },
-      ];
-      if (input.interaction) {
-        const interaction = await readRecord(store, 'interactions', input.interaction);
-        if (interaction?.value.operationId !== key)
-          throw new StoreError('reconcile_required', 'interaction_claimed');
-        terminalGuards.push({
-          collection: 'interactions',
-          key: input.interaction,
-          expectedRevision: interaction.revision,
-          value: { ...interaction.value, phase: 'replied' },
-        });
+      const terminalValue = () => ({
+        ...record.value,
+        phase: 'terminal',
+        outcome: result?.stopReason === 'cancelled' ? 'cancelled' : 'completed',
+      });
+      // The shared process row stays out of this CAS: a guard rewriting a byte-identical
+      // value only bumped its revision, so concurrent completions invalidated each other's
+      // precondition. Generation is re-validated instead - authority() per attempt plus the
+      // synchronous assertCurrent() immediately before the commit - and a completion only
+      // writes its own operation, lease and interaction rows.
+      let finished = false;
+      for (let attempt = 0; attempt < 4 && !finished; attempt++) {
+        await authority();
+        const current = await readRecord(store, 'operations', leaseId);
+        if (
+          current?.value?.operationId !== leaseValue.operationId ||
+          current.value.runtimeOwner !== owner
+        )
+          throw new StoreError('reconcile_required', 'original_lease');
+        const terminalGuards = [];
+        if (!control)
+          terminalGuards.push({
+            collection: 'operations',
+            key: leaseId,
+            expectedRevision: current.revision,
+            value: null,
+          });
+        if (input.interaction) {
+          const interaction = await readRecord(store, 'interactions', input.interaction);
+          if (interaction?.value.operationId !== key)
+            throw new StoreError('reconcile_required', 'interaction_claimed');
+          terminalGuards.push({
+            collection: 'interactions',
+            key: input.interaction,
+            expectedRevision: interaction.revision,
+            value: { ...interaction.value, phase: 'replied' },
+          });
+        }
+        assertCurrent();
+        try {
+          await compareRecord(store, 'operations', key, record, terminalValue(), terminalGuards);
+          finished = true;
+        } catch (error) {
+          if (!isRevisionConflict(error) || attempt === 3) throw error;
+          const latest = await get(key);
+          if (!latest || latest.value.phase !== 'observed')
+            throw new StoreError('reconcile_required', 'operation_phase');
+          record = latest;
+        }
       }
-      await compareRecord(
-        store,
-        'operations',
-        key,
-        record,
-        {
-          ...record.value,
-          phase: 'terminal',
-          outcome: result?.stopReason === 'cancelled' ? 'cancelled' : 'completed',
-        },
-        terminalGuards,
-      );
       return { operationId: key, phase: 'native-executed', result };
     } catch (error) {
       await reconcile(key);

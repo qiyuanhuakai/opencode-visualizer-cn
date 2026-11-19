@@ -67,16 +67,22 @@ test('this startup\'s own marker does satisfy readiness', async () => {
   await awaitLabReady(lab, 5000, probe);
 });
 
-test('the completion marker is written after the version record it certifies', () => {
+test('the completion marker follows every command writing the version record', () => {
   const script = labSetupScript('tok');
-  const markerAt = script.indexOf(`touch ${`${LEGACY_MARKER}-tok`}`);
-  const versionsAt = script.indexOf('/tmp/lab-versions.txt');
-  assert.ok(markerAt !== -1, 'the setup script must write the token-specific completion marker');
-  assert.ok(versionsAt !== -1, 'the setup script must write the version record');
-  assert.ok(
-    markerAt > versionsAt,
-    'the marker precedes the version record, so readLabDescriptor can observe an empty or partial /tmp/lab-versions.txt',
-  );
+  const marker = `touch ${LEGACY_MARKER}-tok`;
+  const writes = (value) => value.split('\n').filter(line =>
+    !line.trimStart().startsWith('#') && />{1,2} \/tmp\/lab-versions\.txt(?: |$)/.test(line));
+  const versions = writes(script);
+  assert.equal(versions.length, 5, 'the setup must emit all five version commands');
+  const markerFollowsWrites = (value) => {
+    const lines = value.split('\n');
+    const markerAt = lines.indexOf(marker);
+    return markerAt !== -1 && writes(value).every(line => lines.lastIndexOf(line) < markerAt);
+  };
+  assert.ok(markerFollowsWrites(script), 'readiness must follow completion of the version record');
+  const lastWrite = versions.at(-1);
+  const reordered = script.replace(marker, '').replace(lastWrite, `${marker}\n${lastWrite}`);
+  assert.equal(markerFollowsWrites(reordered), false, 'the gate must reject a marker preceding the last write');
 });
 
 test('the setup script sweeps stale markers before it installs anything', () => {

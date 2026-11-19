@@ -13,13 +13,15 @@ export interface KimiWebHistory {
   selected(sessionId: string, agentId?: string): unknown;
   receive(frame: KimiFrame, connection: number): boolean;
   read(sessionId: string, options?: { readonly agentId?: string; readonly cursor?: string; readonly limit?: number; readonly signal?: AbortSignal }): Promise<KimiHistoryPage>;
-  recover(sessionId: string): Promise<{ readonly cursor: KimiCursor; readonly recovered: true }>;
+  recover(sessionId: string): Promise<{ readonly cursor: KimiCursor | null; readonly recovered: true }>;
   cursor(sessionId: string): KimiCursor | undefined;
   transcriptCursors(sessionId: string): Readonly<Record<string, number>>;
   inspect(sessionId: string, agentId?: string): { readonly cursor: KimiCursor | null; readonly transcriptSeq: number | null; readonly snapshot: KimiTranscript; readonly recovering: boolean };
+  release(sessionId: string): void;
+  resident(): number;
   clear(): void;
 }
-export function createKimiWebHistory(options: { readonly transport: KimiWebTransport; readonly onRecovered?: (sessionId: string, value: { readonly cursor: KimiCursor; readonly buffered: number }) => void }): KimiWebHistory;
+export function createKimiWebHistory(options: { readonly transport: Pick<KimiWebTransport, 'request'>; readonly legacySnapshot?: () => boolean; readonly onRecovered?: (sessionId: string, value: { readonly cursor: KimiCursor | null; readonly buffered: number }) => void }): KimiWebHistory;
 
 /** Trusted authority captured by the driver from its own construction, never from caller params. */
 export type KimiHistoryAuthority = Readonly<{ readonly epoch: string; readonly processGeneration: number }>;

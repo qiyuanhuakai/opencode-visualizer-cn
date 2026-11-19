@@ -1,3 +1,4 @@
+import { createKimiWebRecovery } from './kimiWebRecovery.js';
 import { encodeSessionKey } from '../../../shared/runtime/identity.js';
 import { ProtocolError, jsonValue } from '../../../shared/runtime/capabilities.js';
 import { nativeText, record } from '../../../shared/runtime/native/kimiWeb/protocol.js';
@@ -7,18 +8,19 @@ import { createAdmissionQueue } from '../admissionQueue.js';
 
 function clean(value) { return JSON.parse(JSON.stringify(jsonValue(value))); }
 function fail(code, reason) { throw new ProtocolError(code, reason); }
-export function createKimiWebOperations({ store, transport, isCurrent, admission = createAdmissionQueue() }) {
+export function createKimiWebOperations({ store, transport, isCurrent, promptAbort = () => false, admission = createAdmissionQueue() }) {
   const journal = createOperationJournal({ store, admission, isProcessCurrent: isCurrent });
   const interactions = createInteractionStore({ store, admission });
   const bound = new Map();
+  const recoveryAuthority = createKimiWebRecovery({ store, isCurrent });
   const leaseKey = (scope) => `lease:${fingerprint(encodeSessionKey(scope.session))}`;
   function fence(scope) { if (!isCurrent(scope)) fail('reconcile_required', 'stale_generation'); }
-  async function instance(scope, method, payload, idempotencyKey, pathname) {
+  async function instance(scope, method, payload, idempotencyKey, pathname, httpMethod = 'POST', createsSession = true) {
     scope = clean(scope); payload = clean(payload);
     nativeText(idempotencyKey, 'idempotency_key', 512);
     const digest = fingerprint({ scope, method, payload });
     const key = `kimi-instance:${fingerprint([scope.target, scope.harnessInstanceId, idempotencyKey])}`;
-    const prepared = await transport.prepare('POST', pathname, payload);
+    const prepared = await transport.prepare(httpMethod, pathname, payload);
     return admission.run({ size: Buffer.byteLength(JSON.stringify(payload)) }, async (signal) => {
       const ready = await store.ready;
       if (ready.environment !== scope.target) fail('conflict', 'store_target');
@@ -36,26 +38,34 @@ export function createKimiWebOperations({ store, transport, isCurrent, admission
         if (signal.aborted) fail('timeout', 'deadline');
         const result = await prepared.send(signal);
         fence(scope);
-        const nativeSessionId = nativeText(record(result).id, 'created_session_id', 512);
-        await compareRecord(store, 'operations', key, sent, { ...sent.value, phase: 'terminal', outcome: 'completed', nativeSessionId });
+        const nativeSessionId = createsSession ? nativeText(record(result).id, 'created_session_id', 512) : undefined;
+        await compareRecord(store, 'operations', key, sent, { ...sent.value, phase: 'terminal', outcome: 'completed', ...(nativeSessionId ? { nativeSessionId } : {}) });
         return { phase: 'native-executed', operationId: key, result };
       } catch (error) {
+        if (!createsSession && Number.isSafeInteger(error.nativeBusinessCode) && error.code !== 'unauthorized') {
+          const result = { __kimiBusinessError: error.nativeBusinessCode };
+          await compareRecord(store, 'operations', key, sent, { ...sent.value, phase: 'terminal', outcome: 'rejected', result });
+          return { phase: 'native-executed', operationId: key, result };
+        }
         const current = await readRecord(store, 'operations', key);
         if (current?.value.phase === 'sent') await compareRecord(store, 'operations', key, current, { ...current.value, phase: 'reconciling' });
         throw error;
       }
     });
   }
-  async function bind(scope) {
+  async function bind(scope, resumed = false) {
+    fence(scope);
     const key = fingerprint(scope);
     if (bound.has(key)) return bound.get(key).promise;
-    const promise = interactions.bindProcess(scope);
+    const promise = resumed ? interactions.resumeProcess(scope) : interactions.bindProcess(scope);
     bound.set(key, { scope, promise });
     try { await promise; } catch (error) { bound.delete(key); throw error; }
   }
   async function send(scope, payload, idempotencyKey) {
     scope = clean(scope); payload = clean(payload);
     nativeText(idempotencyKey, 'idempotency_key', 512);
+    // A rejected new send must not overwrite a prior Runtime task's process proof.
+    if (!bound.has(fingerprint(scope)) && (await readRecord(store, 'operations', leaseKey(scope), false))?.value?.operationId) fail('conflict', 'session_busy');
     const promptId = `vis-${fingerprint([scope, idempotencyKey])}`;
     payload = { ...payload, prompt_id: promptId };
     fence(scope);
@@ -75,6 +85,17 @@ export function createKimiWebOperations({ store, transport, isCurrent, admission
     }
     return { ...executed, promptId };
   }
+  async function nativeMutation(scope, method, payload, idempotencyKey, pathname, httpMethod = 'POST') {
+    scope = clean(scope); payload = clean(payload); fence(scope);
+    if (!['POST', 'PATCH'].includes(httpMethod)) fail('invalid_request', 'native_mutation_method');
+    const prepared = await transport.prepare(httpMethod, pathname, payload);
+    const accepted = await journal.accept({ scope, method, payload, idempotencyKey });
+    const executed = await journal.execute(accepted.operationId, scope, async ({ signal }) => {
+      fence(scope); const result = await prepared.send(signal); fence(scope); return result ?? null;
+    });
+    await journal.terminal(accepted.operationId, scope, 'completed');
+    return executed;
+  }
   async function started(scope, payload) {
     if ((payload.agentId ?? payload.agent_id ?? 'main') !== 'main') return;
     const lease = await readRecord(store, 'operations', leaseKey(scope));
@@ -84,7 +105,7 @@ export function createKimiWebOperations({ store, transport, isCurrent, admission
     if (!binding || fingerprint(binding.value.scope) !== fingerprint(scope) || binding.value.promptId !== payload.promptId) return;
     if (typeof payload.turnId !== 'string' && !Number.isSafeInteger(payload.turnId)) fail('invalid_request', 'native_turn_id');
     fence(scope);
-    await compareRecord(store, 'operations', key, binding, { ...binding.value, turnId: payload.turnId });
+    if (binding.value.turnId !== payload.turnId) await compareRecord(store, 'operations', key, binding, { ...binding.value, turnId: payload.turnId });
   }
   async function parent(scope, operationId) {
     nativeText(operationId, 'parent_operation', 512);
@@ -136,10 +157,18 @@ export function createKimiWebOperations({ store, transport, isCurrent, admission
   }
   async function cancel(scope, operationId, idempotencyKey) {
     scope = clean(scope);
-    const prepared = await transport.prepare('POST', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}:abort`);
+    let pathname = `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}:abort`;
+    if (promptAbort()) {
+      await parent(scope, operationId);
+      const binding = await readRecord(store, 'operations', `kimi-native:${operationId}`);
+      if (!binding || fingerprint(binding.value.scope) !== fingerprint(scope)) fail('conflict', 'cancel_prompt_scope');
+      const promptId = nativeText(binding.value.promptId, 'native_prompt_id', 512);
+      pathname = `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/prompts/${encodeURIComponent(promptId)}:abort`;
+    }
+    const prepared = await transport.prepare('POST', pathname);
     return control(scope, operationId, 'cancel', {}, idempotencyKey, prepared);
   }
-  async function pending(scope, kind, nativeRequestId, payload) {
+  async function pending(scope, kind, nativeRequestId, payload, modern = false) {
     scope = clean(scope); payload = clean(payload);
     await bind(scope);
     const lease = await readRecord(store, 'operations', leaseKey(scope));
@@ -148,13 +177,79 @@ export function createKimiWebOperations({ store, transport, isCurrent, admission
     const binding = await readRecord(store, 'operations', `kimi-native:${lease.value.operationId}`);
     if (!binding || binding.value.turnId === undefined || binding.value.turnId !== (payload.turn_id ?? payload.turnId))
       fail('reconcile_required', 'interaction_turn_unknown');
-    const key = await interactions.pending({ scope, nativeRequestId, payload: { kind, nativeRequestId, details: payload } });
+    const key = await interactions.pending({ scope, nativeRequestId, parentOperationId: lease.value.operationId, payload: { kind, nativeRequestId, details: payload } });
     const metadataKey = `kimi-interaction:${key}`;
     const prior = await readRecord(store, 'operations', metadataKey);
-    const value = { scope, kind, nativeRequestId, parentOperationId: lease.value.operationId };
+    const value = { scope, kind, nativeRequestId, parentOperationId: lease.value.operationId, ...(modern ? { modern: true } : {}) };
     if (prior && fingerprint(prior.value) !== fingerprint(value)) fail('conflict', 'interaction_parent_changed');
     if (!prior) await compareRecord(store, 'operations', metadataKey, null, value);
     return key;
+  }
+  async function modernInteraction(scope, frame, recovery) {
+    scope = clean(scope);
+    fence(scope);
+    if (frame.agent_id !== 'main' || !['question', 'approval'].includes(frame.kind) || !['pending', 'ended'].includes(frame.status)) return null;
+    const kind = frame.kind;
+    const nativeRequestId = nativeText(frame.interaction_id, 'native_request_id', 512);
+    const toolCallId = nativeText(frame.tool_call_id, 'native_tool_call_id', 512);
+    const page = recovery?.page ?? record(await transport.request('GET', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/transcript?agent_id=main&page_size=100`));
+    fence(scope);
+    const item = recovery?.item ?? page.interactions?.find(item => item.interactionId === nativeRequestId && item.interactionKind === kind && item.toolCallId === toolCallId);
+    if (!item) return null;
+    if ((kind === 'question' ? ['answered', 'dismissed', 'cancelled'] : ['approved', 'rejected', 'cancelled']).includes(item.state)) {
+      await interactions.invalidatePending(scope, nativeRequestId);
+      return null;
+    }
+    if (item.state !== 'pending' || frame.status !== 'pending') return null;
+    const lease = await readRecord(store, 'operations', leaseKey(scope));
+    if (recovery && lease?.value?.operationId !== recovery.operationId) return null;
+    if (!lease?.value?.operationId) fail('reconcile_required', 'interaction_parent_unknown');
+    const binding = await readRecord(store, 'operations', `kimi-native:${lease.value.operationId}`);
+    if (!binding || fingerprint(binding.value.scope) !== fingerprint(scope)) fail('reconcile_required', 'interaction_parent_unknown');
+    const turns = (page.items ?? []).filter(turn => turn.kind === 'turn' && turn.triggerPromptId === binding.value.promptId);
+    const identities = new Set(turns.map(turn => nativeText(turn.turnId, 'native_turn_id', 512)));
+    if (turns.length && (identities.size !== 1 || binding.value.turnId !== undefined && !identities.has(binding.value.turnId))) fail('reconcile_required', 'native_turn_identity');
+    const request = record(item.request);
+    const toolName = kind === 'question' ? 'AskUserQuestion' : nativeText(request.tool_name ?? request.toolName, 'native_tool_name', 512);
+    const proof = recovery?.tools.get(toolCallId);
+    const turn = turns.at(-1);
+    const ownsTool = turn && (recovery ? proof?.turnId === turn.turnId && proof.name === toolName : turn.steps?.some(step => step.frames?.some(frame => frame.kind === 'tool' && frame.toolCallId === toolCallId && frame.name === toolName)));
+    if (!turn || turn.state !== 'running' || !ownsTool || (request.session_id ?? request.sessionId) !== scope.session.nativeSessionId || (request.agent_id ?? request.agentId ?? 'main') !== 'main') fail('reconcile_required', 'interaction_turn_unknown');
+    await started(scope, { promptId: binding.value.promptId, turnId: turn.turnId, agentId: 'main' });
+    const payload = { ...request, ...(kind === 'approval' ? { tool_name: toolName, ...(request.display ? { tool_input_display: request.display } : {}) } : {}), turnId: turn.turnId, turn_id: turn.turnId };
+    const interactionId = await pending(scope, kind, nativeRequestId, payload, true);
+    const canonical = await readRecord(store, 'interactions', interactionId, false);
+    return canonical?.value.phase === 'pending' ? { interactionId, payload } : null;
+  }
+  async function recoverModernInteractions(scope, page, onPending = () => {}) {
+    fence(scope);
+    const recoveredFrom = await recoveryAuthority.adopt(scope, page);
+    if (recoveredFrom && !bound.has(fingerprint(scope))) await bind(scope, true);
+    // Browsing unowned native history does not acquire a task or process binding.
+    if (!bound.has(fingerprint(scope))) return;
+    const lease = await readRecord(store, 'operations', leaseKey(scope));
+    if (!lease?.value?.operationId) return;
+    const binding = await readRecord(store, 'operations', `kimi-native:${lease.value.operationId}`);
+    if (!binding || fingerprint(binding.value.scope) !== fingerprint(scope)) return;
+    const owned = page.items.filter(turn => turn.kind === 'turn' && turn.triggerPromptId === binding.value.promptId);
+    const tools = new Map();
+    for (const turn of owned) for (const step of turn.steps ?? []) for (const frame of step.frames ?? []) {
+      if (frame.kind !== 'tool') continue;
+      const prior = tools.get(frame.toolCallId);
+      if (prior && (prior.turnId !== turn.turnId || prior.name !== frame.name)) fail('reconcile_required', 'native_tool_identity');
+      tools.set(frame.toolCallId, { turnId: turn.turnId, name: frame.name });
+    }
+    const recovery = { page, operationId: lease.value.operationId, tools };
+    let handled = 0;
+    for (const item of page.interactions ?? []) {
+      if (!tools.has(item.toolCallId) || !['question', 'approval'].includes(item.interactionKind) || !['pending', 'answered', 'dismissed', 'cancelled', 'approved', 'rejected'].includes(item.state)) continue;
+      fence(scope);
+      if (recoveredFrom) await recoveryAuthority.retire(scope, recoveredFrom, item.interactionId, lease.value.operationId, item.state);
+      const pending = await modernInteraction(scope, { agent_id: 'main', kind: item.interactionKind, status: item.state === 'pending' ? 'pending' : 'ended', interaction_id: item.interactionId, tool_call_id: item.toolCallId }, { ...recovery, item });
+      if (pending) onPending(pending, item.interactionKind);
+      // A large owned turn remains incremental; control requests can interleave.
+      if (++handled % 16 === 0) await new Promise(resolve => setImmediate(resolve));
+    }
   }
   async function reply(scope, interactionId, answer, idempotencyKey) {
     scope = clean(scope); answer = clean(answer);
@@ -162,29 +257,60 @@ export function createKimiWebOperations({ store, transport, isCurrent, admission
     if (!metadata || fingerprint(metadata.value.scope) !== fingerprint(scope)) fail('conflict', 'interaction_scope');
     const { kind, nativeRequestId, parentOperationId } = metadata.value;
     if (kind !== 'approval' && kind !== 'question') fail('invalid_request', 'interaction_kind');
-    const prepared = await transport.prepare('POST', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/${kind === 'approval' ? 'approvals' : 'questions'}/${encodeURIComponent(nativeRequestId)}`, answer);
+    const prepared = metadata.value.modern === true
+      ? await transport.prepare('POST', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/interactions/${encodeURIComponent(nativeRequestId)}`, answer.dismiss === true ? { kind, dismissed: true } : { ...answer, kind })
+      : await transport.prepare('POST', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/${kind === 'approval' ? 'approvals' : 'questions'}/${encodeURIComponent(nativeRequestId)}${kind === 'question' && answer.dismiss === true ? ':dismiss' : ''}`, kind === 'question' && answer.dismiss === true ? undefined : answer);
     return control(scope, parentOperationId, 'respondInteraction', { interactionId, answer }, idempotencyKey, prepared,
       (enqueue) => interactions.reply(interactionId, scope, answer, ({ signal }) => enqueue(signal)));
   }
   async function terminal(scope, payload) {
-    if ((payload.agentId ?? payload.agent_id ?? 'main') !== 'main') return;
+    if ((payload.agentId ?? payload.agent_id ?? 'main') !== 'main') return null;
     if (!['completed', 'failed', 'cancelled'].includes(payload.reason)) fail('invalid_request', 'native_terminal_reason');
     const lease = await readRecord(store, 'operations', leaseKey(scope));
-    if (!lease?.value?.operationId) return;
+    if (!lease?.value?.operationId) return null;
     const operation = await journal.get(lease.value.operationId);
     if (fingerprint(operation.scope) !== fingerprint(scope)) fail('reconcile_required', 'terminal_scope');
     const binding = await readRecord(store, 'operations', `kimi-native:${lease.value.operationId}`);
-    if (!binding || binding.value.turnId === undefined || binding.value.turnId !== payload.turnId) return;
+    if (!binding || binding.value.turnId === undefined || binding.value.turnId !== payload.turnId) return null;
     await journal.terminal(lease.value.operationId, scope, payload.reason);
+    return { operationId: lease.value.operationId, turnId: payload.turnId };
+  }
+  async function syncTranscript(scope, turns) {
+    fence(scope);
+    const lease = await readRecord(store, 'operations', leaseKey(scope));
+    if (!lease?.value?.operationId) return null;
+    const binding = await readRecord(store, 'operations', `kimi-native:${lease.value.operationId}`);
+    if (!binding || fingerprint(binding.value.scope) !== fingerprint(scope)) return null;
+    const owned = turns.filter(turn => turn?.kind === 'turn' && turn.triggerPromptId === binding.value.promptId);
+    if (!owned.length) return null;
+    const identities = new Set(owned.map(turn => nativeText(turn.turnId, 'native_turn_id', 512)));
+    if (identities.size !== 1 || binding.value.turnId !== undefined && !identities.has(binding.value.turnId)) fail('reconcile_required', 'native_turn_identity');
+    const turn = owned.at(-1);
+    await started(scope, { promptId: binding.value.promptId, turnId: turn.turnId, agentId: 'main' });
+    if (!['completed', 'failed', 'cancelled'].includes(turn.state)) return null;
+    const ended = await terminal(scope, { turnId: turn.turnId, reason: turn.state, agentId: 'main' });
+    return ended ? { ...ended, reason: turn.state } : null;
+  }
+  // The live main-task operation of a session, or null when none has to be reconciled: only a task that reached the durable SENT marker (or whose acknowledgement cannot be accounted for) still owns the session. A failed read throws: the caller must not read an unreadable state as an idle session.
+  async function liveTask(scope) {
+    scope = clean(scope);
+    const lease = await readRecord(store, 'operations', leaseKey(scope));
+    if (!lease?.value?.operationId) return null;
+    const operation = await journal.get(lease.value.operationId);
+    return ['sent', 'observed', 'reconciling'].includes(operation.phase) ? lease.value.operationId : null;
   }
   async function close() {
-    for (const { scope, promise } of bound.values()) {
-      await promise;
-      await interactions.processExited(scope);
+    let failed;
+    for (const [key, entry] of bound) {
+      try {
+        await entry.promise;
+        await interactions.processExited(entry.scope);
+        if (bound.get(key) === entry) bound.delete(key);
+      } catch (error) { failed ??= { error }; }
     }
-    bound.clear();
+    if (failed) throw failed.error;
   }
-  return { instance, send, started, cancel, pending, reply, terminal, journal, interactions, admission,
+  return { instance, send, nativeMutation, started, cancel, pending, modernInteraction, recoverModernInteractions, reply, terminal, syncTranscript, liveTask, journal, interactions, admission,
     async invalidate(scope) { await interactions.processExited(scope); },
     close,
   };

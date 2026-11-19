@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, nextTick } from 'vue';
 
 import { AURORA_TIDE_PRESET, SOFT_WHITE_PRESET } from '../utils/regionTheme';
-import { StorageKeys, storageKey } from '../utils/storageKeys';
+import { StorageKeys, storageGet } from '../utils/storageKeys';
 import {
   DEFAULT_SYNTAX_THEME,
   SEMANTIC_THEME_TOKENS,
@@ -106,7 +106,7 @@ describe('useRegionTheme', () => {
     vi.runAllTimers();
 
     expect(document.documentElement.getAttribute('data-region-theme')).toBe('aurora-tide');
-    expect(window.localStorage.getItem(storageKey(StorageKeys.settings.themeTokens))).toContain('"version":2');
+    expect(storageGet(StorageKeys.settings.themeTokens)).toContain('"version":2');
     expect(document.documentElement.style.getPropertyValue('--theme-top-bg')).toBe('#142a35');
     expect(document.documentElement.style.getPropertyValue('--theme-side-bg')).toContain('linear-gradient');
     expect(document.documentElement.style.getPropertyValue('--theme-output-bg')).toContain('linear-gradient');
@@ -157,11 +157,11 @@ describe('useRegionTheme', () => {
     api.applyPreset('aurora-tide');
     await nextTick();
 
-    expect(window.localStorage.getItem(storageKey(StorageKeys.settings.themeTokens))).toBeNull();
+    expect(storageGet(StorageKeys.settings.themeTokens)).toBeNull();
 
     window.dispatchEvent(new Event('pagehide'));
 
-    expect(window.localStorage.getItem(storageKey(StorageKeys.settings.themeTokens))).toContain('"preset":"aurora-tide"');
+    expect(storageGet(StorageKeys.settings.themeTokens)).toContain('"preset":"aurora-tide"');
 
     unmount();
   });

@@ -106,7 +106,7 @@ export function scanRawFrame(text) {
           case 0x74: ch = '\t'; break;
           default: syntax();
         }
-        pos += 2;
+        pos += 1;
         units += 1;
         if (collect) value += ch;
         continue;

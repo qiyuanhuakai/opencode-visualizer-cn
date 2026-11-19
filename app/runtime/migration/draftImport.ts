@@ -39,10 +39,24 @@ async function smallDraftParts(content: string): Promise<InlineDraft['parts']> {
   }
   return parts;
 }
+export function createTraversalId(): string {
+  const webcrypto: Crypto | undefined = typeof crypto === 'undefined' ? undefined : crypto;
+  if (webcrypto && typeof webcrypto.randomUUID === 'function') return webcrypto.randomUUID();
+  // crypto.randomUUID is SecureContext-only, so a plain LAN HTTP origin lacks it while
+  // crypto.getRandomValues stays available; the migration must not depend on the origin.
+  const fill = webcrypto && typeof webcrypto.getRandomValues === 'function' ? webcrypto.getRandomValues.bind(webcrypto) : undefined;
+  if (fill) {
+    const bytes = new Uint8Array(16); fill(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  return `traversal-${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
+}
 export async function importLegacyDrafts(store: DraftStore, record: ArchivedRecord): Promise<number> {
   if (record.metadata.hint.kind !== 'composer' && record.metadata.hint.kind !== 'question') return 0;
   let identity: DraftIdentity | null = null; let digest = new DraftDigest(); let bytes = 0; let chunks = 0; let count = 0;
-  const traversal = crypto.randomUUID(); let pending: InlineDraft[] = [];
+  const traversal = createTraversalId(); let pending: InlineDraft[] = [];
   const metadata = (key: string) => ({ sourceKey: record.metadata.sourceKey, legacyContext: key, kind: record.metadata.hint.kind, traversal });
   async function checkUnique(keys: readonly string[]): Promise<void> {
     if (new Set(keys).size !== keys.length) throw new DraftStorageError('corrupt');

@@ -1,6 +1,13 @@
 import { encodeSessionKey } from '../../identity.js';
 import { requireValue } from '../../capabilities.js';
 
+function sessionStatus(value) {
+  const type = typeof value === 'string' ? value : value?.type;
+  if (['active', 'running', 'inProgress', 'busy'].includes(type)) return 'busy';
+  if (['systemError', 'retry'].includes(type)) return 'retry';
+  return type === 'idle' ? 'idle' : null;
+}
+
 export function createCodexCatalog({ store, sessionFor, assertCurrent, newId, privacy }) {
   let revision = 0;
   const keyFor = (session) => `codex-catalog:${encodeSessionKey(session)}`;
@@ -71,6 +78,7 @@ export function createCodexCatalog({ store, sessionFor, assertCurrent, newId, pr
       source: thread.source ?? null,
       agentNickname: thread.agentNickname ?? null,
       agentRole: thread.agentRole ?? null,
+      status: sessionStatus(thread.status),
     });
   }
   return {

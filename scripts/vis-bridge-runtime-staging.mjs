@@ -37,10 +37,11 @@
 // Returns the installRoot to hand to resolveStoreWorker/createRuntimeStore.
 
 import { build } from 'esbuild';
-import { chmod, copyFile, mkdir, rm } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const WORKER_ENTRY = ['bridge', 'runtime', 'storage', 'runtimeDatabaseWorker.mjs'];
+const HELPER_ENTRIES = ['bridge/runtime/transports/slurmComputeRuntime.js', 'bridge/runtime/transports/slurmStdioRelay.js', 'bridge/runtime/transports/sshAskpass.mjs', WORKER_ENTRY.join('/')];
 const STORAGE_PREFIX = 'bridge/runtime/storage/';
 const STAGED_RUNTIME_DIRECTORY = 'bridge/runtime/runtime';
 
@@ -88,6 +89,16 @@ export async function computeRuntimeWorkerClosure(rootDirectory) {
     .sort();
 }
 
+/** Source closure needed by the installed SSH/Slurm child entry points. */
+export async function computeRuntimeHelperClosure(rootDirectory) {
+  const helpers = await build({
+    entryPoints: HELPER_ENTRIES,
+    bundle: true, write: false, metafile: true, outdir: 'unused-runtime-helper-output',
+    format: 'esm', platform: 'node', target: 'node24', external: ['node-pty'], absWorkingDir: rootDirectory, logLevel: 'silent',
+  });
+  return Object.keys(helpers.metafile.inputs).map(input => input.split(path.sep).join('/')).sort();
+}
+
 export async function stageRuntimeWorkerSidecar(rootDirectory, stageRoot, options = {}) {
   const platform = options.platform ?? process.platform;
   const sidecarSource = options.sidecarSource ?? process.execPath;
@@ -105,5 +116,12 @@ export async function stageRuntimeWorkerSidecar(rootDirectory, stageRoot, option
   }
   await copyFile(sidecarSource, layout.sidecarPath);
   if (platform !== 'win32') await chmod(layout.sidecarPath, 0o755);
-  return { ...layout, platform, sidecarSource, stagedFiles: closure.map(stagedRelativePath) };
+  const helperClosure = await computeRuntimeHelperClosure(rootDirectory);
+  for (const relativePath of helperClosure) {
+    const destination = path.join(stageRoot, relativePath);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await copyFile(path.join(rootDirectory, relativePath), destination);
+  }
+  await writeFile(path.join(stageRoot, 'package.json'), '{"type":"module"}\n');
+  return { ...layout, platform, sidecarSource, stagedFiles: [...new Set([...closure.map(stagedRelativePath), ...helperClosure, 'package.json'])] };
 }

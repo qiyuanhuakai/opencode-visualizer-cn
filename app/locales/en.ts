@@ -54,10 +54,16 @@ const messages: LocaleMessages = {
       remoteLocalEditor: 'the local editor opens paths on this machine only',
       remoteLocalApplication: 'the local application opens files on this machine only',
     },
+    runtimeBridgeMenu: {
+      title: 'Bridge',
+      connections: 'Connections',
+      migration: 'Migrate workspace data',
+      agentSettings: 'Agent settings',
+    },
     runtimeConnection: {
       title: 'Connect to a Bridge target',
       description:
-        'One Bridge entry point binds a connection profile to its target. Pick a profile; every workspace action is authorized for that target.',
+        'Connect to vis_bridge to access your agents and sessions.',
       profilesLabel: 'Connection profiles',
       unsupported: 'not supported by',
       connect: 'Connect',
@@ -89,6 +95,9 @@ const messages: LocaleMessages = {
       resultSummary:
         '{records} record(s), {chunks} chunk(s), {drafts} draft(s) migrated (import {importId})',
       retained: 'The legacy original is retained. Retry the migration without losing it.',
+      storageUnavailable: 'Local storage could not save the migration. Retry to continue; the original data is retained.',
+      storageFull: 'Local storage is full. Make space, then retry. The original data is retained.',
+      storagePaused: 'Migration is paused. Retry to save the pending changes.',
       start: 'Migrate',
       retry: 'Retry',
     },
@@ -1630,6 +1639,8 @@ const messages: LocaleMessages = {
     viewSubagentTitle: 'Open subagent history for {sessionId}',
   },
   subagentHistory: {
+    loadFailed: 'Unable to load subagent history. Try again.',
+    nextPage: 'Next history page',
     title: 'Subagent',
     close: 'Close',
     empty: 'No subagent history available yet.',

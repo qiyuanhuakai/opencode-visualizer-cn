@@ -6,6 +6,10 @@ export const INTAKE_LIMITS = Object.freeze({ bytes: 4194304, events: 256, frameB
 function normalize(source, event) {
   const type = event.type;
   if (typeof type !== 'string') throw new StoreError('invalid_request', 'index_event_type');
+  if (type === 'session.activity') {
+    if (!['running', 'idle'].includes(event.status)) throw new StoreError('invalid_request', 'index_activity_status');
+    return { kind: 'activity', session: parseSessionRef(event.session), status: event.status };
+  }
   if (/interaction|permission|approval|question|operation\.|turn\/completed|session\.idle/.test(type)) return { kind: 'control' };
   if (['source-error', 'replay_required', 'process.invalidated'].includes(type)) return { kind: 'recover' };
   if (['session.deleted', 'thread/deleted'].includes(type)) return { kind: 'delete', session: parseSessionRef(event.session) };
@@ -13,7 +17,7 @@ function normalize(source, event) {
   if (type === 'catalog_changed' || type === 'native-emit' || type.startsWith('thread/') || type.startsWith('session.')) return { kind: 'dirty' };
   return { kind: 'ignore' };
 }
-export function createNativeEventIntake({ source, mutations, dirty, onControl, onFailure }) {
+export function createNativeEventIntake({ source, mutations, dirty, invalidate = dirty, onControl, onFailure }) {
   const queue = [];
   let bytes = 0;
   let count = 0;
@@ -48,6 +52,7 @@ export function createNativeEventIntake({ source, mutations, dirty, onControl, o
         if (entry.value.kind === 'delete' || entry.value.kind === 'update') {
           await mutations.event({ source: source.identity, authority: entry.authority, summary: entry.value.summary, session: entry.value.session, deleted: entry.value.kind === 'delete', assertCurrent });
         }
+        if (entry.value.kind === 'activity') await mutations.activity({ source: source.identity, authority: entry.authority, session: entry.value.session, status: entry.value.status, assertCurrent });
       } catch (error) { fail(error); }
       finally { bytes -= entry.bytes; count--; }
     }
@@ -71,7 +76,8 @@ export function createNativeEventIntake({ source, mutations, dirty, onControl, o
       if (value.kind === 'control') { onControl(); return true; }
       if (value.kind === 'ignore') return true;
       if (value.kind === 'recover') throw new StoreError('replay_required', 'index_native_recovery');
-      dirty();
+      if (value.kind === 'activity') invalidate();
+      else dirty();
       if (value.kind === 'dirty') return true;
       const size = Buffer.byteLength(JSON.stringify(value));
       if (count >= INTAKE_LIMITS.events || bytes + size > INTAKE_LIMITS.bytes) throw new StoreError('replay_required', 'index_producer_overflow');
@@ -89,6 +95,7 @@ export function createNativeEventIntake({ source, mutations, dirty, onControl, o
       const handle = await open();
       if (closed) { if (handle.detach) handle.detach(); else await handle.return(); return; }
       subscription = handle;
+      failure = null;
       subscriptionWork = (async () => {
         try {
           if (typeof handle.read === 'function' && typeof handle.detach === 'function') {
@@ -103,6 +110,7 @@ export function createNativeEventIntake({ source, mutations, dirty, onControl, o
             if (!closed) fail(new StoreError('reconcile_required', 'index_subscription_ended'));
           }
         } catch (error) { if (!closed) fail(error); }
+        finally { if (subscription === handle) subscription = null; }
       })();
     },
     async flush() { while (running) await running; },

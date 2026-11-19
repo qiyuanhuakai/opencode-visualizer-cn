@@ -57,7 +57,7 @@ describe('useSettings persistence', () => {
   it('writes back to localStorage when values change', async () => {
     const settings = await harness.importFresh();
     settings.enterToSend.value = true;
-    expect(harness.storage.getItem('opencode.settings.enterToSend.v1')).toBe('true');
+    expect(harness.readSetting('opencode.settings.enterToSend.v1')).toBe('true');
   });
 
   it('reads and writes editInVis setting', async () => {
@@ -65,7 +65,7 @@ describe('useSettings persistence', () => {
     expect(settings.editInVis.value).toBe(false);
 
     settings.editInVis.value = true;
-    expect(harness.storage.getItem('opencode.settings.editInVis.v1')).toBe('true');
+    expect(harness.readSetting('opencode.settings.editInVis.v1')).toBe('true');
   });
 
   it('persists boolean toggle settings to their exact sync storage keys', async () => {
@@ -81,8 +81,8 @@ describe('useSettings persistence', () => {
     settings.showCodexButton.value = true;
 
     // Then: the flipped value is persisted to its exact storage key.
-    expect(harness.storage.getItem('opencode.settings.suppressAutoWindows.v1')).toBe('true');
-    expect(harness.storage.getItem('opencode.settings.showMinimizeButtons.v1')).toBe('false');
-    expect(harness.storage.getItem('opencode.settings.showCodexButton.v1')).toBe('true');
+    expect(harness.readSetting('opencode.settings.suppressAutoWindows.v1')).toBe('true');
+    expect(harness.readSetting('opencode.settings.showMinimizeButtons.v1')).toBe('false');
+    expect(harness.readSetting('opencode.settings.showCodexButton.v1')).toBe('true');
   });
 });

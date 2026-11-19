@@ -844,6 +844,22 @@ export function createDelegationService({ deliver, mailbox: injectedMailbox } = 
   }
 
   return {
+    scopeForMember(memberId) { return mintScope(requireMember(memberId)); },
+    exportRecords() {
+      const boxes = mailbox.snapshot().teams;
+      return [...teamsById.values()].map(team => ({ team: structuredClone(Object.fromEntries(Object.entries(team).filter(([key]) => key !== 'mailboxDepth'))), members: team.memberIds.map(id => structuredClone(membersById.get(id))), tasks: team.taskIds.map(id => structuredClone(tasksById.get(id))), mailbox: boxes.find(box => box.teamId === team.teamId) }));
+    },
+    restoreRecords(records) {
+      if (teamsById.size) throw new CollaborationError('conflict', 'delegation_restore_nonempty');
+      mailbox.rehydrate({ version: 1, teams: records.map(item => item.mailbox) });
+      for (const item of records) {
+        const team = structuredClone(item.team); parseTeamId(team.teamId); team.mailboxDepth = () => mailbox.depth(team.teamId); teamsById.set(team.teamId, team);
+        for (const member of item.members) { parseSessionRef(member.session); membersById.set(member.memberId, structuredClone(member)); }
+        for (const task of item.tasks) tasksById.set(task.taskId, structuredClone(task));
+      }
+      stats.teams = teamsById.size; stats.members = membersById.size; stats.tasks = tasksById.size;
+      reconcile();
+    },
     createTeam,
     team,
     teams,

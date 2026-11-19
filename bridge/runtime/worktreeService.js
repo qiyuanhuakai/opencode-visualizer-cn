@@ -7,11 +7,43 @@ import { gitLine } from './gitOutputParser.js';
 export function createWorktreeService({ command, git, store, assertCurrent }) {
   const journal = createRepositoryOperation({ store, assertCurrent });
   const running = new Map();
+  // Native jobs own process streams and buffers. Keep them only while work is
+  // unsettled; durable operations remain queryable without a process owner.
+  const failures = new Map();
+  function rememberFailure(id, error) {
+    const bounded = error instanceof GitCommandError
+      ? new GitCommandError(String(error.reason).slice(0, 128), {
+          stdout: String(error.result?.stdout ?? '').slice(0, 4096),
+          stderr: String(error.result?.stderr ?? '').slice(0, 4096),
+          exitCode: error.result?.exitCode ?? null,
+          signal: error.result?.signal ?? null,
+        })
+      : new Error(String(error?.message ?? error).slice(0, 4096));
+    // Never retain a native result/cause/stack through an arbitrary error object.
+    bounded.message = bounded.message.slice(0, 4096);
+    failures.set(id, bounded);
+    while (failures.size > 8) failures.delete(failures.keys().next().value);
+  }
   async function launch(accepted, request, retainWorkspace, authorizeDestination) {
     const job = await journal.launch(accepted.operationId, async () => {
-      await authorizeDestination();
-      return command.start(request);
+      // Pre-send re-verification runs after the durable sent marker but before
+      // the native mutation process exists. A refusal raised here proves no
+      // mutation started, so the operation fails terminally and releases its
+      // leases instead of awaiting reconciliation for a send that never happened.
+      try {
+        await authorizeDestination();
+        return await command.start(request);
+      } catch (error) {
+        try {
+          await journal.terminal(accepted.operationId, 'failed');
+        } catch {
+          // The operation stays for reconciliation when its terminal transition
+          // cannot commit; the refusal itself still reaches the caller.
+        }
+        throw error;
+      }
     });
+    let retainJob = false;
     const completion = (async () => {
       try {
         await journal.observed(accepted.operationId);
@@ -26,15 +58,27 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
         git.invalidate(terminal.repoKey);
         return terminal;
       } catch (error) {
+        // A failed observation/acknowledgement does not prove native exit.
+        // Drain the process before releasing its owner; keep it retryable if
+        // physical cancellation itself fails.
+        let failure = error;
+        try { await job.cancel(); }
+        catch (stopError) { retainJob = true; failure = stopError; }
         const operation = await journal.get(accepted.operationId);
         if (operation.phase !== 'terminal') await journal.reconcile(accepted.operationId);
-        throw error;
+        throw failure;
       }
     })().then(
       (value) => ({ value }),
       (error) => ({ error }),
     );
-    running.set(accepted.operationId, { job, completion });
+    running.set(accepted.operationId, { job, completion, get retainJob() { return retainJob; } });
+    void completion.then(result => {
+      if (!retainJob) {
+        running.delete(accepted.operationId);
+        if (result.error) rememberFailure(accepted.operationId, result.error);
+      }
+    });
     return accepted;
   }
   return {
@@ -43,30 +87,83 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
     async create({ workspace, parent, name, idempotencyKey }) {
       const info = await git.repository(workspace);
       requireValue(info.kind === 'git', 'git.repository');
-      const destination = await command.destination(parent, name);
-      const baseCommit = gitLine(await git.checked(workspace, ['rev-parse', '--verify', 'HEAD']));
+      const destination = await command.destinationRef(parent, name);
+      const payload = { source: workspace, destination };
+      // Replay by identity before resolving any server-derived state: re-reading the
+      // source HEAD would derive a different base commit for a request the caller
+      // repeated verbatim, and re-validating the destination would refuse the result
+      // the first attempt already produced.
+      const replayed = await journal.lookup({
+        repoKey: info.repoKey,
+        workspace: destination,
+        idempotencyKey,
+        method: 'worktree.create',
+        payload,
+      });
+      if (replayed && replayed.phase !== 'accepted')
+        return { phase: 'durable-accepted', operationId: replayed.operationId };
+      // An accepted replay resumes the send its acceptance already recorded, so its base commit
+      // comes from that record. Re-resolving the source HEAD here would check out a different
+      // snapshot than the one the completed record and the writer lease describe.
+      const baseCommit = replayed
+        ? replayed.baseCommit
+        : gitLine(await git.checked(workspace, ['rev-parse', '--verify', 'HEAD']));
       requireValue(/^[0-9a-f]{40,64}$/.test(baseCommit), 'git.base_commit');
+      // Authorize the common directory before any durable state exists: a refusal
+      // here costs nothing, while the same refusal after acceptance would strand
+      // a repository-wide lease behind a sent marker.
+      await command.authorizeCommonDirectory(workspace);
       const accepted = await journal.accept({
         repoKey: info.repoKey,
         workspace: destination,
         idempotencyKey,
         method: 'worktree.create',
-        payload: { source: workspace, destination },
+        payload,
         baseCommit,
       });
+      // An operation past acceptance is a durable replay of a send that already
+      // happened or is still running: return it instead of launching a second
+      // mutation, and keep the accepted phase for a send that never started.
+      const operation = await journal.get(accepted.operationId);
+      if (operation.phase !== 'accepted') return accepted;
+      // The mutation runs against the base commit this acceptance recorded rather than
+      // the snapshot this caller resolved beforehand: a concurrent request carrying the
+      // same identity can persist a different pre-acceptance HEAD, and the send, its
+      // completion record and its writer lease must describe one commit.
       return launch(
         accepted,
         {
           workspace,
           mutation: true,
-          args: ['worktree', 'add', '--detach', '--', destination.canonicalPath, baseCommit],
+          args: [
+            'worktree',
+            'add',
+            '--detach',
+            '--',
+            destination.canonicalPath,
+            operation.baseCommit,
+          ],
         },
         true,
         () => command.destination(parent, name),
       );
     },
     async remove({ workspace, worktree, idempotencyKey }) {
-      const [info, selected] = await Promise.all([git.repository(workspace), git.probe(worktree)]);
+      const info = await git.repository(workspace);
+      requireValue(info.kind === 'git', 'git.repository');
+      const payload = { source: workspace, worktree };
+      // Replay by identity before probing the worktree: a completed removal deleted
+      // the very path the first attempt targeted, so re-probing it cannot succeed.
+      const replayed = await journal.lookup({
+        repoKey: info.repoKey,
+        workspace: worktree,
+        idempotencyKey,
+        method: 'worktree.remove',
+        payload,
+      });
+      if (replayed && replayed.phase !== 'accepted')
+        return { phase: 'durable-accepted', operationId: replayed.operationId };
+      const selected = await git.probe(worktree);
       requireValue(
         info.kind === 'git' && selected.kind === 'git' && info.repoKey === selected.repoKey,
         'git.repository',
@@ -81,14 +178,19 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
         'git.locked_or_prunable',
         'conflict',
       );
+      // Authorize the common directory before any durable state exists: a refusal
+      // here costs nothing, while the same refusal after acceptance would strand
+      // a repository-wide lease behind a sent marker.
+      await command.authorizeCommonDirectory(workspace);
       const accepted = await journal.accept({
         repoKey: info.repoKey,
         workspace: worktree,
         idempotencyKey,
         method: 'worktree.remove',
-        payload: { source: workspace, worktree },
+        payload,
         baseCommit: entry.head,
       });
+      if ((await journal.get(accepted.operationId)).phase !== 'accepted') return accepted;
       try {
         requireValue(
           (
@@ -122,17 +224,25 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
           if (result.error) throw result.error;
           return result.value;
         } finally {
-          running.delete(id);
+          if (!active.retainJob) running.delete(id);
+          failures.delete(id);
         }
       }
+      const failure = failures.get(id);
+      if (failure) { failures.delete(id); throw failure; }
       const operation = await journal.get(id);
       requireValue(operation.phase === 'terminal', 'git.reconcile', 'reconcile_required');
       return operation;
     },
     async cancel(id) {
       const active = running.get(id);
-      requireValue(active, 'git.reconcile', 'reconcile_required');
+      if (!active) {
+        const operation = await journal.get(id);
+        requireValue(operation.phase === 'terminal', 'git.reconcile', 'reconcile_required');
+        return operation;
+      }
       await active.job.cancel();
+      running.delete(id);
       const result = await active.completion;
       if (result.error && !(result.error instanceof GitCommandError)) throw result.error;
       return journal.get(id);
@@ -141,7 +251,10 @@ export function createWorktreeService({ command, git, store, assertCurrent }) {
       await journal.leases.release(encodeWorkspaceKey(workspace), owner);
     },
     async close() {
-      await Promise.all([...running.keys()].map((id) => this.cancel(id)));
+      const results = await Promise.allSettled([...running.keys()].map((id) => this.cancel(id)));
+      failures.clear();
+      const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+      if (errors.length) throw new AggregateError(errors, 'Git operation shutdown failed');
       running.clear();
     },
   };

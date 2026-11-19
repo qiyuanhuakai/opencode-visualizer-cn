@@ -557,9 +557,6 @@ export function createWriterLeaseService(options = {}) {
       if (worktree.length > WRITER_LIMITS.maxCwdChars) {
         throw new CollaborationError('conflict', 'writer_cwd', { limit: WRITER_LIMITS.maxCwdChars });
       }
-      await fsLike.mkdir(writersRoot, { recursive: true });
-      await createWorktree({ repository, worktree, baseCommit });
-
       const record = {
         leaseId,
         taskId,
@@ -573,7 +570,7 @@ export function createWriterLeaseService(options = {}) {
           worktreeAccess: readOnly ? 'read-only' : 'read-write',
           userRepository: 'read-only',
         },
-        state: 'active',
+        state: 'allocating',
         createdAt: at,
         expiresAt: at + ttlMs,
         releasedAt: null,
@@ -587,6 +584,15 @@ export function createWriterLeaseService(options = {}) {
       const registered = byRepository.get(key) ?? [];
       registered.push(leaseId);
       byRepository.set(key, registered);
+      await options.beforeCreate?.(leaseView(record));
+      try {
+        await fsLike.mkdir(writersRoot, { recursive: true });
+        await createWorktree({ repository, worktree, baseCommit });
+        record.state = 'active';
+      } catch (error) {
+        record.state = 'reconciling';
+        throw error;
+      }
       return leaseView(record);
     } finally {
       reservedByTask.delete(taskId);
@@ -595,6 +601,50 @@ export function createWriterLeaseService(options = {}) {
       if (at_ >= 0) pending.splice(at_, 1);
       if (pending.length === 0) reservedByRepository.delete(key);
     }
+  }
+
+  async function reconcile(input = {}) {
+    assertOpen();
+    const record = requireLease(input.leaseId);
+    if (!['allocating', 'reconciling'].includes(record.state)) {
+      throw new CollaborationError('conflict', 'writer_reconcile_state');
+    }
+    if (input.createMissing !== undefined && typeof input.createMissing !== 'boolean') {
+      throw new CollaborationError('invalid_request', 'writer_reconcile_create');
+    }
+    const { worktree, baseCommit } = record.allocation;
+    let info;
+    try { info = await fsLike.lstat(worktree); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (!info) {
+      if (input.createMissing !== true) return Object.freeze({ ...leaseView(record), recovery: 'worktree_missing' });
+      await assertRepositoryClean({ repository: record.repository });
+      if (await resolveBaseCommit({ repository: record.repository }) !== baseCommit) {
+        throw new CollaborationError('conflict', 'writer_reconcile_base_moved');
+      }
+      await fsLike.mkdir(writersRoot, { recursive: true });
+      await createWorktree({ repository: record.repository, worktree, baseCommit });
+      info = await fsLike.lstat(worktree);
+    }
+    if (info.isSymbolicLink() || !info.isDirectory() || await fsLike.realpath(worktree) !== path.resolve(worktree)) {
+      throw new CollaborationError('unauthorized', 'writer_reconcile_worktree');
+    }
+    const listed = await runGit({ cwd: record.repository, args: ['worktree', 'list', '--porcelain', '-z'] });
+    const listedWorktree = listed.stdout.split('\0\0').some(block => {
+      const fields = block.split('\0');
+      return fields.includes('worktree ' + worktree) && fields.includes('HEAD ' + baseCommit) && fields.includes('detached');
+    });
+    const actualHead = await runGit({ cwd: worktree, args: ['rev-parse', '--verify', 'HEAD'] });
+    const originalCommon = await runGit({ cwd: record.repository, args: ['rev-parse', '--path-format=absolute', '--git-common-dir'] });
+    const worktreeCommon = await runGit({ cwd: worktree, args: ['rev-parse', '--path-format=absolute', '--git-common-dir'] });
+    if ([listed, actualHead, originalCommon, worktreeCommon].some(result => result.exitCode !== 0)
+      || !listedWorktree || actualHead.stdout.trim() !== baseCommit
+      || await fsLike.realpath(originalCommon.stdout.trim()) !== await fsLike.realpath(worktreeCommon.stdout.trim())) {
+      throw new CollaborationError('conflict', 'writer_reconcile_identity');
+    }
+    if (record.expiresAt <= Date.now()) throw new CollaborationError('conflict', 'writer_reconcile_expired');
+    record.state = 'active';
+    return leaseView(record);
   }
 
   function lease(leaseId) {
@@ -842,6 +892,7 @@ export function createWriterLeaseService(options = {}) {
       total: leasesById.size,
       worktreesRetained,
       worktreesRemoved,
+      pending: [...leasesById.values()].filter(record => ['allocating', 'reconciling'].includes(record.state)).length,
       closed,
     });
   }
@@ -858,8 +909,19 @@ export function createWriterLeaseService(options = {}) {
   }
 
   return {
+    exportRecords() { return [...leasesById.values()].map(record => structuredClone(record)); },
+    restoreRecords(records) {
+      if (leasesById.size) throw new CollaborationError('conflict', 'writer_restore_nonempty');
+      for (const input of records) {
+        const record = structuredClone(input);
+        if (!UUID_PATTERN.test(record.leaseId) || byTask.has(record.taskId)) throw new CollaborationError('conflict', 'writer_restore_identity');
+        leasesById.set(record.leaseId, record); byTask.set(record.taskId, record.leaseId);
+        const ids = byRepository.get(record.repository) ?? []; ids.push(record.leaseId); byRepository.set(record.repository, ids);
+      }
+    },
     WRITER_LIMITS,
     allocate,
+    reconcile,
     lease,
     leases,
     leasesByRepository,

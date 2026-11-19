@@ -136,6 +136,9 @@ export interface CollaborationRecipientView {
 /** The fan-out read model; `state` is derived from the OBSERVED per-recipient outcomes. */
 export interface CollaborationFanoutView {
   readonly fanoutId: string;
+  readonly promptPreview?: string;
+  readonly createdAt?: number;
+  readonly recipientCount?: number;
   readonly state: string;
   readonly stats: Readonly<Record<string, number>>;
   readonly targets: readonly CollaborationRecipientView[];
@@ -145,6 +148,8 @@ export interface CollaborationFanoutView {
 /** The writer read model: the OBSERVED lease path/resources plus the port's OWN posture object. */
 export interface CollaborationWriterView {
   readonly leaseId: string;
+  readonly state?: string;
+  readonly binding?: { readonly phase: string; readonly lastError: string | null } | null;
   readonly worktree: string;
   readonly nativeCwd: string;
   readonly baseCommit: string;

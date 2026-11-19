@@ -3,7 +3,7 @@ export type DraftIdentity = Readonly<{ context: string; clientOrigin: string; re
 export type DraftPart = Readonly<{ name: string; kind: 'body' | 'attachment' | 'raw'; bytes: number; chunks: number; sha256: string }>;
 export type DraftHeader = DraftIdentity & Readonly<{ parts: readonly DraftPart[]; sourceRevision?: string }>;
 export type InlineDraft = Readonly<{ identity: DraftIdentity; parts: readonly Readonly<{ name: string; kind: DraftPart['kind']; bytes: Uint8Array }>[]; checkpoint?: Readonly<{ key: string; value: unknown }> }>;
-type Put = Readonly<{ store: string; key: IDBValidKey; value: unknown; bytes: number }>;
+type Put = Readonly<{ store: string; key: IDBValidKey; value: unknown; bytes: number; compare?: Readonly<{ expected: unknown }> }>;
 type PendingPut = Readonly<{ writes: readonly Put[]; resolve: () => void; reject: (error: unknown) => void }>;
 function identityKey(identity: DraftIdentity): string {
   if (!identity.context || identity.context.length > 16384 || !identity.clientOrigin || identity.clientOrigin.length > 256 || !Number.isSafeInteger(identity.revision) || identity.revision < 0) throw new DraftStorageError('invalid_chunk');
@@ -57,6 +57,7 @@ export class DraftStore {
       const store = transaction.objectStore(write.store); const request = store.get(write.key);
       request.onsuccess = () => {
         const existing: unknown = request.result;
+        if (write.compare && JSON.stringify(existing) !== JSON.stringify(write.compare.expected) && JSON.stringify(existing) !== JSON.stringify(write.value)) { conflict = true; transaction.abort(); return; }
         if (write.store !== 'migration' && existing !== undefined) {
           let same = false;
           try { same = write.store === 'headers' ? JSON.stringify(parseHeader(existing)) === JSON.stringify(parseHeader(write.value))
@@ -138,6 +139,11 @@ export class DraftStore {
     const serialized = JSON.stringify(value);
     if (serialized === undefined || new TextEncoder().encode(serialized).length > 65536) throw new DraftStorageError('invalid_chunk');
     await this.put({ store: 'migration', key, value: structuredClone(value), bytes: serialized.length * 2 });
+  }
+  async compareAndSetCheckpoint(key: string, expected: unknown, value: unknown): Promise<void> {
+    const serialized = JSON.stringify(value), prior = JSON.stringify(expected);
+    if (serialized === undefined || new TextEncoder().encode(serialized).length > 65536 || prior !== undefined && new TextEncoder().encode(prior).length > 65536) throw new DraftStorageError('invalid_chunk');
+    await this.put({ store: 'migration', key, value: structuredClone(value), compare: { expected: structuredClone(expected) }, bytes: (serialized.length + (prior?.length ?? 0)) * 2 });
   }
   async readCheckpoint(key: string): Promise<unknown> {
     return (await this.readCheckpoints([key]))[0];

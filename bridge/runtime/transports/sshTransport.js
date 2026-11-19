@@ -1,11 +1,13 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, writeFile, rm, mkdir, appendFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { connect, createServer } from 'node:net';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { ProtocolError, requireValue } from '../../../shared/runtime/capabilities.js';
 import { resolveProfileEnvironment } from '../../../shared/runtime/connectionProfile.js';
-import { parseKnownHosts } from './knownHosts.js';
+import { parseKnownHosts, formatKnownHostEntry } from './knownHosts.js';
 import { createProcessRelay, decodeRelayFrames, encodeRelayFrame } from './processRelay.js';
 import { createAuthenticationSession, createSecretChannel } from './sshAuthentication.js';
 
@@ -189,6 +191,10 @@ export function buildSshArgv(options = {}) {
   argv.push('-o', `ConnectTimeout=${options.connectTimeoutSeconds ?? DEFAULT_CONNECT_TIMEOUT_SECONDS}`);
   argv.push('-o', `ServerAliveInterval=${options.serverAliveInterval ?? 15}`);
   if (options.configPath !== undefined) argv.push('-F', options.configPath);
+  if (options.preferredAuthentications !== undefined) {
+    requireValue(options.preferredAuthentications.every(method => ['publickey', 'password', 'keyboard-interactive'].includes(method)), 'auth.methods');
+    argv.push('-o', `PreferredAuthentications=${options.preferredAuthentications.join(',')}`);
+  }
   for (const identity of options.identityFiles ?? target.identityFiles ?? []) argv.push('-i', identity);
   if (target.proxyJump !== undefined) argv.push('-J', target.proxyJump);
   if (target.port !== undefined && Number(target.port) !== 22) argv.push('-p', String(target.port));
@@ -238,8 +244,32 @@ function defaultKnownHostsPath() {
   return path.join(homedir(), '.ssh', 'known_hosts');
 }
 
-function defaultHostKeyProvider() {
-  throw new ProtocolError('source_unavailable', 'host.key');
+async function resolveEffectiveTarget(parsed, options) {
+  if (options.configText !== undefined) return resolveSshTarget({ host: parsed.host, port: parsed.port, configText: options.configText });
+  const args = ['-G', ...(options.configPath ? ['-F', options.configPath] : []), ...(parsed.port !== 22 ? ['-p', String(parsed.port)] : []), '--', parsed.host];
+  const { stdout } = await promisify(execFile)(sshProgram(options.platform), args, { timeout: 10000, maxBuffer: 1024 * 1024 });
+  return resolveSshTarget({ host: parsed.host, port: parsed.port, configText: `Host *\n${stdout}` });
+}
+
+async function defaultHostKeyProvider(target, options) {
+  let command = 'ssh-keyscan', args = ['-T', '10', '-p', String(target.port), target.host];
+  if (target.proxyJump) {
+    const jumps = target.proxyJump.split(',');
+    const last = jumps.pop();
+    const separator = last.lastIndexOf('@');
+    const endpoint = separator >= 0 ? last.slice(separator + 1) : last;
+    const jump = { ...await resolveEffectiveTarget(parseEndpoint(endpoint), options),
+      ...(separator >= 0 ? { user: last.slice(0, separator) } : {}),
+      ...(jumps.length ? { proxyJump: jumps.join(',') } : {}),
+    };
+    const quote = value => `'${value.replace(/'/gu, "'\\''")}'`;
+    command = sshProgram(options.platform);
+    args = [...buildSshArgv({ target: jump, configPath: options.configPath, strictHostKeyChecking: 'yes' }), ['ssh-keyscan', ...args].map(quote).join(' ')];
+  }
+  const { stdout } = await promisify(execFile)(command, args, { timeout: 15000, maxBuffer: 65536 });
+  const keys = parseKnownHosts(stdout);
+  requireValue(keys.length > 0, 'host.key', 'source_unavailable');
+  return keys.find(key => key.keyType === 'ssh-ed25519') ?? keys[0];
 }
 
 /**
@@ -420,6 +450,7 @@ export function createSshTransport(options = {}) {
         // A teardown failure must not mask the dial result; the record is still retired.
       }
     }
+    if (record.trustDirectory) { await rm(record.trustDirectory, { recursive: true, force: true }); record.trustDirectory = undefined; }
     const channel = record.secretChannel;
     record.secretChannel = undefined;
     if (channel !== undefined) {
@@ -446,10 +477,9 @@ export function createSshTransport(options = {}) {
     let auth;
     let target;
     try {
-      const configText = options.configText ?? await loadOptionalFile(options.configPath);
-      target = resolveSshTarget({ host: parsed.host, port: parsed.port, configText });
+      target = await resolveEffectiveTarget(parsed, options);
       const knownHostsText = options.knownHostsText ?? await loadOptionalFile(options.knownHostsPath ?? defaultKnownHostsPath());
-      const presented = await (options.hostKeyProvider ?? defaultHostKeyProvider)(target);
+      const presented = await (options.hostKeyProvider ?? (target => defaultHostKeyProvider(target, options)))(target);
       const session = createAuthenticationSession({
         host: target.host,
         port: target.port,
@@ -458,14 +488,24 @@ export function createSshTransport(options = {}) {
         knownHosts: parseKnownHosts(knownHostsText),
         method: options.method ?? methodForCredential(profile.credentialRef),
         responder: options.responder,
-        passphraseRequired: options.passphraseRequired,
+        passphraseRequired: options.passphraseRequired ?? /passphrase/u.test(profile.credentialRef ?? ''),
       });
       auth = await session.authenticate();
+      record.knownHostsFile = options.knownHostsFile ?? options.knownHostsPath ?? target.userKnownHostsFile;
+      if (auth.hostKeyStatus === 'unknown') {
+        record.trustDirectory = await mkdtemp(path.join(tmpdir(), 'vis-ssh-trust-'));
+        record.knownHostsFile = path.join(record.trustDirectory, 'known_hosts');
+        await writeFile(record.knownHostsFile, formatKnownHostEntry({ host: target.host, port: target.port, keyType: presented.keyType, keyBlob: presented.keyBlob }), { mode: 0o600 });
+      }
       if (auth.knownHostEntry !== undefined && typeof options.persistKnownHost === 'function') {
         await options.persistKnownHost(auth.knownHostEntry);
+      } else if (auth.knownHostEntry !== undefined && options.knownHostsText === undefined) {
+        const filename = options.knownHostsPath ?? defaultKnownHostsPath();
+        await mkdir(path.dirname(filename), { recursive: true, mode: 0o700 });
+        await appendFile(filename, formatKnownHostEntry(auth.knownHostEntry), { mode: 0o600 });
       }
     } catch (error) {
-      if (connections.get(profileId) === record) connections.delete(profileId);
+      await closeConnection(record);
       throw error;
     }
 
@@ -518,9 +558,11 @@ export function createSshTransport(options = {}) {
         argv = buildSshArgv({
           target,
           platform,
+          preferredAuthentications: auth.methods.map(method => method === 'otp' ? 'keyboard-interactive' : method),
           forward: { localHost: '127.0.0.1', localPort, remoteHost, remotePort },
           configPath: options.configPath,
-          knownHostsFile: options.knownHostsFile ?? target.userKnownHostsFile,
+          knownHostsFile: record.knownHostsFile,
+          strictHostKeyChecking: 'yes',
           identityFiles: target.identityFiles,
         });
       } catch (error) {

@@ -333,15 +333,15 @@ describe('task 35 — the user sees exactly which participants the input goes to
     expect(view.root.querySelector('dialog')).toBeNull();
   });
 
-  it('keeps the fan-out slot a labelled reserved placeholder that never claims fan-out works', async () => {
+  it('explains unavailable fan-out without exposing internal task placeholders', async () => {
     const services = await buildServices();
     const view = await mountThreadView(services, { fanoutEnabled: false });
     const slot = view.root.querySelector('[data-testid="fanout-slot"]');
     expect(slot).not.toBeNull();
     expect(slot?.getAttribute('data-reserved')).toBe('true');
     const text = slot?.textContent ?? '';
-    expect(text).toContain('Reserved');
-    expect(text).toContain('fan-out');
+    expect(text).toContain('Fan-out is unavailable');
+    expect(text).not.toContain('Task 38');
     // The placeholder is disabled and never claims the feature exists.
     const action = view.root.querySelector<HTMLButtonElement>('[data-testid="fanout-slot-action"]');
     expect(action?.disabled).toBe(true);
@@ -414,7 +414,7 @@ describe('task 35 — handoff state and source are visible', () => {
     expect(summaryAfterDeliver.revision).toBe(2);
 
     // A REAL native observation (its own event id, never invented by the UI) reaches active.
-    await view.root.querySelector<HTMLButtonElement>('[data-testid="observe-handoff"]')?.click();
+    await view.state.observeHandoff('native-evt-1');
     await settle();
     expect(view.root.querySelector('[data-testid="handoff-state"]')?.getAttribute('data-state')).toBe('active');
     expect(view.root.querySelector('[data-testid="handoff-active"]')?.getAttribute('data-active')).toBe('true');
@@ -424,7 +424,7 @@ describe('task 35 — handoff state and source are visible', () => {
     expect(summaryAfterObserve.revision).toBe(3);
   });
 
-  it('disables the observe action until a real native event id exists, so the UI can never fabricate active', async () => {
+  it('waits for native observation without a manual observation action', async () => {
     const services = await buildServices();
     const view = await mountThreadView(services, { draftText: 'continue from the checkpoint', latestNativeEventId: '', handoffEntries: HANDOFF_ENTRIES });
     view.root
@@ -438,7 +438,7 @@ describe('task 35 — handoff state and source are visible', () => {
     await view.root.querySelector<HTMLButtonElement>('[data-testid="deliver-handoff"]')?.click();
     await settle();
     const observe = view.root.querySelector<HTMLButtonElement>('[data-testid="observe-handoff"]');
-    expect(observe?.disabled).toBe(true);
+    expect(observe).toBeNull();
     expect(view.root.querySelector('[data-testid="observe-waiting"]')?.textContent).toContain('native observation');
   });
 
@@ -458,6 +458,11 @@ describe('task 35 — handoff state and source are visible', () => {
     expect(resolution?.textContent).toContain('cancelled');
     expect(resolution?.textContent).toContain('handoff_cancelled');
     expect(view.root.querySelector('[data-testid="handoff-active"]')).toBeNull();
+    expect(view.root.querySelector<HTMLButtonElement>('[data-testid="cancel-handoff"]')?.disabled).toBe(true);
+    expect(view.root.querySelector<HTMLButtonElement>('[data-testid="begin-handoff"]')?.disabled).toBe(false);
+    await view.root.querySelector<HTMLButtonElement>('[data-testid="begin-handoff"]')?.click();
+    await settle();
+    expect(view.root.querySelector('[data-testid="handoff-state"]')?.getAttribute('data-state')).toBe('attached');
   });
 
   it('stops an ambiguous send at reconcile and offers no retry', async () => {
@@ -519,7 +524,7 @@ describe('task 35 — handoff state and source are visible', () => {
     expect(resolution?.textContent).toContain('handoff_ambiguous');
     // No blind retry: deliver and observe are disabled, and the error is readable.
     expect(host.querySelector<HTMLButtonElement>('[data-testid="deliver-handoff"]')?.disabled).toBe(true);
-    expect(host.querySelector<HTMLButtonElement>('[data-testid="observe-handoff"]')?.disabled).toBe(true);
+    expect(host.querySelector('[data-testid="observe-handoff"]')).toBeNull();
     expect(host.querySelector('[data-testid="handoff-active"]')).toBeNull();
     const error = host.querySelector('[data-testid="thread-error"]');
     expect(error?.textContent).toContain('reconcile');

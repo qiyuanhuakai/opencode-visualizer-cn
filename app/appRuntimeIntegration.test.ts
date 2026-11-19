@@ -27,7 +27,7 @@ import { describe, expect, it } from 'vitest';
 const APP_SOURCE = readFileSync(join(process.cwd(), 'app', 'App.vue'), 'utf8');
 
 /** The full `<template>` block. */
-const APP_TEMPLATE = APP_SOURCE.match(/<template>([\s\S]*?)<\/script>/)?.[1] ?? '';
+const APP_TEMPLATE = APP_SOURCE.match(/<template>([\s\S]*?)\n<\/template>/)?.[1] ?? '';
 
 // ---------------------------------------------------------------------------
 // A. No single-active-backend control
@@ -52,18 +52,12 @@ describe('App.vue has no single-active-backend control', () => {
     expect(templateBindModels.length).toBeGreaterThan(0);
   });
 
-  it('routes the workspace panel through the workspace scope, not a single backend switch', () => {
-    // The login surface is one single Bridge entry point. The per-backend
-    // buttons select which credential FIELDS the entry shows; they never set a
-    // global active backend, so no rendered control may be bound to
-    // `setActiveBackendKind`, and the chooser must live inside the entry.
+  it('keeps Agent selection out of Bridge login and exposes an independent management selector', () => {
     expect(APP_SOURCE).not.toMatch(/@click="[^"]*setActiveBackendKind/);
     expect(APP_SOURCE).not.toMatch(/v-model="[^"]*activeBackendKind/);
-    expect(APP_TEMPLATE).toContain('data-testid="connection-entry"');
-    const entryStart = APP_TEMPLATE.indexOf('data-testid="connection-entry"');
-    const chooserStart = APP_TEMPLATE.indexOf('class="app-login-backends"');
-    expect(entryStart).toBeGreaterThan(-1);
-    expect(chooserStart).toBeGreaterThan(entryStart);
+    expect(APP_TEMPLATE).toMatch(/<BridgeLogin\s[\s\S]*?\/>/);
+    expect(APP_TEMPLATE).not.toContain('class="app-login-backends"');
+    expect(APP_TEMPLATE).toMatch(/<AgentInstanceSelector[^>]*:selected="managementHarnessInstanceId"[^>]*@select="managementHarnessInstanceId = \$event"/);
   });
 });
 
@@ -134,8 +128,13 @@ describe('the task-23 harness scope props are bound in App.vue', () => {
     expect(usage?.[0]).toMatch(/:harness-manifests=/);
   });
 
-  it('derives the scope from the current session or the active harness instance', () => {
-    expect(APP_SOURCE).toMatch(/harnessScope/);
+  it('derives management scope from the explicit Agent selection independently of the conversation', () => {
+    const scope = APP_SOURCE.match(/const harnessInstanceScope = computed<ControlScope \| null>\([\s\S]*?\n\}\) : null\);/)?.[0];
+    expect(scope).toBeDefined();
+    expect(scope).toContain("kind: 'instance'");
+    expect(scope).toContain('environmentId: runtimeEnvironmentId.value');
+    expect(scope).toContain('harnessInstanceId: managementHarnessInstanceId.value');
+    expect(scope).not.toMatch(/selectedSession|runtimeSelectedSessionRef/);
   });
 });
 

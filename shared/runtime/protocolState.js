@@ -33,9 +33,9 @@ export function createProtocolState(input) {
       requireValue(frame.kind === 'request', 'request');
       requireValue(!usedIds.has(frame.id), 'id', 'conflict');
       requireValue(usedIds.size < 65536, 'request.capacity', 'reconcile_required');
-      if (frame.method === 'native.extension') {
+      if (frame.method === 'native.extension' || frame.method === 'native.query') {
         requireValue(extensionGrant !== undefined, 'extension.permission', 'unauthorized');
-        authorizeExtension(extensionGrant.capabilities, { owner: frame.params.owner, name: frame.params.name, permissions: extensionGrant.permissions });
+        authorizeExtension(extensionGrant.capabilities, { owner: frame.params.owner ?? frame.params.harnessInstanceId, name: frame.params.name ?? frame.params.operation, permissions: extensionGrant.permissions });
       }
       pending.set(frame.id, { method: frame.method, accepted: false });
       usedIds.add(frame.id);

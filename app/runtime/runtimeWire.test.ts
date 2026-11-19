@@ -4,6 +4,12 @@ const harnessInstanceId = '11111111-1111-4111-8111-111111111111';
 const environmentId = '22222222-2222-4222-8222-222222222222';
 const session = { environmentId, harnessInstanceId, nativeSessionId: 'same-native-id' };
 describe('closed runtime wire DTO validation', () => {
+  it('accepts declared native envelopes and refuses authority injection', () => {
+    expect(parseRuntimeParams('native.query', { harnessInstanceId, operation: 'getGlobalConfig', args: {} })).toMatchObject({ operation: 'getGlobalConfig' });
+    expect(parseRuntimeParams('native.extension', { harnessInstanceId, session, operation: 'updateSession', args: { native: { name: 'renamed' } } })).toMatchObject({ session });
+    expect(() => parseRuntimeParams('native.extension', { harnessInstanceId, session, operation: 'updateSession', args: { idempotencyKey: 'forged' } })).toThrow('unauthorized');
+    expect(parseRuntimeResult('native.extension', { operationId: 'op', value: null })).toEqual({ operationId: 'op', value: null });
+  });
   it('rejects client authority overrides and improperly scoped native requests', () => {
     for (const name of ['target', 'environmentId', 'harnessInstanceId', 'session', 'epoch', 'processGeneration', 'permissions', 'idempotencyKey']) expect(() => parseRuntimeParams('session.send', { harnessInstanceId, session, args: { [name]: 'forged' } })).toThrow('unauthorized');
     expect(() => parseRuntimeParams('session.send', { harnessInstanceId, args: {} })).toThrow();
@@ -11,7 +17,12 @@ describe('closed runtime wire DTO validation', () => {
     expect(parseRuntimeParams('session.send', { harnessInstanceId, session, args: { content: [{ type: 'text', text: 'hello' }] } })).toMatchObject({ session });
   });
   it('keeps the allowed index surface and channel budgets bounded', () => {
-    expect(Object.keys(RUNTIME_WIRE_METHODS)).toHaveLength(32);
+    // Includes the session-qualified interaction payload read used by approval cards.
+    expect(Object.keys(RUNTIME_WIRE_METHODS)).toHaveLength(42);
+    expect(RUNTIME_WIRE_METHODS['runtime.interaction.read']).toBe('read');
+    expect(parseRuntimeParams('runtime.interaction.read', { session, interactionId: 'approval-1' })).toEqual({ session, interactionId: 'approval-1' });
+    expect(() => parseRuntimeParams('runtime.interaction.read', { session, interactionId: '' })).toThrow();
+    expect(() => parseRuntimeParams('runtime.interaction.read', { session: { ...session, endpoint: 'forged' }, interactionId: 'approval-1' })).toThrow();
     expect(() => parseRuntimeParams('runtime.snapshot', { collection: 'imports' })).toThrow();
     expect(() => parseRuntimeParams('runtime.snapshot', { collection: 'workspaces', limit: 201 })).toThrow();
     expect(() => parseRuntimeParams('runtime.channel.ack', { channelId: 0, offset: 0, length: 1 })).toThrow();

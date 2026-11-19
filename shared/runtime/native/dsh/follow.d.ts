@@ -15,3 +15,5 @@ export interface HistoryPage {
 }
 export function createFollowState(): FollowState;
 export function historyPage(value: unknown, throughSeq: number, beforeSeq: number, limit: number): HistoryPage;
+
+export function terminalTurn(value: unknown, afterSeq: number): TurnEndEvent | null;

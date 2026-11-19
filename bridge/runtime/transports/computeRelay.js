@@ -74,6 +74,8 @@ export function createRelayChannel(stream, options = {}) {
   let buffer = Buffer.alloc(0);
   const pendingStore = new Map();
   const dataHandlers = [];
+  const pendingData = [];
+  let pendingDataBytes = 0;
   const controlHandlers = [];
   const storageHandlers = [];
   const closeHandlers = [];
@@ -262,6 +264,11 @@ export function createRelayChannel(stream, options = {}) {
       return;
     }
     if (tag === RELAY_TAG.data) {
+      if (dataHandlers.length === 0) {
+        pendingDataBytes += payload.length;
+        if (pendingDataBytes > 8 * 1024 * 1024) { fail(new ProtocolError('source_unavailable', 'relay.backpressure')); return; }
+        pendingData.push(payload);
+      }
       for (const handler of dataHandlers) handler(payload);
       return;
     }
@@ -312,9 +319,12 @@ export function createRelayChannel(stream, options = {}) {
     role,
     binding: handshake.binding,
     ready,
+    get bufferedAmount() { return stream.writableLength ?? 0; },
     state: () => state,
     onData(handler) {
       dataHandlers.push(handler);
+      const queued = pendingData.splice(0); pendingDataBytes = 0;
+      for (const payload of queued) handler(payload);
       return this;
     },
     onControl(handler) {

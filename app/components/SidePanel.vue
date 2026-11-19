@@ -33,6 +33,8 @@
           :view-error="unifiedTreeError"
           :filter-kinds="unifiedTreeFilterKinds"
           :search-state="unifiedTreeSearch"
+          :pin-state="runtimePins"
+          @select-qualified="emit('select-qualified', $event)"
           @toggle-expand="(path) => emit('toggle-expand', path)"
           @select-session="(payload) => emit('select-session', payload)"
           @pin-project="(projectId) => emit('pin-project', projectId)"
@@ -47,6 +49,7 @@
           @retry-source="(harnessInstanceId) => emit('retry-source', harnessInstanceId)"
           @filter-change="(kinds) => emit('filter-change', kinds)"
           @search="(query) => emit('search', query)"
+          @search-more="emit('search-more')"
           @load-more-children="(key) => emit('load-more-children', key)"
         />
       </div>
@@ -145,9 +148,11 @@ const props = defineProps<{
   unifiedTreeError?: string | null;
   unifiedTreeFilterKinds?: ReadonlySet<SessionHarness>;
   unifiedTreeSearch?: UnifiedSearchState | null;
+  runtimePins?: import('../composables/useRuntimePins').RuntimePinsState;
 }>();
 
 const emit = defineEmits<{
+  (event: 'select-qualified', selection: import('../runtime/selectionScope').QualifiedSession): void;
   (event: 'change-tab', value: 'todo' | 'session' | 'tree'): void;
   (event: 'select-session', payload: { projectId: string; sessionId: string }): void;
   (event: 'toggle-expand', path: string): void;
@@ -168,6 +173,7 @@ const emit = defineEmits<{
   (event: 'retry-source', harnessInstanceId: string): void;
   (event: 'filter-change', kinds: SessionHarness[]): void;
   (event: 'search', query: string): void;
+  (event: 'search-more'): void;
   (event: 'load-more-children', key: string): void;
 }>();
 
@@ -182,6 +188,7 @@ const tabs = computed(() => [
 ]);
 
 const sessionTreeSessionCount = computed(() => {
+  if (props.unifiedTreeRows !== undefined) return props.unifiedTreeLoaded ?? 0;
   return props.sessionTreeData.reduce(
     (count, project) =>
       count + project.sandboxes.reduce((sCount, sandbox) => sCount + sandbox.sessions.length, 0),

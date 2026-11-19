@@ -1,0 +1,16 @@
+export const KIMI_PROVIDER_OPERATIONS = Object.freeze({
+  'kimi.auth': { method: 'GET', path: '/api/v1/auth' },
+  'kimi.models.list': { method: 'GET', path: '/api/v1/models' },
+  'kimi.config.get': { method: 'GET', path: '/api/v1/config' },
+  'kimi.config.update': { method: 'POST', path: '/api/v1/config' },
+  'kimi.providers.list': { method: 'GET', path: '/api/v1/providers' },
+  'kimi.providers.create': { method: 'POST', path: '/api/v1/providers' },
+  'kimi.providers.update': { method: 'PUT', path: '/api/v1/providers/{id}' },
+  'kimi.providers.delete': { method: 'DELETE', path: '/api/v1/providers/{id}' },
+  'kimi.providers.refresh': { method: 'POST', path: '/api/v1/providers/{id}:refresh' },
+  'kimi.providers.refreshAll': { method: 'POST', path: '/api/v1/providers:refresh' },
+  'kimi.providers.catalog': { method: 'GET', path: '/api/v1/catalog/providers' },
+  'kimi.providers.catalogEntry': { method: 'GET', path: '/api/v1/catalog/providers/{id}' },
+  'kimi.providers.importCatalog': { method: 'POST', path: '/api/v1/providers:import_catalog' },
+  'kimi.models.setDefault': { method: 'POST', path: '/api/v1/models/{id}:set_default' },
+});

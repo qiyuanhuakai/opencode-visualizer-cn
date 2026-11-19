@@ -36,6 +36,23 @@ describe('Runtime management connection', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
+  it('renews the retry allowance after every successful recovery instead of exhausting a lifetime allowance', async () => {
+    const fixture = setup();
+    try {
+      let socket = await fixture.ready();
+      for (let round = 0; round < 5; round++) {
+        socket.dispatchEvent(new Event('close'));
+        await vi.advanceTimersByTimeAsync(250);
+        expect(fixture.sockets).toHaveLength(round + 2);
+        const next = fixture.sockets.at(-1);
+        if (!next) throw new Error('Recovery socket missing');
+        next.message(encodeFrame(hello));
+        expect(fixture.connection.status.state).toBe('ready');
+        socket = next;
+      }
+    } finally { fixture.connection.dispose(); }
+  });
+
   it('preserves the global receiver for default browser timers through Hello and reconnect disposal', async () => {
     const schedule = globalThis.setTimeout; const cancel = globalThis.clearTimeout;
     const set = vi.spyOn(globalThis, 'setTimeout').mockImplementation(function (this: unknown, ...args: Parameters<typeof setTimeout>) {
@@ -134,6 +151,13 @@ describe('Runtime management connection', () => {
     expect(JSON.stringify(fixture.events)).not.toContain('private-canary-19'); fixture.connection.dispose();
   });
 
+  it('retains a bounded protocol field while scrubbing arbitrary server prose', async () => {
+    const fixture = setup(); const socket = await fixture.ready();
+    socket.message(encodeFrame({ version: 1, kind: 'result', target: hello.target, epoch: hello.epoch, generation: hello.generation, id: 'read-1', ok: false, typedError: { code: 'replay_required', message: 'replay_required: runtime.snapshot_expired' } }));
+    expect(fixture.events.at(-1)).toMatchObject({ kind: 'frame', frame: { typedError: { message: 'replay_required: runtime.snapshot_expired' } } });
+    fixture.connection.dispose();
+  });
+
   it('bounds text and binary frames and delivers validated binary bytes', async () => {
     const fixture = setup(); const socket = await fixture.ready();
     const binary = encodeBinary({ channelId: 1, offset: 0, data: new Uint8Array(65536) });
@@ -144,15 +168,30 @@ describe('Runtime management connection', () => {
     socket.message('x'.repeat(LIMITS.jsonBytes + 1)); expect(fixture.connection.status.state).toBe('error'); fixture.connection.dispose();
   });
 
-  it('reconnects the same candidate at most three times without replaying sent requests', async () => {
+  it('limits consecutive unsuccessful recoveries to three attempts without replaying sent requests', async () => {
     const fixture = setup(); let socket = await fixture.ready(); fixture.connection.send(request);
     for (const delay of [250, 1000, 4000]) {
       socket.dispatchEvent(new Event('close')); await vi.advanceTimersByTimeAsync(delay);
-      socket = fixture.sockets.at(-1) ?? socket; socket.message(encodeFrame(hello));
+      socket = fixture.sockets.at(-1) ?? socket;
     }
     socket.dispatchEvent(new Event('close')); await vi.advanceTimersByTimeAsync(10000);
     expect(fixture.factory).toHaveBeenCalledTimes(4); expect(fixture.sockets.reduce((sum, item) => sum + item.send.mock.calls.length, 0)).toBe(1);
     expect(vi.getTimerCount()).toBe(0); fixture.connection.dispose();
+  });
+  it('continues bounded recovery when the first reconnect fails before Hello', async () => {
+    const fixture = setup();
+    const original = await fixture.ready(); fixture.connection.send(request);
+    original.dispatchEvent(new Event('close'));
+    await vi.advanceTimersByTimeAsync(250);
+    fixture.sockets.at(-1)?.dispatchEvent(new Event('error'));
+    await vi.advanceTimersByTimeAsync(1000);
+    const recovered = fixture.sockets.at(-1);
+    recovered?.message(encodeFrame(hello));
+    expect(fixture.connection.status.state).toBe('ready');
+    expect(fixture.factory).toHaveBeenCalledTimes(3);
+    expect(fixture.sockets.reduce((sum, item) => sum + item.send.mock.calls.length, 0)).toBe(1);
+    fixture.connection.dispose();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

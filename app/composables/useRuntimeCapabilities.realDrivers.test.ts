@@ -408,6 +408,18 @@ describe('real DSH native extensions are first-class controls (PR #182 finding 3
     const instanceScope: ControlScope = { kind: 'instance', environmentId: source.manifest.environmentId, harnessInstanceId: source.manifest.harnessInstanceId };
     expect(resolveControlSupport({ control: 'dsh.models.select', scope: instanceScope, manifests: [source.manifest] }).state).toBe('unsupported');
   });
+
+  it('refuses every session-only DSH action from management scope or a foreign environment', () => {
+    const source = dsh();
+    const instanceScope: ControlScope = { kind: 'instance', environmentId: source.manifest.environmentId, harnessInstanceId: source.manifest.harnessInstanceId };
+    const foreignScope: ControlScope = { kind: 'instance', environmentId: parseEnvironmentId('99999999-9999-4999-8999-999999999999'), harnessInstanceId: source.manifest.harnessInstanceId };
+    const actions = source.manifest.extensions.filter(entry => entry.support.state === 'supported' && entry.scope === 'session');
+    expect(actions.length).toBeGreaterThan(1);
+    for (const action of actions) {
+      expect(resolveControlSupport({ control: action.name, scope: instanceScope, manifests: [source.manifest] }).state, action.name).toBe('unsupported');
+      expect(resolveControlSupport({ control: action.name, scope: foreignScope, manifests: [source.manifest] }).state, action.name).toBe('unsupported');
+    }
+  });
 });
 
 describe('each real manifest resolves its own native names', () => {

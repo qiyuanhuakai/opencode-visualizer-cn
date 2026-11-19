@@ -160,6 +160,21 @@ function createEnvelopeScanner() {
   };
 }
 
+/**
+ * Recognizes the supported version's explicit unmaterialized rejection: a -32600 whose native
+ * message carries the "not materialized yet" marker (docs/codex.md:34, corroborated by the
+ * upstream thread_processor.rs thread_turns_list_history_load_error). The fixed upstream reuses
+ * -32600 for ephemeral threads, unloaded threads and invalid ids, so the code alone is not the
+ * cause. Only a boolean classification is kept here; the native message can name session
+ * content and is never carried into the error.
+ */
+function isUnmaterializedNativeError(nativeError) {
+  return (
+    typeof nativeError.message === 'string' &&
+    nativeError.message.includes('not materialized yet')
+  );
+}
+
 /** Owns one native connection; closed generations never dispatch late frames. */
 export function createAppServerClient({
   transport,
@@ -243,6 +258,7 @@ export function createAppServerClient({
                 : 'source_unavailable';
           const error = new ProtocolError(code, `codex.rpc.${waiter.method}`);
           error.nativeCode = nativeCode;
+          if (nativeCode === -32600 && isUnmaterializedNativeError(message.error)) error.unmaterialized = true;
           waiter.reject(error);
         } else if (Object.hasOwn(message, 'result')) waiter.resolve(message.result);
         else waiter.reject(new ProtocolError('invalid_request', 'codex.response'));

@@ -59,5 +59,15 @@ describe('runtime durable store', () => {
       expect(await store.readIntent({ intentId: 'atomic' })).toBeNull();
     } finally { await store.close(); await rm(stateDirectory, { recursive: true, force: true }); }
   });
-
+  it('failure ends the lifecycle when the store worker cannot spawn', async () => {
+    const stateDirectory = await mkdtemp(path.join(tmpdir(), 'runtime-store-test-'));
+    const installRoot = await mkdtemp(path.join(tmpdir(), 'runtime-store-root-'));
+    const store = createRuntimeStore({ stateDirectory, environmentId, ownerId, epoch, installRoot });
+    try {
+      await expect(store.ready).rejects.toMatchObject({ code: 'source_unavailable', reason: 'worker_exit' });
+      await expect(store.close()).resolves.toMatchObject({ code: null, signal: null });
+      await expect(store.terminate()).resolves.toMatchObject({ code: null, signal: null });
+      await expect(store.close()).resolves.toMatchObject({ code: null, signal: null });
+    } finally { await rm(stateDirectory, { recursive: true, force: true }); await rm(installRoot, { recursive: true, force: true }); }
+  }, 3000);
 });

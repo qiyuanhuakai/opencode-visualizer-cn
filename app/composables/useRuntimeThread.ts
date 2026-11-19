@@ -29,6 +29,8 @@ import type { ThreadService, ThreadSummary } from '../../bridge/runtime/threads/
 import { threadBindingKey } from '../../shared/runtime/thread.js';
 import type { TimelinePage, TurnTimeline } from '../runtime/timeline';
 import { createTurnTimeline } from '../runtime/timeline';
+import type { ContextCheckpointView, EvidenceRecordView, EvidenceTarget } from '../../shared/runtime/context.js';
+import type { AsyncEvidenceCapture, AsyncEvidencePageReader } from '../runtime/hostEvidenceViews';
 
 /**
  * The frozen handoff read model this UI renders (task 34's `handoffView`).
@@ -110,6 +112,8 @@ export interface NativeHistoryGroup {
   readonly harness: string;
   readonly session: SessionRef;
   readonly entries: readonly { readonly id: string; readonly kind: string; readonly text: string; readonly at: number }[];
+  readonly loading?: boolean;
+  readonly error?: string;
 }
 
 /** A native session the picker can offer to the thread (the session tree's rows). */
@@ -125,6 +129,7 @@ export interface ThreadSessionResolution {
 }
 
 export interface RuntimeThreadState {
+  readonly composerActive?: Readonly<Ref<boolean>>;
   /** False until a thread port exists; components render nothing when false. */
   readonly available: boolean;
   readonly threadId: Ref<string | null>;
@@ -133,11 +138,26 @@ export interface RuntimeThreadState {
   readonly targets: Ref<readonly string[]>;
   readonly handoff: Ref<RuntimeHandoffView | null>;
   readonly handoffOps: Ref<readonly RuntimeHandoffOpView[]>;
+  readonly handoffs?: Ref<readonly RuntimeHandoffView[]>;
+  readonly handoffPage?: Ref<{ readonly offset: number; readonly total: number; readonly nextCursor: number | null }>;
+  loadHandoffPage?(offset: number): Promise<void>;
+  selectHandoff?(handoffId: string): Promise<void>;
   /** The session tree's current selection, resolved against this thread. */
   readonly selectedSession: Ref<SessionRef | null>;
   readonly busy: Ref<boolean>;
   readonly error: Ref<string>;
   readonly timelinePage: Ref<TimelinePage | null>;
+  readonly checkpoint?: Ref<ContextCheckpointView | null>;
+  readonly currentTarget?: Ref<EvidenceTarget | null>;
+  readonly evidenceTargetError?: Ref<string>;
+  readonly readEvidencePage?: AsyncEvidencePageReader;
+  readonly capturedEvidence?: Ref<readonly EvidenceRecordView[]>;
+  readonly captureEvidence?: AsyncEvidenceCapture;
+  removeCapturedEvidence?(hash: string): void;
+  readonly participantPage?: Ref<{ readonly offset: number; readonly total: number; readonly nextCursor: number | null }>;
+  loadParticipantPage?(offset: number): Promise<void>;
+  readonly timelineOffset?: Ref<number>;
+  loadTimelinePage?(offset: number): Promise<void>;
   readonly selectedSessionResolution: ComputedRef<ThreadSessionResolution | null>;
   openThread(input: { session: SessionRef; repo: RepoRef }): Promise<void>;
   joinThread(session: SessionRef): Promise<void>;
@@ -373,7 +393,7 @@ export function createRuntimeThreadState(ports: RuntimeThreadPorts): RuntimeThre
       return;
     }
     const existing = handoff.value;
-    if (existing !== null && existing.state !== 'checkpoint' && existing.state !== 'attached') {
+    if (existing !== null && !['active', 'failed', 'cancelled'].includes(existing.state)) {
       fail(`This thread already has a handoff at "${existing.state}". Resolve or cancel it before starting another.`);
       return;
     }
