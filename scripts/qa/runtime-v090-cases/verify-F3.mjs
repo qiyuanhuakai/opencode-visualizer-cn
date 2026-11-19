@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { artifact, validateEvidence } from '../runtime-v090-evidence.mjs';
 import { sourceFiles as FAULTS_SOURCE_FILES, runFaults } from '../runtime-v090-faults.mjs';
@@ -31,7 +31,6 @@ const SCREENSHOTS = Object.freeze([
   { file: 'F3-anime-night-mobile-390.png', width: 390, height: 844, viewport: 'mobile-390', theme: 'anime-night' },
   { file: 'F3-soft-white-desktop-1440.png', width: 1440, height: 900, viewport: 'desktop-1440', theme: 'soft-white' },
   { file: 'F3-soft-white-mobile-390.png', width: 390, height: 844, viewport: 'mobile-390', theme: 'soft-white' },
-  { file: 'F3-electron-desktop.png', width: 1400, height: 870, viewport: 'desktop-electron-cdp', theme: 'packaged-app' },
   { file: 'F3-five-source-tree-1440.png', width: 1440, height: 900, viewport: 'desktop-1440', theme: 'five-source-tree' },
   { file: 'F3-thread-handoff-1440.png', width: 1440, height: 900, viewport: 'desktop-1440', theme: 'thread-handoff' },
 ]);
@@ -126,8 +125,8 @@ export async function run(context) {
   // ── the landed screenshots: proven real by an independent PNG decode ────────────────────────
   const decoded = SCREENSHOTS.map((shot) => ({ ...shot, ...pngShape(path.join(finalDir, shot.file)) }));
   const distinctHashes = new Set(decoded.map((shot) => shot.sha256)).size;
-  check('the nine F3 screenshot files have PNG headers whose IHDR dimensions match the captured viewport exactly (3 themes x desktop 1440 / mobile 390, the packaged Electron CDP window, the five-source tree and the thread handoff)', decoded.map((shot) => ({ file: shot.file, viewport: shot.viewport, theme: shot.theme, width: shot.width, height: shot.height })), SCREENSHOTS.map((shot) => ({ file: shot.file, viewport: shot.viewport, theme: shot.theme, width: shot.width, height: shot.height })), 'independent PNG IHDR decode of the nine landed screenshots against the frozen dimensions the F3 lane recorded');
-  check('every screenshot is a distinct, non-trivial capture', { distinctHashes, everyShotAtLeast20KiB: decoded.every((shot) => shot.bytes >= 20 * 1024) }, { distinctHashes: 9, everyShotAtLeast20KiB: true }, 'sha256 distinctness and a 20KiB size floor over the nine decoded screenshots');
+  check('the eight F3 manual screenshot files have PNG headers whose IHDR dimensions match the captured viewport exactly (3 themes x desktop 1440 / mobile 390, the five-source tree and the thread handoff)', decoded.map((shot) => ({ file: shot.file, viewport: shot.viewport, theme: shot.theme, width: shot.width, height: shot.height })), SCREENSHOTS.map((shot) => ({ file: shot.file, viewport: shot.viewport, theme: shot.theme, width: shot.width, height: shot.height })), 'independent PNG IHDR decode of the nine landed screenshots against the frozen dimensions the F3 lane recorded');
+  check('every screenshot is a distinct, non-trivial capture', { distinctHashes, everyShotAtLeast20KiB: decoded.every((shot) => shot.bytes >= 20 * 1024) }, { distinctHashes: 8, everyShotAtLeast20KiB: true }, 'sha256 distinctness and a 20KiB size floor over the nine decoded screenshots');
 
   // ── the live SSH / Slurm legs, the lab and the runner-bound task-43 manifests ───────────────
   const reports = LIVE_REPORTS.map((entry) => ({ ...entry, ...reportShape(reportPath(evidenceRoot, finalDir, entry)) }));
@@ -149,7 +148,7 @@ export async function run(context) {
     buildSha256: capture.buildIdentitySha256, screenshotSha256: capture.screenshotSha256,
     executableSha256: capture.executableSha256, appAsarSha256: capture.appAsarSha256,
     platform: desktopReceipt.platform.platform, arch: desktopReceipt.platform.arch,
-    processMatched: capture.main.pid === capture.launchedPid,
+    processMatched: Number.isInteger(capture.launchedPid) && capture.launchedPid > 0 && capture.main.pid === capture.launchedPid,
     passed: desktopReceipt.pass,
   }, {
     buildRevision: revision, buildTree: tree, smokeRevision: revision, smokeTree: tree,
@@ -160,17 +159,8 @@ export async function run(context) {
   for (const file of [desktopBuildPath, desktopReceiptPath, desktopCapturePath]) {
     artifacts.push(artifact(file, 'f3-windows-desktop-ci-evidence'));
   }
-  const electron = manual.electron;
-  assert(path.isAbsolute(electron.binaryPath), 'record the absolute path of the captured Electron executable');
-  const electronBinary = artifact(electron.binaryPath, 'f3-electron-executable');
-  check('the captured Electron executable matches its recorded hash and CDP registration', {
-    sha256: electronBinary.sha256,
-    bytes: statSync(electron.binaryPath).size,
-    address: /^127\.0\.0\.1:\d+$/.test(electron.registered.address),
-    browserPath: /^\/devtools\/browser\/[0-9a-f-]{36}$/.test(electron.registered.browserPath),
-    pid: Number.isInteger(electron.registered.electronPid) && electron.registered.electronPid > 0,
-  }, { sha256: electron.binarySha256, bytes: electron.binaryBytes, address: true, browserPath: true, pid: true }, manualDoc);
-  artifacts.push(electronBinary);
+  const desktopPng = pngShape(desktopCapturePath);
+  assert(desktopPng.width > 0 && desktopPng.height > 0, 'invalid Windows x64 capture dimensions');
   const packageReports = packaged.artifacts.filter((entry) => entry.kind === 'packaged-driver-manifest');
   assert.equal(packageReports.length, 1, 'expected one packaged-driver manifest');
   assert.equal(manual.packagedBridge.reportSha256, packageReports[0].sha256, 'manual packaged observations must bind the candidate packaging run');
@@ -184,10 +174,10 @@ export async function run(context) {
     const harness = await runSystem({ ...context, evidenceRoot: DETAIL_ROOT(root) });
     scenarios.push(...harness.scenarios);
     artifacts.push(...harness.artifacts);
-    const controlledServer = { url: harness.observations.pageUrl ?? null, pattern: 'the harness-owned Vite server on 127.0.0.1 with an ephemeral port, serving the real QA page', cdp: 'the harness drives a real headless Chromium over a pipe (omowright.connectPipe); the packaged Electron CDP address is audited above from the F3 lane\'s registered DevToolsActivePort read' };
+    const controlledServer = { url: harness.observations.pageUrl ?? null, pattern: 'the harness-owned Vite server on 127.0.0.1 with an ephemeral port, serving the real QA page', cdp: 'the harness drives a real headless Chromium over a pipe (omowright.connectPipe); the packaged Windows x64 capture is verified against the CI smoke process and build identity' };
     check('the task-43 fixture really started and drove the full happy chain at this head: the landed system harness reports its frozen 12 scenarios / 12 assertions over the real five-source tree, the real thread handoff and the real team/artifact review in a real headless Chromium, and it published the controlled UI URL', { url: controlledServer.url, urlShape: /^http:\/\/127\.0\.0\.1:\d+\/qa43\/$/.test(controlledServer.url ?? ''), scenarios: harness.scenarios.length, assertions: harness.scenarios.reduce((sum, scenario) => sum + scenario.assertions.length, 0), mappingMissing: harness.mapping?.completeness?.missing ?? [] }, { url: controlledServer.url, urlShape: true, scenarios: 12, assertions: 12, mappingMissing: [] }, 'the real scripts/qa/runtime-v090-system.mjs runSystem harness executed by this module, cross-checked against the runner-bound F3-task43-happy.json manifest (whose 18 scenarios are this harness\'s 12 plus task-43.mjs\'s own 6)');
 
-    const report = { lane: 'happy', controlledServer, screenshots: decoded.map((shot) => ({ file: shot.file, width: shot.width, height: shot.height, bytes: shot.bytes, sha256: shot.sha256 })), reports, lab: { runtime: lab.runtime, computeNodes: labNodes.filter((node) => node.role === 'compute').length }, electron: { registeredAddress: manual.electron.registered.address }, task23: { revision: task23.productionRevision, scenarios: task23.scenarioCount }, harnessScenarios: harness.scenarios.length, harnessAssertions: harness.scenarios.reduce((sum, scenario) => sum + scenario.assertions.length, 0) };
+    const report = { lane: 'happy', controlledServer, screenshots: decoded.map((shot) => ({ file: shot.file, width: shot.width, height: shot.height, bytes: shot.bytes, sha256: shot.sha256 })), reports, lab: { runtime: lab.runtime, computeNodes: labNodes.filter((node) => node.role === 'compute').length }, electron: { pid: capture.launchedPid, executableSha256: capture.executableSha256, appAsarSha256: capture.appAsarSha256, screenshot: desktopPng }, task23: { revision: task23.productionRevision, scenarios: task23.scenarioCount }, harnessScenarios: harness.scenarios.length, harnessAssertions: harness.scenarios.reduce((sum, scenario) => sum + scenario.assertions.length, 0) };
     writeFileSync(path.join(detailDir, 'happy-audit.json'), `${JSON.stringify(report, null, 2)}\n`);
     artifacts.push(artifact(path.join(detailDir, 'happy-audit.json'), 'f3-happy-audit'));
     return {
@@ -195,7 +185,7 @@ export async function run(context) {
       verdict: 'PASS (the fixture leg re-executed at this head; the other legs audited from the F3 lane\'s independent observed evidence)',
       controlledServer,
       whatWasReExecuted: ['the real task-43 system harness over the real five-source unified tree, thread handoff and team/artifact review in a real headless Chromium'],
-      whatWasAudited: ['nine screenshot files checked by PNG header and hash', 'real SSH happy/failure and real Slurm happy/failure at their frozen scenario counts', 'the real four-namespace Slurm lab descriptor', 'the packaged Electron binary\'s registered CDP address', 'the packaged vis_bridge on a node-free PATH', 'current Task 23 native controls'],
+      whatWasAudited: ['eight manual screenshots and one candidate-bound Windows x64 screenshot', 'real SSH happy/failure and real Slurm happy/failure at their frozen scenario counts', 'the real four-namespace Slurm lab descriptor', 'the packaged Windows x64 application process and app.asar', 'the packaged vis_bridge on a node-free PATH', 'current Task 23 native controls'],
       scenarios,
       artifacts,
       versions: { node: process.version },
