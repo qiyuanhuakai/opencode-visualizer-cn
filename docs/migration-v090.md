@@ -1,6 +1,6 @@
-# v0.9.0-alpha 迁移与发布兼容说明
+# v0.9.0-alpha.1 迁移与发布兼容说明
 
-本文档描述 v0.9.0-alpha 统一运行环境（Unified Runtime）相对于 v0.8.x 的**协议破坏性变更、废弃登录路径、数据保留承诺、旧 Bridge 拒绝规则、直连与管理浏览器差异、Slurm 持久化条件和不支持拓扑**，并给出完整的升级路径。
+本文档描述 v0.9.0-alpha.1 统一运行环境（Unified Runtime）相对于 v0.8.x 的**协议破坏性变更、废弃登录路径、数据保留承诺、旧 Bridge 拒绝规则、直连与管理浏览器差异、Slurm 持久化条件和不支持拓扑**，并给出完整的升级路径。
 
 **本文所有结论均来自已落地的验收证据**，不是设计意图。每条关键声明后面标注了证据编号（E43、E44、E45、E46、E27 等），可在 `.omo/evidence/vis-v090/` 下对应目录核对。凡本文未标注证据的行为，即为未验证，不得据此声称支持。
 
@@ -12,7 +12,7 @@
 
 | 项 | 值 | 证据 |
 |---|---|---|
-| 发布版本 | `0.9.0-alpha` | `package.json` |
+| 发布版本 | `0.9.0-alpha.1` | `package.json` |
 | `/runtime` 协议版本 | `1`（`PROTOCOL_VERSION`） | `shared/runtime/protocol.js` |
 | Bridge 协议代 | `v090-runtime`（`BRIDGE_PROTOCOL_GENERATION`） | `bridge/runtime/transports/remoteBootstrap.js:21` |
 | 被拒绝的旧协议代 | `v070-legacy`（如 bridge `0.7.10`） | E27 |
@@ -21,7 +21,7 @@
 
 ## 2. 协议破坏性变更（breaking）
 
-v0.9.0-alpha 引入 `/runtime` v1 协议。这是**新增通道**，不与 v0.8 的任何端点共用帧格式；旧版 Vis 客户端不认识它，新版客户端也只接受 `v090-runtime` 代的 Bridge。已验收的帧契约如下（E43）：
+v0.9.0-alpha.1 引入 `/runtime` v1 协议。这是**新增通道**，不与 v0.8 的任何端点共用帧格式；旧版 Vis 客户端不认识它，新版客户端也只接受 `v090-runtime` 代的 Bridge。已验收的帧契约如下（E43）：
 
 - **握手**：`hello{instanceId, capabilities}`，随后每帧携带 `version`、`target`、`epoch`、`generation`。
 - **请求**：`request{id, method, target, params, idempotencyKey?}`；所有 mutation 必须带幂等键。
@@ -118,7 +118,7 @@ v0.9.0-alpha 引入 `/runtime` v1 协议。这是**新增通道**，不与 v0.8 
 按顺序执行，任何一步失败即停止，不回滚已保留的旧数据：
 
 1. **backup（备份）**：备份旧来源全部持久键（localStorage 五键、SQLite/KV/settings、legacy JSON/history shard、IndexedDB 各 store）与当前 bridge 状态目录；记录每项 SHA-256。迁移不删源，备份用于回滚。
-2. **bind（绑定）**：启动 v0.9.0-alpha bridge，确认 `/runtime` hello 的协议代为 `v090-runtime`；旧主机先完成升级（见第 5 节）。在绑定界面把旧来源逐项绑定到 target；身份不明的数据进入 unattached legacy namespace 等待显式绑定。
+2. **bind（绑定）**：启动 v0.9.0-alpha.1 bridge，确认 `/runtime` hello 的协议代为 `v090-runtime`；旧主机先完成升级（见第 5 节）。在绑定界面把旧来源逐项绑定到 target；身份不明的数据进入 unattached legacy namespace 等待显式绑定。
 3. **import（导入）**：分批导入。每批先冻结本 client 旧写入口并记录 revision，批次 durable-ack 后再放行 pending 新格式写入；草稿逐条持久（头/正文分块/附件 blob 分库），导入计数与正文、附件 hash 全部核对后才继续。
 4. **verify（校验）**：以只读方式复核导入结果：旧源 SHA-256 不变（与备份比对）、实体计数一致、草稿正文与附件 hash 与独立 oracle 一致、断线/重启/切换后 hash 稳定。E43 对同链路有等价验收。
 5. **cutover（切换）**：校验全绿后切换客户端到新运行时入口；保留旧来源只读副本与回退路径，不删除源。未全绿不得 cutover。

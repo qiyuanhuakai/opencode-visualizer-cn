@@ -13,7 +13,7 @@
 // modules themselves:
 //
 //   happy lane (what it PROVES about the delivered docs):
-//     H1a package.json is 0.9.0-alpha, the lockfile specifiers match package.json, and a REAL
+//     H1a package.json is 0.9.0-alpha.1, the lockfile specifiers match package.json, and a REAL
 //         `pnpm install --lockfile-only` leaves pnpm-lock.yaml byte-identical.
 //     H1b the documented bridge commands run in an ISOLATED fixture and print the release version.
 //     H1c artifact-budget.json's entry-js cap is the frozen 2053120 and a REAL production build's
@@ -157,7 +157,7 @@ import { INSPECTION_STATES } from '../../../shared/runtime/harnessContract.js';
 import { DATASET } from '../../../scripts/qa/runtime-v090-benchmark.mjs';
 
 const TASK = 47;
-const RELEASE_VERSION = '0.9.0-alpha';
+const RELEASE_VERSION = '0.9.0-alpha.1';
 const ENTRY_JS_CAP = 2053120;
 
 /** The docs this task owns and the link-checker scope of H2. */
@@ -960,7 +960,7 @@ export async function run(context) {
       const lockfileRun = spawn('pnpm', ['install', '--lockfile-only'], { env: { CI: 'true', DEBIAN_FRONTEND: 'noninteractive' }, timeout: 120000 });
       assert.equal(lockfileRun.status, 0, `pnpm install --lockfile-only failed: ${lockfileRun.stderr ?? lockfileRun.stdout}`);
       const lockAfter = createHash('sha256').update(readFileSync(path.join(root, 'pnpm-lock.yaml'), 'utf8')).digest('hex');
-      check('H1a: package.json is 0.9.0-alpha and pnpm-lock.yaml is in sync',
+      check('H1a: package.json is 0.9.0-alpha.1 and pnpm-lock.yaml is in sync',
         { ...checkVersion(packageText), ...checkLockfileSpecifiers(packageText, lockfileText), lockfileSha256Before: lockBefore, lockfileSha256After: lockAfter, lockfileUnchanged: lockBefore === lockAfter },
         { version: RELEASE_VERSION, declared: 58, specifiers: 58, lockfileSha256Before: lockBefore, lockfileSha256After: lockBefore, lockfileUnchanged: true },
         'real pnpm install --lockfile-only resolution over the delivered package.json + pnpm-lock.yaml');
@@ -972,7 +972,7 @@ export async function run(context) {
       const versionRun = spawn(process.execPath, [path.join(root, 'vis_bridge.js'), '--version'], { env: fixtureEnv });
       const helpRun = spawn(process.execPath, [path.join(root, 'vis_bridge.js'), '--help'], { env: fixtureEnv });
       const updateHelpRun = spawn(process.execPath, [path.join(root, 'vis_bridge.js'), 'update', '--help'], { env: fixtureEnv });
-      check('H1b: documented bridge commands run in an isolated fixture and report 0.9.0-alpha',
+      check('H1b: documented bridge commands run in an isolated fixture and report 0.9.0-alpha.1',
         { versionStatus: versionRun.status, versionStdout: versionRun.stdout.trim(), helpStatus: helpRun.status, helpMentionsStart: (helpRun.stdout ?? '').includes('vis_bridge start'), updateHelpStatus: updateHelpRun.status, updateHelpMentionsCheck: (updateHelpRun.stdout ?? '').includes('--check') },
         { versionStatus: 0, versionStdout: RELEASE_VERSION, helpStatus: 0, helpMentionsStart: true, updateHelpStatus: 0, updateHelpMentionsCheck: true },
         'real node vis_bridge.js --version/--help/update --help under an isolated HOME and state dir');
@@ -1089,7 +1089,7 @@ export async function run(context) {
       // F1: a wrong version and a lockfile whose specifiers drifted from package.json.
       await rejection('F1: a wrong version is rejected', () => {
         checkVersion(JSON.stringify({ version: '0.9.1' }));
-      }, 'package.json version 0.9.1 is not 0.9.0-alpha', 'the version checker driven over a controlled wrong package.json');
+      }, 'package.json version 0.9.1 is not 0.9.0-alpha.1', 'the version checker driven over a controlled wrong package.json');
       const specifiers = [...lockfileText.matchAll(/^ {8}specifier: (.+)$/gmu)].map((match) => match[1].trim());
       const drifted = specifiers.find((range) => specifiers.filter((other) => other === range).length === 1);
       assert.ok(drifted, 'no uniquely-occurring specifier to drift');
@@ -1104,22 +1104,22 @@ export async function run(context) {
       // F2: wrong checksum / wrong size / missing digest through the REAL product verifiers.
       const assetDir = path.join(temporaryRoot, 'asset');
       mkdirSync(assetDir, { recursive: true });
-      const assetPath = path.join(assetDir, 'VisBridge-0.9.0-alpha-x64-Linux.deb');
+      const assetPath = path.join(assetDir, 'VisBridge-0.9.0-alpha.1-x64-Linux.deb');
       const assetBytes = Buffer.from('vis-bridge-packaged-artifact-bytes');
       writeFileSync(assetPath, assetBytes);
       const assetDigest = createHash('sha256').update(assetBytes).digest('hex');
-      const releaseAsset = { name: 'VisBridge-0.9.0-alpha-x64-Linux.deb', size: assetBytes.length, digest: assetDigest };
+      const releaseAsset = { name: 'VisBridge-0.9.0-alpha.1-x64-Linux.deb', size: assetBytes.length, digest: assetDigest };
       await rejection('F2: a tampered artifact fails the real SHA-256 verification', async () => {
         writeFileSync(assetPath, Buffer.from('vis-bridge-packaged-artifact-byteX'));
         await verifyAsset(assetPath, releaseAsset, assetDigest, 'sha256');
-      }, 'Downloaded asset VisBridge-0.9.0-alpha-x64-Linux.deb failed SHA256 verification', 'the real electron/updateTransport.js verifyAsset over controlled bytes');
+      }, 'Downloaded asset VisBridge-0.9.0-alpha.1-x64-Linux.deb failed SHA256 verification', 'the real electron/updateTransport.js verifyAsset over controlled bytes');
       await rejection('F2b: a size mismatch fails the real verification', async () => {
         writeFileSync(assetPath, assetBytes);
         await verifyAsset(assetPath, { ...releaseAsset, size: assetBytes.length + 1 }, assetDigest, 'sha256');
-      }, 'Downloaded asset VisBridge-0.9.0-alpha-x64-Linux.deb has an unexpected size', 'the real verifyAsset size guard');
+      }, 'Downloaded asset VisBridge-0.9.0-alpha.1-x64-Linux.deb has an unexpected size', 'the real verifyAsset size guard');
       await rejection('F2c: a release asset without a valid digest is rejected', () => {
         sha256FromDigest({ name: releaseAsset.name, digest: null });
-      }, 'Release asset VisBridge-0.9.0-alpha-x64-Linux.deb has no valid SHA-256 digest', 'the real electron/updatePolicy.js sha256FromDigest');
+      }, 'Release asset VisBridge-0.9.0-alpha.1-x64-Linux.deb has no valid SHA-256 digest', 'the real electron/updatePolicy.js sha256FromDigest');
       writeJson(path.join(runDir, 'checksum-rejections.json'), { tampered: true, sizeMismatch: true, missingDigest: true });
 
       // F3: a matrix row claiming a capability the measured evidence does not support.
