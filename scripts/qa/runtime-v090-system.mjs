@@ -47,6 +47,7 @@ import { fileURLToPath } from 'node:url';
 import vue from '@vitejs/plugin-vue';
 import { chromium } from 'playwright';
 import { createServer as createViteServer } from 'vite';
+import { listenLoopback } from './runtime-v090-browser.mjs';
 import { artifact, sourceSnapshot, writeJson } from './runtime-v090-evidence.mjs';
 import { loadBrowserKernel } from './runtime-v090-browser-kernel.mjs';
 import { OLD_FEATURE_MAPPING, assertMappingComplete } from '../../app/dev/runtime-v090/system43-mapping.mjs';
@@ -495,8 +496,7 @@ export async function runSystem(context) {
 
     /* ---------------------------------------------------------------- browser realm */
     vite.middlewares.use('/qa43', (_request, response) => { response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(PAGE_HTML); });
-    await vite.listen();
-    const browserPort = vite.httpServer.address().port;
+    const browserPort = await listenLoopback(vite.httpServer);
     ledger.resources.push({ kind: 'Vite-created', port: browserPort });
     persistLedger();
     const pageUrl = `http://127.0.0.1:${browserPort}/qa43/`;

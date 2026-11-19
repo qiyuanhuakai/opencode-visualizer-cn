@@ -40,6 +40,7 @@ import { fileURLToPath } from 'node:url';
 import vue from '@vitejs/plugin-vue';
 import { chromium } from 'playwright';
 import { createServer as createViteServer } from 'vite';
+import { listenLoopback } from './runtime-v090-browser.mjs';
 import { artifact, sourceSnapshot, writeJson } from './runtime-v090-evidence.mjs';
 import { loadBrowserKernel } from './runtime-v090-browser-kernel.mjs';
 import { FAULT_SCENARIOS, assertMappingComplete, OLD_FEATURE_MAPPING } from '../../app/dev/runtime-v090/system43-mapping.mjs';
@@ -407,8 +408,7 @@ export async function runFaults(context) {
         logLevel: 'error',
       });
       vite.middlewares.use('/qa43', (_request, response) => { response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(PAGE_HTML); });
-      await vite.listen();
-      const port = vite.httpServer.address().port;
+      const port = await listenLoopback(vite.httpServer);
       ledger.resources.push({ kind: 'Vite-created', port });
       persistLedger();
       const profileRoot = path.join(privateRoot, 'chromium-profile');
