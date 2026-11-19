@@ -96,13 +96,23 @@
         class="app-body"
         :class="{ 'todo-collapsed': sidePanelCollapsed }"
         :style="
-          sidePanelWidth !== null
+          !sidePanelCollapsed && sidePanelWidth !== null
             ? ({ '--todo-panel-width': `${sidePanelWidth}px` } as any)
             : undefined
         "
       >
         <div ref="sidePanelAreaEl" class="side-panel-area">
+          <button
+            type="button"
+            class="app-runtime-action narrow-side-panel-toggle"
+            aria-controls="vis-side-panel"
+            :aria-expanded="!sidePanelCollapsed"
+            @click="sidePanelCollapsed = !sidePanelCollapsed"
+          >
+            {{ t(sidePanelCollapsed ? 'sidePanel.expandPanel' : 'sidePanel.collapsePanel') }}
+          </button>
           <SidePanel
+            id="vis-side-panel"
             class="todo-panel"
             :class="{ 'is-disabled': !hasSession && !unifiedSessionTree }"
             :collapsed="sidePanelCollapsed"
@@ -10055,6 +10065,7 @@ function buildUnifiedSessionTree(): void {
     client,
     profileId: activeProfileId.value,
     target,
+    sessionWindow: true,
     onCanonical: entity => {
       runtimeTurns.apply(entity); runtimeInteractionProjection?.observeOperation(entity);
       const selected = runtimeSelectedPresentation.value;
@@ -14268,6 +14279,45 @@ body {
   width: 100%;
   height: 100%;
   min-height: 0;
+}
+
+.narrow-side-panel-toggle {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .app-body {
+    flex-direction: column;
+  }
+
+  .side-panel-area {
+    display: flex;
+    flex: 0 1 clamp(150px, 38dvh, 310px);
+    flex-direction: column;
+    width: 100%;
+    gap: 6px;
+  }
+
+  .narrow-side-panel-toggle {
+    display: block;
+    flex: 0 0 auto;
+    align-self: flex-start;
+    min-height: 44px;
+  }
+
+  .todo-panel {
+    flex: 1 1 auto;
+    height: auto;
+  }
+
+  .app-body.todo-collapsed .side-panel-area {
+    flex: 0 0 auto;
+  }
+
+  .app-body.todo-collapsed .todo-panel,
+  .side-resizer {
+    display: none;
+  }
 }
 
 .side-resizer {

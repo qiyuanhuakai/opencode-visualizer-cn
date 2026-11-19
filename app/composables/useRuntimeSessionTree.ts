@@ -369,7 +369,7 @@ function matchesQuery(row: UnifiedSessionRow, query: string): boolean {
     || (row.directory?.toLowerCase().includes(needle) ?? false);
 }
 
-export type UnifiedSessionTreeOptions = RuntimeStateOptions & Readonly<{ client: RuntimeClient; target: EnvironmentId }>;
+export type UnifiedSessionTreeOptions = RuntimeStateOptions & Readonly<{ client: RuntimeClient; target: EnvironmentId; sessionWindow?: boolean }>;
 
 /**
  * Create the unified tree over one environment target. The runtime state is
@@ -519,7 +519,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     unsubscribe = state.subscribe(() => { if (!disposed) refreshFromState(); });
     // The state snapshot already applies every harness and workspace page
     // through onCanonical, before the session rows from the same revision.
-    await state.start(target, { collection: 'session_summaries', visible: true });
+    await state.start(target, { collection: 'session_summaries', visible: true, sessionWindow: options.sessionWindow });
     if (disposed) return;
     started.value = true;
     refreshFromState();

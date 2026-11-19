@@ -256,6 +256,26 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     const ordered = observer.read(); socket.reply(await socket.next(), { kind: 'event', frame: event(1) }); await ordered;
     expect(received).toEqual([4, 1]);
   });
+  it('falls back to legacy observer reads when an older Bridge rejects the optional field', async () => {
+    const { client, socket } = await fixture();
+    const opening = client.observe(target, { after: 0, onDelivery: () => {} });
+    socket.reply(await socket.next(), { observerId: 'observer' });
+    const observer = await opening;
+    const reading = observer.read();
+    const extended = await socket.next();
+    expect(extended.params).toEqual({ observerId: 'observer', resolveSummary: true });
+    socket.frame({ version: 1, kind: 'result', target, epoch: extended.epoch, generation: extended.generation,
+      id: extended.id, ok: false, typedError: { code: 'invalid_request', message: 'invalid_request: fields' } });
+    const legacy = await socket.next();
+    expect(legacy.params).toEqual({ observerId: 'observer' });
+    socket.reply(legacy, { kind: 'event', frame: event(1) });
+    await expect(reading).resolves.toMatchObject({ kind: 'event', frame: { seq: 1 } });
+    const nextReading = observer.read();
+    const nextRequest = await socket.next();
+    expect(nextRequest.params).toEqual(legacy.params);
+    socket.reply(nextRequest, null);
+    await expect(nextReading).resolves.toBeNull();
+  });
   it('loops replay when a concurrent write advances the observer resume highwater', async () => {
     const { client, socket } = await fixture();
     const received: number[] = [];

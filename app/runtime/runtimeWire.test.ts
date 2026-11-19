@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseRuntimeParams, parseRuntimeResult, RUNTIME_WIRE_METHODS } from '../../shared/runtime/runtimeWire.js';
+import { encodeSessionKey, parseSessionRef } from '../../shared/runtime/identity.js';
 const harnessInstanceId = '11111111-1111-4111-8111-111111111111';
 const environmentId = '22222222-2222-4222-8222-222222222222';
 const session = { environmentId, harnessInstanceId, nativeSessionId: 'same-native-id' };
@@ -28,6 +29,19 @@ describe('closed runtime wire DTO validation', () => {
     expect(() => parseRuntimeParams('runtime.channel.ack', { channelId: 0, offset: 0, length: 1 })).toThrow();
     expect(() => parseRuntimeParams('runtime.pty.write', { ptyId: 'pty', data: 'x'.repeat(65537) })).toThrow();
     expect(() => parseRuntimeResult('runtime.channel.open', { channelId: 1, direction: 'upload', service: 'pty', credits: 4, chunkBytes: 65536, offset: 0 })).toThrow();
+  });
+  it('binds an inline summary to the delivered patch key and revision', () => {
+    const key = encodeSessionKey(parseSessionRef(session));
+    const frame = {
+      kind: 'event', version: 1, target: environmentId, epoch: 'epoch', generation: 1, seq: 1,
+      entityRevision: 9, scope: key, type: 'entity.patch',
+      payload: { collection: 'session_summaries', key, deleted: false },
+    };
+    const canonical = { collection: 'session_summaries', key, revision: 9, value: { session, title: 'updated' } };
+    expect(parseRuntimeResult('runtime.observer.read', { kind: 'event', frame, canonical })).toMatchObject({ canonical });
+    for (const invalid of [{ ...canonical, key: 'another' }, { ...canonical, revision: 8 }, { ...canonical, chunked: true }]) {
+      expect(() => parseRuntimeResult('runtime.observer.read', { kind: 'event', frame, canonical: invalid })).toThrow('observer_entity');
+    }
   });
   it('checks nested frames and exact result shapes before client consumption', () => {
     expect(() => parseRuntimeResult('runtime.observer.read', { kind: 'control', frame: { kind: 'event', version: 1 } })).toThrow();

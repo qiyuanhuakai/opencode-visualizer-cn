@@ -16,7 +16,7 @@ export type RequestMethod = Exclude<RuntimeMethod, MutationMethod>;
 export type RequestOptions = { readonly signal?: AbortSignal; readonly selectionCurrent?: () => boolean; readonly onDrained?: () => void };
 export type RuntimeScope = { readonly binding: Binding; readonly generation: number; readonly isCurrent: () => boolean };
 type Collection = RuntimeParams['runtime.snapshot']['collection'];
-type Target = { readonly hello: Hello; readonly state: ProtocolState; readonly generation: number; paging: boolean; indexSnapshot?: Readonly<{ token: string; revision: number; watermark: number; expiresAt: number }> };
+type Target = { readonly hello: Hello; readonly state: ProtocolState; readonly generation: number; paging: boolean; legacyObserverRead?: true; indexSnapshot?: Readonly<{ token: string; revision: number; watermark: number; expiresAt: number }> };
 type Pending = {
   readonly target: Target; readonly method: RuntimeMethod; readonly current: () => boolean;
   readonly slot: 'normal' | 'reserved';
@@ -372,7 +372,14 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
         requireValue(!reading && !attached.paging, 'observer.busy', 'conflict');
         reading = true;
         try {
-          const delivery = await request(target, 'runtime.observer.read', { observerId }, options);
+          const params = attached.legacyObserverRead ? { observerId } : { observerId, resolveSummary: true as const };
+          const delivery = await request(target, 'runtime.observer.read', params, options).catch(error => {
+            if (attached.legacyObserverRead || !(error instanceof RuntimeRequestError)
+              || error.code !== 'invalid_request' || error.field !== 'fields') throw error;
+            // Older Bridges reject the optional field before reading the observer.
+            attached.legacyObserverRead = true;
+            return request(target, 'runtime.observer.read', { observerId }, options);
+          });
           active();
           if (delivery === null) return null;
           switch (delivery.kind) {
@@ -393,12 +400,14 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       close,
     };
   }
-  async function snapshot(target: EnvironmentId, collections: Collection | readonly Collection[], options: RequestOptions & { readonly onPage: (collection: Collection, page: Snapshot) => void | Promise<void>; readonly onDelivery?: (delivery: ObserverDelivery) => void | Promise<void>; readonly onDeliveries?: (deliveries: readonly ObserverDelivery[]) => Promise<void> }) {
+  async function snapshot(target: EnvironmentId, collections: Collection | readonly Collection[], options: RequestOptions & { readonly initialSummaryLimit?: number; readonly onPage: (collection: Collection, page: Snapshot) => void | false | Promise<void | false>; readonly onDelivery?: (delivery: ObserverDelivery) => void | Promise<void>; readonly onDeliveries?: (deliveries: readonly ObserverDelivery[]) => Promise<void> }) {
     const attached = getTarget(target);
     requireValue(!attached.paging, 'snapshot.pending', 'conflict');
     const names = typeof collections === 'string' ? [collections] : collections;
     requireValue(names.length > 0 && names.length <= 5 && new Set(names).size === names.length, 'snapshot.collections');
     attached.paging = true;
+    const limit = (collection: Collection, cursor: string | null) =>
+      collection === 'session_summaries' && cursor === null ? options.initialSummaryLimit ?? 200 : 200;
     let first: Snapshot | undefined;
     let openingObserver: ReturnType<typeof observe> | undefined;
     const prefetched = new Map<Collection, Promise<Snapshot>>();
@@ -409,7 +418,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
         let cursor: string | null = null;
         do {
           const ahead = cursor === null ? prefetched.get(collection) : undefined;
-          const page: Snapshot = await (ahead ?? request(target, 'runtime.snapshot', { collection, ...(first ? { token: first.token } : {}), cursor, limit: 200 }, options));
+          const page: Snapshot = await (ahead ?? request(target, 'runtime.snapshot', { collection, ...(first ? { token: first.token } : {}), cursor, limit: limit(collection, cursor) }, options));
           if (ahead) prefetched.delete(collection);
           if (!first) {
             first = page;
@@ -423,7 +432,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
               // Queue at most two independent first pages on this same token.
               // Apply them in collection order so session rows see topology.
               for (const nextCollection of names.slice(1, 3)) {
-                const pending = request(target, 'runtime.snapshot', { collection: nextCollection, token: page.token, cursor: null, limit: 200 }, options);
+                const pending = request(target, 'runtime.snapshot', { collection: nextCollection, token: page.token, cursor: null, limit: limit(nextCollection, null) }, options);
                 prefetched.set(nextCollection, pending);
                 void pending.catch(() => undefined);
               }
@@ -431,9 +440,9 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
           }
           requireValue(page.token === first.token && page.revision === first.revision && page.watermark === first.watermark && page.target === attached.hello.target && page.epoch === attached.hello.epoch && page.generation === attached.hello.generation, 'snapshot.atomic', 'replay_required');
           requireValue(page.expiresAt > Date.now() && (page.cursor === null || page.cursor !== cursor), 'snapshot.expired', 'replay_required');
-          await options.onPage(collection, page);
+          const keepPaging = await options.onPage(collection, page);
           requireValue(current(attached) && (options.selectionCurrent?.() ?? true), 'snapshot.selection', 'reconcile_required');
-          cursor = page.cursor;
+          cursor = keepPaging === false ? null : page.cursor;
         } while (cursor !== null);
       }
       requireValue(first !== undefined && openingObserver !== undefined, 'snapshot.empty');

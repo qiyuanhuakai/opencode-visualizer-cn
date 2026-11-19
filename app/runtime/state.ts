@@ -16,7 +16,7 @@ export type RuntimeHistoryResource = RuntimeResource & Readonly<{ select(capture
 export type RuntimeStateOptions = Readonly<{ client: RuntimeClient; profileId: ConnectionProfileId; drafts?: RuntimeResource; history?: RuntimeHistoryResource; pins?: RuntimeResource; onCanonical?: (entity: CanonicalEntity) => void }>;
 export type PageState<T> = Readonly<{ status: 'loading' | 'partial' | 'complete' | 'error'; items: readonly T[]; cursor: string | null; loaded: number; error?: Readonly<{ code: ErrorCode; retryable: boolean }> }>;
 export type RuntimePageView = PageState<CachedEntity> & Readonly<{ release(): void }>;
-export type RuntimeViewRequest = Readonly<{ collection?: IndexCollection; offset?: number; visible?: boolean }>;
+export type RuntimeViewRequest = Readonly<{ collection?: IndexCollection; offset?: number; visible?: boolean; sessionWindow?: boolean }>;
 type Progress = { status: PageState<never>['status']; loaded: number; cursor: string | null; error?: Readonly<{ code: ErrorCode; retryable: boolean }> };
 type Observer = Awaited<ReturnType<RuntimeClient['observe']>>;
 type TargetState = {
@@ -76,7 +76,7 @@ export function createRuntimeState(options: RuntimeStateOptions) {
   }
   function fail(entry: TargetState, error: unknown) {
     const code = error instanceof ProtocolError ? error.code : 'source_unavailable';
-    for (const [name, value] of entry.progress) if (name === entry.pendingCollection || value.status === 'complete') {
+    for (const [name, value] of entry.progress) if (name === entry.pendingCollection || value.status === 'complete' || (entry.request.sessionWindow && name === 'session_summaries')) {
       value.status = 'error'; value.error = { code, retryable: code !== 'unauthorized' && code !== 'unsupported' };
     }
     if (!disposed) notify();
@@ -93,22 +93,24 @@ export function createRuntimeState(options: RuntimeStateOptions) {
         cache.begin(entry.fence);
       }
       const position = progress(entry, name); const offset = entry.request.offset ?? 0;
-      const show = visible?.target === entry.target && visible.collection === name && !entry.visibleCaptured && position.loaded + page.items.length > offset;
-      if (show) clearWindow();
+      const visibleCollection = visible?.target === entry.target && visible.collection === name;
+      const startWindow = visibleCollection && !entry.visibleCaptured && position.loaded + page.items.length > offset;
+      const fillWindow = visibleCollection && (startWindow || (entry.request.sessionWindow && name === 'session_summaries'));
+      if (startWindow) clearWindow();
       for (let index = 0; index < page.items.length; index++) {
         const item = row(page.items[index], name);
         requireValue(item.revision <= page.revision, 'state.snapshot_revision', 'replay_required');
         const result = cache.admit({ ...item, address: address(entry, item), fence: entry.fence });
         requireValue(result !== 'budget', 'state.entity_budget', 'source_unavailable');
         if (result === 'applied') options.onCanonical?.(item);
-        if (show && position.loaded + index >= offset && item.value !== null) {
+        if (fillWindow && window.length < ENTITY_LIMITS.page && position.loaded + index >= offset && item.value !== null) {
           const lease = cache.get(address(entry, item)); requireValue(lease !== null, 'state.view_budget', 'source_unavailable'); window.push(lease);
-        } else if (entry.visibleCaptured && visible?.target === entry.target && visible.collection === name
-          && lookahead.length < ENTITY_LIMITS.page && item.value !== null) {
+        } else if ((entry.visibleCaptured || startWindow) && visibleCollection
+          && position.loaded + index >= offset && lookahead.length < ENTITY_LIMITS.page && item.value !== null) {
           const lease = cache.get(address(entry, item)); requireValue(lease !== null, 'state.view_budget', 'source_unavailable'); lookahead.push(lease);
         }
       }
-      if (show) entry.visibleCaptured = true;
+      if (startWindow) entry.visibleCaptured = true;
       position.loaded += page.items.length; position.cursor = page.cursor; position.status = 'partial';
       entry.pendingCollection = page.cursor === null ? INDEX_COLLECTIONS[INDEX_COLLECTIONS.indexOf(name) + 1] ?? name : name;
       notify();
@@ -160,7 +162,7 @@ export function createRuntimeState(options: RuntimeStateOptions) {
     if (frame.type !== 'entity.patch') return;
     requireValue(record(frame.payload) && typeof frame.payload.collection === 'string' && typeof frame.payload.key === 'string', 'state.patch');
     if (!collection(frame.payload.collection)) return;
-    const canonical = prefetched ?? await client.request(entry.target, 'runtime.entity.resolve', { event: frame }, { signal: entry.controller.signal, selectionCurrent: () => current(entry) });
+    const canonical = prefetched ?? delivery.canonical ?? await client.request(entry.target, 'runtime.entity.resolve', { event: frame }, { signal: entry.controller.signal, selectionCurrent: () => current(entry) });
     check(entry);
     requireValue(applicationGeneration === entry.applicationGeneration && entry.fence !== undefined, 'state.application', 'reconcile_required');
     requireValue(canonical.collection === frame.payload.collection && canonical.key === frame.payload.key && canonical.revision >= frame.entityRevision, 'state.canonical', 'replay_required');
@@ -213,13 +215,19 @@ export function createRuntimeState(options: RuntimeStateOptions) {
       let first = true;
       const result = await client.snapshot(entry.target, INDEX_COLLECTIONS, {
         signal: entry.controller.signal, selectionCurrent: () => current(entry),
+        initialSummaryLimit: entry.request.sessionWindow ? 32 : undefined,
         onPage: (name, page) => {
           if (first) { requireValue(firstPage.resize(2048 + 2 * estimateRetainedBytes(page.items) + 4 * page.token.length), 'state.first_page_budget', 'source_unavailable'); first = false; }
           publishPage(entry, name, page);
+          // The visible page and its bounded local backfill are ready. The
+          // rest of the inventory stays in the Bridge for search and child pages.
+          if (entry.request.sessionWindow && name === 'session_summaries' && visible?.target === entry.target && visible.collection === name && lookahead.length >= ENTITY_LIMITS.page) return false;
         }, onDelivery: delivery => deliver(entry, delivery), onDeliveries: deliveries => deliverMany(entry, deliveries),
       });
       entry.observer = result.observer; check(entry);
-      for (const value of entry.progress.values()) value.status = 'complete';
+      for (const [name, value] of entry.progress) {
+        value.status = entry.request.sessionWindow && name === 'session_summaries' && value.cursor !== null ? 'partial' : 'complete';
+      }
       notify();
     } finally { firstPage.release(); }
   }

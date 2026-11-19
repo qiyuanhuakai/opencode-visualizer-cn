@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { createInteractionStore } from '../../bridge/runtime/interactionStore.js';
 import { createOperationJournal } from '../../bridge/runtime/operationJournal.js';
 import { objectFields, textValue } from '../../shared/runtime/capabilities.js';
@@ -25,6 +26,15 @@ import { createHarnessRegistry, unsupported } from '../../shared/runtime/harness
 import type { InternalNativeHistoryHandle } from '../../bridge/runtime/historyService.js';
 import { encodeSessionKey, parseSessionRef, parseEnvironmentId, parseHarnessInstanceId } from '../../shared/runtime/identity.js';
 import { decodeWebSocketFrames } from '../../bridge/webSocketFrames.js';
+
+import type { RemoteServices, RemoteTarget } from '../../bridge/runtime/remoteServices.js';
+
+import { createRuntimeClient } from './client';
+import { createRuntimeConnection } from './connection';
+
+const { openRemoteRuntime }: {
+  openRemoteRuntime(options: { endpoint: string; environmentId: string }): Promise<RemoteTarget>;
+} = createRequire(import.meta.url)('../../bridge/runtime/transports/remoteRuntimeClient.js');
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
@@ -434,6 +444,25 @@ describe('runtime real WebSocket dispatch', () => {
     const page = await connection.request('runtime.snapshot', { collection: 'workspaces' }); if (!page.ok) throw new Error('Snapshot failed');
     expect(await second.request('runtime.snapshot', { collection: 'workspaces', token: (page.result as { token: string }).token })).toMatchObject({ ok: false, typedError: { code: 'replay_required' } });
   });
+  it('attaches a qualified summary only when the observer opts in', async () => {
+    const { connection, services } = await runtime();
+    const session = parseSessionRef({ environmentId: services.target, harnessInstanceId: services.registry.list()[0].harnessInstanceId, nativeSessionId: 'observer-summary' });
+    const key = encodeSessionKey(session);
+    const snapshot = await connection.request('runtime.snapshot', { collection: 'session_summaries' });
+    if (!snapshot.ok) throw new Error('Snapshot unavailable');
+    const opened = await connection.request('runtime.observer.open', { after: (snapshot.result as { watermark: number }).watermark });
+    if (!opened.ok) throw new Error('Missing observer');
+    for (const resolveSummary of [true, undefined]) {
+      const value = { session, title: resolveSummary ? 'resolved' : 'legacy' };
+      const pending = connection.request('runtime.observer.read', { ...opened.result as object, ...(resolveSummary ? { resolveSummary } : {}) });
+      await services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key, value }] });
+      const result = await pending;
+      expect(result).toMatchObject({ ok: true, result: { kind: 'event', frame: { payload: { key } } } });
+      if (!result.ok) throw new Error('Observer read failed');
+      if (resolveSummary) expect(result.result).toMatchObject({ canonical: { collection: 'session_summaries', key, value } });
+      else expect(result.result).not.toHaveProperty('canonical');
+    }
+  });
   it('enforces trusted permission grants before file and native invocation', async () => {
     const { services } = await graph();
     const host = createRuntimeHost({ environmentId: services.target, role: 'local', services, grants: [{ ...services.grant, permissions: ['runtime:read'] }] }); host.start(); cleanups.push(() => host.stop());
@@ -489,6 +518,76 @@ describe('runtime real WebSocket dispatch', () => {
     expect(await connection.request('runtime.snapshot', { collection: 'workspaces' }, hello)).toMatchObject({ ok: true });
     expect(await connection.request('runtime.target.detach', { target: execution.services.target })).toMatchObject({ ok: true });
     expect(await connection.request('runtime.inspect', {}, hello)).toMatchObject({ ok: false, typedError: { code: 'unauthorized' } });
+  });
+  it('keeps the renderer observer live through a manager forwarding to an older execution Bridge', async () => {
+    const manager = await graph('manager'), execution = await graph('execution');
+    const executionHost = createRuntimeHost({ environmentId: execution.services.target, role: 'execution', services: execution.services });
+    executionHost.start();
+    cleanups.push(() => executionHost.stop());
+    let refused = 0;
+    const legacyHost = {
+      ...executionHost,
+      connect(id: string) {
+        const scoped = executionHost.connect(id);
+        return { ...scoped, openRuntime(transport: Parameters<typeof scoped.openRuntime>[0]) {
+          const dispatcher = scoped.openRuntime(transport);
+          if (!dispatcher) return null;
+          return { ...dispatcher, async request(frame: Parameters<typeof dispatcher.request>[0]) {
+            if (frame.method === 'runtime.observer.read' && 'resolveSummary' in (frame.params as object)) {
+              refused++;
+              const { id, target, epoch, generation } = frame;
+              transport.send({ version: 1, kind: 'result', id, target, epoch, generation,
+                ok: false, typedError: { code: 'invalid_request', message: 'invalid_request: fields' } });
+            } else await dispatcher.request(frame);
+          } };
+        } };
+      },
+    };
+    const endpoint = (await client(legacyHost)).url.replace(/^http:/, 'ws:');
+    const remote = await openRemoteRuntime({ endpoint, environmentId: execution.services.target });
+    cleanups.push(async () => remote.close());
+    const target = remote.grant.target;
+    const remoteServices: RemoteServices = {
+      capabilities: { direct: true, ssh: false, slurm: false },
+      getTarget: requested => requested === target ? remote : undefined,
+      listTargets: () => [remote.grant],
+      async refreshTargets() {},
+      async openProfileTransport() { throw new Error('Unexpected managed transport request'); },
+      configureProfiles() { throw new Error('Unexpected profile configuration'); },
+      async read() { throw new Error('Unexpected manager read'); },
+      async mutate() { throw new Error('Unexpected manager write'); },
+      async close() { remote.close(); },
+    };
+    const host = createRuntimeHost({ environmentId: manager.services.target, role: 'manager', services: { ...manager.services, remoteServices } });
+    host.start();
+    cleanups.push(() => host.stop());
+    const url = (await client(host)).url.replace(/^http:/, 'ws:');
+    const connection = createRuntimeConnection({ reference: { url }, resolveAuthentication: async () => ({}), createWebSocket: address => new WebSocket(address) });
+    const renderer = createRuntimeClient({ connection });
+    cleanups.push(async () => { renderer.dispose(); connection.dispose(); });
+    await connection.connect();
+    await renderer.inspect();
+    await renderer.attach(target);
+    const session = parseSessionRef({ environmentId: target, harnessInstanceId: execution.services.registry.list()[0].harnessInstanceId, nativeSessionId: 'old-execution' });
+    const key = encodeSessionKey(session);
+    const delivered: number[] = [];
+    const { observer } = await renderer.snapshot(target, 'session_summaries', {
+      onPage: () => {},
+      onDelivery: delivery => {
+        const frame = delivery?.kind === 'event' ? delivery.frame : null;
+        if (frame?.type === 'entity.patch' && (frame.payload as { key?: string }).key === key) delivered.push(frame.seq);
+      },
+    });
+    for (const [index, title] of ['Legacy execution', 'Still live'].entries()) {
+      await execution.services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key, value: { session, title } }] });
+      // A concurrent index write can legitimately require replay. The
+      // production callback receives both live and recovered deliveries.
+      for (let attempt = 0; attempt < 5 && delivered.length <= index; attempt++) await observer.read();
+      expect(delivered).toHaveLength(index + 1);
+    }
+    expect(delivered[1]).toBeGreaterThan(delivered[0]);
+    expect(refused).toBe(1);
+    await observer.close();
   });
   it('persists connection and harness identities across bridge restart while refreshing store epoch', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'vis-wire-restart-')); cleanups.push(() => rm(root, { recursive: true, force: true }));

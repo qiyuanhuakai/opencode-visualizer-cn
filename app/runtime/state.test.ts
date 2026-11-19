@@ -27,6 +27,7 @@ const session = (index: number, environmentId = target): SessionRef => ({ enviro
 
 class StateWire extends EventTarget {
   binaryType: BinaryType = 'arraybuffer'; readyState: 0 | 1 | 2 | 3 = 1; bufferedAmount = 0;
+  summaryPageLimit = 200;
   readonly methods = new Map<string, number>();
   readonly canonical = new Map<string, CanonicalEntity>();
   readonly deliveries = new Map<EnvironmentId, ObserverDelivery[]>();
@@ -75,7 +76,7 @@ class StateWire extends EventTarget {
         if (!request.params.token) this.snapshots++;
         const count = name === 'session_summaries' ? this.count : 0;
         const limit = typeof request.params.limit === 'number' ? request.params.limit : 200;
-        const end = Math.min(count, offset + limit);
+        const end = Math.min(count, offset + Math.min(limit, this.summaryPageLimit));
         this.reply(request, { version: 1, kind: 'snapshot', target: request.target, epoch: request.epoch, generation: request.generation,
           token: request.params.token ?? `snapshot-${this.snapshots}`, revision: this.revision, watermark: this.seq.get(request.target) ?? 0,
           expiresAt: Date.now() + 60000, cursor: end < count ? String(end) : null,
@@ -154,6 +155,43 @@ describe('runtime state through production client and frame codecs', () => {
     expect(wire.methods.has('session.history')).toBe(false);
   });
 
+  it('progressively fills a bounded live window while leaving the rest of the index on the Bridge', async () => {
+    const { state, wire } = await fixture(1000);
+    await state.start(target, { collection: 'session_summaries', visible: true, sessionWindow: true });
+    const initial = read(state);
+    expect(initial).toMatchObject({ status: 'partial', loaded: 432 });
+    expect(initial.items).toHaveLength(200);
+
+    const key = encodeSessionKey(session(0));
+    const frame = wire.event(0, { title: 'incoming after window' });
+    wire.deliveries.set(target, [{ kind: 'event', frame }]);
+    await vi.advanceTimersByTimeAsync(25);
+    expect(read(state).items.find(item => item.key === key)?.value).toMatchObject({ title: 'incoming after window' });
+  });
+  it('retains backfill across byte-limited summary pages', async () => {
+    const { state, wire } = await fixture(250);
+    wire.summaryPageLimit = 62;
+    await state.start(target, { collection: 'session_summaries', visible: true, sessionWindow: true });
+    expect(read(state)).toMatchObject({ status: 'complete', loaded: 250 });
+    expect(read(state).items).toHaveLength(200);
+    wire.deliveries.set(target, Array.from({ length: 124 }, (_, index) => ({ kind: 'event', frame: wire.event(index, null) })));
+    await vi.advanceTimersByTimeAsync(25);
+    expect(read(state).items).toHaveLength(126);
+    expect(new Set(read(state).items.map(item => item.key))).toEqual(new Set(Array.from({ length: 126 }, (_, index) => encodeSessionKey(session(index + 124)))));
+  });
+  it('applies a canonical summary delivered with its event without issuing a resolve request', async () => {
+    const { state, wire } = await fixture(10);
+    await state.start(target);
+    const key = encodeSessionKey(session(0));
+    const value = { session: session(0), title: 'resolved summary' };
+    const frame = wire.event(0, value);
+    wire.deliveries.set(target, [{ kind: 'event', frame, canonical: {
+      collection: 'session_summaries', key, revision: frame.entityRevision, value,
+    } }]);
+    await vi.advanceTimersByTimeAsync(25);
+    expect(read(state).items.find(item => item.key === key)?.value).toEqual(value);
+    expect(wire.methods.get('runtime.entity.resolve')).toBeUndefined();
+  });
   it('prefetches bounded replay reads but applies no later row before an earlier read finishes', async () => {
     const { state, wire } = await fixture(10);
     await state.start(target);

@@ -69,6 +69,7 @@ try {
   const monitor = setInterval(() => { rssPeak = Math.max(rssPeak, bridge.rss().rssBytes); }, 250);
   try {
     const connected = await connectApp(browser.page, web.origin, network.port);
+    report.connection = connected;
     report.tree = await measureTree(browser.page, connected);
     report.index = await bridge.indexed();
     const historySample = { ...summaryAt(5), title: 'Vis measured native history session' };
@@ -76,6 +77,7 @@ try {
     // Keep the browser profile and populated Bridge. Reconnect through the
     // normal entry form so the warm measurement still traverses the real wire.
     const warm = await connectApp(browser.page, web.origin, network.port);
+    report.warmConnection = warm;
     report.warmTree = await measureTree(browser.page, warm);
     report.warmInteractions = await measureInteractions(browser.page, historySample);
     const eventVisibleMs = await measureEventVisibility(browser.page, native.descriptor.opencode, historySample.nativeSessionId);
