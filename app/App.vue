@@ -994,6 +994,7 @@ import {
   disconnectDshBackend as disconnectDshBackendAdapter,
   configureOpenCodeBackend,
   getBackendAdapter,
+  getRuntimeBackendCapabilities,
 } from './backends/registry';
 import { AcpAdapter } from './backends/acp/acpAdapter';
 import {
@@ -9832,12 +9833,12 @@ function backend() {
   if (runtimeActionClient.value) {
     const native = selectedRuntimeNativeAdapter() ?? {};
     const context = findWorkspaceContext(activeDirectory.value || undefined);
-    if (!context) return capturedBackend(activeBackendKind.value, getBackendAdapter(activeBackendKind.value).capabilities, native, {});
+    if (!context) return capturedBackend(activeBackendKind.value, activeBackendCapabilities.value, native, {});
     const files = createWorkspaceFiles(context.client, context.target, context.workspaceKey);
     const selected = runtimeSelectedSessionRef.value;
     const filePath = (directory: string, path: string) => path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
       ? path : `${directory.replace(/[\\/]$/, '')}/${path}`;
-    return capturedBackend(activeBackendKind.value, getBackendAdapter(activeBackendKind.value).capabilities, native, {
+    return capturedBackend(activeBackendKind.value, activeBackendCapabilities.value, native, {
       getPathInfo: () => files.info(),
       getVcsInfo: () => selected && selected.environmentId === context.target
         ? createHostClient(context.client, context.target).read({ domain: 'thread', operation: 'repository', args: { session: selected } }, value => value)
@@ -10561,7 +10562,9 @@ function selectedWorkspacePty(directory?: string): WorkspacePty {
 }
 
 const activeBackendCapabilities = computed(
-  () => getBackendAdapter(activeBackendKind.value).capabilities,
+  () => runtimeActionClient.value
+    ? getRuntimeBackendCapabilities(activeBackendKind.value)
+    : getBackendAdapter(activeBackendKind.value).capabilities,
 );
 
 const projectPickerHomePath = computed(() =>
