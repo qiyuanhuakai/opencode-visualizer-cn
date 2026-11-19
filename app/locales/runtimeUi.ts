@@ -17,6 +17,10 @@ export function runtimeCopyKey(message: string): string {
 }
 
 const copyKeys = new Map(runtimeCopy.map(([message]) => [message, runtimeCopyKey(message)]));
+const bridgeCopyAliases = new Map([
+  ['one writer lease per task, and at most WRITER_LIMITS.maxWritersPerRepository per repository', 'Each task has at most one writer lease. Each repository limits simultaneous writers.'],
+  ['conflict: host.writer_lease', 'Check the writer lease and its Agent session before retrying.'],
+]);
 function copyMessages(index: 0 | 1 | 2 | 3 | 4): Record<string, string> {
   return Object.fromEntries(runtimeCopy.map((row) => [runtimeCopyKey(row[0]), row[index]]));
 }
@@ -85,7 +89,7 @@ type CopyParameters = Readonly<Record<string, string | number>>;
 type CopyTranslator = (key: string, parameters: CopyParameters) => string;
 
 export function translateRuntimeUi(message: string, translate: CopyTranslator, parameters: CopyParameters = {}): string {
-  const key = copyKeys.get(message);
+  const key = copyKeys.get(bridgeCopyAliases.get(message) ?? message);
   return key === undefined ? message : translate(key, parameters);
 }
 

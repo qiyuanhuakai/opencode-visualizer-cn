@@ -3,7 +3,7 @@ import { createApp, h, nextTick } from 'vue';
 import { createI18n } from 'vue-i18n';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { runtimeCopy, runtimeCopyKey, runtimeUiMessages } from './runtimeUi';
+import { runtimeCopy, runtimeCopyKey, runtimeUiMessages, translateRuntimeUi } from './runtimeUi';
 import { runtimeEntryMessages } from './runtimeEntry';
 import SlurmExecutionForm from '../components/runtime/SlurmExecutionForm.vue';
 import SshHostForm from '../components/runtime/SshHostForm.vue';
@@ -57,6 +57,21 @@ describe('runtime UI translation coverage', () => {
           .toEqual([...row[0].matchAll(/\{(\w+)\}/gu)].map((match) => match[1]).sort());
         if (locale !== 'en' && row[0] !== 'Bridge URL') expect(translated, `${locale}: ${row[0]}`).not.toBe(row[0]);
       }
+    }
+  });
+
+  it('renders legacy writer guarantees and lease conflicts as readable copy', () => {
+    const originalGuarantee = 'one writer lease per task, and at most WRITER_LIMITS.maxWritersPerRepository per repository';
+    const originalConflict = 'conflict: host.writer_lease';
+    for (const locale of locales) {
+      const i18n = createI18n({ legacy: false, locale, messages: runtimeUiMessages });
+      const translate = (key: string) => i18n.global.t(key);
+      expect(translateRuntimeUi(originalGuarantee, translate)).toBe(
+        translate(runtimeCopyKey('Each task has at most one writer lease. Each repository limits simultaneous writers.')),
+      );
+      expect(translateRuntimeUi(originalConflict, translate)).toBe(
+        translate(runtimeCopyKey('Check the writer lease and its Agent session before retrying.')),
+      );
     }
   });
 
