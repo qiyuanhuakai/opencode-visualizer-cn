@@ -244,37 +244,6 @@ describe('App drives the real session tree from Locate, and back', () => {
     return threadState;
   }
 
-  it('the real tree selection drives the thread locate state back', async () => {
-    // Reverse sync: selecting a participant's session in the tree writes the thread's located
-    // session, so the surface follows the tree exactly as the tree follows Locate.
-    const fixture = await mountHistoryApp([historyEntry('message-1', 'first-read-entry')]);
-    mountedApps.push(fixture);
-    await selectSessionA(fixture);
-    const threadState = await openThreadWithTwoParticipants(fixture);
-
-    await vi.waitFor(() => {
-      expect(fixture.readSetupBinding('selectedSessionId')).toBe('session-a');
-    });
-
-    // Select the OTHER participant's session through the real picker.
-    await fixture.host.querySelector<HTMLElement>('.top-panel .ui-dropdown-button')?.dispatchEvent(
-      new MouseEvent('click', { bubbles: true }),
-    );
-    await vi.waitFor(() => {
-      const session = Array.from(fixture.host.querySelectorAll('.top-panel .ui-dropdown-item')).find((item) =>
-        item.textContent?.includes('Session B'),
-      );
-      if (!session) throw new Error('Session B did not appear in the picker');
-      session.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    await vi.waitFor(() => {
-      expect(fixture.readSetupBinding('selectedSessionId')).toBe('session-b');
-    });
-    await vi.waitFor(() => {
-      expect(threadState.selectedSession.value?.nativeSessionId).toBe('session-b');
-    });
-  });
-
   it('a locate of a session the thread does not hold moves nothing', async () => {
     // A locate can never point the real tree at a session no participant owns.
     const fixture = await mountHistoryApp([historyEntry('message-1', 'first-read-entry')]);

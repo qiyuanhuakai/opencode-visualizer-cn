@@ -134,6 +134,21 @@ it('opens a Host Thread, refreshes a participant’s own history, and locates th
   expect(reopenedLocate?.disabled).toBe(false);
   reopenedLocate!.click();
   await vi.waitFor(() => expect(fixture.historyPages.filter(page => page.session.nativeSessionId === 'session-b')).toHaveLength(4));
+  const participantId = reopenedRow?.getAttribute('data-participant-id');
+  expect(participantId).toBeTruthy();
+  await vi.waitFor(() => {
+    const resolution = fixture.element.querySelector('[data-testid="thread-for-session"]');
+    expect(resolution?.getAttribute('data-participant-id')).toBe(participantId);
+    expect(resolution?.getAttribute('data-unresolved')).toBe('false');
+  });
+  fixture.element.querySelector<HTMLButtonElement>('[data-testid="thread-view-close"]')!.click();
+  await fixture.select('Session A');
+  await vi.waitFor(() => {
+    const owner = fixture.element.querySelector('[data-testid="participant-row"][data-role="owner"]');
+    const resolution = fixture.element.querySelector('[data-testid="thread-for-session"]');
+    expect(owner?.getAttribute('data-participant-id')).toBeTruthy();
+    expect(resolution?.getAttribute('data-participant-id')).toBe(owner?.getAttribute('data-participant-id'));
+  });
 }, 30000);
 
 it('loads DSH account status from the management instance while OpenCode owns the conversation', async () => {
