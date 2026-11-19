@@ -60,6 +60,7 @@ function fill(root: HTMLDivElement, values: Record<string, string>) {
 /** The request the form will submit once every field is filled to `values`. */
 const BASE_DRAFT = Object.freeze({
   'slurm-partition': 'cpu', 'slurm-account': '', 'slurm-cpus': '4',
+  'slurm-working-root': '/compute/project', 'slurm-state-root': '/compute/state',
   'slurm-memory': '8', 'slurm-time': '01:00:00', 'slurm-gres': 'none',
 });
 
@@ -93,7 +94,8 @@ describe('the Slurm preview is compared through the bridge normalizer, never a s
     // still shows 8 MiB while the bridge would parse the request as 8192 MiB.
     fill(live.root, draftWith({ 'slurm-memory': '8G' }));
     await nextTick();
-    live.root.querySelector<HTMLButtonElement>('[data-testid="slurm-form-submit"]')?.click();
+    expect(live.root.querySelector<HTMLButtonElement>('[data-testid="slurm-form-submit"]')?.disabled).toBe(true);
+    live.root.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }));
     await nextTick();
 
     expect(bound(live.root)).toBe('false');
@@ -119,7 +121,7 @@ describe('the Slurm preview is compared through the bridge normalizer, never a s
     expect(bound(live.root)).toBe('true');
     expect(submitted).toEqual([{
       resources: { partition: 'cpu', account: null, cpus: 4, memory: '8G', time: '01:00:00', gres: 'none' },
-      ownership: 'owned',
+      ownership: 'owned', mode: 'relay', computeWorkingRoot: '/compute/project', computeStateRoot: '/compute/state',
     }]);
     // The preview the user saw is the preview the bridge normalized for that request.
     expect(parseSlurmMemory('8G')).toBe(8192);
@@ -142,7 +144,7 @@ describe('the Slurm preview is compared through the bridge normalizer, never a s
     expect(bound(live.root)).toBe('true');
     expect(submitted).toEqual([{
       resources: { partition: 'cpu', account: null, cpus: 4, memory: '8G', time: '60', gres: 'none' },
-      ownership: 'owned',
+      ownership: 'owned', mode: 'relay', computeWorkingRoot: '/compute/project', computeStateRoot: '/compute/state',
     }]);
   });
 
@@ -155,7 +157,8 @@ describe('the Slurm preview is compared through the bridge normalizer, never a s
     });
     fill(live.root, draftWith({ 'slurm-memory': '8G', 'slurm-time': '10:00:00', 'slurm-gres': 'gpu:a100:2' }));
     await nextTick();
-    live.root.querySelector<HTMLButtonElement>('[data-testid="slurm-form-submit"]')?.click();
+    expect(live.root.querySelector<HTMLButtonElement>('[data-testid="slurm-form-submit"]')?.disabled).toBe(true);
+    live.root.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }));
     await nextTick();
 
     expect(bound(live.root)).toBe('false');
