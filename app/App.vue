@@ -10858,10 +10858,13 @@ const threadNativeErrors = shallowRef<ReadonlyMap<string, string>>(new Map());
 const threadNativeLoading = ref<string | null>(null);
 let threadNativeController: AbortController | undefined;
 let threadNativeGeneration = 0;
-watch([runtimeThreadState.owner, runtimeThreadState.threadId], () => {
+function resetThreadNativeHistory() {
   threadNativeGeneration += 1; threadNativeController?.abort(); threadNativeController = undefined;
   threadNativeLoading.value = null; threadNativeErrors.value = new Map(); threadNativeWindows.value = new Map();
-});
+}
+watch([runtimeThreadState.owner, runtimeThreadState.threadId], resetThreadNativeHistory);
+watch(isThreadPanelOpen, open => { if (!open) resetThreadNativeHistory(); }, { flush: 'sync' });
+onScopeDispose(resetThreadNativeHistory);
 function nativeHistoryRows(entries: unknown[]) {
   return entries.slice(-50).flatMap(entry => {
     if (!entry || typeof entry !== 'object' || !('info' in entry) || !('parts' in entry)) return [];
@@ -10887,7 +10890,7 @@ const runtimeThreadNativeHistory = computed(() => (runtimeThreadState.summary.va
 })));
 async function loadThreadNativeHistory(participantId: string) {
   const session = runtimeThreadState.sessionOfParticipant(participantId);
-  if (!session || threadNativeLoading.value) return;
+  if (!isThreadPanelOpen.value || !session || threadNativeLoading.value) return;
   const key = encodeSessionKey(session), generation = threadNativeGeneration;
   const threadId = runtimeThreadState.threadId.value;
   const controller = new AbortController();

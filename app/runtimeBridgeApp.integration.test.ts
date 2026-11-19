@@ -48,11 +48,21 @@ it('connects through Bridge login and renders selected native history over the a
 
 it('opens a Host Thread, refreshes a participant’s own history, and locates their session', async () => {
   let participantText = 'Initial participant history';
+  let pauseRead = false;
+  const pausedRead = Promise.withResolvers<void>();
+  const releaseRead = Promise.withResolvers<void>();
   const fixture = await mountRuntimeApp([], {
-    readHistory: async session => session.nativeSessionId === 'session-b' ? [{
-      info: { id: 'b-history', sessionID: 'session-b', role: 'user', time: { created: 101 } },
-      parts: [{ id: 'b-part', messageID: 'b-history', sessionID: 'session-b', type: 'text', text: participantText }],
-    }] : [],
+    readHistory: async session => {
+      if (session.nativeSessionId !== 'session-b') return [];
+      if (pauseRead) {
+        pausedRead.resolve();
+        await releaseRead.promise;
+      }
+      return [{
+        info: { id: 'b-history', sessionID: 'session-b', role: 'user', time: { created: 101 } },
+        parts: [{ id: 'b-part', messageID: 'b-history', sessionID: 'session-b', type: 'text', text: participantText }],
+      }];
+    },
   });
   await fixture.connect();
   // Connecting discovers Git identity without requiring a session selection.
@@ -80,12 +90,6 @@ it('opens a Host Thread, refreshes a participant’s own history, and locates th
     return button!;
   });
   add.click();
-  const locate = await vi.waitFor(() => {
-    const row = fixture.element.querySelector('[data-testid="participant-session"][title="session-b"]')?.closest('[data-testid="participant-row"]');
-    const button = row?.querySelector<HTMLButtonElement>('[data-testid="locate-session"]');
-    expect(button?.disabled).toBe(false);
-    return button!;
-  });
   const historyGroup = await vi.waitFor(() => {
     const label = fixture.element.querySelector('[data-testid="native-history-session"][title="session-b"]');
     const group = label?.closest('[data-testid="native-history-group"]');
@@ -106,8 +110,30 @@ it('opens a Host Thread, refreshes a participant’s own history, and locates th
     expect(historyGroup.textContent).not.toContain('Initial participant history');
     expect(fixture.historyPages.filter(page => page.session.nativeSessionId === 'session-b')).toHaveLength(2);
   });
-  locate.click();
-  await vi.waitFor(() => expect(fixture.historyPages.filter(page => page.session.nativeSessionId === 'session-b')).toHaveLength(3));
+  pauseRead = true;
+  participantText = 'Late result from the closed panel';
+  refresh.click();
+  try {
+    await pausedRead.promise;
+    fixture.element.querySelector<HTMLButtonElement>('[data-testid="thread-view-close"]')!.click();
+    await vi.waitFor(() => expect(fixture.element.querySelector('[data-testid="thread-view"][open]')).toBeNull());
+  } finally {
+    pauseRead = false;
+    releaseRead.resolve();
+  }
+  await vi.waitFor(() => expect(fixture.historyCloses.filter(session => session.nativeSessionId === 'session-b')).toHaveLength(3));
+  const reopen = fixture.element.querySelector<HTMLButtonElement>('[data-testid="open-runtime-thread"]');
+  expect(reopen?.disabled).toBe(false);
+  reopen!.click();
+  await vi.waitFor(() => expect(fixture.element.querySelector('[data-testid="thread-view"][open]')).toBeTruthy(), { timeout: 3000 });
+  const reopenedHistory = fixture.element.querySelector('[data-testid="thread-view"][open] [data-testid="native-history"]');
+  expect(reopenedHistory).toBeTruthy();
+  expect(reopenedHistory?.textContent).not.toContain('Late result from the closed panel');
+  const reopenedRow = fixture.element.querySelector('[data-testid="participant-session"][title="session-b"]')?.closest('[data-testid="participant-row"]');
+  const reopenedLocate = reopenedRow?.querySelector<HTMLButtonElement>('[data-testid="locate-session"]');
+  expect(reopenedLocate?.disabled).toBe(false);
+  reopenedLocate!.click();
+  await vi.waitFor(() => expect(fixture.historyPages.filter(page => page.session.nativeSessionId === 'session-b')).toHaveLength(4));
 }, 30000);
 
 it('loads DSH account status from the management instance while OpenCode owns the conversation', async () => {
