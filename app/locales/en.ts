@@ -92,8 +92,8 @@ const messages: LocaleMessages = {
       backup: 'Backup progress',
       backupProgress: '{records} record(s), {chunks} chunk(s) archived',
       result: 'Migration result',
-      resultSummary:
-        '{records} record(s), {chunks} chunk(s), {drafts} draft(s) migrated (import {importId})',
+      backupOnly: 'Local backup only',
+      resultSummary: 'Local backup: {records} record(s), {chunks} chunk(s) and {drafts} saved draft(s). Bridge archive: {bound} record(s). Outside the Bridge archive: {unarchived} record(s), including local drafts (import {importId}).',
       retained: 'The legacy original is retained. Retry the migration without losing it.',
       storageUnavailable: 'Local storage could not save the migration. Retry to continue; the original data is retained.',
       storageFull: 'Local storage is full. Make space, then retry. The original data is retained.',

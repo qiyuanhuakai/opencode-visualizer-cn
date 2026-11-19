@@ -68,13 +68,15 @@
       </section>
 
       <section v-if="result" class="result-section" data-testid="migration-result">
-        <h3 class="section-title">{{ $t('app.runtimeMigration.result') }}</h3>
+        <h3 class="section-title">{{ $t(result.boundRecords === 0 ? 'app.runtimeMigration.backupOnly' : 'app.runtimeMigration.result') }}</h3>
         <span class="result-text">
           {{
             $t('app.runtimeMigration.resultSummary', {
               records: result.records,
               chunks: result.chunks,
               drafts: result.drafts,
+              bound: result.boundRecords,
+              unarchived: result.records - result.boundRecords,
               importId: result.importId,
             })
           }}

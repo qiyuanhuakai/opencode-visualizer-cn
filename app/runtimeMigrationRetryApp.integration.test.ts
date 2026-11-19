@@ -55,7 +55,7 @@ it('retries migration through the real App using the same failed archive owner a
     expect(writers).toHaveLength(1);
     const failedOwner = writers[0]!;
     fixture.element.querySelector<HTMLButtonElement>('[data-testid="migration-retry"]')!.click();
-    await vi.waitFor(() => expect(fixture.element.querySelector('[data-testid="migration-result"]')).not.toBeNull(), { timeout: 10000 });
+    await vi.waitFor(() => expect(fixture.element.querySelector('[data-testid="migration-result"]')?.textContent).toContain('Local backup only'), { timeout: 10000 });
     expect(new Set(writers)).toEqual(new Set([failedOwner]));
     expect(retried.has(failedOwner)).toBe(true);
     await fixture.unmount();
