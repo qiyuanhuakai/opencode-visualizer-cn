@@ -177,6 +177,7 @@ export async function createKimiWebDriver(options) {
     selected.delete(sessionId);
     lifecycleCursors.delete(sessionId);
     lifecycleSessions.delete(sessionId);
+    invalidated.delete(sessionId);
     endedTasks.delete(sessionId);
     uncertain.delete(sessionId);
     forgetRecheck(sessionId);
@@ -555,20 +556,15 @@ export async function createKimiWebDriver(options) {
     try { await lane.control(type, payload, { destructive: false }); }
     catch (error) { if (!(error instanceof ProtocolError)) throw error; }
   }
-  async function releaseHistoryOwner(sessionId, agentId, notify = true) {
+  async function releaseHistoryOwner(sessionId, agentId) {
     const { pending, key, entry } = agentSlot(sessionId, agentId);
     if (!entry || entry.held === 0) return;
     entry.held--;
     if (entry.permanent > 0 || entry.held > 0) return;
+    if (pending.size === 1) return reclaim(sessionId);
+    if (agentId === 'main' && (runningTasks.has(sessionId) || uncertain.has(sessionId))) return;
     pending.delete(key);
-    if (!notify) return;
     await teardown('unsubscribe_v2', { session_id: sessionId, transcript: { [agentId]: 'off' } });
-    if (pending.size > 0) return;
-    selected.delete(sessionId);
-    if (lifecycleSessions.delete(sessionId)) await teardown('unsubscribe', { session_ids: [sessionId] });
-    for (const [lifecycleKey] of lifecycleSubscriptions) if (lifecycleKey.slice(lifecycleKey.indexOf(':') + 1) === sessionId) lifecycleSubscriptions.delete(lifecycleKey);
-    lifecycleCursors.delete(sessionId);
-    invalidated.delete(sessionId);
   }
   const methods = {
     async inspect(context) { capture(context); return inspectNative(); },
@@ -611,8 +607,10 @@ export async function createKimiWebDriver(options) {
       const agentId = nativeText(params.agentId ?? 'main', 'agent_id', 128);
       const sessionId = captured.session.nativeSessionId;
       const release = retain(sessionId);
+      let held = false;
       try {
-        try { await subscribeSession(sessionId, agentId, 'held'); } catch (error) { await releaseHistoryOwner(sessionId, agentId, false); throw error; }
+        await subscribeSession(sessionId, agentId, 'held');
+        held = true;
         fence(captured);
         return createKimiWebHistoryProducer({
           session: captured.session,
@@ -625,7 +623,11 @@ export async function createKimiWebDriver(options) {
           sessionEpoch: () => history.cursor(sessionId)?.epoch,
           randomUUID,
         });
-      } catch (error) { await release(); throw error; }
+      } catch (error) {
+        await release();
+        if (held) await releaseHistoryOwner(sessionId, agentId);
+        throw error;
+      }
     },
     async createSession(context) {
       const captured = capture(context); requireCapability('create');

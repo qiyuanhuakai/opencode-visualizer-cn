@@ -161,8 +161,9 @@ async function controlledKimiWeb(nativePageMaximum = 200) {
     }
     if (route.pathname === '/api/v1/meta') { response.end(JSON.stringify({ code: 0, data: { backend: 'v2', server_id: 'srv_fixture', server_version: '2.1.1', capabilities: { websocket: true } } })); return; }
     if (route.pathname === '/api/v2/sessions') { response.end(JSON.stringify({ code: 0, data: { items: [{ id: nativeSessionId, meta: { title: 'Fixture', archived: false }, workspace: { id: 'wd_fixture', cwd: dir }, busy: false, last_seq: 7 }], has_more: false, next_page_token: null } })); return; }
-    if (route.pathname === `/api/v1/sessions/${nativeSessionId}/snapshot`) {
-      response.end(JSON.stringify({ code: 0, data: { epoch: 'ep_fixture', as_of_seq: 7, session: { id: nativeSessionId, meta: { title: 'Fixture' }, workspace: { id: 'wd_fixture', cwd: dir }, busy: false, last_seq: 7 }, messages: { items: [], has_more: false }, in_flight_turn: { assistant_text: '', thinking_text: '' }, subagents: [], pending_approvals: [], pending_questions: [] } }));
+    const snapshotSession = /^\/api\/v1\/sessions\/([^/]+)\/snapshot$/.exec(route.pathname)?.[1];
+    if (snapshotSession) {
+      response.end(JSON.stringify({ code: 0, data: { epoch: 'ep_fixture', as_of_seq: 7, session: { id: decodeURIComponent(snapshotSession), meta: { title: 'Fixture' }, workspace: { id: 'wd_fixture', cwd: dir }, busy: false, last_seq: 7 }, messages: { items: [], has_more: false }, in_flight_turn: { assistant_text: '', thinking_text: '' }, subagents: [], pending_approvals: [], pending_questions: [] } }));
       return;
     }
     if (route.pathname === `/api/v1/sessions/${nativeSessionId}/prompts`) {
@@ -792,3 +793,19 @@ it('limits the modern prompt abort alias to the verified dispatcher profile', ()
   expect(parseNativeCapabilities({ backend: 'v2', server_version: '2.5.2' }, { paths: {} }, ws).promptAbort).toBe(false);
   expect(parseNativeCapabilities({ backend: 'v2', server_version: '2.5.2' }, { paths: { '/api/v1/sessions/{session_id}/prompts/{tail}': { post: { operationId: 'otherAction' } } } }, ws).promptAbort).toBe(false);
 });
+
+it('reclaims native history slots after closing 33 distinct sessions', async () => {
+  const fixture = await controlledKimiWeb();
+  const driver = await createKimiWebDriver(fixture.options);
+  try {
+    const open = driver.registration.driver.core.openHistory;
+    if (!open) throw new Error('missing native history producer');
+    for (let index = 0; index < 33; index++) {
+      const handle = await open({
+        ...producerInput, session: { ...session, nativeSessionId: `capacity-${index}` },
+      }) as InternalNativeHistoryHandle;
+      await handle.close();
+      expect(driver.diagnostics()).toMatchObject({ observers: 0, selected: 0, historySessions: 0 });
+    }
+  } finally { await driver.close(); await fixture.close(); }
+}, 30000);
