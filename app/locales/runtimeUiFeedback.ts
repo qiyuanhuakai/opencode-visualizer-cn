@@ -1,6 +1,7 @@
 import type { RuntimeCopy } from './runtimeUiCommon';
 
 export const runtimeFeedbackCopy: readonly RuntimeCopy[] = [
+  ['Choose the repository used to allocate this writer.', '请选择分配此写入者时使用的仓库。', '請選擇分配此寫入者時使用的儲存庫。', 'この書き込み担当を割り当てたリポジトリを選択してください。', 'Elektu la deponejon uzitan por asigni ĉi tiun verkanton.'],
   ['Allocate a writer for this task before capturing changes.', '捕获变更前，请先为此任务分配写入者。', '擷取變更前，請先為此任務分配寫入者。', '変更を取得する前に、このタスクに書き込み担当を割り当ててください。', 'Asignu verkanton al ĉi tiu tasko antaŭ kapti ŝanĝojn.'],
   ['Prepare and inspect the current artifact review first.', '请先准备并检查当前交付物的审查。', '請先準備並檢查目前交付物的審查。', 'まず現在の成果物のレビューを準備して確認してください。', 'Unue preparu kaj inspektu la revizion de la nuna liveraĵo.'],
   ['Approve the current artifact review first.', '请先批准当前交付物的审查。', '請先核准目前交付物的審查。', 'まず現在の成果物のレビューを承認してください。', 'Unue aprobu la revizion de la nuna liveraĵo.'],

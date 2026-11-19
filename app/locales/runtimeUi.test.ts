@@ -60,18 +60,19 @@ describe('runtime UI translation coverage', () => {
     }
   });
 
-  it('renders legacy writer guarantees and lease conflicts as readable copy', () => {
-    const originalGuarantee = 'one writer lease per task, and at most WRITER_LIMITS.maxWritersPerRepository per repository';
-    const originalConflict = 'conflict: host.writer_lease';
+  it('renders Bridge writer and artifact messages as readable copy', () => {
+    const aliases = [
+      ['one writer lease per task, and at most WRITER_LIMITS.maxWritersPerRepository per repository', 'Each task has at most one writer lease. Each repository limits simultaneous writers.'],
+      ['conflict: host.writer_lease', 'Check the writer lease and its Agent session before retrying.'],
+      ['unauthorized: host.artifact_repository', 'Choose the repository used to allocate this writer.'],
+      ['conflict: host.artifact_review', 'Approve the current artifact review first.'],
+    ];
     for (const locale of locales) {
       const i18n = createI18n({ legacy: false, locale, messages: runtimeUiMessages });
       const translate = (key: string) => i18n.global.t(key);
-      expect(translateRuntimeUi(originalGuarantee, translate)).toBe(
-        translate(runtimeCopyKey('Each task has at most one writer lease. Each repository limits simultaneous writers.')),
-      );
-      expect(translateRuntimeUi(originalConflict, translate)).toBe(
-        translate(runtimeCopyKey('Check the writer lease and its Agent session before retrying.')),
-      );
+      for (const [wireCopy, readableCopy] of aliases) {
+        expect(translateRuntimeUi(wireCopy!, translate)).toBe(translate(runtimeCopyKey(readableCopy!)));
+      }
     }
   });
 

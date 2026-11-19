@@ -20,6 +20,8 @@ const copyKeys = new Map(runtimeCopy.map(([message]) => [message, runtimeCopyKey
 const bridgeCopyAliases = new Map([
   ['one writer lease per task, and at most WRITER_LIMITS.maxWritersPerRepository per repository', 'Each task has at most one writer lease. Each repository limits simultaneous writers.'],
   ['conflict: host.writer_lease', 'Check the writer lease and its Agent session before retrying.'],
+  ['unauthorized: host.artifact_repository', 'Choose the repository used to allocate this writer.'],
+  ['conflict: host.artifact_review', 'Approve the current artifact review first.'],
 ]);
 function copyMessages(index: 0 | 1 | 2 | 3 | 4): Record<string, string> {
   return Object.fromEntries(runtimeCopy.map((row) => [runtimeCopyKey(row[0]), row[index]]));
