@@ -265,18 +265,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node -e "const r = require(process.env.VIS_SMOKE_OUT_DIR + '/receipt.json'); if (r.platform.platform !== 'win32' || r.platform.arch !== 'x64') process.exit(1)"
 
-      - name: Upload Windows x64 capture evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: electron-windows-x64-candidate-evidence
-          path: |
-            ${{ runner.temp }}/windows-build-identity.json
-            ${{ runner.temp }}/smoke-unpacked/receipt.json
-            ${{ runner.temp }}/smoke-unpacked/screenshot.png
-          retention-days: 7
-          if-no-files-found: error
-
       - name: Exercise installer
         shell: pwsh
         run: ./scripts/qa/electron-installer-windows.ps1 -Arch x64
@@ -304,6 +292,18 @@ jobs:
             dist-electron/Vis-*-x64-Windows.exe
             dist-electron/Vis-*-x64-Windows.exe.blockmap
             dist-electron/latest.yml
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload Windows x64 capture evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-windows-x64-candidate-evidence
+          path: |
+            ${{ runner.temp }}/windows-build-identity.json
+            ${{ runner.temp }}/smoke-unpacked/receipt.json
+            ${{ runner.temp }}/smoke-unpacked/screenshot.png
           retention-days: 7
           if-no-files-found: error
 
