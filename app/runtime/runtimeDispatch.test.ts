@@ -568,16 +568,24 @@ describe('runtime real WebSocket dispatch', () => {
     await connection.connect();
     await renderer.inspect();
     await renderer.attach(target);
-    const { observer } = await renderer.snapshot(target, 'session_summaries', { onPage: () => {} });
-
     const session = parseSessionRef({ environmentId: target, harnessInstanceId: execution.services.registry.list()[0].harnessInstanceId, nativeSessionId: 'old-execution' });
     const key = encodeSessionKey(session);
-    const read = observer.read();
-    await execution.services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key, value: { session, title: 'Legacy execution' } }] });
-    await expect(read).resolves.toMatchObject({ kind: 'event', frame: { payload: { key } } });
-    const next = observer.read();
-    await execution.services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key, value: { session, title: 'Still live' } }] });
-    await expect(next).resolves.toMatchObject({ kind: 'event', frame: { payload: { key } } });
+    const delivered: number[] = [];
+    const { observer } = await renderer.snapshot(target, 'session_summaries', {
+      onPage: () => {},
+      onDelivery: delivery => {
+        const frame = delivery?.kind === 'event' ? delivery.frame : null;
+        if (frame?.type === 'entity.patch' && (frame.payload as { key?: string }).key === key) delivered.push(frame.seq);
+      },
+    });
+    for (const [index, title] of ['Legacy execution', 'Still live'].entries()) {
+      await execution.services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key, value: { session, title } }] });
+      // A concurrent index write can legitimately require replay. The
+      // production callback receives both live and recovered deliveries.
+      for (let attempt = 0; attempt < 5 && delivered.length <= index; attempt++) await observer.read();
+      expect(delivered).toHaveLength(index + 1);
+    }
+    expect(delivered[1]).toBeGreaterThan(delivered[0]);
     expect(refused).toBe(1);
     await observer.close();
   });
