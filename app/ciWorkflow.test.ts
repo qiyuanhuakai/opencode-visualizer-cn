@@ -309,7 +309,8 @@ describe('complete CI workflow', () => {
     expect(unixQa()).toContain('hdiutil attach');
     expect(unixQa()).toContain('hdiutil detach');
     expect(unixQa()).toContain('unzip');
-    expect(unixQa()).toContain('sudo apt-get install -y "$deb"');
+    expect(unixQa()).toContain('install --download-only -y "$deb"');
+    expect(unixQa()).toContain('sudo apt-get install -y --no-download "$deb"');
     expect(unixQa()).not.toContain('sudo dpkg -i');
     expect(unixQa()).toContain('--appimage-extract');
     // Every artifact's executable goes through the smoke driver, which enforces
