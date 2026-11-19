@@ -71,7 +71,13 @@ try {
     const connected = await connectApp(browser.page, web.origin, network.port);
     report.tree = await measureTree(browser.page, connected);
     report.index = await bridge.indexed();
-    report.interactions = await measureInteractions(browser.page, { ...summaryAt(5), title: 'Vis measured native history session' });
+    const historySample = { ...summaryAt(5), title: 'Vis measured native history session' };
+    report.interactions = await measureInteractions(browser.page, historySample);
+    // Keep the browser profile and populated Bridge. Reconnect through the
+    // normal entry form so the warm measurement still traverses the real wire.
+    const warm = await connectApp(browser.page, web.origin, network.port);
+    report.warmTree = await measureTree(browser.page, warm);
+    report.warmInteractions = await measureInteractions(browser.page, historySample);
     report.renderer = await browser.heap();
     report.bridgeObservedRssPeakBytes = Math.max(rssPeak, bridge.rss().rssBytes);
     const label = count > 10000 ? '100k' : '10k';
