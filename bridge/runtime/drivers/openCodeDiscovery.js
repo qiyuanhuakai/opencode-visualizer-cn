@@ -61,7 +61,8 @@ export function createOpenCodeDiscovery({ reader, request, current, assertCurren
         scan.nativeCursor = page.cursor;
         const invalid = scan.invalid ?? failure;
         const more = page.cursor !== null && !invalid;
-        if (!more) scans.delete(token);
+        if (more) scan.expiresAt = Date.now() + 60000;
+        else scans.delete(token);
         return { items, cursor: more ? token : null, completeness: invalid ? 'partial' : page.completeness, reason: invalid ?? page.reason, retryable: Boolean(invalid), provenance: page.provenance, ...generation, seq: scan.seq };
       } catch (error) {
         if (!(error instanceof ProtocolError)) { scans.delete(token); throw error; }

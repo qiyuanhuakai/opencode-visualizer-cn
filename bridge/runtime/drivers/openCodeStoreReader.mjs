@@ -106,7 +106,7 @@ function nativeStore({ databasePath, nativeVersion }) {
       if (!complete) {
         requireValue(items.length > 0, 'opencode.store_page_size', 'unsupported');
         next = randomUUID();
-        cursors.set(next, { ...cursor, last: items.at(-1).id });
+        cursors.set(next, { ...cursor, last: items.at(-1).id, expiresAt: Date.now() + 60000 });
       }
       return { items, cursor: next, completeness: complete ? 'complete' : 'partial', reason: complete ? 'native-store-eof' : 'more-pages', provenance: this.inspect };
     },
