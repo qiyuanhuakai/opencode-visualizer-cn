@@ -88,6 +88,37 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     socket.reply(request, { rows: ['remote'] });
     await expect(result).resolves.toEqual({ rows: ['remote'] });
   });
+  it('falls back to plain inspection when an older Bridge rejects startup page negotiation', async () => {
+    const { client, socket } = await fixture();
+    const inspected = client.inspect(true);
+    const extended = await socket.next();
+    expect(extended).toMatchObject({ method: 'runtime.inspect', params: { bootstrapTree: true } });
+    socket.frame({ version: 1, kind: 'result', target, epoch: extended.epoch, generation: extended.generation,
+      id: extended.id, ok: false, typedError: { code: 'invalid_request', message: 'invalid_request: fields' } });
+    const legacy = await socket.next();
+    expect(legacy).toMatchObject({ method: 'runtime.inspect', params: {} });
+    socket.reply(legacy, inspection);
+    await expect(inspected).resolves.toEqual(inspection);
+  });
+  it('adopts three inspected pages in collection order and opens the observer at their watermark', async () => {
+    const { client, socket } = await fixture();
+    const inspected = client.inspect(true);
+    const page = { kind: 'snapshot', version: 1, target, epoch: hello.epoch, generation: hello.generation,
+      token: 'bootstrap', revision: 10, watermark: 4, expiresAt: Date.now() + 60000, items: [], cursor: null };
+    socket.reply(await socket.next(), { ...inspection, treeBootstrap: [page, page, page] });
+    await inspected;
+    const order: string[] = [];
+    const paging = client.snapshot(target, ['harnesses', 'workspaces', 'session_summaries'], {
+      initialSummaryLimit: 32,
+      onPage(collection) { order.push(collection); },
+    });
+    const open = await socket.next();
+    expect(open).toMatchObject({ method: 'runtime.observer.open', params: { after: 4 } });
+    socket.reply(open, { observerId: 'observer' });
+    await expect(paging).resolves.toMatchObject({ token: 'bootstrap', watermark: 4 });
+    expect(order).toEqual(['harnesses', 'workspaces', 'session_summaries']);
+    expect(socket.sent.map(frame => frame.method)).toEqual(['runtime.inspect', 'runtime.observer.open']);
+  });
   it('uses a refreshed source grant after startup and enforces later permission revocation on the same binding', async () => {
     const { client, socket } = await fixture();
     const query = { harnessInstanceId: harness, operation: 'listProviders', args: {} };
