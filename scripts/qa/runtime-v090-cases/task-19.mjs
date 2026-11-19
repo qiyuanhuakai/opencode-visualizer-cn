@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { request as httpRequest } from 'node:http';
+import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 import { readdirSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -43,9 +43,27 @@ export async function run(context) {
   let browser, page, electron;
   try {
     fixture.register({ kind: 'Vite-planned', host: '127.0.0.1', teardown: 'server.close and exclusive port rebind' });
-    const vite = await createServer({ configFile: false, root: context.root, server: { host: '127.0.0.1', port: 0, strictPort: false }, logLevel: 'error' });
-    await vite.listen(); const port = vite.httpServer.address().port;
-    fixture.register({ kind: 'Vite-created', port }); fixture.own('Vite-server', async () => { await vite.close(); await assertPortReleased(port); return { port, exclusiveRebind: true }; });
+    const vite = await createServer({ configFile: false, root: context.root, server: { middlewareMode: true, hmr: false }, logLevel: 'error' });
+    fixture.own('Vite-middleware', () => vite.close());
+    const http = createHttpServer(vite.middlewares);
+    let port;
+    fixture.own('Vite-server', async () => {
+      if (!http.listening) return { listening: false };
+      const closed = new Promise((resolve, reject) => http.close(error => error ? reject(error) : resolve()));
+      http.closeAllConnections();
+      await closed;
+      await assertPortReleased(port);
+      return { port, exclusiveRebind: true };
+    });
+    await new Promise((resolve, reject) => {
+      http.once('error', reject);
+      http.listen(0, '127.0.0.1', () => {
+        http.removeListener('error', reject);
+        resolve();
+      });
+    });
+    port = http.address().port;
+    fixture.register({ kind: 'Vite-created', port });
     const baseUrl = `http://127.0.0.1:${port}/app/dev/runtime-v090/index.html`;
     const initial = fixture.sql(); proof.observations.initialSql = initial;
     const selected = initial.sessions.find(row => row.value?.session.nativeSessionId === fixture.native.opencode.sessions[0].id);
