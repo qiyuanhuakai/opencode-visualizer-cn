@@ -218,6 +218,18 @@ export async function createFixture(context) {
     const peerPort = await listen(versionPeer); register({ kind: 'version-peer-created', port: peerPort });
     own('version-peer', async () => { for (const socket of peerSockets) socket.destroy(); await closeServer(versionPeer); await assertPortReleased(peerPort); return { port: peerPort, exclusiveRebind: true }; });
     return { root, stateRoot, secondaryRoot, workspace, controlled, controlledSession, secondary, manager, writeCompletion, host, token, url: `ws://127.0.0.1:${port}/runtime`, versionUrl: `ws://127.0.0.1:${peerPort}/runtime`, native, resources, register, own, close, sql: () => sql(stateRoot), secondarySql: () => sql(secondaryRoot) };
-  } catch (error) { writeJson(path.join(context.runDir, 'fixture-failure.json'), { message: error.message, stack: error.stack, factoryErrors }); await close(); throw error; }
+  } catch (error) {
+    try {
+      writeJson(path.join(context.runDir, 'fixture-failure.json'), { message: error.message, stack: error.stack, factoryErrors });
+    } catch (reportError) {
+      console.error(`Task 19 fixture failure report: ${reportError.message}`);
+    }
+    try {
+      await close();
+    } catch (cleanupError) {
+      console.error(`Task 19 fixture cleanup after initialization failure: ${cleanupError.message}`);
+    }
+    throw error;
+  }
 }
 function processReceipt(pid, [code, signal]) { return { pid, code, signal, absent: !alive(pid) }; }

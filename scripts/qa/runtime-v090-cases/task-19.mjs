@@ -41,6 +41,12 @@ export async function run(context) {
   const check = (name, observed, expected) => { proof.checks.push({ name, observed, expected, passed: JSON.stringify(observed) === JSON.stringify(expected) }); persist(); assert.deepEqual(observed, expected, name); scenarios.push({ name, assertions: [{ name, observed, expected, passed: true }] }); console.log(`PASS ${name}`); };
   const fixture = await createFixture({ ...context, runDir, evidenceDir });
   let browser, page, electron;
+  let primaryError = null;
+  const diagnosticErrors = [];
+  const collectDiagnostic = async (name, collect) => {
+    try { await collect(); }
+    catch (error) { diagnosticErrors.push(error); console.error(`Task 19 ${name}: ${error.message}`); }
+  };
   try {
     fixture.register({ kind: 'Vite-planned', host: '127.0.0.1', teardown: 'server.close and exclusive port rebind' });
     const vite = await createServer({ configFile: false, root: context.root, server: { middlewareMode: true, hmr: false }, logLevel: 'error' });
@@ -71,7 +77,9 @@ export async function run(context) {
     const profile = JSON.parse(await readFile(path.join(fixture.stateRoot, 'runtime/registrations/management-profile.json'), 'utf8')).id;
     const pageUrl = `${baseUrl}?task=19&runtimeProfile=${profile}&runtimeSession=${encodeSessionKey(selected.value.session)}`;
     proof.pageUrl = pageUrl;
-    const { omowright } = await loadBrowserKernel();
+    const { omowright, kernelSource, kernelPin } = await loadBrowserKernel();
+    proof.observations.browserKernel = { source: kernelSource, pin: kernelPin };
+    assert(kernelPin.verified, 'Task 19 requires a digest-verified browser kernel');
     const profileRoot = path.join(fixture.root, 'chromium-profile');
     fixture.register({ kind: 'Chromium-planned', executable: chromium.executablePath(), profile: profileRoot, teardown: 'owned browser.close; process exit; private root removal' });
     browser = await omowright.connectPipe({ browserPath: chromium.executablePath(), browserArgs: ['--headless', '--no-sandbox', '--disable-gpu', '--no-first-run', `--user-data-dir=${profileRoot}`], storageRoot: runDir });
@@ -206,18 +214,33 @@ export async function run(context) {
     proof.observations.finalSql = fixture.sql(); proof.observations.secondaryFinalSql = fixture.secondarySql();
     proof.observations.controlledNativeCalls = fixture.controlled.calls;
     check('dirty worktree source bytes and unrelated uncommitted paths are preserved', worktree(), sourceBefore);
-  } catch (error) { proof.failure = { message: error.message, stack: error.stack }; persist(); if (page) { writeJson(path.join(runDir, 'failure-dom.json'), await page.evaluate(() => ({ url: location.href, body: document.body.innerText, runtime: window.task19?.state() }))); await writeFile(path.join(runDir, 'failure.png'), await page.screenshot()); } throw error; }
-  finally {
-    try {
-      await fixture.close();
-    } catch (cleanupError) {
-      if (!proof.failure) throw cleanupError;
-      proof.cleanupFailure = { message: cleanupError.message, stack: cleanupError.stack };
-    } finally {
-      persist();
+  } catch (error) {
+    primaryError = error;
+    proof.failure = { message: error.message, stack: error.stack };
+    if (page) {
+      await collectDiagnostic('failure DOM', async () => {
+        const dom = await page.evaluate(() => ({ url: location.href, body: document.body.innerText, runtime: window.task19?.state() }));
+        writeJson(path.join(runDir, 'failure-dom.json'), dom);
+      });
+      await collectDiagnostic('failure screenshot', async () => {
+        await writeFile(path.join(runDir, 'failure.png'), await page.screenshot());
+      });
     }
-    artifacts.push(artifact(path.join(runDir, 'proof.json'), 'real-renderer-runtime-proof'), artifact(path.join(runDir, 'resources.json'), 'resource-cleanup'), artifact(path.join(runDir, 'native-inventory.json'), 'installed-native-inventory'));
+  } finally {
+    await collectDiagnostic('fixture cleanup', () => fixture.close());
+    proof.diagnosticFailures = diagnosticErrors.map(error => ({ message: error.message, stack: error.stack }));
+    await collectDiagnostic('proof write', persist);
+    for (const [file, kind] of [
+      ['proof.json', 'real-renderer-runtime-proof'],
+      ['resources.json', 'resource-cleanup'],
+      ['native-inventory.json', 'installed-native-inventory'],
+      ['supported-native-packages.json', 'native-package-provenance'],
+    ]) {
+      await collectDiagnostic(kind, () => artifacts.push(artifact(path.join(runDir, file), kind)));
+    }
   }
+  if (primaryError) throw primaryError;
+  if (diagnosticErrors.length) throw new AggregateError(diagnosticErrors, 'Task 19 cleanup or evidence collection failed');
   const classMatchers = {
     malformed_input: /malformed authority|foreign environment/,
     prompt_injection: /untrusted native title/,
