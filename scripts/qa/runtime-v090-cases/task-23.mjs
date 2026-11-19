@@ -98,6 +98,7 @@ export async function run(context) {
   const record = (name, value) => { observations[name] = normalize(value); persist(); };
   const fixture = await createFixture({ ...context, runDir, evidenceDir });
   const sourceBefore = sourceSnapshot(context.root, sourceFiles);
+  const statusBefore = execFileSync('git', ['status', '--porcelain'], { cwd: context.root, encoding: 'utf8' });
   let browser; let page; let vite;
   try {
     fixture.register({ kind: 'Vite-planned', host: '127.0.0.1', teardown: 'server.close then exclusive port rebind' });
@@ -338,14 +339,14 @@ export async function run(context) {
       await evaluate((input) => window.task23.setWorkspaceScope(input), { present: true, path: '/repo' });
       const withWorkspace = await evaluate(() => window.task23.settings());
       await evaluate((input) => window.task23.setWorkspaceScope(input), { present: false });
-      const withoutWorkspace = await evaluate(() => window.task23.settings());
+      const withoutWorkspace = await evaluate(() => window.task23.settings(true));
       record('workspaceSettingsGate', { withWorkspace, withoutWorkspace });
-      check('the workspace settings control is enabled with a workspace scope and names the workspace when it is absent', {
+      check('the desktop local application chooser stays available and invokes local Electron IPC without a remote workspace', {
         withWorkspace: { row: withWorkspace.hasLocalApplicationRow, disabled: withWorkspace.browseDisabled, sourceCount: withWorkspace.sourceCount },
-        withoutWorkspace: { row: withoutWorkspace.hasLocalApplicationRow, disabled: withoutWorkspace.browseDisabled, sourceNamesWorkspace: Boolean(withoutWorkspace.sourceText && withoutWorkspace.sourceText.includes('no workspace is selected')) },
+        withoutWorkspace: { row: withoutWorkspace.hasLocalApplicationRow, disabled: withoutWorkspace.browseDisabled, sourceCount: withoutWorkspace.sourceCount, chooserCalls: withoutWorkspace.localApplicationSelections },
       }, {
         withWorkspace: { row: true, disabled: false, sourceCount: 0 },
-        withoutWorkspace: { row: true, disabled: true, sourceNamesWorkspace: true },
+        withoutWorkspace: { row: true, disabled: false, sourceCount: 0, chooserCalls: 1 },
       });
 
       // H8 — three themes at desktop and mobile widths for the happy surfaces.
@@ -382,7 +383,7 @@ export async function run(context) {
     }
 
     const sourceAfter = sourceSnapshot(context.root, sourceFiles);
-    check('dirty worktree production sources are unchanged by the registered case', { status: execFileSync('git', ['status', '--porcelain'], { cwd: context.root, encoding: 'utf8' }).length > 0, unchanged: JSON.stringify(sourceAfter) === JSON.stringify(sourceBefore) }, { status: true, unchanged: true });
+    check('dirty worktree production sources are unchanged by the registered case', { status: execFileSync('git', ['status', '--porcelain'], { cwd: context.root, encoding: 'utf8' }) === statusBefore, unchanged: JSON.stringify(sourceAfter) === JSON.stringify(sourceBefore) }, { status: true, unchanged: true });
   } catch (error) {
     proof.failure = { message: error.message, stack: error.stack };
     if (page) {
