@@ -77,8 +77,8 @@ export function createNativeEventIntake({ source, mutations, dirty, invalidate =
       if (value.kind === 'control') { onControl(); return true; }
       if (value.kind === 'ignore') return true;
       if (value.kind === 'recover') throw new StoreError('replay_required', 'index_native_recovery');
-      if (value.kind === 'activity' || value.updateExisting) invalidate();
-      else dirty();
+      if (value.kind === 'activity') invalidate();
+      else if (!value.updateExisting) dirty();
       if (value.kind === 'dirty') return true;
       const size = Buffer.byteLength(JSON.stringify(value));
       if (count >= INTAKE_LIMITS.events || bytes + size > INTAKE_LIMITS.bytes) throw new StoreError('replay_required', 'index_producer_overflow');

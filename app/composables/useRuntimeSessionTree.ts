@@ -348,13 +348,13 @@ export function flattenUnifiedTree(
   return rows;
 }
 
-function firstSessionBranch(nodes: readonly UnifiedTreeNode[], filter: ReadonlySet<SessionHarness>): string[] | null {
+function firstSessionBranch(nodes: readonly UnifiedTreeNode[], filter: ReadonlySet<SessionHarness>, key?: string): { key: string; ancestors: string[] } | null {
   for (const node of nodes) {
     if (node.kind === 'session') {
-      if (!node.session.archived && filter.has(node.session.harness)) return [];
+      if (!node.session.archived && filter.has(node.session.harness) && (key === undefined || node.key === key)) return { key: node.key, ancestors: [] };
     } else if (node.kind !== 'native') {
-      const branch = firstSessionBranch(node.children, filter);
-      if (branch !== null) return [node.key, ...branch];
+      const branch = firstSessionBranch(node.children, filter, key);
+      if (branch !== null) return { key: branch.key, ancestors: [node.key, ...branch.ancestors] };
     }
   }
   return null;
@@ -424,7 +424,8 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   // only for the view it was scanned against, so a newer index view re-scans it.
   const childScanRevisions = new Map<string, number>();
   const childScans = computed<ReadonlySet<string>>(() => new Set(childScanRevisions.keys()));
-  const expanded = shallowRef<ReadonlySet<string>>(new Set<string>());
+  const manualExpanded = shallowRef<ReadonlySet<string> | null>(null);
+  const initialSessionKey = shallowRef<string | undefined>();
   const filterKinds = shallowRef<ReadonlySet<SessionHarness>>(new Set<SessionHarness>([...HARNESS_KINDS, 'unknown']));
   const search = shallowRef<UnifiedSearchState>(idleSearchState());
   /** A topology re-read is waiting for the bridge's bounded live-view budget to free a slot. */
@@ -435,7 +436,6 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   const started = shallowRef(false);
   const failure = shallowRef<ErrorCode | null>(null);
   let disposed = false;
-  let initialExpansionHandled = false;
   let unsubscribe: (() => void) | undefined;
   let readChain: Promise<unknown> = Promise.resolve();
   let searchGeneration = 0;
@@ -464,12 +464,8 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
         if (parsed) rows.push(parsed);
       }
       sessions.value = Object.freeze(rows);
-      if (!initialExpansionHandled && rows.length > 0) {
-        const branch = firstSessionBranch(tree.value, filterKinds.value);
-        if (branch !== null) {
-          initialExpansionHandled = true;
-          expanded.value = new Set(branch);
-        }
+      if (manualExpanded.value === null && initialSessionKey.value === undefined && rows.length > 0) {
+        initialSessionKey.value = firstSessionBranch(tree.value, filterKinds.value)?.key;
       }
       viewLoaded.value = Math.max(view.loaded, rows.length);
     } finally {
@@ -712,7 +708,6 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     }
   }
   function toggleExpand(key: string): void {
-    initialExpansionHandled = true;
     const next = new Set(expanded.value);
     if (next.has(key)) next.delete(key);
     else next.add(key);
@@ -734,6 +729,14 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     }
   }
   const tree = computed(() => buildUnifiedTree(sessions.value, workspaces.value, nativeChildren.value));
+  const expanded = computed<ReadonlySet<string>>({
+    get() {
+      if (manualExpanded.value !== null) return manualExpanded.value;
+      const key = initialSessionKey.value;
+      return new Set(key === undefined ? [] : firstSessionBranch(tree.value, filterKinds.value, key)?.ancestors);
+    },
+    set(value) { manualExpanded.value = value; },
+  });
   const rows = computed(() => flattenUnifiedTree(tree.value, expanded.value, filterKinds.value));
   async function dispose(): Promise<void> {
     if (disposed) return;

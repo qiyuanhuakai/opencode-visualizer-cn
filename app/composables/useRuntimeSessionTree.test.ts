@@ -183,7 +183,7 @@ class ReactiveClient {
   }
 }
 
-function seedTopology(client: ReactiveClient): void {
+function seedTopology(client: ReactiveClient, repoKey: string | null = REPO_KEY): void {
   for (const kind of HARNESS_KINDS) {
     client.add('harnesses', {
       collection: 'harnesses', key: HARNESS_IDS[kind], revision: 1,
@@ -192,7 +192,7 @@ function seedTopology(client: ReactiveClient): void {
   }
   client.add('workspaces', {
     collection: 'workspaces', key: 'workspace:/repo', revision: 1,
-    value: { kind: 'workspace', workspace: { environmentId: ENV, canonicalPath: DIRECTORY, pathPolicy: { platform: 'posix', caseSensitive: true, volumeId: 'vol' } }, sources: [], orphan: false, gitKind: 'git', repoKey: REPO_KEY },
+    value: { kind: 'workspace', workspace: { environmentId: ENV, canonicalPath: DIRECTORY, pathPolicy: { platform: 'posix', caseSensitive: true, volumeId: 'vol' } }, sources: [], orphan: false, gitKind: 'git', repoKey },
   });
 }
 
@@ -229,6 +229,28 @@ it('reveals a first active session and respects a subsequent explicit collapse',
     tree.toggleExpand(tree.rows.value[0].key);
     await tree.refresh();
     expect(tree.rows.value.some(row => row.key === key)).toBe(false);
+  } finally {
+    await tree.dispose();
+  }
+});
+
+it('keeps the initial session visible when Git discovery regroups its worktree', async () => {
+  const client = new ReactiveClient();
+  seedTopology(client, null);
+  const key = sessionKey(0);
+  client.add('session_summaries', canonical(key, 1, summaryValue(0)));
+  const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV });
+  try {
+    await tree.start();
+    expect(tree.rows.value[0].key).toBe('section:global');
+    expect(tree.rows.value.some(row => row.key === key)).toBe(true);
+    client.add('workspaces', {
+      collection: 'workspaces', key: 'workspace:/repo', revision: 2,
+      value: { kind: 'workspace', workspace: { environmentId: ENV, canonicalPath: DIRECTORY, pathPolicy: { platform: 'posix', caseSensitive: true, volumeId: 'vol' } }, sources: [], orphan: false, gitKind: 'git', repoKey: REPO_KEY },
+    });
+    await tree.refresh();
+    expect(tree.rows.value[0].key).toBe(`repo:${REPO_KEY}`);
+    expect(tree.rows.value.some(row => row.key === key)).toBe(true);
   } finally {
     await tree.dispose();
   }
