@@ -13,7 +13,7 @@ function normalize(source, event) {
   if (/interaction|permission|approval|question|operation\.|turn\/completed|session\.idle/.test(type)) return { kind: 'control' };
   if (['source-error', 'replay_required', 'process.invalidated'].includes(type)) return { kind: 'recover' };
   if (['session.deleted', 'thread/deleted'].includes(type)) return { kind: 'delete', session: parseSessionRef(event.session) };
-  if (source.kind === 'opencode' && ['session.created', 'session.updated'].includes(type)) return { kind: 'update', summary: sessionSummary(source, event) };
+  if (source.kind === 'opencode' && ['session.created', 'session.updated'].includes(type)) return { kind: 'update', updateExisting: type === 'session.updated', summary: sessionSummary(source, event) };
   if (type === 'catalog_changed' || type === 'native-emit' || type.startsWith('thread/') || type.startsWith('session.')) return { kind: 'dirty' };
   return { kind: 'ignore' };
 }
@@ -50,7 +50,8 @@ export function createNativeEventIntake({ source, mutations, dirty, invalidate =
         };
         assertCurrent();
         if (entry.value.kind === 'delete' || entry.value.kind === 'update') {
-          await mutations.event({ source: source.identity, authority: entry.authority, summary: entry.value.summary, session: entry.value.session, deleted: entry.value.kind === 'delete', assertCurrent });
+          const reconcile = entry.value.updateExisting ? dirty : undefined;
+          await mutations.event({ source: source.identity, authority: entry.authority, summary: entry.value.summary, session: entry.value.session, deleted: entry.value.kind === 'delete', assertCurrent, reconcile });
         }
         if (entry.value.kind === 'activity') await mutations.activity({ source: source.identity, authority: entry.authority, session: entry.value.session, status: entry.value.status, assertCurrent });
       } catch (error) { fail(error); }
@@ -76,7 +77,7 @@ export function createNativeEventIntake({ source, mutations, dirty, invalidate =
       if (value.kind === 'control') { onControl(); return true; }
       if (value.kind === 'ignore') return true;
       if (value.kind === 'recover') throw new StoreError('replay_required', 'index_native_recovery');
-      if (value.kind === 'activity') invalidate();
+      if (value.kind === 'activity' || value.updateExisting) invalidate();
       else dirty();
       if (value.kind === 'dirty') return true;
       const size = Buffer.byteLength(JSON.stringify(value));
