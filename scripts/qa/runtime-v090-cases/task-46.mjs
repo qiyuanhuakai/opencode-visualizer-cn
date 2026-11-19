@@ -114,13 +114,8 @@ const SSH_HAPPY_FLOOR = 14;
 const SSH_FAILURE_FLOOR = 21;
 const SLURM_HAPPY_FLOOR = 39;
 const SLURM_FAILURE_FLOOR = 39;
-// Measured runtimes on this host, recorded so the split above is auditable rather than asserted.
-const MEASURED_RUNTIME_MS = Object.freeze({
-  sshHappy: 97500,
-  sshFailure: 115100,
-  slurmHappy: 137300,
-  runnerWorkerBudgetMs: 600_000,
-});
+// A cold isolated lab installs real packages before testing starts.
+export const workerTimeoutMs = 600_000;
 
 /** The product / QA paths this case's drivers execute. */
 export const sourceFiles = [...new Set([
@@ -180,7 +175,7 @@ async function runDriver(context, runDir, label, driver, args) {
   const out = path.join(runDir, `${label}.json`);
   const log = path.join(runDir, `${label}.log`);
   const invocation = [process.execPath, driver, ...args, '--out', out];
-  const receipt = await captureProcess(invocation, { root: context.root, log, timeoutMs: MEASURED_RUNTIME_MS.runnerWorkerBudgetMs - 30_000 });
+  const receipt = await captureProcess(invocation, { root: context.root, log, timeoutMs: workerTimeoutMs - 30_000 });
   const text = existsSync(log) ? readFileSync(log, 'utf8') : '';
   return { label, driver, invocation, out, log, receipt, logText: text };
 }
