@@ -429,10 +429,9 @@ wait_for_state() {
 wait_for_state RUNNING >/dev/null
 printf 'EXPIRE_RUNNING=%s RUNNING\n' "$job"
 scontrol requeuehold "$job"
-wait_for_state PENDING >/dev/null
+pending=$(wait_for_state PENDING)
+[[ " $pending " =~ [[:space:]]Restarts=[1-9][0-9]*[[:space:]] ]]
 printf 'EXPIRE_REQUEUED=%s PENDING\n' "$job"
-scontrol release "$job"
-wait_for_state RUNNING >/dev/null
 scancel "$job"
 wait_for_state CANCELLED >/dev/null
 printf 'EXPIRE_AFTER_CANCEL=%s CANCELLED\n' "$job"

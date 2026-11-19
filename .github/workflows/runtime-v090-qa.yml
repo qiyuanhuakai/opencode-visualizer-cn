@@ -117,8 +117,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: runtime-v090-live-slurm
+          include-hidden-files: true
           path: |
-            .omo/evidence/vis-v090/task-46/
+            .omo/evidence/vis-v090/task-46/slurm.json
+            .omo/evidence/vis-v090/task-46/slurm-failure.json
             ${{ runner.temp }}/vis-live-preflight.log
           retention-days: 30
           if-no-files-found: error
@@ -186,8 +188,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: runtime-v090-live-ssh
+          include-hidden-files: true
           path: |
-            .omo/evidence/vis-v090/task-46/
+            .omo/evidence/vis-v090/task-46/ssh.json
+            .omo/evidence/vis-v090/task-46/ssh-failure.json
             ${{ runner.temp }}/vis-live-preflight.log
           retention-days: 30
           if-no-files-found: error
