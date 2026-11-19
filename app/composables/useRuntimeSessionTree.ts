@@ -527,7 +527,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
    * cached view may predate sessions the query should match; paging the SAME
    * search leaves it unset so every page reads one consistent view.
    */
-  async function scanSearch(query: string, skip: number, signal: AbortSignal, accumulator: SearchScan, fresh: boolean, onWaiting?: () => void): Promise<void> {
+  async function scanSearch(query: string, skip: number, signal: AbortSignal, accumulator: SearchScan, fresh: boolean, onWaiting?: () => void, onMatches?: () => void): Promise<void> {
     const view = await client.readIndex(target, 'session_summaries', {
       fresh,
       signal,
@@ -535,6 +535,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
       onPage: (_collection, page) => {
         if (signal.aborted) return;
         accumulator.pages += 1;
+        const previouslyRetained = accumulator.retained.length;
         for (const item of page.items) {
           accumulator.scanned += 1;
           const record = asRecord(item);
@@ -545,6 +546,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
           accumulator.totalMatched += 1;
           if (accumulator.totalMatched > skip && accumulator.retained.length < SEARCH_LIMITS.maxRetained) accumulator.retained.push(parsed);
         }
+        if (accumulator.retained.length > previouslyRetained) onMatches?.();
       },
     });
     lastIndexRevision = view.revision;
@@ -566,6 +568,16 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
       try {
         await scanSearch(query, 0, controller.signal, accumulator, true, () => {
           if (generation === searchGeneration) search.value = { ...search.value, status: 'searching', waiting: true };
+        }, () => {
+          if (generation !== searchGeneration) return;
+          search.value = {
+            ...search.value,
+            scanned: accumulator.scanned,
+            pages: accumulator.pages,
+            totalMatched: accumulator.totalMatched,
+            matches: Object.freeze([...accumulator.retained]),
+            waiting: false,
+          };
         });
         if (generation !== searchGeneration) return search.value;
         const hasMore = accumulator.totalMatched > accumulator.retained.length;

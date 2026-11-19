@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { HARNESS_KINDS, useRuntimeSessionTree, type HarnessKind } from './useRuntimeSessionTree';
 import { encodeSessionKey, parseConnectionProfileId } from '../../shared/runtime/identity.js';
 import type { ConnectionProfileId, EnvironmentId, HarnessInstanceId, SessionRef } from '../../shared/runtime/identity.js';
@@ -282,6 +282,42 @@ describe('useRuntimeSessionTree — index view freshness (review round 613858028
   function titled(index: number, title: string, parent?: SessionRef): AnyRecord {
     return { ...summaryValue(index), title, ...(parent ? { parentSession: parent } : {}) };
   }
+
+  it('publishes an early match while the full-index scan is still running', async () => {
+    const client = new ReactiveClient();
+    seedTopology(client);
+    client.add('session_summaries', canonical(sessionKey(9), 2, titled(9, 'early match')));
+    const firstPage = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const readIndex = client.readIndex.bind(client);
+    const original = vi.spyOn(client, 'readIndex').mockImplementation((target, collections, options) =>
+      readIndex(target, collections, {
+        ...options,
+        async onPage(collection, page) {
+          await options.onPage(collection, page);
+          if (options.fresh) {
+            firstPage.resolve();
+            await finish.promise;
+          }
+        },
+      }),
+    );
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV });
+    try {
+      await tree.start();
+      const searching = tree.search('early match');
+      await firstPage.promise;
+      expect(tree.searchState.value).toMatchObject({
+        status: 'searching', matches: [{ title: 'early match' }],
+      });
+      finish.resolve();
+      await expect(searching).resolves.toMatchObject({ status: 'complete', totalMatched: 1 });
+    } finally {
+      finish.resolve();
+      original.mockRestore();
+      await tree.dispose();
+    }
+  });
 
   it('a repeated search sees sessions added after the first search', async () => {
     const client = new ReactiveClient();

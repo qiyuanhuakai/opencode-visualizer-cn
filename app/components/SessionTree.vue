@@ -76,7 +76,7 @@
           {{ searchState.matches.length }} / {{ searchState.totalMatched }} {{ $t('runtime.sessionTree.matches', 'matches') }} · {{ searchState.scanned }} {{ $t('runtime.sessionTree.scanned', 'scanned') }} · {{ searchState.pages }} {{ $t('runtime.sessionTree.pages', 'pages') }}
         </span>
       </div>
-      <ul v-if="searchState && searchState.status === 'complete' && searchState.matches.length" class="unified-search-results" data-testid="search-results">
+      <ul v-if="searchState?.matches.length" class="unified-search-results" data-testid="search-results">
         <li v-for="match in searchState.matches" :key="match.key">
           <button type="button" class="unified-search-result" data-testid="search-result" @click="emit('select-key', match.key)">
             <HarnessBadge class="unified-search-result-badge" :harness="match.harness" compact />
