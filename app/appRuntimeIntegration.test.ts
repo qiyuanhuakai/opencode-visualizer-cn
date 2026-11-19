@@ -115,25 +115,25 @@ describe('the task-23 harness scope props are bound in App.vue', () => {
   });
 
   it('passes the harness scope to ProviderManagerModal', () => {
-    const usage = APP_TEMPLATE.match(/<ProviderManagerModal[\s\S]*?\/>/);
+    const usage = APP_TEMPLATE.match(/<ProviderManagerModal[\s\S]*?>/);
     expect(usage).not.toBeNull();
     expect(usage?.[0]).toMatch(/:harness-scope=/);
     expect(usage?.[0]).toMatch(/:harness-manifests=/);
   });
 
   it('passes the harness scope to StatusMonitorModal', () => {
-    const usage = APP_TEMPLATE.match(/<StatusMonitorModal[\s\S]*?\/>/);
+    const usage = APP_TEMPLATE.match(/<StatusMonitorModal[\s\S]*?>/);
     expect(usage).not.toBeNull();
     expect(usage?.[0]).toMatch(/:harness-scope=/);
     expect(usage?.[0]).toMatch(/:harness-manifests=/);
   });
 
   it('derives management scope from the explicit Agent selection independently of the conversation', () => {
-    const scope = APP_SOURCE.match(/const harnessInstanceScope = computed<ControlScope \| null>\([\s\S]*?\n\}\) : null\);/)?.[0];
+    const scope = APP_SOURCE.match(/const harnessInstanceScope = computed<ControlScope \| null>\([\s\S]*?\n\}\);/)?.[0];
     expect(scope).toBeDefined();
     expect(scope).toContain("kind: 'instance'");
-    expect(scope).toContain('environmentId: runtimeEnvironmentId.value');
-    expect(scope).toContain('harnessInstanceId: managementHarnessInstanceId.value');
+    expect(scope).toContain('environmentId: manifest.environmentId');
+    expect(scope).toContain('harnessInstanceId: manifest.harnessInstanceId');
     expect(scope).not.toMatch(/selectedSession|runtimeSelectedSessionRef/);
   });
 });

@@ -243,7 +243,7 @@ if [[ "$PLATFORM" == "linux" ]]; then
       sudo apt-get "${apt_network[@]}" install --download-only -y "$deb"
     fi
     DEB_INSTALL_ATTEMPTED=1
-    sudo apt-get install -y --no-download "$deb"
+    sudo apt-get "${apt_network[@]}" install -y "$deb"
     INSTALLED_EXE="/opt/Vis/$EXECUTABLE_NAME"
   fi
   [[ -x "$INSTALLED_EXE" ]] || die "installed executable missing: $INSTALLED_EXE"
