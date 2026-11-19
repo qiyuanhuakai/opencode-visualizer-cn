@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { effectScope } from 'vue';
 import { createRuntimeState } from './state';
@@ -244,9 +245,9 @@ describe('runtime state through production client and frame codecs', () => {
     const { state, wire } = await fixture(10); await state.start(target);
     const host = wire.event(0, { title: 'host-patch-placeholder' });
     const queue = wire.deliveries.get(target)!;
-    queue[queue.length - 1] = { kind: 'event', frame: { ...host, scope: 'host:v1:thread:test', payload: { collection: 'threads', key: 'host:v1:thread:test', deleted: false } } };
+    queue[queue.length - 1] = { kind: 'event', frame: { ...host, scope: createHash('sha256').update(JSON.stringify(['threads', 'host:v1:thread:test'])).digest('base64url'), payload: { collection: 'threads', key: 'host:v1:thread:test', deleted: false } } };
     const imported = wire.event(0, { title: 'import-placeholder' });
-    queue[queue.length - 1] = { kind: 'event', frame: { ...imported, scope: 'manifest:test', payload: { collection: 'imports', key: 'manifest:test', deleted: false } } };
+    queue[queue.length - 1] = { kind: 'event', frame: { ...imported, scope: createHash('sha256').update(JSON.stringify(['imports', 'manifest:test'])).digest('base64url'), payload: { collection: 'imports', key: 'manifest:test', deleted: false } } };
     wire.event(0, { title: 'native update after host writes' });
     await vi.advanceTimersByTimeAsync(25);
     expect(read(state).status).toBe('complete');

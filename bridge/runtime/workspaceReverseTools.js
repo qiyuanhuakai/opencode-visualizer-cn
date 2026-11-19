@@ -50,12 +50,11 @@ export function createWorkspaceReverseTools() {
             },
             handle(request) {
               assertOwner();
-              // Shutdown waits for in-flight work, so a terminal whose cwd is still
-              // resolving cannot publish a process after the owner is gone.
+              requireValue(sessions.has(request.params?.sessionId), 'reverse.session', 'unauthorized');
+              const permission = request.method === 'fs/read_text_file' ? 'read' : request.method === 'fs/write_text_file' ? 'write' : 'command';
+              scope.authorizeRuntime(workspaceKey, permission);
+              // Shutdown waits for a terminal whose cwd is still resolving.
               const inFlight = (async () => {
-                requireValue(sessions.has(request.params?.sessionId), 'reverse.session', 'unauthorized');
-                const permission = request.method === 'fs/read_text_file' ? 'read' : request.method === 'fs/write_text_file' ? 'write' : 'command';
-                scope.authorizeRuntime(workspaceKey, permission);
                 return handler(request, context);
               })();
               inflight.add(inFlight);
