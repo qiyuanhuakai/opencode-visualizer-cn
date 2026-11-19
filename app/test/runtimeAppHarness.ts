@@ -139,9 +139,10 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
             if (!patch || typeof patch !== 'object' || Array.isArray(patch) || typeof idempotencyKey !== 'string') {
               throw new Error('Fixture config patch and idempotency key required');
             }
-            const accepted = await editableConfig.accept({ idempotencyKey, method: operation, payload: patch });
+            const changes = patch as Readonly<Record<string, JsonValue>>;
+            const accepted = await editableConfig.accept({ idempotencyKey, method: operation, payload: changes });
             return editableConfig.execute(accepted.operationId, async () => {
-              config = { ...config, ...patch };
+              config = { ...config, ...changes };
               return config;
             });
           }
