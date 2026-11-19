@@ -272,7 +272,7 @@ function acceptTask(task: CollaborationTaskView): void {
 .phase-chip.phase-failed,
 .phase-chip.phase-cancelled {
   color: var(--codex-status-danger, var(--theme-text-primary));
-  border-color: color-mix(in srgb, var(--theme-status-error, #f87171) 45%, transparent);
+  border-color: color-mix(in srgb, var(--theme-status-danger, #f87171) 45%, transparent);
 }
 
 .task-title {
@@ -301,7 +301,7 @@ function acceptTask(task: CollaborationTaskView): void {
 
 .action-button {
   padding: 4px 10px;
-  border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
+  border: 1px solid var(--theme-form-control-border, var(--theme-border-default, #334155));
   border-radius: var(--radius-control, 8px);
   background: transparent;
   color: var(--theme-text-primary, #e2e8f0);
