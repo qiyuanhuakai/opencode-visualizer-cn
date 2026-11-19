@@ -485,16 +485,33 @@ vi.mock('@xterm/xterm', () => ({
   Terminal: harness.HarnessTerminal,
 }));
 
-class HarnessWebSocket {
+export class HarnessWebSocket {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
   static readonly CLOSING = 2;
   static readonly CLOSED = 3;
   readonly readyState = HarnessWebSocket.OPEN;
   binaryType = 'blob';
+  private readonly registered = new Map<string, Set<(event: Event) => void>>();
 
   addEventListener(type: string, callback: (event: Event) => void) {
-    if (type === 'open') queueMicrotask(() => callback(new Event('open')));
+    const existing = this.registered.get(type);
+    if (existing) existing.add(callback);
+    else this.registered.set(type, new Set([callback]));
+    if (type === 'open') {
+      queueMicrotask(() => {
+        if (this.registered.get(type)?.has(callback)) callback(new Event('open'));
+      });
+    }
+  }
+
+  // The runtime connection's teardown unregisters these listeners, so the double
+  // must honour the EventTarget contract rather than the product tolerating it.
+  removeEventListener(type: string, callback: (event: Event) => void) {
+    const existing = this.registered.get(type);
+    if (existing === undefined) return;
+    existing.delete(callback);
+    if (existing.size === 0) this.registered.delete(type);
   }
 
   close() {}
