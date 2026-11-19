@@ -9,6 +9,19 @@ it('connects through Bridge login and renders selected native history over the a
   await vi.waitFor(() => expect(fixture.element.textContent).toContain('History through the qualified Bridge boundary'), { timeout: 10000 });
   expect(fixture.historyOpens).toEqual([expect.objectContaining({ environmentId: fixture.environmentId, nativeSessionId: 'session-a' })]);
   expect(fixture.element.querySelectorAll('.thread-block')).toHaveLength(1);
+  const manager = fixture.element.querySelector('[data-testid="management-agent-selector"]')!;
+  expect(manager.querySelector('button')?.textContent).toContain('OpenCode');
+  manager.querySelector<HTMLButtonElement>('button')!.click();
+  const codex = await vi.waitFor(() => {
+    const item = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(option => option.textContent?.includes('Codex'));
+    expect(item).toBeTruthy();
+    return item!;
+  });
+  codex.click();
+  await vi.waitFor(() => expect(manager.querySelector('button')?.textContent).toContain('Codex'));
+  expect(fixture.element.textContent).toContain('History through the qualified Bridge boundary');
+  expect(fixture.historyOpens).toHaveLength(1);
+
   await fixture.select('Session B');
   await vi.waitFor(() => {
     expect(fixture.historyOpens.at(-1)).toEqual(expect.objectContaining({ environmentId: fixture.environmentId, nativeSessionId: 'session-b' }));
