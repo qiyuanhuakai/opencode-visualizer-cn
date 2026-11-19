@@ -167,11 +167,15 @@ function freezeDigest(root) {
 }
 
 const DOWNSTREAM = [
-  ['task-43-system.json', 18, true], ['task-43-system-failure.json', 17, true],
-  ['task-44-performance.json', 10, true], ['task-44-performance-failure.json', 8, true],
-  ['task-46-live-ssh.json', 14, false], ['task-46-live-ssh-failure.json', 21, false],
-  ['task-46-live-slurm.json', 39, false], ['task-46-live-slurm-failure.json', 48, false],
-  ['packaged/happy.json', 14, false],
+  { file: 'task-43-system.json', scenarios: 18, task: 43, lane: 'happy' },
+  { file: 'task-43-system-failure.json', scenarios: 17, task: 43, lane: 'failure' },
+  { file: 'task-44-performance.json', scenarios: 10, task: 44, lane: 'happy' },
+  { file: 'task-44-performance-failure.json', scenarios: 8, task: 44, lane: 'failure' },
+  { file: 'task-46-live-ssh.json', scenarios: 14, task: 46, lane: 'happy', artifactKind: 'live-ssh-report' },
+  { file: 'task-46-live-ssh-failure.json', scenarios: 21, task: 46, lane: 'failure', artifactKind: 'live-ssh-report' },
+  { file: 'task-46-live-slurm.json', scenarios: 39, task: 46, lane: 'happy', artifactKind: 'live-slurm-report' },
+  { file: 'task-46-live-slurm-failure.json', scenarios: 48, task: 46, lane: 'failure', artifactKind: 'live-slurm-report' },
+  { file: 'packaged/happy.json', scenarios: 14, task: 45, lane: 'happy', artifactKind: 'packaged-driver-manifest' },
 ];
 
 // The five files of the task-19 corrected-head delivery (commit 49b5b8b62,
@@ -341,27 +345,40 @@ function audit({ root, evidenceRoot, planPath }) {
 
   // -- 5. downstream reruns -----------------------------------------------------
   const downstream = [];
-  for (const [file, scenarios, runnerBound] of DOWNSTREAM) {
-    const report = readJson(path.join(evidenceRoot, 'task-48', file));
-    const row = { file, exists: Boolean(report), scenarios: report?.scenarios?.length ?? report?.scenarioCount ?? null, expected: scenarios, runnerBound };
-    if (!report) { add('DOWNSTREAM-MISSING', 'blocking', 'task 48 Happy QA', `downstream rerun report ${file} missing`); downstream.push(row); continue; }
-    if (report.status !== 'passed' || (runnerBound && report.exitCode !== 0)) add('DOWNSTREAM-STATUS', 'blocking', 'task 48 Happy QA', `${file} did not pass`);
-    if (row.scenarios !== scenarios) add('DOWNSTREAM-COUNT', 'blocking', 'task 48 Happy QA', `${file} scenarios ${row.scenarios} != manifest ${scenarios}`);
-    if (runnerBound) {
-      row.productionRevision = report.productionRevision ?? null;
-      row.sourceHashes = report.sourceHashes ? Object.keys(report.sourceHashes).length : 0;
-      if (report.productionRevision !== revision) add('DOWNSTREAM-REVISION', 'blocking', 'task 48 Happy QA', `${file} productionRevision ${report.productionRevision} != final head`);
-      const drifted = Object.entries(report.sourceHashes ?? {}).filter(([rel, hash]) => { const p = path.join(root, rel); return !existsSync(p) || sha256(p) !== hash; }).map(([rel]) => rel);
-      if (drifted.length) add('DOWNSTREAM-SOURCE-HASH', 'blocking', 'task 48 Happy QA', `${file} source hashes drifted: ${drifted.slice(0, 3).join(', ')}`);
-      try {
-        validateEvidence(report, root);
-      } catch (error) {
-        add('DOWNSTREAM-RECEIPT', 'blocking', 'task 48 Happy QA', `${file} receipt or artifact verification failed: ${error.message}`);
-      }
-    } else {
-      add('DOWNSTREAM-UNBOUND', 'non-blocking', 'plan line 221 (task 6 ownership)', `${file} is a direct-script artifact with no runner productionRevision/sourceHashes binding`);
-    }
+  const downstreamDir = path.join(evidenceRoot, 'task-48');
+  for (const { file, scenarios, task, lane, artifactKind } of DOWNSTREAM) {
+    const reportPath = path.join(downstreamDir, file);
+    const report = readJson(reportPath);
+    const row = { file, exists: Boolean(report), scenarios: report?.scenarios?.length ?? report?.scenarioCount ?? null, expected: scenarios, task, lane };
     downstream.push(row);
+    if (!report) {
+      add('DOWNSTREAM-MISSING', 'blocking', 'task 48 Happy QA', `downstream rerun report ${file} missing`);
+      continue;
+    }
+    if (report.status !== 'passed') add('DOWNSTREAM-STATUS', 'blocking', 'task 48 Happy QA', `${file} did not pass`);
+    if (row.scenarios !== scenarios) add('DOWNSTREAM-COUNT', 'blocking', 'task 48 Happy QA', `${file} scenarios ${row.scenarios} != manifest ${scenarios}`);
+    const receiptName = artifactKind ? `task-${task}-${lane}.json` : file;
+    const receipt = artifactKind ? readJson(path.join(downstreamDir, receiptName)) : report;
+    if (!receipt) {
+      add('DOWNSTREAM-UNBOUND', 'blocking', 'task 48 Happy QA', `${file} requires runner manifest ${receiptName}`);
+      continue;
+    }
+    row.productionRevision = receipt.productionRevision ?? null;
+    if (receipt.productionRevision !== revision) add('DOWNSTREAM-REVISION', 'blocking', 'task 48 Happy QA', `${file} productionRevision ${receipt.productionRevision} != final head`);
+    if (receipt.selector?.task !== task || receipt.selector?.case !== lane || receipt.selector.verify !== undefined) {
+      add('DOWNSTREAM-SELECTOR', 'blocking', 'task 48 Happy QA', `${file} requires task ${task} / ${lane}, received ${JSON.stringify(receipt.selector ?? null)}`);
+    }
+    try {
+      validateEvidence(receipt, root);
+      if (artifactKind) {
+        const entries = receipt.artifacts.filter((entry) => entry.kind === artifactKind);
+        if (entries.length !== 1 || entries[0].sha256 !== sha256(reportPath)) {
+          add('DOWNSTREAM-ARTIFACT', 'blocking', 'task 48 Happy QA', `${file} differs from the ${artifactKind} in ${receiptName}`);
+        }
+      }
+    } catch (error) {
+      add('DOWNSTREAM-RECEIPT', 'blocking', 'task 48 Happy QA', `${file} receipt or artifact verification failed: ${error.message}`);
+    }
   }
 
   // -- 6. task-19 correction bytes in the final tree ---------------------------
@@ -406,7 +423,7 @@ export async function run(context) {
     const edgeViolations = result.findings.filter((f) => f.id === 'DEP-BLOCKER-DIVERGENT');
     const evidenceBindingViolations = result.findings.filter((f) => f.id === 'DEP-EVIDENCE-BINDING');
     const softDeliveryOrder = result.findings.filter((f) => f.id === 'DEP-DELIVERY-ORDER');
-    const downstreamGaps = result.findings.filter((f) => ['DOWNSTREAM-MISSING', 'DOWNSTREAM-STATUS', 'DOWNSTREAM-RECEIPT', 'DOWNSTREAM-COUNT', 'DOWNSTREAM-REVISION', 'DOWNSTREAM-SOURCE-HASH'].includes(f.id));
+    const downstreamGaps = result.findings.filter((f) => f.id.startsWith('DOWNSTREAM-'));
     const wave9Gaps = result.findings.filter((f) => f.id === 'LEDGER-WAVE9-EVIDENCE');
     const wave9Bound = result.checks.wave9.filter((r) => r.resolved).map((r) => r.task);
     return {
@@ -427,8 +444,7 @@ export async function run(context) {
           { name: 'every dependency edge sits on one delivery line (no divergent parallel development) and exactly one soft re-delivery order case exists (task 21 product commit predates task 20 round-2 re-delivery)', passed: edgeViolations.length === 0 && softDeliveryOrder.length === 1 && /task 21/.test(softDeliveryOrder[0].detail), observed: { divergent: edgeViolations.length, softDeliveryOrder: softDeliveryOrder.map((f) => f.detail), edgesChecked: result.checks.edgeChecks.length }, expected: { divergent: 0, softDeliveryOrder: softDeliveryOrder.map((f) => f.detail), edgesChecked: 320 } },
           { name: 'every task happy.json binds a head that contains all of its blockers\' delivery heads — the task-20 evidence was re-captured at a head containing blocker 19 delivery head 49b5b8b62, so the evidence-binding defect the first pass recorded is closed and zero edges violate it', passed: evidenceBindingViolations.length === 0, observed: { bindings: evidenceBindingViolations.map((f) => f.detail) }, expected: { bindings: [] } },
           { name: 'frozen final digest matches the current tree — the digest was re-frozen over the final tree after every product change landed, so the post-freeze staleness the first pass recorded is closed (a stale digest is more dangerous than a missing one, so this row must be a MATCH, never a tolerated mismatch)', passed: result.checks.digestState === 'match', observed: { digestState: result.checks.digestState, digestObserved: result.checks.digestObserved }, expected: { digestState: 'match', digestObserved: result.checks.digestObserved } },
-          { name: 'all nine downstream rerun reports exist with the manifest scenario counts and ZERO of them are missing, short, revision-drifted or source-hash drifted — the two missing task-44-performance copies were re-landed and every head-bound artifact was re-run/re-bound against the final head, so the whole downstream set binds the current tree', passed: downstreamGaps.filter((f) => f.id !== 'DOWNSTREAM-UNBOUND').length === 0, observed: { reports: result.checks.downstream.map((d) => `${d.file}:${d.scenarios}/${d.expected}`), nonUnboundGaps: downstreamGaps.filter((f) => f.id !== 'DOWNSTREAM-UNBOUND').map((f) => `${f.id}: ${f.detail}`) }, expected: { reports: result.checks.downstream.map((d) => `${d.file}:${d.expected}/${d.expected}`), nonUnboundGaps: [] } },
-          { name: 'runner-bound downstream receipts bind to the final head with ZERO revision drift and ZERO source-hash drift, and the five direct-script lanes are still flagged unbound — the four runner-bound reports (task-43 happy/failure, task-44 happy/failure) were re-run against the current runner bytes, so nothing in the downstream set still reads the pre-change tree', passed: result.findings.filter((f) => f.id === 'DOWNSTREAM-REVISION').length === 0 && result.findings.filter((f) => f.id === 'DOWNSTREAM-SOURCE-HASH').length === 0 && result.findings.filter((f) => f.id === 'DOWNSTREAM-UNBOUND').length === 5, observed: { unbound: ['packaged/happy.json', 'task-46-live-ssh.json', 'task-46-live-ssh-failure.json', 'task-46-live-slurm.json', 'task-46-live-slurm-failure.json'].filter((f) => result.findings.some((x) => x.id === 'DOWNSTREAM-UNBOUND' && x.detail.startsWith(f))), sourceHashDrift: result.findings.filter((f) => f.id === 'DOWNSTREAM-SOURCE-HASH').map((f) => f.detail) }, expected: { unbound: ['packaged/happy.json', 'task-46-live-ssh.json', 'task-46-live-ssh-failure.json', 'task-46-live-slurm.json', 'task-46-live-slurm-failure.json'], sourceHashDrift: [] } },
+          { name: 'all nine downstream reports pass and bind to the candidate through the expected task and case, including packaged and live artifacts', passed: downstreamGaps.length === 0, observed: { reports: result.checks.downstream.map((d) => `${d.file}:${d.scenarios}/${d.expected}`), gaps: downstreamGaps.map((f) => `${f.id}: ${f.detail}`) }, expected: { reports: result.checks.downstream.map((d) => `${d.file}:${d.expected}/${d.expected}`), gaps: [] } },
           { name: 'task-19 correction bytes (commit 49b5b8b62, native Windows CI green) are byte-identical in the final tree', passed: result.checks.task19.every((r) => r.match), observed: { matches: result.checks.task19.filter((r) => r.match).length, total: result.checks.task19.length }, expected: { matches: result.checks.task19.length, total: result.checks.task19.length } },
           { name: 'contract 1-16 delivery surfaces present and package version is 0.9.0-alpha.1', passed: result.checks.missingSurfaces.length === 0 && result.checks.packageVersion === '0.9.0-alpha.1', observed: { missingSurfaces: result.checks.missingSurfaces, packageVersion: result.checks.packageVersion }, expected: { missingSurfaces: [], packageVersion: '0.9.0-alpha.1' } },
           { name: 'every Wave-9 integration row 49-56 carries its lane evidence — the task-49-53 App.vue integration DoneClaim (rows 49/51/52/53), the task-50 seeding-and-scoring DoneClaim, the task-54 selector/verify-module DoneClaim, the F2 DoneClaim for row 55 and the task-56 ledger/re-freeze DoneClaim each exist and bind a real head on the final delivery line', passed: wave9Gaps.length === 0 && wave9Bound.length === 8, observed: { boundRows: wave9Bound, gaps: wave9Gaps.map((f) => f.detail) }, expected: { boundRows: [49, 50, 51, 52, 53, 54, 55, 56], gaps: [] } },
@@ -470,6 +486,20 @@ export async function run(context) {
   };
 
   applyMutation('LEDGER-HAPPY', (f) => f.id === 'LEDGER-HAPPY' && /task 44/.test(f.detail), () => rmSync(path.join(copyEvidence, 'task-44/happy.json'), { force: true }));
+  const failurePath = path.join(evidenceRoot, 'task-48/task-43-system-failure.json');
+  const failureReport = readJson(failurePath);
+  validateEvidence(failureReport, root);
+  assert.equal(failureReport.productionRevision, git(root, 'rev-parse', 'HEAD'));
+  assert.equal(failureReport.selector.task, 43);
+  assert.equal(failureReport.selector.case, 'failure');
+  const happyPath = 'task-48/task-43-system.json';
+  try {
+    applyMutation('DOWNSTREAM-SELECTOR', (f) => f.id === 'DOWNSTREAM-SELECTOR' && f.detail.startsWith('task-43-system.json '), () => {
+      copyFileSync(failurePath, path.join(copyEvidence, happyPath));
+    });
+  } finally {
+    copyFileSync(path.join(evidenceRoot, happyPath), path.join(copyEvidence, happyPath));
+  }
   applyMutation('DOWNSTREAM-REVISION', (f) => f.id === 'DOWNSTREAM-REVISION' && /task-43-system\.json/.test(f.detail) && f.detail.includes('0'.repeat(40)), () => {
     const report = JSON.parse(readCopy('task-48/task-43-system.json'));
     report.productionRevision = '0'.repeat(40);
