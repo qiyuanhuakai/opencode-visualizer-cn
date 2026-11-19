@@ -1696,6 +1696,7 @@ watch(tabs, (available) => {
     <header class="status-monitor-header">
       <div class="status-monitor-header-main">
         <div class="status-monitor-title">{{ $t('statusMonitor.title') }}</div>
+        <slot name="agent-selector" />
       </div>
       <button
         type="button"
@@ -2371,6 +2372,7 @@ watch(tabs, (available) => {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .status-monitor-title {

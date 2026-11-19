@@ -4,6 +4,7 @@
       <header class="provider-manager-header">
         <div class="provider-manager-title-wrap">
           <div class="provider-manager-title">{{ $t('providerManager.title') }}</div>
+          <slot name="agent-selector" />
         </div>
         <button
           type="button"
@@ -1668,6 +1669,7 @@ async function disconnectProvider(provider: ProviderInfo) {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex-wrap: wrap;
 }
 
 .provider-manager-title {

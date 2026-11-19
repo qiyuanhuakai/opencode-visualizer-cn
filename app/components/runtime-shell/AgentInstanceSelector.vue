@@ -18,8 +18,8 @@ function label(instance: HarnessManifest | undefined): string {
 </script>
 <template>
   <div class="agent-instance-selector" data-runtime-ui data-testid="management-agent-selector">
-    <span id="management-agent-label">{{ rt("Agent") }}</span>
-    <Dropdown :model-value="selected ?? undefined" aria-labelledby="management-agent-label" auto-close @update:model-value="select($event, instances)">
+    <span aria-hidden="true">{{ rt("Agent") }}</span>
+    <Dropdown :model-value="selected ?? undefined" :aria-label="`${rt('Agent')} · ${label(instances.find(entry => entry.harnessInstanceId === selected))}`" auto-close @update:model-value="select($event, instances)">
       <template #value>{{ label(instances.find(entry => entry.harnessInstanceId === selected)) }}</template>
       <DropdownItem v-for="instance in instances" :key="instance.harnessInstanceId" :value="instance.harnessInstanceId">
         {{ label(instance) }}

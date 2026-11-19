@@ -594,7 +594,11 @@
       @config-updated="managementProviderConfig = $event"
       @providers-changed="refreshManagementProviders"
       @open-acp-auth-terminal="openAcpAuthTerminal"
-    />
+    >
+      <template #agent-selector>
+        <AgentInstanceSelector v-if="harnessManifests.length" :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
+      </template>
+    </ProviderManagerModal>
     <StatusMonitorModal
       :open="isStatusMonitorOpen"
       :initial-tab="statusMonitorTab"
@@ -610,7 +614,11 @@
       :harness-scope="harnessInstanceScope ?? undefined"
       :harness-manifests="harnessManifests"
       @close="isStatusMonitorOpen = false"
-    />
+    >
+      <template #agent-selector>
+        <AgentInstanceSelector v-if="harnessManifests.length" :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
+      </template>
+    </StatusMonitorModal>
     <ProjectSettingsDialog
       :open="!!editingProject"
       :project-id="editingProject?.projectId ?? ''"
@@ -11145,7 +11153,7 @@ const harnessSettingsControls = computed<readonly string[]>(() => {
   if (!scope) return [];
   return Object.keys(HARNESS_CONTROLS).filter((control) => {
     const support = runtimeCapabilities.support({ control, scope });
-    return support.channel === 'harness';
+    return support.channel === 'harness' && support.state === 'supported';
   });
 });
 

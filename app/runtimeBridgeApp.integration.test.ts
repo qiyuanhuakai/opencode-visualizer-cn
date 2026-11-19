@@ -11,14 +11,30 @@ it('connects through Bridge login and renders selected native history over the a
   expect(fixture.element.querySelectorAll('.thread-block')).toHaveLength(1);
   const manager = fixture.element.querySelector('[data-testid="management-agent-selector"]')!;
   expect(manager.querySelector('button')?.textContent).toContain('OpenCode');
-  manager.querySelector<HTMLButtonElement>('button')!.click();
+  fixture.element.querySelector<HTMLButtonElement>('button[title="Status monitor"]')!.click();
+  const monitor = await vi.waitFor(() => {
+    const button = fixture.element.querySelector<HTMLButtonElement>('.status-monitor-popover [data-testid="management-agent-selector"] button');
+    expect(button?.getAttribute('aria-label')).toContain('OpenCode');
+    return button!;
+  });
+  monitor.click();
   const codex = await vi.waitFor(() => {
     const item = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(option => option.textContent?.includes('Codex'));
     expect(item).toBeTruthy();
     return item!;
   });
   codex.click();
-  await vi.waitFor(() => expect(manager.querySelector('button')?.textContent).toContain('Codex'));
+  await vi.waitFor(() => {
+    expect(manager.querySelector('button')?.textContent).toContain('Codex');
+    expect(monitor.getAttribute('aria-label')).toContain('Codex');
+  });
+  fixture.element.querySelector<HTMLButtonElement>('button[aria-label="Close status monitor"]')!.click();
+  fixture.element.querySelector<HTMLButtonElement>('button[title="Providers & models"]')!.click();
+  await vi.waitFor(() => {
+    const providerSelector = fixture.element.querySelector<HTMLButtonElement>('dialog[open].provider-manager-backdrop [data-testid="management-agent-selector"] button');
+    expect(providerSelector?.getAttribute('aria-label')).toContain('Codex');
+  });
+  fixture.element.querySelector<HTMLDialogElement>('dialog[open].provider-manager-backdrop')!.close();
   expect(fixture.element.textContent).toContain('History through the qualified Bridge boundary');
   expect(fixture.historyOpens).toHaveLength(1);
 
