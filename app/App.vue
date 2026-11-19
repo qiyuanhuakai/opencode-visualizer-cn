@@ -3306,7 +3306,9 @@ const {
   refreshBranchEntries,
   ensureBranchEntriesLoaded,
 } = useFileTree({
-  activeDirectory,
+  // The sidebar makes several workspace Git requests when its directory
+  // changes. Prioritize loading the newly selected conversation first.
+  activeDirectory: computed(() => runtimeActionClient.value && runtimeSelectionLoading.value ? '' : activeDirectory.value),
   activeBackendKind,
   backend,
   runtimeWorkspace: computed(() => runtimeActionClient.value !== null),
