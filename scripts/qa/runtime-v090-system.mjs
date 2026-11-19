@@ -366,9 +366,11 @@ export async function runSystem(context) {
     writeFileSync(path.join(lease.nativeCwd, 'src', 'change.txt'), 'the reviewed change\n');
     writeFileSync(path.join(lease.nativeCwd, 'untracked.bin'), Buffer.from([0x00, 0x01, 0x02, 0x03, 0xfe, 0xff]));
     const captured = await artifacts.capture({ lease, at: T0 });
-    const review = await reviews.create({ repository, target: 'main', artifactHash: captured.artifactHash, at: T0 });
-    const approval = reviews.approve({ reviewId: review.reviewId, at: T0 + 1, reviewerId: 'reviewer-system43' });
     const base = headOf(repository);
+    const target = 'system43-integration-target';
+    runGit(repository, ['branch', target, base]);
+    const review = await reviews.create({ repository, target, artifactHash: captured.artifactHash, at: T0 });
+    const approval = reviews.approve({ reviewId: review.reviewId, at: T0 + 1, reviewerId: 'reviewer-system43' });
     const integrated = await integration.integrate({ approvalId: approval.approvalId, criteria: CRITERIA_PARSED, tests: CRITERIA.map((criterion) => ({ criterionId: criterion.id, command: process.execPath, args: ['-e', 'process.exit(0)'] })), commitMessage: 'integrate the reviewed change', at: T0 + 2 });
     const coordinator = coordinatorModule.createCollaborationCoordinator({ deliver: async () => ({ ackId: 'ack-team' }) });
     const team = coordinator.createTeam({ name: 'system43 team', at: T0 });
@@ -381,13 +383,14 @@ export async function runSystem(context) {
     check('a team task is dispatched once and fanned out to two harnesses, and the reviewed artifact is captured from a real leased writer worktree and integrated through a real fast-forward of a real private git repository', {
       artifactHashShape: /^[a-f0-9]{64}$/u.test(captured.artifactHash), approvedHashMatchesCaptured: approval.binding.artifactHash === captured.artifactHash,
       integrated: { ok: integrated.ok, outcome: integrated.outcome, verified: integrated.artifact.verified },
-      targetMoved: integrated.targetAfter.targetHead !== base, base,
+      targetMoved: runGit(repository, ['rev-parse', '--verify', target]).trim() !== base,
+      checkedOutHeadUnchanged: headOf(repository) === base, base,
       attemptState: dispatched.attempt ? coordinator.attempt(dispatched.attempt.attemptId).state : null, duplicateDispatch: duplicate,
       fanout: { state: fanned.state, targets: fanned.targets.map((entry) => entry.outcome), sent: fanned.stats.sent },
       writerPostureSandbox: posture.sandbox === false, writerIsolationByIdentity: JSON.stringify(posture) === JSON.stringify(writerModule.WRITER_ISOLATION),
     }, {
       artifactHashShape: true, approvedHashMatchesCaptured: true,
-      integrated: { ok: true, outcome: 'integrated', verified: true }, targetMoved: true, base,
+      integrated: { ok: true, outcome: 'integrated', verified: true }, targetMoved: true, checkedOutHeadUnchanged: true, base,
       attemptState: 'accepted', duplicateDispatch: { code: 'conflict', field: 'task_dispatched' },
       fanout: { state: 'succeeded', targets: ['sent', 'sent'], sent: 2 },
       writerPostureSandbox: true, writerIsolationByIdentity: true,
