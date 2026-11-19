@@ -280,8 +280,8 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     const snapshot = client.snapshot(target, ['workspaces', 'session_summaries'], { onPage: (collection) => { pages.push(collection); } });
     socket.reply(await socket.next(), page);
     const observerRequest = await socket.next(); expect(observerRequest).toMatchObject({ method: 'runtime.observer.open', params: { after: 4 } });
-    socket.reply(observerRequest, { observerId: 'observer' });
     const next = await socket.next(); expect(next.params).toMatchObject({ token: 'atomic', cursor: 'next' });
+    socket.reply(observerRequest, { observerId: 'observer' });
     socket.reply(next, { ...page, cursor: null });
     const collection = await socket.next(); expect(collection.params).toMatchObject({ token: 'atomic', collection: 'session_summaries', cursor: null });
     socket.reply(collection, { ...page, cursor: null });

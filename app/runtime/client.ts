@@ -377,7 +377,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     requireValue(names.length > 0 && names.length <= 5 && new Set(names).size === names.length, 'snapshot.collections');
     attached.paging = true;
     let first: Snapshot | undefined;
-    let observer: Awaited<ReturnType<typeof observe>> | undefined;
+    let openingObserver: ReturnType<typeof observe> | undefined;
     let releaseView: (() => Promise<void>) | undefined;
     try {
       if (attached.indexSnapshot) await retireView(attached, attached.indexSnapshot.token);
@@ -389,7 +389,10 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
             first = page;
             releaseView = holdView(attached, page.token);
             await publishView(attached, page);
-            observer = await observe(target, { ...options, after: first.watermark, onDelivery: options.onDelivery ?? (() => {}) });
+            // Register at the captured watermark while the remaining pages
+            // are downloaded. Event reads still begin after snapshot commit.
+            openingObserver = observe(target, { ...options, after: first.watermark, onDelivery: options.onDelivery ?? (() => {}) });
+            void openingObserver.catch(() => undefined);
           }
           requireValue(page.token === first.token && page.revision === first.revision && page.watermark === first.watermark && page.target === attached.hello.target && page.epoch === attached.hello.epoch && page.generation === attached.hello.generation, 'snapshot.atomic', 'replay_required');
           requireValue(page.expiresAt > Date.now() && (page.cursor === null || page.cursor !== cursor), 'snapshot.expired', 'replay_required');
@@ -398,11 +401,14 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
           cursor = page.cursor;
         } while (cursor !== null);
       }
-      requireValue(first !== undefined && observer !== undefined, 'snapshot.empty');
+      requireValue(first !== undefined && openingObserver !== undefined, 'snapshot.empty');
+      const observer = await openingObserver;
+      requireValue(current(attached) && (options.selectionCurrent?.() ?? true), 'snapshot.selection', 'reconcile_required');
       attached.state.acceptSnapshot(first, Date.now());
       return { token: first.token, revision: first.revision, watermark: first.watermark, observer };
     } catch (error) {
-      if (observer) await observer.close();
+      const observer = await openingObserver?.catch(() => undefined);
+      if (observer) await observer.close().catch(() => undefined);
       throw error;
     } finally { attached.paging = false; await releaseView?.(); }
   }
