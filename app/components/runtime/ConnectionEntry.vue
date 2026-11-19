@@ -377,7 +377,7 @@ function shortTarget(environmentId: string): string {
 
 .status-chip[data-state='error'] {
   color: var(--codex-status-danger, var(--theme-text-primary));
-  border-color: var(--theme-status-error, #f87171);
+  border-color: var(--theme-status-danger, #f87171);
 }
 
 .action-button {

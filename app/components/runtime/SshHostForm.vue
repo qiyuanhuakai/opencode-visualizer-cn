@@ -273,10 +273,10 @@ function submit() {
   width: 100%;
   min-width: 0;
   padding: 6px 8px;
-  border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
+  border: 1px solid var(--theme-form-control-border, var(--theme-border-default, #334155));
   border-radius: var(--radius-control, 8px);
-  background: var(--theme-input-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.72)));
-  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
+  background: var(--theme-form-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.72)));
+  color: var(--theme-form-control-text, var(--theme-text-primary, #e2e8f0));
   font-family: var(--app-monospace-font-family);
   font-size: var(--type-sm, 12px);
   outline: none;
@@ -322,7 +322,7 @@ function submit() {
 
 .action-button {
   padding: 6px 14px;
-  border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
+  border: 1px solid var(--theme-form-control-border, var(--theme-border-default, #334155));
   border-radius: var(--radius-control, 8px);
   background: transparent;
   color: var(--theme-text-primary, #e2e8f0);

@@ -154,7 +154,7 @@ const pendingReason = computed<string | null>(() => {
 
 .status-chip[data-state='failed'] {
   color: var(--codex-status-danger, var(--theme-text-primary));
-  border-color: var(--theme-status-error, #f87171);
+  border-color: var(--theme-status-danger, #f87171);
 }
 
 .status-chip[data-state='connecting'] {

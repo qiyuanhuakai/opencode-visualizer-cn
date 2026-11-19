@@ -286,7 +286,7 @@ function shortId(value: string): string {
 
 .participant-state[data-state='orphaned'] {
   color: var(--codex-status-danger, var(--theme-text-primary));
-  border-color: color-mix(in srgb, var(--theme-status-error, #f87171) 55%, transparent);
+  border-color: color-mix(in srgb, var(--theme-status-danger, #f87171) 55%, transparent);
 }
 
 .participant-active {
@@ -354,7 +354,7 @@ function shortId(value: string): string {
   align-items: center;
   gap: 6px;
   padding: 5px 10px;
-  border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
+  border: 1px solid var(--theme-form-control-border, var(--theme-border-default, #334155));
   border-radius: var(--radius-control, 8px);
   background: transparent;
   color: var(--theme-text-primary, #e2e8f0);

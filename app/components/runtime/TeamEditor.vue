@@ -343,10 +343,10 @@ function recipientLabel(target: CollaborationRecipientView): string {
   flex: 1 1 200px;
   min-width: 0;
   padding: 5px 8px;
-  border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
+  border: 1px solid var(--theme-form-control-border, var(--theme-border-default, #334155));
   border-radius: var(--radius-control, 8px);
-  background: var(--theme-input-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.72)));
-  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
+  background: var(--theme-form-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.72)));
+  color: var(--theme-form-control-text, var(--theme-text-primary, #e2e8f0));
   font-family: inherit;
   font-size: var(--type-sm, 12px);
 }
@@ -413,7 +413,7 @@ function recipientLabel(target: CollaborationRecipientView): string {
 
 .action-button {
   padding: 5px 12px;
-  border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
+  border: 1px solid var(--theme-form-control-border, var(--theme-border-default, #334155));
   border-radius: var(--radius-control, 8px);
   background: transparent;
   color: var(--theme-text-primary, #e2e8f0);

@@ -182,7 +182,7 @@ const updateTitle = computed(() => updateRefusal.value ?? rt('Explicitly {action
 
 .action-button {
   padding: 6px 14px;
-  border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
+  border: 1px solid var(--theme-form-control-border, var(--theme-border-default, #334155));
   border-radius: var(--radius-control, 8px);
   background: transparent;
   color: var(--theme-text-primary, #e2e8f0);

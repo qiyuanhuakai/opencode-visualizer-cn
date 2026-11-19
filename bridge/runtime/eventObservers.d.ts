@@ -7,6 +7,7 @@ export interface EventObserver {
   push(frame: RuntimeEvent, priority?: boolean): void;
   recover(reason: string): void;
   read(): ObserverDelivery | null;
+  waitRead(signal?: AbortSignal): Promise<ObserverDelivery | null>;
   resume(afterReplay: number): void;
   openChannel(channelId: number): void;
   sendBinary(input: BinaryInput): Chunk;

@@ -320,7 +320,7 @@ function shortId(value: string): string {
 .state-chip[data-state='reconcile'],
 .state-chip[data-state='failed'] {
   color: var(--codex-status-danger, var(--theme-text-primary));
-  border-color: color-mix(in srgb, var(--theme-status-error, #f87171) 55%, transparent);
+  border-color: color-mix(in srgb, var(--theme-status-danger, #f87171) 55%, transparent);
 }
 
 .active-marker {
@@ -368,7 +368,7 @@ function shortId(value: string): string {
 }
 
 .ladder-rung.is-resolution {
-  border-color: var(--theme-status-error, #f87171);
+  border-color: var(--theme-status-danger, #f87171);
   color: var(--codex-status-danger, var(--theme-text-primary));
 }
 
@@ -471,7 +471,7 @@ function shortId(value: string): string {
 
 .action-button {
   padding: 5px 12px;
-  border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
+  border: 1px solid var(--theme-form-control-border, var(--theme-border-default, #334155));
   border-radius: var(--radius-control, 8px);
   background: transparent;
   color: var(--theme-text-primary, #e2e8f0);

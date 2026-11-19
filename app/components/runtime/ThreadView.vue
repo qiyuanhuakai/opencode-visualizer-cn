@@ -658,10 +658,10 @@ function handleFanout(): void {
 
 .draft-preview {
   padding: 6px 8px;
-  border: 1px dashed var(--theme-input-border, var(--theme-border-default, #334155));
+  border: 1px dashed var(--theme-form-control-border, var(--theme-border-default, #334155));
   border-radius: var(--radius-control, 8px);
-  background: var(--theme-input-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.72)));
-  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
+  background: var(--theme-form-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.72)));
+  color: var(--theme-form-control-text, var(--theme-text-primary, #e2e8f0));
   font-size: var(--type-sm, 12px);
   line-height: 1.45;
   max-height: 64px;
@@ -784,7 +784,7 @@ function handleFanout(): void {
 }
 
 .native-history-group[data-state='orphaned'] {
-  border-color: color-mix(in srgb, var(--theme-status-error, #f87171) 55%, transparent);
+  border-color: color-mix(in srgb, var(--theme-status-danger, #f87171) 55%, transparent);
 }
 
 .group-header {
@@ -848,7 +848,7 @@ function handleFanout(): void {
 
 .action-button {
   padding: 5px 12px;
-  border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
+  border: 1px solid var(--theme-form-control-border, var(--theme-border-default, #334155));
   border-radius: var(--radius-control, 8px);
   background: transparent;
   color: var(--theme-text-primary, #e2e8f0);
