@@ -1,7 +1,13 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 
-import { ProtocolError, requireValue, textValue } from '../../../shared/runtime/capabilities.js';
+import { requireValue, textValue } from '../../../shared/runtime/capabilities.js';
 import { parseEnvironmentId } from '../../../shared/runtime/identity.js';
+// The resource normalizer is SHARED with the renderer, which must ask the same question ("what
+// does `8G` mean?") to decide whether a preview still describes the request on screen. It moved to
+// `shared/runtime/slurmResources.js` because this module's graph pulls `node:crypto` / `node:fs`
+// and a renderer cannot load it; both functions are re-exported below so this module's public
+// surface is unchanged and there is still exactly ONE implementation.
+import { parseSlurmMemory, parseSlurmTime } from '../../../shared/runtime/slurmResources.js';
 import { CONTROL_STORE_SCHEMA_VERSION } from './slurmControlStore.js';
 import { assertNoShellConcatenation } from './sshTransport.js';
 
@@ -73,42 +79,9 @@ function slurmDirectivePath(value, field) {
   return text;
 }
 
-/** Parses a Slurm time limit into seconds. Accepts `mm`, `mm:ss`, `hh:mm:ss`, `d-hh`, `d-hh:mm`, `d-hh:mm:ss`. */
-export function parseSlurmTime(value) {
-  const text = textValue(value, 'resources.time');
-  const match = /^(?:(\d+)-)?(?:(\d+)(?::(\d+))?(?::(\d+))?)$/u.exec(text);
-  if (match === null) throw new ProtocolError('invalid_request', 'resources.time');
-  const days = match[1] === undefined ? 0 : Number(match[1]);
-  const first = Number(match[2]);
-  const second = match[3] === undefined ? 0 : Number(match[3]);
-  const third = match[4] === undefined ? 0 : Number(match[4]);
-  if (second > 59 || third > 59) throw new ProtocolError('invalid_request', 'resources.time');
-  // Without a day prefix the units are minutes / minutes:seconds / hours:minutes:seconds.
-  // With a day prefix they are days-hours / days-hours:minutes / days-hours:minutes:seconds.
-  let seconds;
-  if (match[1] === undefined) {
-    if (match[4] !== undefined) seconds = first * 3600 + second * 60 + third;
-    else if (match[3] !== undefined) seconds = first * 60 + second;
-    else seconds = first * 60;
-  } else {
-    seconds = days * 86400 + first * 3600 + second * 60 + third;
-  }
-  requireValue(Number.isSafeInteger(seconds) && seconds > 0, 'resources.time');
-  return seconds;
-}
-
-/** Parses a Slurm memory request into MiB (`2048`, `2048M`, `2G`, `1T`). */
-export function parseSlurmMemory(value) {
-  const text = typeof value === 'string' ? value.trim() : String(value ?? '').trim();
-  const match = /^(\d+)([KMGTP])?$/iu.exec(text);
-  if (match === null) throw new ProtocolError('invalid_request', 'resources.memory');
-  const amount = Number(match[1]);
-  const unit = (match[2] ?? 'M').toUpperCase();
-  const factor = { K: 1 / 1024, M: 1, G: 1024, T: 1024 * 1024, P: 1024 * 1024 * 1024 }[unit];
-  const mebibytes = Math.ceil(amount * factor);
-  requireValue(Number.isSafeInteger(mebibytes) && mebibytes > 0, 'resources.memory');
-  return mebibytes;
-}
+// `parseSlurmTime` / `parseSlurmMemory` now live in `shared/runtime/slurmResources.js` so the
+// renderer can ask the SAME normalizer; they are re-exported here to keep this module's surface.
+export { parseSlurmMemory, parseSlurmTime };
 
 /**
  * Normalizes a resource request. `time` and `gres` are required and validated as explicit

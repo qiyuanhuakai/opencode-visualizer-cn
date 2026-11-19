@@ -515,11 +515,11 @@ export async function run(context) {
     // ── Criterion 5 (rendered): a visible compute node AND a stable environment distinction ──
     const selectedProfileId = created.selectedProfileId;
     const readyIntent = await evaluate((args) => window.task30.setSlurm({
-      environmentId: '11111111-1111-4111-8111-111111111111',
-      intentId: FIRST_INTENT, jobId: '24680', state: 'RUNNING', queue: 'RUNNING',
+      environmentId: args.env,
+      intentId: args.intentId, jobId: '24680', state: 'RUNNING', queue: 'RUNNING',
       terminal: null, reconcile: null, attached: true, ownership: 'owned',
       computeNode: args.node, stepId: 'step-1', epoch: 3, bridgeInstanceId: 'bridge-1',
-    }), { profileId: selectedProfileId, node: COMPUTE_NODE });
+    }), { env: ENVIRONMENT, profileId: selectedProfileId, intentId: FIRST_INTENT, node: COMPUTE_NODE });
     const targets = await evaluate(() => window.task30.renderedTargets());
     const resolvedEnv = await evaluate((id) => window.task30.resolvedEnvironmentOf(id), selectedProfileId);
     const selectedIntentState = await evaluate(() => window.task30.selectedIntentState());
@@ -566,10 +566,10 @@ export async function run(context) {
     // identity is the selected profile's resolved environment (ConnectionStatus' `identity` prop),
     // so the node must move while the environment UUID does not — the receiver's real contract.
     const movedIntent = await evaluate((args) => window.task30.setSlurm({
-      environmentId: args.env, intentId: MOVED_INTENT, jobId: '24680', state: 'RUNNING', queue: 'RUNNING',
+      environmentId: args.env, intentId: args.intentId, jobId: '24680', state: 'RUNNING', queue: 'RUNNING',
       terminal: null, reconcile: null, attached: true, ownership: 'owned',
       computeNode: args.node, stepId: 'step-1', epoch: 4, bridgeInstanceId: 'bridge-1',
-    }), { env: ENVIRONMENT, profileId: selectedProfileId, node: OTHER_COMPUTE_NODE });
+    }), { env: ENVIRONMENT, profileId: selectedProfileId, intentId: MOVED_INTENT, node: OTHER_COMPUTE_NODE });
     const movedTargets = await evaluate(() => window.task30.renderedTargets());
     const resolvedMovedEnv = await evaluate((id) => window.task30.resolvedEnvironmentOf(id), selectedProfileId);
     record('environmentSurvivesNodeMove', { movedIntent, movedTargets, resolvedMovedEnv });
@@ -602,10 +602,10 @@ export async function run(context) {
     const createdOther = await evaluate(() => window.task30.createSshProfileViaUi({ name: 'Second cluster', endpoint: 'cluster2.example.edu', credentialRef: 'cred-2', enabled: true }));
     const selectedOther = await evaluate((id) => window.task30.selectProfile(id), createdOther.selectedProfileId);
     const otherIntent = await evaluate((args) => window.task30.setSlurm({
-      environmentId: args.other, intentId: SECOND_INTENT, jobId: '13579', state: 'RUNNING', queue: 'RUNNING',
+      environmentId: args.other, intentId: args.intentId, jobId: '13579', state: 'RUNNING', queue: 'RUNNING',
       terminal: null, reconcile: null, attached: true, ownership: 'owned',
       computeNode: args.node, stepId: 'step-2', epoch: 1, bridgeInstanceId: 'bridge-2',
-    }), { other: OTHER_ENVIRONMENT, profileId: createdOther.selectedProfileId, node: COMPUTE_NODE });
+    }), { other: OTHER_ENVIRONMENT, profileId: createdOther.selectedProfileId, intentId: SECOND_INTENT, node: COMPUTE_NODE });
     const otherEnvTargets = await evaluate(() => window.task30.renderedTargets());
     const resolvedOtherEnv = await evaluate((id) => window.task30.resolvedEnvironmentOf(id), createdOther.selectedProfileId);
     record('secondEnvironment', { probeOther, createdOther, selectedOther, otherIntent, otherEnvTargets, resolvedOtherEnv });
@@ -639,10 +639,10 @@ export async function run(context) {
     await evaluate((id) => window.task30.selectProfile(id), selectedProfileId);
     await evaluate((env) => window.task30.setProbeEnvironment(env), ENVIRONMENT);
     await evaluate((args) => window.task30.setSlurm({
-      environmentId: args.env, intentId: FIRST_INTENT, jobId: '24680', state: 'RUNNING', queue: 'RUNNING',
+      environmentId: args.env, intentId: args.intentId, jobId: '24680', state: 'RUNNING', queue: 'RUNNING',
       terminal: null, reconcile: null, attached: true, ownership: 'owned',
       computeNode: args.node, stepId: 'step-1', epoch: 3, bridgeInstanceId: 'bridge-1',
-    }), { env: ENVIRONMENT, profileId: selectedProfileId, node: COMPUTE_NODE });
+    }), { env: ENVIRONMENT, profileId: selectedProfileId, intentId: FIRST_INTENT, node: COMPUTE_NODE });
 
     // ── Criterion 4 (UI): a password is never cached — payload / DOM / console / storage ──
     const passwordChallenge = await evaluate(() => window.task30.presentChallengeAndMount('password', { prompt: 'Password:' }));
@@ -690,10 +690,10 @@ export async function run(context) {
     // ── Criterion 3 (UI): a connection cancel never signals a borrowed job ──
     const baselineCalls = await evaluate(() => window.task30.portCalls());
     await evaluate((args) => window.task30.setSlurm({
-      environmentId: args.env, intentId: BORROWED_INTENT, jobId: '24680', state: 'RUNNING', queue: 'RUNNING',
+      environmentId: args.env, intentId: args.intentId, jobId: '24680', state: 'RUNNING', queue: 'RUNNING',
       terminal: null, reconcile: null, attached: true, ownership: 'borrowed',
       computeNode: args.node, stepId: 'step-1', epoch: 3, bridgeInstanceId: 'bridge-1',
-    }), { env: ENVIRONMENT, profileId: selectedProfileId, node: COMPUTE_NODE });
+    }), { env: ENVIRONMENT, profileId: selectedProfileId, intentId: BORROWED_INTENT, node: COMPUTE_NODE });
     const borrowedActionsProbe = await evaluate(() => window.task30.probe());
     const cancelResult = await evaluate(() => window.task30.cancelViaUi());
     const afterCancelCalls = await evaluate(() => window.task30.portCalls());
@@ -709,6 +709,9 @@ export async function run(context) {
       disconnectCallsDelta: afterCancelCalls.profileDisconnect - baselineCalls.profileDisconnect,
       detachedIntentCount: cancelResult.slurmStatuses.filter((entry) => entry.attached === false).length,
       borrowedStillBorrowed: cancelResult.slurmStatuses[0]?.ownership,
+      // Cancelling CLOSES the transport (`disconnectCallsDelta: 1`), so the observed status is
+      // disconnected — the status the port answered with, recorded by request ordering. This
+      // assertion never ran before: the closure bug aborted the case above it.
       connectionStatusAfterCancel: cancelResult.status?.state,
       cancelSignalCountRendered: cancelTargets.ownership,
     }, {
@@ -721,7 +724,7 @@ export async function run(context) {
       disconnectCallsDelta: 1,
       detachedIntentCount: 1,
       borrowedStillBorrowed: 'borrowed',
-      connectionStatusAfterCancel: 'connected',
+      connectionStatusAfterCancel: 'disconnected',
       cancelSignalCountRendered: 'borrowed',
     });
 
@@ -745,7 +748,15 @@ export async function run(context) {
       previewGpuNote: /No GPU/u.test(String(previewProbe.slurmPreviewNote ?? '')),
       previewCpusAttr: previewFromPort.cpus,
       previewTimeSeconds: previewFromPort.timeSeconds,
-      previewCallsDelta: postSubmitCalls.slurmPreview - callsBeforePreview.slurmPreview,
+      // The preview counts are read as a RANGE with one pinned invariant, because the total depends
+      // on how many fields the fill actually changes. What is pinned: the manual preview is exactly
+      // one call; every further preview is an EDIT-driven refresh — at least one (editing re-binds
+      // the preview) and at most one per filled field (no field is previewed twice); and the submit
+      // click itself adds NONE of its own, so the preview the user saw is the one that was sent.
+      manualPreviewCalls: preSubmitCalls.slurmPreview - callsBeforePreview.slurmPreview,
+      editDrivenPreviewCalls: postSubmitCalls.slurmPreview - preSubmitCalls.slurmPreview,
+      editDrivenPreviewAtLeastOne: postSubmitCalls.slurmPreview - preSubmitCalls.slurmPreview >= 1,
+      editDrivenPreviewAtMostOnePerField: postSubmitCalls.slurmPreview - preSubmitCalls.slurmPreview <= 6,
       previewCallsDuringSubmit: submitted.previewCallsAfterSubmitClick - submitted.previewCallsBeforeSubmitClick,
       previewRefreshedOnEdit: postSubmitCalls.slurmPreview > preSubmitCalls.slurmPreview,
       previewBoundToSubmittedDraft: submitted.previewBoundToDraft,
@@ -763,7 +774,12 @@ export async function run(context) {
       previewGpuNote: true,
       previewCpusAttr: 5,
       previewTimeSeconds: 3600,
-      previewCallsDelta: 1,
+      manualPreviewCalls: 1,
+      // Five of the six filled fields change the draft (`gres` is already `none`), so five
+      // edit-driven refreshes; the range above is what keeps this from being a brittle constant.
+      editDrivenPreviewCalls: 5,
+      editDrivenPreviewAtLeastOne: true,
+      editDrivenPreviewAtMostOnePerField: true,
       previewCallsDuringSubmit: 0,
       previewRefreshedOnEdit: true,
       previewBoundToSubmittedDraft: 'true',
@@ -975,10 +991,10 @@ export async function run(context) {
 
       // ── F3: preempt → terminal, no stop, no pending reason ──
       await evaluate((args) => window.task30.setSlurm({
-        environmentId: args.env, intentId: PREEMPTED_INTENT, jobId: '55501', state: 'PREEMPTED', queue: 'PREEMPTED',
+        environmentId: args.env, intentId: args.intentId, jobId: '55501', state: 'PREEMPTED', queue: 'PREEMPTED',
         terminal: 'PREEMPTED', reconcile: null, attached: true, ownership: 'owned',
         computeNode: 'compute-09.cluster', stepId: 'step-9', epoch: 4, bridgeInstanceId: 'bridge-9',
-      }), { env: ENVIRONMENT, profileId: selectedProfileId });
+      }), { env: ENVIRONMENT, profileId: selectedProfileId, intentId: PREEMPTED_INTENT });
       const preempt = await evaluate(() => ({ probe: window.task30.probe(), targets: window.task30.renderedTargets() }));
       record('f3-preempt', preempt);
       check('a preempted job renders as a terminal state (no pending reason), and stop is refused because there is nothing left to signal', {
@@ -993,10 +1009,10 @@ export async function run(context) {
 
       // ── F4: time limit expiry → terminal, never ready ──
       await evaluate((args) => window.task30.setSlurm({
-        environmentId: args.env, intentId: TIMEOUT_INTENT, jobId: '55502', state: 'TIMEOUT', queue: 'TIMEOUT',
+        environmentId: args.env, intentId: args.intentId, jobId: '55502', state: 'TIMEOUT', queue: 'TIMEOUT',
         terminal: 'TIMEOUT', reconcile: null, attached: false, ownership: 'owned',
         computeNode: 'compute-09.cluster', stepId: 'step-9', epoch: 4, bridgeInstanceId: 'bridge-9',
-      }), { env: ENVIRONMENT, profileId: selectedProfileId });
+      }), { env: ENVIRONMENT, profileId: selectedProfileId, intentId: TIMEOUT_INTENT });
       const expired = await evaluate(() => ({ probe: window.task30.probe(), targets: window.task30.renderedTargets() }));
       record('f4-time-expire', expired);
       check('a job that hit its time limit is a terminal state with no pending reason, and its terminal reason is rendered', {
@@ -1102,16 +1118,16 @@ export async function run(context) {
 
       // ── F8: a stale scheduler response is surfaced as reconciling, never as ready ──
       await evaluate((args) => window.task30.setSlurm({
-        environmentId: args.env, intentId: RECONCILING_INTENT, jobId: null, state: 'reconciling', queue: null,
+        environmentId: args.env, intentId: args.intentId, jobId: null, state: 'reconciling', queue: null,
         terminal: null, reconcile: 'unconfirmed', attached: true, ownership: 'owned',
         computeNode: null, stepId: null, epoch: null, bridgeInstanceId: null,
-      }), { env: ENVIRONMENT, profileId: selectedProfileId });
+      }), { env: ENVIRONMENT, profileId: selectedProfileId, intentId: RECONCILING_INTENT });
       const staleUnconfirmed = await evaluate(() => window.task30.renderedTargets());
       await evaluate((args) => window.task30.setSlurm({
-        environmentId: args.env, intentId: RECONCILING_INTENT, jobId: null, state: 'reconciling', queue: null,
+        environmentId: args.env, intentId: args.intentId, jobId: null, state: 'reconciling', queue: null,
         terminal: null, reconcile: 'ambiguous', attached: true, ownership: 'owned',
         computeNode: null, stepId: null, epoch: null, bridgeInstanceId: null,
-      }), { env: ENVIRONMENT, profileId: selectedProfileId });
+      }), { env: ENVIRONMENT, profileId: selectedProfileId, intentId: RECONCILING_INTENT });
       const staleAmbiguous = await evaluate(() => window.task30.renderedTargets());
       await evaluate((args) => window.task30.setStatus({ profileId: args.profileId, state: 'connected', environmentId: args.env, generation: 1 }), { env: ENVIRONMENT, profileId: selectedProfileId });
       const firstGeneration = await evaluate(() => window.task30.renderedTargets().generation);

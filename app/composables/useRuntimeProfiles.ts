@@ -33,6 +33,7 @@ import type {
   ConnectionTarget,
   TransportKind,
 } from '../../shared/runtime/connectionProfile.js';
+import { parseSlurmMemory, parseSlurmTime } from '../../shared/runtime/slurmResources.js';
 
 // ---------------------------------------------------------------------------
 // Client identity and the ONE capability entry
@@ -454,6 +455,33 @@ export type SlurmResourcePreview = Readonly<{
 }>;
 
 /**
+ * The MiB the ONE resource normalizer reads out of a memory request.
+ *
+ * `shared/runtime/slurmResources.js` owns what a resource expression means — `8G` is 8192 MiB —
+ * and the bridge uses the very same functions to build a preview. A renderer that derived MiB
+ * itself would be a second parser for one value, and the two drift: `parseInt('8G')` is 8 while the
+ * normalizer reads 8192, so a preview answering `8` still looked like a match after the field
+ * became `8G`, and a correct 8192 MiB preview was refused as stale. `null` means the expression is
+ * not one the bridge accepts, so no preview can describe it.
+ */
+export function slurmMemoryMiB(memory: string | number): number | null {
+  try {
+    return parseSlurmMemory(memory);
+  } catch {
+    return null;
+  }
+}
+
+/** The seconds the ONE resource normalizer reads out of a wall-clock request (`60` is 3600). */
+export function slurmTimeSeconds(time: string): number | null {
+  try {
+    return parseSlurmTime(time);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Local validation of a resource request.
  *
  * The numbers and the explicit `time`/`gres` fields are checked here so the form can refuse a
@@ -465,8 +493,14 @@ export function validateSlurmResourceInput(input: SlurmResourceInput): readonly 
   const problems: string[] = [];
   if (typeof input.partition !== 'string' || input.partition.trim().length === 0) problems.push('partition');
   if (!Number.isSafeInteger(input.cpus) || input.cpus < 1) problems.push('cpus');
-  const memory = typeof input.memory === 'number' ? input.memory : Number.parseInt(String(input.memory), 10);
-  if (!Number.isFinite(memory) || memory < 1) problems.push('memory');
+  // The UNIT of a memory expression (`8G`, `2048M`, `2T`) belongs to the bridge normalizer alone,
+  // whose answer arrives as the preview's `memoryMiB`; reading it here as well would be a second
+  // parser. So this gate refuses only an absent value and a bare number that cannot be a size.
+  if (typeof input.memory === 'number') {
+    if (!Number.isSafeInteger(input.memory) || input.memory < 1) problems.push('memory');
+  } else if (typeof input.memory !== 'string' || input.memory.trim().length === 0) {
+    problems.push('memory');
+  }
   if (typeof input.time !== 'string' || input.time.trim().length === 0) problems.push('time');
   if (typeof input.gres !== 'string' || input.gres.trim().length === 0) problems.push('gres');
   return Object.freeze(problems);
@@ -490,6 +524,22 @@ export type DeleteReceipt = Readonly<{
   readonly preservedHandles: readonly string[];
 }>;
 
+/**
+ * The answer to a lifecycle-status query.
+ *
+ * `supported: false` means the target serves NO status route at all, so the answer carries no
+ * statuses because none could be observed. That is an absent ANSWER — it is NOT an answer of
+ * "there are no connections". Only a target that CAN answer may report `profiles: []` as
+ * confirmed-none, and the two must never be conflated: reading an absent answer as confirmed-none
+ * erases a connection nobody closed and shows a disconnected chip with the cancel affordance gone.
+ */
+export type RuntimeInspection = Readonly<{
+  readonly profiles: readonly RuntimeConnectionStatus[];
+  /** `false` only when the target has no status route; a target that answers never omits it. */
+  readonly supported?: boolean;
+  readonly reason?: string;
+}>;
+
 /** The management-side profile surface, i.e. `bridge/bridgeHttpRoutes.js` profile routes. */
 export interface RuntimeProfilePort {
   list(): Promise<readonly ConnectionProfile[]>;
@@ -500,7 +550,7 @@ export interface RuntimeProfilePort {
   connect(profileId: string): Promise<RuntimeConnectionStatus>;
   disconnect(profileId: string): Promise<RuntimeConnectionStatus>;
   reconnect(profileId: string): Promise<RuntimeConnectionStatus>;
-  inspect(): Promise<{ readonly profiles: readonly RuntimeConnectionStatus[] }>;
+  inspect(): Promise<RuntimeInspection>;
 }
 
 /** The Slurm control surface (the task-28 `SlurmJobController`, reachable only through a bridge role). */
@@ -589,10 +639,16 @@ export function createBridgeProfileClient(options: RuntimeProfileClientOptions):
     async inspect() {
       // The bridge serves NO lifecycle-inspection route: `PROFILE_ACTION` matches only
       // connect|disconnect|reconnect|enabled, and `GET /api/v1/profiles` answers with a profile
-      // LIST whose entries carry neither `state` nor `generation`. So this reports NO statuses
-      // instead of asserting that list into a status array — a fabricated status would drive a
-      // status chip for a connection nobody observed. A real status route is read HERE, nowhere else.
-      return Object.freeze({ profiles: Object.freeze([] as readonly RuntimeConnectionStatus[]) });
+      // LIST whose entries carry neither `state` nor `generation`. So this reports that it CANNOT
+      // answer and carries no statuses, rather than asserting a list into a status array: an empty
+      // array reads as "confirmed no connections" and would drive a disconnected chip for a
+      // connection nobody closed, with the cancel affordance gone. A real status route is read
+      // HERE, nowhere else.
+      return Object.freeze({
+        profiles: Object.freeze([] as readonly RuntimeConnectionStatus[]),
+        supported: false,
+        reason: 'no lifecycle-inspection route',
+      });
     },
   };
   return Object.freeze(port);
@@ -630,7 +686,24 @@ export function useRuntimeProfiles(options: UseRuntimeProfilesOptions = {}) {
   const selectedIntentId = ref('');
   /** profileId → the intent that profile submitted, recorded when the submission lands. */
   const submittedIntents = new Map<string, string>();
+  /**
+   * How many times the selection has moved.
+   *
+   * A submission is made at one selection and answers at a later time; comparing the two tells
+   * whether the user is still where the submission started. Without it a job would be attributed to
+   * whichever profile happens to be in focus when the answer lands.
+   */
+  let selectionVersion = 0;
   const statuses = shallowRef<readonly RuntimeConnectionStatus[]>(Object.freeze([]));
+  /**
+   * Whether the selected target can ANSWER a lifecycle-status query.
+   *
+   * A target with no status route cannot tell this client anything about its connections, so the
+   * UI may show an unknown capability — it may never show a disconnected one. `true` until a target
+   * answers otherwise, because the port contract includes `inspect`; a port that serves no route
+   * says so on its first answer.
+   */
+  const statusQuerySupported = ref(true);
   const slurmStatuses = shallowRef<readonly SlurmLifecycleStatus[]>(Object.freeze([]));
   const challenge = ref<RuntimeChallenge | null>(null);
   const remotePlan = ref<RemoteBridgeUpdatePlan | null>(null);
@@ -693,7 +766,14 @@ export function useRuntimeProfiles(options: UseRuntimeProfilesOptions = {}) {
     return intentId === '' ? null : slurmStatuses.value.find((entry) => entry.intentId === intentId) ?? null;
   });
 
+  /**
+   * The ONE selection path. Every switch — the picker, a fresh `createProfile`, a reset to nothing
+   * — goes through here, so the profile and the intent in focus can never disagree: selecting a
+   * profile brings back the intent IT submitted and only that one, which for a profile with no
+   * submission is nothing.
+   */
   function selectProfile(profileId: string) {
+    selectionVersion += 1;
     selectedProfileId.value = profileId;
     // Selecting a profile brings back the intent it submitted, and only that one. Two profiles in
     // the same environment must not share a job, so the intent is never resolved by environment.
@@ -702,6 +782,7 @@ export function useRuntimeProfiles(options: UseRuntimeProfilesOptions = {}) {
 
   /** Focus one intent explicitly. The caller passes an INTENT id, never a profile id. */
   function selectIntent(intentId: string) {
+    selectionVersion += 1;
     selectedIntentId.value = intentId;
   }
 
@@ -716,7 +797,12 @@ export function useRuntimeProfiles(options: UseRuntimeProfilesOptions = {}) {
     error.value = '';
     try {
       profiles.value = Object.freeze([...(await profilePort.list())]);
-      statuses.value = Object.freeze([...(await profilePort.inspect()).profiles]);
+      const inspection = await profilePort.inspect();
+      statusQuerySupported.value = inspection.supported !== false;
+      // "Cannot answer" is not "no connections": when the target serves no status route the
+      // OBSERVED statuses stand, because the connection was never closed. Only a target that can
+      // answer may replace them, and an empty answer from such a target is confirmed-none.
+      if (inspection.supported !== false) statuses.value = Object.freeze([...inspection.profiles]);
       if (remoteBridgePort !== null) remotePlan.value = await remoteBridgePort.plan();
     } catch (cause) {
       fail(cause instanceof Error ? cause.message : 'runtime.profile.refresh');
@@ -735,7 +821,9 @@ export function useRuntimeProfiles(options: UseRuntimeProfilesOptions = {}) {
       const validated = parseNewConnectionProfile(draft);
       const created = await profilePort.create(validated);
       profiles.value = Object.freeze([...profiles.value, created]);
-      selectedProfileId.value = created.profileId;
+      // Through the ONE selection path, so the new profile starts with no intent in focus: writing
+      // `selectedProfileId` directly would leave the PREVIOUS profile's job on screen.
+      selectProfile(created.profileId);
       return created;
     } catch (cause) {
       return fail(cause instanceof Error ? cause.message : 'runtime.profile.create');
@@ -834,14 +922,23 @@ export function useRuntimeProfiles(options: UseRuntimeProfilesOptions = {}) {
     if (slurmPort === null) return fail('runtime.slurm.unavailable');
     const problems = validateSlurmResourceInput(request.resources);
     if (problems.length > 0) return fail(`runtime.slurm.resource:${problems.join(',')}`);
+    // Captured BEFORE the await. A value read after it reflects a LATER state than the action that
+    // started before it: reading the current selection here would attribute this job to whichever
+    // profile happens to be in focus when the answer lands, so a switch made while the submit was
+    // in flight would hand one profile another's job — and the later detach/stop would then act on
+    // a job in the wrong interface context.
+    const originatingProfileId = selectedProfileId.value;
+    const originatingSelection = selectionVersion;
     busy.value = true;
     error.value = '';
     try {
       const status = await slurmPort.submit(request);
       // The submission is recorded against the profile it was made for. Without this association
       // the resulting intent — whose UUID differs from the profile's — could not be resolved back.
-      if (selectedProfileId.value !== '') submittedIntents.set(selectedProfileId.value, status.intentId);
-      selectedIntentId.value = status.intentId;
+      if (originatingProfileId !== '') submittedIntents.set(originatingProfileId, status.intentId);
+      // The answer is focused only if the user is still on the selection the submit started from;
+      // a user who has since moved on keeps the selection they made.
+      if (selectionVersion === originatingSelection) selectedIntentId.value = status.intentId;
       slurmStatuses.value = Object.freeze([...slurmStatuses.value.filter((entry) => entry.intentId !== status.intentId), status]);
       return status;
     } catch (cause) {
@@ -938,6 +1035,7 @@ export function useRuntimeProfiles(options: UseRuntimeProfilesOptions = {}) {
     capabilityEntry,
     directOnly,
     statusOf,
+    statusQuerySupported,
     attachedSlurm,
     cancelPlan,
     selectProfile,
