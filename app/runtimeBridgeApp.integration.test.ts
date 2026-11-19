@@ -230,16 +230,18 @@ it('publishes returned config in the Bridge provider panel without changing the 
   fixture.element.querySelector<HTMLButtonElement>('.provider-manager-button')!.click();
   const toggle = await vi.waitFor(() => {
     const input = fixture.element.querySelector<HTMLInputElement>('.provider-list-row .toggle-input');
-    expect(input?.checked).toBe(true);
+    expect(input?.checked).toBe(false);
     return input!;
   });
-  toggle.checked = false;
-  toggle.dispatchEvent(new Event('change', { bubbles: true }));
   toggle.checked = true;
+  toggle.dispatchEvent(new Event('change', { bubbles: true }));
+  toggle.checked = false;
   await vi.waitFor(() => {
     expect(fixture.nativeQueries.some(query => query.operation === 'updateGlobalConfig')).toBe(true);
     const current = fixture.element.querySelector<HTMLInputElement>('.provider-list-row .toggle-input');
-    expect(current?.checked, fixture.element.querySelector('.provider-manager-feedback')?.textContent ?? '').toBe(false);
+    const feedback = fixture.element.querySelector('.provider-manager-feedback');
+    expect(feedback?.classList.contains('is-success'), feedback?.textContent ?? '').toBe(true);
+    expect(current?.checked).toBe(true);
   });
   expect(fixture.element.querySelector('.selected-title')?.textContent).toBe('Session A');
   expect(fixture.historyOpens.at(-1)?.nativeSessionId).toBe('session-a');

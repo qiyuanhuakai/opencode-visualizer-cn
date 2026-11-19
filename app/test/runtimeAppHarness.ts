@@ -93,7 +93,10 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
         scope: { environmentId: identity.environmentId, harnessInstanceId: identity.harnessInstanceId, ...context.authority() },
         current: context.authority, fingerprint, randomUUID,
       }) : undefined;
-      let config: Record<string, JsonValue> = { model: 'provider-a/model-a' };
+      let config: Record<string, JsonValue> = {
+        model: 'provider-a/model-a',
+        ...(options.editableProvider ? { disabled_providers: ['provider-a'] } : {}),
+      };
       const queries: Record<string, JsonValue> = {
         listProviders: { all: [{ id: 'provider-a', name: 'QA provider', models, ...(options.editableProvider ? { source: 'config' } : {}) }], connected: ['provider-a'], default: { 'provider-a': 'model-a' } },
         getGlobalConfig: config,
