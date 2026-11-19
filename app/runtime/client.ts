@@ -433,7 +433,11 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
           const ahead = cursor === null ? prefetched.get(collection) : undefined;
           const page: Snapshot = await (ahead ?? request(target, 'runtime.snapshot', { collection, ...(first ? { token: first.token } : {}), cursor, limit: limit(collection, cursor) }, options));
           if (ahead) prefetched.delete(collection);
-          requireValue(page.token === (first ?? page).token && page.revision === (first ?? page).revision && page.watermark === (first ?? page).watermark && page.target === attached.hello.target && page.epoch === attached.hello.epoch && page.generation === attached.hello.generation, 'snapshot.atomic', 'replay_required');
+          requireValue(page.target === attached.hello.target && page.epoch === attached.hello.epoch
+            && page.generation === attached.hello.generation, 'snapshot.binding', 'replay_required');
+          requireValue(!first || (page.token === first.token && page.revision === first.revision
+            && page.watermark === first.watermark), 'snapshot.atomic', 'replay_required');
+          requireValue(page.expiresAt > Date.now() && (page.cursor === null || page.cursor !== cursor), 'snapshot.expired', 'replay_required');
           if (!first) {
             first = page;
             releaseView = holdView(attached, page.token);
@@ -452,7 +456,6 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
               }
             }
           }
-          requireValue(page.expiresAt > Date.now() && (page.cursor === null || page.cursor !== cursor), 'snapshot.expired', 'replay_required');
           const keepPaging = await options.onPage(collection, page);
           requireValue(current(attached) && (options.selectionCurrent?.() ?? true), 'snapshot.selection', 'reconcile_required');
           cursor = keepPaging === false ? null : page.cursor;

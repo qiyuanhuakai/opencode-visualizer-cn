@@ -165,9 +165,10 @@ describe('runtime real WebSocket dispatch', () => {
       })] } });
       expect(await connection.request('native.query', { harnessInstanceId: manifest.harnessInstanceId, operation: 'listProviders', args: {} })).toMatchObject({ ok: true, result: { ready: true } });
     }
+    if (!inspection.ok) throw new Error('Runtime inspection failed');
     expect(inspection.result).not.toHaveProperty('treeBootstrap');
     const bootstrapped = await connection.request('runtime.inspect', { bootstrapTree: true });
-    expect(bootstrapped.ok).toBe(true);
+    if (!bootstrapped.ok) throw new Error(bootstrapped.typedError.message);
     const pages = (bootstrapped.result as unknown as { treeBootstrap: import('../../shared/runtime/protocol.js').Snapshot[] }).treeBootstrap;
     expect(pages).toHaveLength(3);
     expect(pages[0].items.length).toBeGreaterThan(0);

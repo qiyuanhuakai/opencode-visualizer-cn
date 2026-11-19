@@ -223,31 +223,34 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
           }
         }
         for (const grant of management.remoteServices?.listTargets() ?? []) grantFor(grant.target);
-        const inspection = await graph.inspect(inspect(), [...allowed.values()]);
+        const inspection = Promise.resolve(graph.inspect(inspect(), [...allowed.values()]));
         if (!params.bootstrapTree || !entry.grant.capabilities.methods.includes('runtime.snapshot')
           || !graph.grant.workspaceKeys.every(key => entry.grant.workspaceKeys.includes(key))) return inspection;
-        const view = await snapshots(entry);
+        const view = snapshots(entry);
         let first;
         let keep = false;
-        try {
-          first = await view.page({ collection: 'harnesses', limit: 200 });
+        const loadPages = async () => {
+          const snapshot = await view;
+          first = await snapshot.page({ collection: 'harnesses', limit: 200 });
           const token = first.token;
           const remaining = await Promise.allSettled([
-            view.page({ collection: 'workspaces', token, limit: 200 }),
-            view.page({ collection: 'session_summaries', token, limit: 32 }),
+            snapshot.page({ collection: 'workspaces', token, limit: 200 }),
+            snapshot.page({ collection: 'session_summaries', token, limit: 32 }),
           ]);
-          if (remaining.some(page => page.status === 'rejected')) return inspection;
-          const result = { ...inspection, treeBootstrap: [first, ...remaining.map(page => page.value)] };
-          if (Buffer.byteLength(JSON.stringify(result)) > LIMITS.jsonBytes - 4096) return inspection;
+          if (remaining.some(page => page.status === 'rejected')) return undefined;
+          return [first, ...remaining.map(page => page.value)];
+        };
+        try {
+          const [base, pages] = await Promise.allSettled([inspection, loadPages()]);
           entry.current();
+          if (base.status === 'rejected') throw base.reason;
+          if (pages.status === 'rejected' || !pages.value || signal.aborted) return base.value;
+          const result = { ...base.value, treeBootstrap: pages.value };
+          if (Buffer.byteLength(JSON.stringify(result)) > LIMITS.jsonBytes - 4096) return base.value;
           keep = true;
           return result;
-        } catch (error) {
-          entry.current();
-          if (signal.aborted) throw error;
-          return inspection;
         } finally {
-          if (first && !keep) await view.release({ token: first.token }).catch(() => {});
+          if (first && !keep) await (await view).release({ token: first.token }).catch(() => {});
         }
       }
       case 'runtime.target.attach': {
