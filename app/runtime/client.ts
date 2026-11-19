@@ -314,18 +314,30 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       if (error instanceof RuntimeRequestError && error.code === 'timeout' && current(attached)) connection.reconnect();
       throw error;
     });
-    let closed = false;
+    let closing: Promise<void> | undefined;
     let reading = false;
-    async function close() {
-      if (closed) return;
-      closed = true;
-      if (current(attached)) await request(target, 'runtime.observer.close', { observerId });
+    async function release() {
+      for (let attempt = 0; attempt < 2 && current(attached); attempt++) {
+        try {
+          await request(target, 'runtime.observer.close', { observerId });
+          return;
+        } catch (error) {
+          if (!current(attached)) return;
+          if (attempt === 0 && error instanceof ProtocolError && error.code === 'source_unavailable') continue;
+          // A failed close can leave the server's observer slot occupied.
+          connection.reconnect();
+          throw error;
+        }
+      }
+    }
+    function close() {
+      return closing ??= release();
     }
     if (!selectionCurrent()) {
       await close();
       throw new ProtocolError('cancelled', 'request.selection');
     }
-    const active = () => requireValue(!closed && current(attached) && selectionCurrent(), 'observer.closed', 'reconcile_required');
+    const active = () => requireValue(closing === undefined && current(attached) && selectionCurrent(), 'observer.closed', 'reconcile_required');
     async function resume(after: number) {
       active();
       await request(target, 'runtime.observer.resume', { observerId, after }, options);
