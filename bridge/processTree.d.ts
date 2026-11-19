@@ -16,6 +16,13 @@ export type WindowsCommandChild = {
 export function detachedProcessOptions(): { detached?: true };
 export function signalProcessTree(child: ProcessTreeChild, signal: NodeJS.Signals): boolean;
 export function forceStopProcessTree(pid: number): Promise<void>;
+export function taskkillProcessTree(
+  pid: number,
+  force: boolean,
+  options?: {
+    spawnProcess?: (command: string, args: readonly string[], options: SpawnOptions) => WindowsCommandChild;
+  },
+): Promise<boolean>;
 export function stopProcessTree(
   child: ProcessTreeChild,
   options?: { graceMs?: number; forceMs?: number },

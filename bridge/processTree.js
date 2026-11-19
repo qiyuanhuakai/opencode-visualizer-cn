@@ -1,6 +1,6 @@
-import { stopWindowsProcessTree } from './windowsProcessTree.js';
+import { stopWindowsProcessTree, taskkillProcessTree } from './windowsProcessTree.js';
 
-export { stopWindowsProcessTree } from './windowsProcessTree.js';
+export { stopWindowsProcessTree, taskkillProcessTree } from './windowsProcessTree.js';
 
 export function detachedProcessOptions() {
   return process.platform === 'win32' ? {} : { detached: true };
@@ -79,7 +79,14 @@ export async function stopProcessTree(child, options = {}) {
   let forceRequired = false;
   if (process.platform === 'win32' && child.pid) {
     try {
-      await stopWindowsProcessTree(child.pid, false);
+      // Windows: `taskkill /T` alone is the graceful phase. A windowless
+      // console leader (every process the bridge spawns) cannot be stopped
+      // without `/F`, and the CIM sweep excludes the root, so a failed probe
+      // means the leader cannot exit on its own — escalate immediately instead
+      // of waiting out the grace period. The forced `taskkill /T /F` reaps the
+      // live tree; the sweep still runs in the forced path for an exited leader
+      // (the case taskkill cannot enumerate).
+      forceRequired = !(await taskkillProcessTree(child.pid, false));
     } catch {
       forceRequired = true;
     }
