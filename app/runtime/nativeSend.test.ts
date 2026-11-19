@@ -8,7 +8,7 @@ describe('instance native projections', () => {
     const input = { text: 'question', model: 'provider/model', mode: 'build' };
     // When the source owns the encoding, then its real protocol fields are used.
     expect(nativeSendArgs('opencode', input)).toEqual({ body: { parts: [{ type: 'text', text: 'question' }], agent: 'build', model: { providerID: 'provider', modelID: 'model' } } });
-    expect(nativeSendArgs('codex', input)).toEqual({ native: { input: [{ type: 'text', text: 'question' }], model: 'model' } });
+    expect(nativeSendArgs('codex', input)).toEqual({ native: { input: [{ type: 'text', text: 'question' }], model: 'model', expectedModelProvider: 'provider' } });
     expect(nativeSendArgs('acp', input)).toEqual({ prompt: [{ type: 'text', text: 'question' }] });
     expect(nativeSendArgs('kimi-web', input)).toEqual({ content: [{ type: 'text', text: 'question' }], model: 'model' });
     expect(nativeSendArgs('dsh', input)).toMatchObject({ request: { content: [{ type: 'text', text: 'question' }], requestId: expect.any(String) } });

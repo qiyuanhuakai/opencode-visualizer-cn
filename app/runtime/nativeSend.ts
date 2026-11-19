@@ -23,6 +23,8 @@ export function nativeSendArgs(kind: HarnessKind, input: RuntimeSendInput): Read
       }
       const native: Record<string, JsonValue> = { input: content, ...input.args };
       if (model) native.model = model;
+      const provider = input.model?.includes('/') ? input.model.slice(0, input.model.indexOf('/')).trim() : '';
+      if (provider) native.expectedModelProvider = provider === 'codex' ? 'openai' : provider;
       if (input.mode && model && ['plan', 'default'].includes(input.mode)) native.collaborationMode = { mode: input.mode, settings: { model, developer_instructions: null } };
       if (input.thinking) native.effort = input.thinking;
       return { native, ...(input.queue ? { queue: true } : {}) };

@@ -34,7 +34,7 @@ async function fixture() {
       send(raw) {
         const message = JSON.parse(raw); if (message.id === undefined) return;
         methods.push(message.method);
-        const thread = { id: 'native-outside', name: 'Outside turn', cwd: directory, status };
+        const thread = { id: 'native-outside', name: 'Outside turn', cwd: directory, status, modelProvider: 'openai' };
         const result = message.method === 'initialize' ? { userAgent: 'codex-cli/0.160.0 controlled' }
           : message.method === 'thread/list' ? { data: message.params.archived ? [] : [thread], nextCursor: null }
           : message.method === 'thread/read' ? { thread } : {};
@@ -74,4 +74,21 @@ it('publishes external native lifecycle activity without allocating a Vis operat
     expect((await state.store.page({ collection: 'operations', limit: 10 })).items).toHaveLength(0);
     expect(state.methods).toEqual(['initialize']);
   } finally { await observer.return?.(); await pump; await state.close(); }
+});
+
+it('refuses a model from a different provider before dispatching a turn', async () => {
+  const state = await fixture();
+  try {
+    const session = { ...state.context, nativeSessionId: 'native-outside' };
+    await expect(state.core.send!({
+      ...state.context,
+      session,
+      params: {
+        idempotencyKey: 'provider-mismatch',
+        native: { input: [{ type: 'text', text: 'test prompt' }], model: 'org/model', expectedModelProvider: 'custom' },
+      },
+    })).rejects.toThrow('codex.model_provider_mismatch');
+    expect(state.methods).toContain('thread/read');
+    expect(state.methods).not.toContain('turn/start');
+  } finally { await state.close(); }
 });

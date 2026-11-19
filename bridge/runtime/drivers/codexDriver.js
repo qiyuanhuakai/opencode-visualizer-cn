@@ -137,7 +137,7 @@ export async function createCodexDriver(options) {
     assertCurrent();
     return canonical;
   }
-  async function authorizeSession(session) {
+  async function authorizeSession(session, expectedModelProvider) {
     const result = await request('thread/read', {
       threadId: session.nativeSessionId,
       includeTurns: false,
@@ -146,6 +146,9 @@ export async function createCodexDriver(options) {
       result.thread?.id === session.nativeSessionId && typeof result.thread.cwd === 'string',
       'codex.thread.scope',
     );
+    if (expectedModelProvider && result.thread.modelProvider) {
+      requireValue(result.thread.modelProvider === expectedModelProvider, 'codex.model_provider_mismatch', 'conflict');
+    }
     return authorizeCwd(result.thread.cwd);
   }
   const journal = createOperationJournal({
@@ -343,6 +346,7 @@ export async function createCodexDriver(options) {
       const payload = nativeArguments(params.native, [
         'input',
         'model',
+        'expectedModelProvider',
         'effort',
         'summary',
         'approvalPolicy',
@@ -354,7 +358,9 @@ export async function createCodexDriver(options) {
         'collaborationMode',
       ]);
       requireValue(Array.isArray(payload.input), 'codex.send.input');
-      const cwd = await authorizeSession(context.session);
+      const { expectedModelProvider, ...turnPayload } = payload;
+      requireValue(expectedModelProvider === undefined || typeof expectedModelProvider === 'string', 'codex.model_provider');
+      const cwd = await authorizeSession(context.session, expectedModelProvider);
       for (const input of payload.input) {
         requireValue(
           ['text', 'image', 'localImage'].includes(input.type),
@@ -367,7 +373,7 @@ export async function createCodexDriver(options) {
       return sessions.mutate({
         session: context.session,
         method: 'turn/start',
-        payload: { ...payload, cwd },
+        payload: { ...turnPayload, cwd },
         idempotencyKey: params.idempotencyKey,
         turn: true,
         queue: params.queue === true,
