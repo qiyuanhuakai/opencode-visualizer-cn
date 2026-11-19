@@ -184,6 +184,52 @@ describe('runtime real WebSocket dispatch', () => {
     expect(await connection.request('session.list', { harnessInstanceId: disabled.harnessInstanceId, args: {} })).toMatchObject({ ok: false, typedError: { code: 'source_unavailable' } });
     expect(attempts).toBe(2);
   });
+  it('finishes inspection while the optional snapshot stalls and releases its late token', async () => {
+    const { services } = await graph();
+    const resume = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<string>();
+    let attempts = 0;
+    const host = createRuntimeHost({
+      environmentId: services.target, role: 'local',
+      services: { ...services, snapshots: { async connect(binding, isCurrent) {
+        const snapshots = await services.snapshots.connect(binding, isCurrent);
+        return {
+          ...snapshots,
+          async page(input) {
+            if (input?.collection === 'harnesses' && !input.token) {
+              attempts++;
+              started.resolve();
+              await resume.promise;
+            }
+            return snapshots.page(input);
+          },
+          async release(input) {
+            const result = await snapshots.release(input);
+            if (result.released) released.resolve(input.token);
+            return result;
+          },
+        };
+      } } },
+    });
+    host.start(); cleanups.push(() => host.stop());
+    const connection = await client(host);
+    try {
+      const pending = connection.request('runtime.inspect', { bootstrapTree: true });
+      await started.promise;
+      const inspection = await pending;
+      if (!inspection.ok) throw new Error(inspection.typedError.message);
+      expect(inspection.result).not.toHaveProperty('treeBootstrap');
+      const repeated = await connection.request('runtime.inspect', { bootstrapTree: true });
+      if (!repeated.ok) throw new Error(repeated.typedError.message);
+      expect(repeated.result).not.toHaveProperty('treeBootstrap');
+      expect(attempts).toBe(1);
+      expect(await connection.request('runtime.snapshot', { collection: 'workspaces' })).toMatchObject({ ok: true });
+    } finally {
+      resume.resolve();
+    }
+    await expect(released.promise).resolves.toEqual(expect.any(String));
+  });
   it('reads pending interaction details only for the captured authorized session and current native generation', async () => {
     const fixture = await historyRuntime();
     const connection = await client(fixture.host);

@@ -10,6 +10,7 @@ import { createRuntimeChannels } from './runtimeChannels.js';
 
 const operations = { 'session.list': 'listSessionPage', 'session.get': 'getSession', 'session.history': 'readHistoryPage', 'session.create': 'createSession', 'session.send': 'send', 'session.cancel': 'cancel', 'interaction.respond': 'respondInteraction' };
 const critical = new Set(['runtime.history.close', 'session.cancel', 'interaction.respond', 'runtime.channel.ack', 'runtime.channel.cancel', 'runtime.pty.detach', 'runtime.observer.read', 'runtime.observer.resume', 'runtime.observer.close', 'runtime.target.detach']);
+const TREE_BOOTSTRAP_BUDGET_MS = 300;
 const publicKinds = new Set(['operation', 'acp-operation', 'opencode-instance-operation', 'opencode-cancellation', 'codex-instance-operation', 'codex-cancel-operation', 'kimi-instance', 'kimi-control', 'dsh-operation', 'interaction', 'acp-interaction']);
 function project(collection, row) {
   if (!['operations', 'interactions'].includes(collection)) return row;
@@ -224,14 +225,18 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
         }
         for (const grant of management.remoteServices?.listTargets() ?? []) grantFor(grant.target);
         const inspection = Promise.resolve(graph.inspect(inspect(), [...allowed.values()]));
-        if (!params.bootstrapTree || !entry.grant.capabilities.methods.includes('runtime.snapshot')
+        if (!params.bootstrapTree || entry.treeBootstrapStarted || !entry.grant.capabilities.methods.includes('runtime.snapshot')
           || !graph.grant.workspaceKeys.every(key => entry.grant.workspaceKeys.includes(key))) return inspection;
+        // Only the first opt-in inspection on this attachment owns a startup token.
+        entry.treeBootstrapStarted = true;
         const view = snapshots(entry);
         let first;
         let keep = false;
+        let abandoned = false;
         const loadPages = async () => {
           const snapshot = await view;
           first = await snapshot.page({ collection: 'harnesses', limit: 200 });
+          if (abandoned) return undefined;
           const token = first.token;
           const remaining = await Promise.allSettled([
             snapshot.page({ collection: 'workspaces', token, limit: 200 }),
@@ -240,17 +245,28 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
           if (remaining.some(page => page.status === 'rejected')) return undefined;
           return [first, ...remaining.map(page => page.value)];
         };
+        const loaded = loadPages().catch(() => undefined);
+        let timer;
+        const budget = new Promise(resolve => { timer = setTimeout(resolve, TREE_BOOTSTRAP_BUDGET_MS); });
+        const optionalPages = Promise.race([loaded, budget]);
         try {
-          const [base, pages] = await Promise.allSettled([inspection, loadPages()]);
+          const base = await inspection;
+          const pages = await optionalPages;
           entry.current();
-          if (base.status === 'rejected') throw base.reason;
-          if (pages.status === 'rejected' || !pages.value || signal.aborted) return base.value;
-          const result = { ...base.value, treeBootstrap: pages.value };
-          if (Buffer.byteLength(JSON.stringify(result)) > LIMITS.jsonBytes - 4096) return base.value;
+          if (!pages || signal.aborted) return base;
+          const result = { ...base, treeBootstrap: pages };
+          if (Buffer.byteLength(JSON.stringify(result)) > LIMITS.jsonBytes - 4096) return base;
           keep = true;
           return result;
         } finally {
-          if (first && !keep) await (await view).release({ token: first.token }).catch(() => {});
+          clearTimeout(timer);
+          // A slow store request may still create a token after plain inspection has returned.
+          if (!keep) {
+            abandoned = true;
+            void loaded.then(async () => {
+              if (first) await (await view).release({ token: first.token });
+            }).catch(() => {});
+          }
         }
       }
       case 'runtime.target.attach': {
