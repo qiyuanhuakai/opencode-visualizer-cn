@@ -388,32 +388,36 @@ function createLivenessToken() {
  * process would exit immediately after claiming ownership, since a signal listener does not
  * keep the event loop alive. Every terminating path (SIGINT, SIGTERM, an unexpected error, or
  * an explicit `close()`) releases the on-disk fence before the process ends.
+ *
+ * The terminating signal handlers are registered BEFORE the ownership line is published and
+ * before the store is even opened, and that order is a contract rather than a style choice:
+ * publishing ownership makes the role observable to anything watching for it (the QA lane
+ * kills the process the instant it sees the line), so a handler registered after the line
+ * leaves a window in which SIGINT still carries its default disposition — the process dies
+ * without releasing the fence, orphaning the single-owner lock on disk. Registering first
+ * makes every signal after startup graceful regardless of when it arrives.
  */
 export async function runControlStoreCommand(options, dependencies = {}) {
   const stateRoot = options.stateRoot ?? dependencies.stateRoot;
   if (!stateRoot) throw new Error('vis_bridge control-store requires --state-root or VIS_BRIDGE_CONTROL_STORE_ROOT.');
   const environmentId = options.environmentId ?? dependencies.environmentId;
   if (!environmentId) throw new Error('vis_bridge control-store requires an environment id (--environment).');
-  const { createSlurmControlStore } = await import('./runtime/transports/slurmControlStore.js');
-  const store = createSlurmControlStore({
-    root: stateRoot,
-    environmentId,
-    ownerInstanceId: dependencies.ownerInstanceId ?? `control-store-${process.pid}`,
-  });
-  const status = await store.open('owner');
-  console.log(
-    `vis_bridge control-store owns environment ${status.environmentId} at ${status.root} (epoch ${status.epoch}).`,
-  );
 
   const liveness = createLivenessToken();
+  // Assigned once the store module is imported; a signal that arrives before then
+  // finds it null and exits with nothing to release (the fence was never acquired).
+  let store = null;
   let released = false;
   const releaseFence = async () => {
     if (released) return;
     released = true;
     liveness.release();
-    await store.close();
+    if (store !== null) await store.close();
   };
   const exitAfterRelease = (code) => {
+    // Absorb repeat signals first: a second SIGINT during the fence write would
+    // otherwise terminate the process mid-release and orphan the fence.
+    absorbRepeatSignals();
     void releaseFence().then(
       () => process.exit(code),
       () => process.exit(1),
@@ -435,10 +439,52 @@ export async function runControlStoreCommand(options, dependencies = {}) {
     process.off('unhandledRejection', onUnhandledRejection);
   };
 
-  process.once('SIGINT', onSignal);
-  process.once('SIGTERM', onSignal);
-  process.once('uncaughtException', onFatalError);
-  process.once('unhandledRejection', onUnhandledRejection);
+  // Registered before the store opens and before ownership is published, so no signal that
+  // arrives after startup can hit the default disposition. A repeat signal during the release
+  // is absorbed rather than allowed to terminate the process mid-release: with `once`, a
+  // second SIGINT while the fence write is in flight would kill the process before the fence
+  // is released, which is the same orphaned-fence outcome this ordering prevents.
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+  process.on('uncaughtException', onFatalError);
+  process.on('unhandledRejection', onUnhandledRejection);
+  const absorbRepeatSignals = () => {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
+    process.on('SIGINT', () => {});
+    process.on('SIGTERM', () => {});
+  };
+
+  // The timer and the handlers above are registered BEFORE ownership is published — that
+  // ordering is what makes the signal fix work — so any failure in import/create/open must
+  // reclaim them. The referenced interval has a 2,147,483,647 ms period with no natural
+  // exit, and the rejection only reaches `main`'s catch (which sets `process.exitCode`), so
+  // it never trips the unhandledRejection release path: without this cleanup the CLI prints
+  // the error and then stays resident forever, leaving a supervisor with a process that has
+  // already errored but never exits. The fence was never published on this path, but
+  // `releaseFence` is the single reclamation rule for this phase — it clears the timer and
+  // closes a store that may have opened partially — and its own failure must not replace the
+  // original error the caller needs to see.
+  try {
+    const { createSlurmControlStore } = await import('./runtime/transports/slurmControlStore.js');
+    store = createSlurmControlStore({
+      root: stateRoot,
+      environmentId,
+      ownerInstanceId: dependencies.ownerInstanceId ?? `control-store-${process.pid}`,
+    });
+    const status = await store.open('owner');
+    console.log(
+      `vis_bridge control-store owns environment ${status.environmentId} at ${status.root} (epoch ${status.epoch}).`,
+    );
+  } catch (error) {
+    removeLivenessListeners();
+    try {
+      await releaseFence();
+    } catch {
+      // Reclaiming the timer and listeners must not mask the initialisation failure.
+    }
+    throw error;
+  }
 
   return {
     store,
