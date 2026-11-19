@@ -15,6 +15,7 @@ import {
   parseSessionRef,
 } from '../../shared/runtime/identity.js';
 import {
+  ProtocolError,
   objectFields,
   textValue,
   jsonValue,
@@ -42,8 +43,10 @@ it('binds actual writer execution to its Git worktree, reviews immutable bytes, 
   const originalHead = git('rev-parse', 'HEAD'),
     branch = git('branch', '--show-current');
   const nativeDirectories = new Map<string, string>([['owner', repository]]),
-    executedDirectories: string[] = [];
+    executedDirectories: string[] = [],
+    nativeSends: Array<{ sessionId: string; operationId: string }> = [];
   let owner: ReturnType<typeof parseSessionRef> | undefined;
+  let rejectNativeSend = false;
   const factory: RuntimeDriverFactory = async (context) => {
     const identity = {
       environmentId: parseEnvironmentId(context.environmentId),
@@ -120,6 +123,7 @@ it('binds actual writer execution to its Git worktree, reviews immutable bytes, 
             return result;
           },
           send: async (input) => {
+            if (rejectNativeSend) throw new ProtocolError('source_unavailable', 'fixture.native_send');
             if (!input.session) throw new Error('Missing session');
             const session = input.session;
             const params = objectFields(input.params, ['idempotencyKey', 'native']);
@@ -135,6 +139,7 @@ it('binds actual writer execution to its Git worktree, reviews immutable bytes, 
               idempotencyKey: textValue(params.idempotencyKey, 'key'),
               payload: jsonValue(params.native),
             });
+            nativeSends.push({ sessionId: session.nativeSessionId, operationId: accepted.operationId });
             const result = await journal.execute(accepted.operationId, scope, () => {
               const cwd = nativeDirectories.get(session.nativeSessionId);
               if (!cwd) throw new Error('Missing native cwd');
@@ -216,7 +221,9 @@ it('binds actual writer execution to its Git worktree, reviews immutable bytes, 
     objectFields(dispatched.attempt, [], Object.keys(dispatched.attempt ?? {})).attemptId,
     'attemptId',
   );
-  await mutate('collaboration', 'send', { attemptId });
+  expect(dispatched.attempt).toMatchObject({ accepted: true, sent: false, observed: false });
+  const sent = await mutate('collaboration', 'send', { attemptId });
+  expect(sent.attempt).toMatchObject({ attemptId, sent: true, observed: false, terminal: false });
   expect(
     await read('collaboration', 'taskDetails', { taskId: task.taskId, limit: 1 }),
   ).toMatchObject({
@@ -235,6 +242,32 @@ it('binds actual writer execution to its Git worktree, reviews immutable bytes, 
     state: 'review',
     owner: { session: { nativeSessionId: expect.not.stringMatching(/^owner$/) } },
   });
+  const dispatchedTask = await read('collaboration', 'task', { taskId: task.taskId });
+  expect(nativeSends).toEqual([{
+    sessionId: (dispatchedTask as { owner: { session: { nativeSessionId: string } } }).owner.session.nativeSessionId,
+    operationId: expect.any(String),
+  }]);
+
+  const missingTask = await mutate('collaboration', 'createTask', {
+    teamId: team.teamId,
+    title: 'Unavailable owner',
+    criteria: [{ id: 'delivery', text: 'Deliver the prompt', required: true }],
+    owner: { participantId: randomUUID(), session: owner },
+  });
+  const missingDispatch = await mutate('collaboration', 'dispatch', { taskId: missingTask.taskId });
+  const missingAttemptId = textValue(
+    objectFields(missingDispatch.attempt, [], Object.keys(missingDispatch.attempt ?? {})).attemptId,
+    'attemptId',
+  );
+  rejectNativeSend = true;
+  await expect(mutate('collaboration', 'send', { attemptId: missingAttemptId })).rejects.toMatchObject({
+    code: 'source_unavailable',
+    field: 'attempt_send',
+  });
+  expect(await read('collaboration', 'attempt', { attemptId: missingAttemptId })).toMatchObject({ sent: false, observed: false });
+  expect(nativeSends).toHaveLength(1);
+  rejectNativeSend = false;
+
   const captured = await mutate('artifact', 'capture', { leaseId: lease.leaseId });
   expect(
     await read('artifact', 'entries', { artifactHash: captured.artifactHash, limit: 1 }),
