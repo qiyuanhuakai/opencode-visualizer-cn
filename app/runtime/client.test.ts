@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { gzipSync } from 'node:zlib';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -92,7 +93,7 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     const { client, socket } = await fixture();
     const inspected = client.inspect(true);
     const extended = await socket.next();
-    expect(extended).toMatchObject({ method: 'runtime.inspect', params: { bootstrapTree: true } });
+    expect(extended).toMatchObject({ method: 'runtime.inspect', params: { bootstrapTree: true, bootstrapEncoding: 'gzip' } });
     socket.frame({ version: 1, kind: 'result', target, epoch: extended.epoch, generation: extended.generation,
       id: extended.id, ok: false, typedError: { code: 'invalid_request', message: 'invalid_request: fields' } });
     const legacy = await socket.next();
@@ -105,8 +106,11 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     const inspected = client.inspect(true);
     const page = { kind: 'snapshot', version: 1, target, epoch: hello.epoch, generation: hello.generation,
       token: 'bootstrap', revision: 10, watermark: 4, expiresAt: Date.now() + 60000, items: [], cursor: null };
-    socket.reply(await socket.next(), { ...inspection, treeBootstrap: [page, page, page] });
-    await inspected;
+    const payload = Buffer.from(JSON.stringify([page, page, page]));
+    socket.reply(await socket.next(), { ...inspection,
+      treeBootstrapGzip: { data: gzipSync(payload).toString('base64'), bytes: payload.length },
+    });
+    await expect(inspected).resolves.toEqual(inspection);
     const order: string[] = [];
     const paging = client.snapshot(target, ['harnesses', 'workspaces', 'session_summaries'], {
       initialSummaryLimit: 32,

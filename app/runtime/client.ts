@@ -31,7 +31,21 @@ function reserved(method: RuntimeMethod) {
 
 async function decodeStartupPages(compressed: { readonly data: string; readonly bytes: number }) {
   const compressedBytes = Uint8Array.from(atob(compressed.data), byte => byte.charCodeAt(0));
-  const reader = new Blob([compressedBytes]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+  // Feed the decompressor in bounded increments even if the peer supplies
+  // an invalid declared size smaller than the represented pages.
+  let inputOffset = 0;
+  const source = new ReadableStream<Uint8Array<ArrayBuffer>>({
+    pull(controller) {
+      if (inputOffset === compressedBytes.length) {
+        controller.close();
+        return;
+      }
+      const next = Math.min(inputOffset + 4096, compressedBytes.length);
+      controller.enqueue(compressedBytes.subarray(inputOffset, next));
+      inputOffset = next;
+    },
+  });
+  const reader = source.pipeThrough(new DecompressionStream('gzip')).getReader();
   const output = new Uint8Array(compressed.bytes);
   let size = 0;
   try {
