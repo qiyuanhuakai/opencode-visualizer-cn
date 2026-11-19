@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseConnectionProfileId, parseSessionRef } from '../../shared/runtime/identity.js';
 import type { ConnectionProfileId, EnvironmentId, HarnessInstanceId, SessionRef } from '../../shared/runtime/identity.js';
 import { useRuntimeMessageSend } from './useRuntimeMessageSend';
+import type { RuntimeTurnLifecycle } from './useRuntimeMessageSend';
 import { createFakeCapture, createFakeRuntimeActionClient } from './runtimeActions.test-helpers';
 
 const PROFILE: ConnectionProfileId = parseConnectionProfileId('33333333-3333-4333-8333-333333333333');
@@ -15,10 +16,10 @@ const HARNESS_B = '10000000-0000-4000-8000-000000000002' as HarnessInstanceId;
 const SESSION_A: SessionRef = parseSessionRef({ environmentId: ENV_A, harnessInstanceId: HARNESS_A, nativeSessionId: 'shared-native-id' });
 const SESSION_B: SessionRef = parseSessionRef({ environmentId: ENV_B, harnessInstanceId: HARNESS_B, nativeSessionId: 'shared-native-id' });
 
-function context(client: ReturnType<typeof createFakeRuntimeActionClient>, session: SessionRef = SESSION_A) {
+function context(client: ReturnType<typeof createFakeRuntimeActionClient>, session: SessionRef = SESSION_A, turnLifecycle?: RuntimeTurnLifecycle) {
   const { capture, uiCurrent } = createFakeCapture(client.client.scope(session.environmentId), PROFILE, session);
   return {
-    ctx: { client: client.asClient(), profileId: PROFILE, capture: () => capture },
+    ctx: { client: client.asClient(), profileId: PROFILE, capture: () => capture, ...(turnLifecycle ? { turnLifecycle } : {}) },
     capture,
     uiCurrent,
   };
@@ -152,6 +153,23 @@ describe('useRuntimeMessageSend — active turn owner vs queued receipt (review 
     });
   }
 
+  /** The turn-lifecycle seam. A turn's terminal notification is the ONLY thing that retires an
+   * owner: a send RPC's acknowledgment is not a completion (review P2-2). */
+  function createTurnLifecycle() {
+    const listeners = new Set<(terminal: Readonly<{ operationId: string }>) => void>();
+    return {
+      lifecycle: {
+        onTerminal(listener: (terminal: Readonly<{ operationId: string }>) => void) {
+          listeners.add(listener);
+          return () => { listeners.delete(listener); };
+        },
+      } satisfies RuntimeTurnLifecycle,
+      terminate(operationId: string) {
+        for (const listener of Array.from(listeners)) listener({ operationId });
+      },
+    };
+  }
+
   function lastCancel(client: ReturnType<typeof createFakeRuntimeActionClient>) {
     const call = client.calls.at(-1);
     if (!call || call.kind !== 'mutate' || call.method !== 'session.cancel') {
@@ -181,14 +199,21 @@ describe('useRuntimeMessageSend — active turn owner vs queued receipt (review 
 
   it('retires the active owner once that turn finishes', async () => {
     const client = createFakeRuntimeActionClient([ENV_A]);
-    const { ctx } = context(client);
+    const { lifecycle, terminate } = createTurnLifecycle();
+    const { ctx } = context(client, SESSION_A, lifecycle);
     const send = useRuntimeMessageSend(ctx);
 
     send.send(SESSION_A, { text: 'running turn' });
     await settleMicrotasks();
+    // The send RPC's acknowledgment is NOT the turn's end: the real session keeps the operation
+    // active until its terminal notification, so the owner survives it.
     expect(client.settle()).toBe(true);
     await settleMicrotasks();
+    send.cancelTurn(SESSION_A);
+    expect(lastCancel(client).params.args).toMatchObject({ operationId: 'op-1' });
 
+    // The turn's terminal notification is what retires the owner.
+    terminate('op-1');
     send.cancelTurn(SESSION_A);
     // The finished turn owns nothing, so no stale operationId is carried into the cancel.
     expect(lastCancel(client).params.args).toEqual({});
@@ -196,7 +221,8 @@ describe('useRuntimeMessageSend — active turn owner vs queued receipt (review 
 
   it('keeps a queued receipt from stealing the owner of a still-running turn', async () => {
     const client = createFakeRuntimeActionClient([ENV_A]);
-    const { ctx } = context(client);
+    const { lifecycle, terminate } = createTurnLifecycle();
+    const { ctx } = context(client, SESSION_A, lifecycle);
     const send = useRuntimeMessageSend(ctx);
 
     send.send(SESSION_A, { text: 'running turn' });
@@ -209,9 +235,48 @@ describe('useRuntimeMessageSend — active turn owner vs queued receipt (review 
     send.cancelTurn(SESSION_A);
     expect(lastCancel(client).params.args).toMatchObject({ operationId: 'op-1' });
 
-    // And the running turn is still the owner after it completes.
+    // And the running turn is still the owner after its send RPC is acknowledged: an
+    // acknowledgment is not a completion, so the queued receipts behind it never take over.
     expect(client.settle()).toBe(true);
     await settleMicrotasks();
+    send.cancelTurn(SESSION_A);
+    expect(lastCancel(client).params.args).toMatchObject({ operationId: 'op-1' });
+
+    // Only the turn's terminal notification retires it.
+    terminate('op-1');
+    send.cancelTurn(SESSION_A);
+    expect(lastCancel(client).params.args).toEqual({});
+  });
+
+  it('moves the owner to a queued send once the queue promotes it to the active turn', async () => {
+    const client = createFakeRuntimeActionClient([ENV_A]);
+    const { lifecycle, terminate } = createTurnLifecycle();
+    const { ctx } = context(client, SESSION_A, lifecycle);
+    const send = useRuntimeMessageSend(ctx);
+
+    // Given a running turn and a message queued behind it.
+    send.send(SESSION_A, { text: 'running turn' });
+    await settleMicrotasks();
+    const queued = send.queue(SESSION_A, { text: 'promoted next' });
+    await settleMicrotasks();
+    send.cancelTurn(SESSION_A);
+    expect(lastCancel(client).params.args).toMatchObject({ operationId: 'op-1' });
+
+    // When the queue promotes it, its own send RPC is issued and it becomes the active turn.
+    expect(client.settle()).toBe(true);
+    await settleMicrotasks();
+    send.cancelTurn(SESSION_A);
+    expect(lastCancel(client).params.args).toMatchObject({ operationId: 'op-1' });
+
+    expect(client.settle()).toBe(true);
+    await settleMicrotasks();
+    await queued.executed;
+    await settleMicrotasks();
+    send.cancelTurn(SESSION_A);
+    expect(lastCancel(client).params.args).toMatchObject({ operationId: 'op-2' });
+
+    // And that promoted turn's own terminal notification retires it.
+    terminate('op-2');
     send.cancelTurn(SESSION_A);
     expect(lastCancel(client).params.args).toEqual({});
   });

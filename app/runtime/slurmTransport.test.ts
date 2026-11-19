@@ -940,3 +940,165 @@ describe('i4: a handshake that never completes settles instead of hanging', () =
     await transport.close();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PR #183 re-review (P2): the first business frame after the three-way handshake
+// was silently dropped when it shared a read block with the confirm.
+//
+// `attach` registered the connection's consumer from `ready.then` — one microtask
+// after the confirm settled the compute channel's readiness — while `onData`
+// dispatches every frame of a read block synchronously. A legal login writes the
+// confirm, completes its own readiness, and can immediately send business data;
+// the pipe/socket can merge the confirm and that frame into ONE read, so the
+// frame dispatched while `dataHandlers` was still empty and was dropped: the
+// connection counted as established while the consumer only ever saw later
+// frames. This is normal legal peer timing, not an attack. The cases below
+// substitute the server/socket for EventEmitters and drive the REAL relay,
+// handshake and codec; none of them waits on a timer.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A compute-relay endpoint whose server and accepted socket are EventEmitters. The login
+ * side is a REAL relay channel whose writes are captured, so the test decides when — and
+ * in which read blocks — the compute side receives them; the compute→login direction (the
+ * ack) is delivered immediately, exactly as a linked pair would.
+ */
+function relayEndpoint() {
+  const server = new EventEmitter() as EventEmitter & {
+    listen: (target: unknown, callback: () => void) => void;
+    close: (callback: () => void) => void;
+    address: () => null;
+  };
+  server.listen = (_target: unknown, callback: () => void) => {
+    callback();
+  };
+  server.close = (callback: () => void) => {
+    callback();
+  };
+  server.address = () => null;
+
+  const loginStream = duplex();
+  const computeSocket = duplex();
+  const loginWrites: Buffer[] = [];
+  loginStream.write = (chunk: Buffer) => {
+    loginWrites.push(Buffer.from(chunk));
+    return true;
+  };
+  computeSocket.write = (chunk: Buffer) => {
+    loginStream.push(chunk);
+    return true;
+  };
+  return { server, loginStream, computeSocket, loginWrites };
+}
+
+describe('P2: the first business frame sharing a read block with the confirm is never dropped', () => {
+  it('delivers the first business frame merged into one read with the confirm', async () => {
+    const { server, loginStream, computeSocket, loginWrites } = relayEndpoint();
+    const relay = createComputeRelay({
+      handshake: handshake(),
+      mode: 'local-socket',
+      socketPath: path.join(await temporaryDirectory('vis-relay-merged-'), 'relay.sock'),
+      createServer: () => server,
+    });
+    await relay.listen();
+
+    // The business consumer registers exactly as production does: through onConnection.
+    const received: string[] = [];
+    relay.onConnection((channel: { onData(handler: (payload: Buffer) => void): void }) => {
+      channel.onData((payload) => received.push(payload.toString('utf8')));
+    });
+    server.emit('connection', computeSocket);
+
+    const login = createRelayChannel(loginStream, { handshake: handshake(), role: 'login', timeoutMs: 400 });
+    // hello/ack: the login's constructor writes the hello, the compute channel answers the
+    // ack, and the login verifies it and writes its confirm — the login is ready from then.
+    computeSocket.push(loginWrites.shift()!);
+    expect(loginWrites).toHaveLength(1);
+
+    // A legal peer follows the confirm with business data immediately: the pipe/socket can
+    // merge both frames into ONE read. The confirm itself is what registers this
+    // connection's consumer, so the frame must survive the same synchronous dispatch pass.
+    login.sendData(Buffer.from('first'));
+    computeSocket.push(Buffer.concat([loginWrites.shift()!, loginWrites.shift()!]));
+
+    // The next frame arrives after the microtask that settles the handshake promise.
+    await Promise.resolve();
+    login.sendData(Buffer.from('second'));
+    computeSocket.push(loginWrites.shift()!);
+
+    expect({ connectionCount: relay.connectionCount(), received }).toEqual({ connectionCount: 1, received: ['first', 'second'] });
+    login.close();
+    await relay.close();
+  });
+
+  it('delivers both frames when the confirm and the data frame arrive split across read blocks', async () => {
+    const { server, loginStream, computeSocket, loginWrites } = relayEndpoint();
+    const relay = createComputeRelay({
+      handshake: handshake(),
+      mode: 'local-socket',
+      socketPath: path.join(await temporaryDirectory('vis-relay-chunked-'), 'relay.sock'),
+      createServer: () => server,
+    });
+    await relay.listen();
+
+    const received: string[] = [];
+    relay.onConnection((channel: { onData(handler: (payload: Buffer) => void): void }) => {
+      channel.onData((payload) => received.push(payload.toString('utf8')));
+    });
+    server.emit('connection', computeSocket);
+
+    const login = createRelayChannel(loginStream, { handshake: handshake(), role: 'login', timeoutMs: 400 });
+    computeSocket.push(loginWrites.shift()!);
+    const confirm = loginWrites.shift()!;
+    login.sendData(Buffer.from('first'));
+    const first = loginWrites.shift()!;
+    // The same bytes the merged case delivers, split mid-frame across two reads with no
+    // timer in between: the confirm plus three bytes of the data frame, then the rest.
+    const block = Buffer.concat([confirm, first]);
+    computeSocket.push(block.subarray(0, confirm.length + 3));
+    computeSocket.push(block.subarray(confirm.length + 3));
+
+    // A later frame still arrives in order after the split reassembly.
+    login.sendData(Buffer.from('second'));
+    computeSocket.push(loginWrites.shift()!);
+
+    expect({ connectionCount: relay.connectionCount(), received }).toEqual({ connectionCount: 1, received: ['first', 'second'] });
+    login.close();
+    await relay.close();
+  });
+
+  it('delivers the first frame a legal login sends immediately after its own ready', async () => {
+    const { server, loginStream, computeSocket, loginWrites } = relayEndpoint();
+    const relay = createComputeRelay({
+      handshake: handshake(),
+      mode: 'local-socket',
+      socketPath: path.join(await temporaryDirectory('vis-relay-ready-'), 'relay.sock'),
+      createServer: () => server,
+    });
+    await relay.listen();
+
+    const received: string[] = [];
+    relay.onConnection((channel: { onData(handler: (payload: Buffer) => void): void }) => {
+      channel.onData((payload) => received.push(payload.toString('utf8')));
+    });
+    server.emit('connection', computeSocket);
+
+    const login = createRelayChannel(loginStream, { handshake: handshake(), role: 'login', timeoutMs: 400 });
+    computeSocket.push(loginWrites.shift()!);
+    // The producer contract: the login sends its first business frame the moment its own
+    // handshake completes, with nothing in between. The confirm and that frame reach the
+    // relay in one read block, so the relay's consumer registration must not depend on the
+    // producer's timing.
+    await login.ready;
+    login.sendData(Buffer.from('first'));
+    computeSocket.push(Buffer.concat([loginWrites.shift()!, loginWrites.shift()!]));
+
+    await Promise.resolve();
+    login.sendData(Buffer.from('second'));
+    computeSocket.push(loginWrites.shift()!);
+
+    expect({ connectionCount: relay.connectionCount(), received }).toEqual({ connectionCount: 1, received: ['first', 'second'] });
+    login.close();
+    await relay.close();
+  });
+});

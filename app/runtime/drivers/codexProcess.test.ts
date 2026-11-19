@@ -460,3 +460,112 @@ describe('Codex oversized stale frame cannot enter a new raw sink (review round 
     }
   }, 30000);
 });
+
+/** Controlled-stdio stand-in for the reviewer's independent re-review finding P2-1. A cancelled raw
+ * read's OVERSIZED response is withheld; a plain `history` flushes the held queue in order and then
+ * answers itself, so a SMALL read completes normally in between; a third oversized read is then
+ * issued. The abandoned id must be retired by the drain that consumes its frame, or the third
+ * read's only response is drained away with neither data nor an error reaching its waiter. */
+describe('Codex abandoned id is retired by the drain that consumes its frame (review P2-1)', () => {
+  async function spawnFixture() {
+    const { createCodexProcess } =
+      await import('../../../bridge/runtime/drivers/codexProcess.js');
+    const dir = await mkdtemp(path.join(tmpdir(), 'vis-codex-stale-owner-'));
+    const script = path.join(dir, 'app-server.mjs');
+    await writeFile(script, OVERSIZED_STALE_FIXTURE, 'utf8');
+    const proc = createCodexProcess({ executable: process.execPath, args: [script] });
+    return { proc, dir };
+  }
+
+  async function waitFor(predicate: () => boolean, label: string, deadlineMs = 15000): Promise<void> {
+    const deadline = Date.now() + deadlineMs;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error(`${label} was not reached`);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  /** Parks a raw read on `next()`, waits until the app-server has withheld its response, cancels it. */
+  async function parkAndCancel(proc: CodexProcess, id: number, bytes: number) {
+    const requestRaw = proc.requestRaw;
+    if (!requestRaw) throw new TypeError('missing raw transport');
+    const stale = requestRaw(
+      JSON.stringify({ id, method: 'history', params: { hold: true, bytes } }),
+      id,
+    );
+    const iterator = stale[Symbol.asyncIterator]();
+    void iterator.next().catch(() => {});
+    await waitFor(() => proc.inspection().stderrBytes > 0, 'held history response');
+    stale.cancel?.();
+  }
+
+  async function collect(raw: AsyncIterable<Uint8Array>): Promise<Buffer[]> {
+    const parts: Buffer[] = [];
+    for await (const chunk of raw) parts.push(Buffer.from(chunk));
+    return parts;
+  }
+
+  it('serves a third oversized raw read after a cancel, a drained stale frame and a small read', async () => {
+    const { proc, dir } = await spawnFixture();
+    const lines: string[] = [];
+    proc.subscribe(
+      (line) => lines.push(line),
+      () => {},
+    );
+    try {
+      const requestRaw = proc.requestRaw;
+      if (!requestRaw) throw new TypeError('missing raw transport');
+
+      // Given a cancelled raw read whose OVERSIZED response is withheld.
+      await parkAndCancel(proc, 1, OVERSIZED);
+
+      // When a SMALL read completes normally: the withheld >4 MiB id=1 frame arrives first and is
+      // drained, then id=2's own small frame completes the read.
+      const second = requestRaw(
+        JSON.stringify({ id: 2, method: 'history', params: { bytes: 64 } }),
+        2,
+      );
+      const secondFrame = JSON.parse(Buffer.concat(await collect(second)).toString('utf8')) as {
+        id: number;
+        result: { data: Array<{ item: { id: string; payload: string } }> };
+      };
+      expect(secondFrame.id).toBe(2);
+      expect(secondFrame.result.data[0].item.payload).toHaveLength(64);
+
+      // And a THIRD oversized read is issued: its response is the only one it will ever get.
+      const third = requestRaw(
+        JSON.stringify({ id: 3, method: 'history', params: { bytes: OVERSIZED } }),
+        3,
+      );
+      const settled = await Promise.race([
+        collect(third).then(
+          (parts) => ({ settled: 'data' as const, frame: Buffer.concat(parts).toString('utf8') }),
+          (error: unknown) => ({ settled: 'error' as const, error }),
+        ),
+        new Promise<{ settled: 'hang' }>((resolve) =>
+          setTimeout(() => resolve({ settled: 'hang' }), 8000),
+        ),
+      ]);
+
+      // Then the third read settles with data or an explicit error. It must never be drained away
+      // with no data and no error, leaving its waiter parked and rawPending stuck true.
+      expect(settled.settled).not.toBe('hang');
+      expect(settled.settled).toBe('data');
+      if (settled.settled === 'data') {
+        const parsed = JSON.parse(settled.frame) as {
+          id: number;
+          result: { data: Array<{ item: { id: string; payload: string } }> };
+        };
+        expect(parsed.id).toBe(3);
+        expect(parsed.result.data[0].item.payload).toHaveLength(OVERSIZED);
+      }
+      expect(lines).toHaveLength(0);
+      expect(proc.inspection().failed).toBe(false);
+      await waitFor(() => proc.inspection().rawPending === false, 'third raw read released');
+      expect(proc.inspection().rawPending).toBe(false);
+    } finally {
+      await proc.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 40000);
+});

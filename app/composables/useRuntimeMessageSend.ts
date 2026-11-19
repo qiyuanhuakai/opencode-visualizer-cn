@@ -79,7 +79,24 @@ function sendArgs(input: RuntimeSendInput): Readonly<Record<string, JsonValue>> 
 }
 
 /** The context plus the optional harness kind that selects a real adapter (finding B). */
-export type RuntimeSendContext = RuntimeActionContext & Readonly<{ harnessKind?: HarnessKind }>;
+
+/**
+ * The turn-lifecycle seam a harness adapter supplies. A send RPC's ACKNOWLEDGMENT is not the turn's
+ * END: the real Codex session (`shared/runtime/native/codex/sessionOperations.js`) returns the
+ * execution result as soon as `turn/start` is acknowledged and keeps the operation ACTIVE until a
+ * later terminal notification, and `cancel` still requires the matching active operationId. An owner
+ * retired on the acknowledgment therefore leaves `cancelTurn` with no id to send, and the real cancel
+ * refuses it as `codex.cancel.owner`. Without this seam the owner is retired only when superseded,
+ * which is still sound: it is never dropped on an acknowledgment.
+ */
+export type RuntimeTurnLifecycle = Readonly<{
+  onTerminal(listener: (terminal: Readonly<{ operationId: string }>) => void): () => void;
+}>;
+
+export type RuntimeSendContext = RuntimeActionContext & Readonly<{
+  harnessKind?: HarnessKind;
+  turnLifecycle?: RuntimeTurnLifecycle | null;
+}>;
 
 export function useRuntimeMessageSend(ctx: RuntimeSendContext, adapter?: RuntimeSendAdapter | null) {
   const router = createSessionActionRouter(ctx);
@@ -100,26 +117,35 @@ export function useRuntimeMessageSend(ctx: RuntimeSendContext, adapter?: Runtime
     const bound = router.bind(session, capture);
     const mutation = router.mutate(bound, 'session.send', router.call(bound, args));
     const key = router.qualifiedKey(session);
-    // A queued receipt is NOT the active turn: it is a message waiting behind whatever is
-    // running. Recording it as the turn owner would make cancelTurn() cancel the QUEUE instead
-    // of stopping the turn the user is waiting on, so only a non-queued send becomes the owner.
-    if (args.queue !== true) {
-      mutation.accepted.then(
-        (receipt) => {
-          if (typeof receipt?.operationId === 'string' && receipt.operationId.length > 0) {
-            const operationId = receipt.operationId;
-            parents.set(key, operationId);
-            // The owner is retired by the turn's own completion, so a later cancel never carries a
-            // stale operationId into a session that is no longer running anything.
-            const retire = () => {
-              if (parents.get(key) === operationId) parents.delete(key);
-            };
-            void mutation.executed.then(retire, retire);
-          }
-        },
-        () => {},
-      );
-    }
+    const lifecycle = ctx.turnLifecycle ?? null;
+    mutation.accepted.then(
+      (receipt) => {
+        const operationId = receipt?.operationId;
+        if (typeof operationId !== 'string' || operationId.length === 0) return;
+        // A queued receipt is NOT the active turn: it is a message waiting behind whatever is
+        // running. Recording it as the turn owner would make cancelTurn() cancel the QUEUE instead
+        // of stopping the turn the user is waiting on, so only a non-queued send becomes the owner.
+        // A queued send claims the owner only once the queue PROMOTES it, which is when its own send
+        // RPC is finally issued and the operation becomes the session's active turn.
+        const claim = () => {
+          parents.set(key, operationId);
+          let unsubscribe: (() => void) | null = null;
+          // The owner is retired by the turn's own terminal notification, so a later cancel never
+          // carries a stale operationId into a session that is no longer running anything. The send
+          // RPC's acknowledgment is NOT that notification: it only means the request was accepted.
+          const retire = () => {
+            if (parents.get(key) === operationId) parents.delete(key);
+            unsubscribe?.();
+          };
+          unsubscribe = lifecycle?.onTerminal((terminal) => {
+            if (terminal.operationId === operationId) retire();
+          }) ?? null;
+        };
+        if (args.queue === true) void mutation.executed.then(claim, () => {});
+        else claim();
+      },
+      () => {},
+    );
     return mutation;
   }
 
