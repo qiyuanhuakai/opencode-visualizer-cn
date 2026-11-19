@@ -152,7 +152,13 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
   const [{ default: App }, { i18n }] = await Promise.all([import('../App.vue'), import('../i18n')]);
   const app = createApp(App);
   app.use(i18n);
-  cleanups.push(() => app.unmount());
+  let rendererMounted = true;
+  function unmountRenderer() {
+    if (!rendererMounted) return;
+    rendererMounted = false;
+    app.unmount();
+  }
+  cleanups.push(unmountRenderer);
   app.mount(element);
   await vi.waitFor(() => expectLogin(element));
   async function connect() {
@@ -180,7 +186,7 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
       result.click();
     }, { timeout: 10000 });
   }
-  return { element, endpoint, directory, workspaceTopology: () => services.index.topology({ collection: 'workspaces' }), environmentId: services.target, historyOpens, historyCloses, historyPages, nativeQueries, connect, select, unmount };
+  return { element, endpoint, directory, workspaceTopology: () => services.index.topology({ collection: 'workspaces' }), environmentId: services.target, historyOpens, historyCloses, historyPages, nativeQueries, frames: transport.frames, connect, select, unmountRenderer, unmount };
 }
 
 function expectLogin(element: HTMLElement) {

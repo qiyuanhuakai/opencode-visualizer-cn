@@ -1,67 +1,73 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { mountHistoryApp } from './test/appHarness';
+import { mountRuntimeApp } from './test/runtimeAppHarness';
 
-const mountedApps: Array<{ readonly unmount: () => void }> = [];
+const { dispose } = vi.hoisted(() => ({ dispose: vi.fn() }));
 
-beforeAll(async () => {
-  await import('./App.vue');
-});
+vi.mock('@xterm/xterm', () => ({
+  Terminal: class {
+    readonly options = {};
+    readonly buffer = { active: { baseY: 0, cursorY: 0, viewportY: 0 } };
+    readonly rows = 24;
+    readonly cols = 80;
+    open() {}
+    focus() {}
+    refresh() {}
+    resize() {}
+    write(_data: string | Uint8Array, callback?: () => void) { callback?.(); }
+    onData() { return { dispose: () => {} }; }
+    dispose = dispose;
+  },
+}));
 
-afterEach(() => {
-  mountedApps.splice(0).forEach(({ unmount }) => unmount());
-});
+beforeEach(() => dispose.mockClear());
 
-async function openShell(fixture: Awaited<ReturnType<typeof mountHistoryApp>>) {
-  const button = fixture.host.querySelector('.open-shell-button');
-  expect(button).toBeInstanceOf(HTMLButtonElement);
-  button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  await vi.waitFor(() => {
-    if (!fixture.host.querySelector('[data-floating-key="shell:pty-harness"]')) {
-      throw new Error('Shell window did not open');
-    }
+async function shellFixture() {
+  const fixture = await mountRuntimeApp([]);
+  await fixture.connect();
+  await fixture.select('Session A');
+  const button = await vi.waitFor(() => {
+    const candidate = fixture.element.querySelector<HTMLButtonElement>('.open-shell-button');
+    expect(candidate?.disabled).toBe(false);
+    return candidate!;
   });
+  const requests = (method: string) => fixture.frames.flatMap(frame => {
+    if (frame.direction !== 'send' || typeof frame.value !== 'object' || frame.value === null) return [];
+    const value = frame.value as { method?: string; params?: { ptyId?: string; command?: string } };
+    return value.method === method ? [value.params] : [];
+  });
+  const interactiveCreates = () => requests('runtime.pty.create').filter(params => !params?.command);
+  const removals = (id: string) => requests('runtime.pty.remove').filter(params => params?.ptyId === id);
+  const windows = () => fixture.element.querySelectorAll<HTMLElement>('[data-floating-key^="shell:"]');
+  return { ...fixture, button, requests, interactiveCreates, removals, windows };
 }
 
-describe('App PTY window ownership', () => {
-  it('Given duplicate real App shell actions, When one PTY id resolves, Then one terminal window is created and its close deletes that PTY', async () => {
-    const fixture = await mountHistoryApp([]);
-    mountedApps.push(fixture);
-    const button = fixture.host.querySelector('.open-shell-button');
-    expect(button).toBeInstanceOf(HTMLButtonElement);
+describe('App PTY window ownership through Bridge', () => {
+  it('coalesces repeated shell clicks while opening and removes the owned PTY on explicit close', async () => {
+    const fixture = await shellFixture();
+    fixture.button.click();
+    fixture.button.click();
+    await vi.waitFor(() => expect(fixture.windows()).toHaveLength(1));
+    expect(fixture.interactiveCreates()).toHaveLength(1);
 
-    button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await vi.waitFor(() =>
-      expect(fixture.host.querySelectorAll('[data-floating-key="shell:pty-harness"]')).toHaveLength(
-        1,
-      ),
-    );
+    const window = fixture.windows()[0]!;
+    const id = window.dataset.floatingKey!.slice('shell:'.length);
+    window.querySelector<HTMLButtonElement>('[aria-label="Close window"]')!.click();
+    await vi.waitFor(() => {
+      expect(fixture.windows()).toHaveLength(0);
+      expect(fixture.removals(id)).toEqual([{ ptyId: id }]);
+    });
+    expect(dispose).toHaveBeenCalled();
+  }, 15000);
 
-    expect(fixture.terminalInstances).toHaveLength(1);
-    const close = fixture.host.querySelector(
-      '[data-floating-key="shell:pty-harness"] [aria-label="Close window"]',
-    );
-    expect(close).toBeInstanceOf(HTMLButtonElement);
-    close?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-
-    await vi.waitFor(() =>
-      expect(fixture.host.querySelector('[data-floating-key="shell:pty-harness"]')).toBeNull(),
-    );
-    expect(fixture.deletePty).toHaveBeenCalledOnce();
-    expect(fixture.deletePty).toHaveBeenCalledWith('pty-harness', '/repo');
-    expect(fixture.terminalInstances[0]?.disposed).toBe(true);
-  });
-
-  it('Given a real App shell window, When the renderer unmounts, Then its terminal closes without deleting the backend PTY', async () => {
-    const fixture = await mountHistoryApp([]);
-    mountedApps.push(fixture);
-    await openShell(fixture);
-
-    mountedApps.pop();
-    fixture.unmount();
-
-    expect(fixture.terminalInstances[0]?.disposed).toBe(true);
-    expect(fixture.deletePty).not.toHaveBeenCalled();
-  });
+  it('disposes the renderer terminal without sending a request to remove the backend PTY', async () => {
+    const fixture = await shellFixture();
+    fixture.button.click();
+    await vi.waitFor(() => expect(fixture.windows()).toHaveLength(1));
+    await vi.waitFor(() => expect(fixture.requests('runtime.channel.open')).toHaveLength(1));
+    const id = fixture.windows()[0]!.dataset.floatingKey!.slice('shell:'.length);
+    fixture.unmountRenderer();
+    expect(dispose).toHaveBeenCalled();
+    expect(fixture.removals(id)).toEqual([]);
+  }, 15000);
 });

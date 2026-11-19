@@ -7143,6 +7143,8 @@ async function restoreShellSessions() {
   }
 }
 
+let openingInteractiveShell = false;
+
 async function openShellFromInput(input: string) {
   if (!ptySupported.value) {
     setSendStatusKey('app.error.shellFailed', {
@@ -7150,9 +7152,11 @@ async function openShellFromInput(input: string) {
     });
     return false;
   }
+  const script = input.trim();
+  const hasCommand = script.length > 0;
+  if (!hasCommand && openingInteractiveShell) return true;
+  if (!hasCommand) openingInteractiveShell = true;
   try {
-    const script = input.trim();
-    const hasCommand = script.length > 0;
     const pty = hasCommand
       ? await createPtySession('/bin/sh', ['-c', script])
       : await createPtySession();
@@ -7165,6 +7169,8 @@ async function openShellFromInput(input: string) {
   } catch (error) {
     setSendStatusKey('app.error.shellFailed', { message: toErrorMessage(error) });
     return false;
+  } finally {
+    if (!hasCommand) openingInteractiveShell = false;
   }
 }
 
