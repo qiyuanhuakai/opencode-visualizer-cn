@@ -39,7 +39,7 @@ vi.mock('../composables/useGlobalEvents', () => ({ useGlobalEvents: () => ({
 type NativeHistory = Readonly<{ info: Readonly<Record<string, JsonValue>>; parts: readonly JsonValue[] }>;
 
 /** Real App + TCP/WebSocket + production Runtime/SQLite, controlled native harness boundary. */
-export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
+export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; bridgeToken?: string; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
   // Load the Node worker owner without Vite's browser asset URL rewriting.
   // The worker itself still runs the production module in a real subprocess.
   const requireNodeModule = createRequire(path.resolve(process.cwd(), 'package.json'));
@@ -134,7 +134,7 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
   cleanups.push(() => host.stop());
   host.start();
   const bridge = createBridgeRuntime({ nativeSupervisor: supervisor, acpManager: acp });
-  const server = createVisBridgeServer({ host: '127.0.0.1', path: '/codex', target: 'ws://127.0.0.1:1', runtime: { ...bridge, getRuntimeHost: async () => host } });
+  const server = createVisBridgeServer({ host: '127.0.0.1', path: '/codex', target: 'ws://127.0.0.1:1', bridgeToken: options.bridgeToken, runtime: { ...bridge, getRuntimeHost: async () => host } });
   cleanups.push(async () => { await host.stop(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
@@ -161,12 +161,18 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
   cleanups.push(unmountRenderer);
   app.mount(element);
   await vi.waitFor(() => expectLogin(element));
-  async function connect() {
+  async function submitBridgeLogin(token = options.bridgeToken ?? '') {
     const input = element.querySelector<HTMLInputElement>('#bridge-url')!;
     input.value = endpoint;
     input.dispatchEvent(new Event('input', { bubbles: true }));
+    const tokenInput = element.querySelector<HTMLInputElement>('#bridge-token')!;
+    tokenInput.value = token;
+    tokenInput.dispatchEvent(new Event('input', { bubbles: true }));
     await nextTick();
     element.querySelector<HTMLFormElement>('[data-testid=bridge-login]')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  }
+  async function connect() {
+    await submitBridgeLogin();
     await vi.waitFor(() => {
       if (!element.querySelector('.top-panel')) throw new Error(`${element.querySelector('[role=alert]')?.textContent ?? 'App is not ready'}; ${JSON.stringify(transport.frames.slice(-3))}`);
     }, { timeout: 10000 });
@@ -186,7 +192,7 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
       result.click();
     }, { timeout: 10000 });
   }
-  return { element, endpoint, directory, workspaceTopology: () => services.index.topology({ collection: 'workspaces' }), environmentId: services.target, historyOpens, historyCloses, historyPages, nativeQueries, frames: transport.frames, connect, select, unmountRenderer, unmount };
+  return { element, endpoint, directory, workspaceTopology: () => services.index.topology({ collection: 'workspaces' }), environmentId: services.target, historyOpens, historyCloses, historyPages, nativeQueries, frames: transport.frames, submitBridgeLogin, connect, select, unmountRenderer, unmount };
 }
 
 function expectLogin(element: HTMLElement) {
