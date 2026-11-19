@@ -89,13 +89,13 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     socket.reply(request, { rows: ['remote'] });
     await expect(result).resolves.toEqual({ rows: ['remote'] });
   });
-  it('falls back to plain inspection when an older Bridge rejects startup page negotiation', async () => {
+  it.each(['fields', 'wire.bootstrap_encoding'])('falls back to plain inspection after startup negotiation is rejected (%s)', async (field) => {
     const { client, socket } = await fixture();
     const inspected = client.inspect(true);
     const extended = await socket.next();
-    expect(extended).toMatchObject({ method: 'runtime.inspect', params: { bootstrapTree: true, bootstrapEncoding: 'gzip' } });
+    expect(extended).toMatchObject({ method: 'runtime.inspect', params: { bootstrapTree: true, bootstrapEncoding: 'gzip-inspection' } });
     socket.frame({ version: 1, kind: 'result', target, epoch: extended.epoch, generation: extended.generation,
-      id: extended.id, ok: false, typedError: { code: 'invalid_request', message: 'invalid_request: fields' } });
+      id: extended.id, ok: false, typedError: { code: 'invalid_request', message: `invalid_request: ${field}` } });
     const legacy = await socket.next();
     expect(legacy).toMatchObject({ method: 'runtime.inspect', params: {} });
     socket.reply(legacy, inspection);
@@ -106,9 +106,11 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     const inspected = client.inspect(true);
     const page = { kind: 'snapshot', version: 1, target, epoch: hello.epoch, generation: hello.generation,
       token: 'bootstrap', revision: 10, watermark: 4, expiresAt: Date.now() + 60000, items: [], cursor: null };
-    const payload = Buffer.from(JSON.stringify([page, page, page]));
-    socket.reply(await socket.next(), { ...inspection,
-      treeBootstrapGzip: { data: gzipSync(payload).toString('base64'), bytes: payload.length },
+    const payload = Buffer.from(JSON.stringify({
+      targets: inspection.targets, harnesses: inspection.harnesses, treeBootstrap: [page, page, page],
+    }));
+    socket.reply(await socket.next(), { ...inspection, targets: [], harnesses: [],
+      treeBootstrapGzip: { data: gzipSync(payload).toString('base64'), bytes: payload.length, includesInspection: true },
     });
     await expect(inspected).resolves.toEqual(inspection);
     const order: string[] = [];
@@ -122,6 +124,25 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     await expect(paging).resolves.toMatchObject({ token: 'bootstrap', watermark: 4 });
     expect(order).toEqual(['harnesses', 'workspaces', 'session_summaries']);
     expect(socket.sent.map(frame => frame.method)).toEqual(['runtime.inspect', 'runtime.observer.open']);
+  });
+  it('cannot replace grants with a compressed inspection superseded during decoding', async () => {
+    const { client, socket } = await fixture();
+    const earlier = client.inspect(true);
+    const request = await socket.next();
+    const page = { kind: 'snapshot', version: 1, target, epoch: hello.epoch, generation: hello.generation,
+      token: 'stale-startup', revision: 10, watermark: 4, expiresAt: Date.now() + 60000, items: [], cursor: null };
+    const payload = Buffer.from(JSON.stringify({ targets: inspection.targets, harnesses: [], treeBootstrap: [page, page, page] }));
+    socket.reply(request, {
+      ...inspection, targets: [], treeBootstrapGzip: { data: gzipSync(payload).toString('base64'), bytes: payload.length, includesInspection: true },
+    });
+    const newer = client.inspect();
+    socket.reply(await socket.next(), { ...inspection, targets: [grant()] });
+    await newer;
+    await expect(earlier).rejects.toMatchObject({ code: 'reconcile_required', field: 'inspection.superseded' });
+    const released = await socket.next();
+    expect(released).toMatchObject({ method: 'runtime.snapshot.release', params: { token: 'stale-startup' } });
+    socket.reply(released, { released: true });
+    await expect(client.attach(other)).rejects.toMatchObject({ code: 'unauthorized' });
   });
   it('uses a refreshed source grant after startup and enforces later permission revocation on the same binding', async () => {
     const { client, socket } = await fixture();

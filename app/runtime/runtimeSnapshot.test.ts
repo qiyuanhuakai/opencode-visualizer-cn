@@ -198,6 +198,104 @@ describe('runtime common-watermark snapshots', () => {
       expect((await store.snapshot({ collection: 'workspaces' })).items).toHaveLength(1);
     });
   });
+  it('preserves each pinned revision through overwrites, deletes, and later insertions', async () => {
+    await withStore(async store => {
+      const collection = 'session_summaries';
+      await store.mutate({ intentId: 'pin-original', changes: [
+        { collection, key: 'a', value: 'initial' },
+        { collection, key: 'b', value: null },
+      ] });
+      const first = await store.snapshot({ collection, limit: 1 });
+      await store.mutate({ intentId: 'after-first', changes: [
+        { collection, key: 'a', value: 'middle' },
+        { collection, key: 'b', value: 'restored' },
+        { collection, key: 'c', value: 'new' },
+      ] });
+      const second = await store.snapshot({ collection });
+      await store.mutate({ intentId: 'after-second', changes: [
+        { collection, key: 'a', value: null },
+        { collection, key: 'b', value: 'latest' },
+      ] });
+      expect(first.items).toEqual([{ key: 'a', revision: 1, value: 'initial' }]);
+      expect((await store.snapshot({ collection, token: first.token, cursor: first.cursor })).items)
+        .toEqual([{ key: 'b', revision: 2, value: null }]);
+      expect((await store.snapshot({ collection, token: second.token })).items).toEqual([
+        { key: 'a', revision: 3, value: 'middle' },
+        { key: 'b', revision: 4, value: 'restored' },
+        { key: 'c', revision: 5, value: 'new' },
+      ]);
+    });
+  });
+  it('rejects a newer prior snapshot after a legacy writer and preserves legacy materialized views', async () => {
+    const stateDirectory = await mkdtemp(path.join(tmpdir(), 'runtime-snapshot-legacy-writer-'));
+    const options = { stateDirectory, environmentId, ownerId, epoch };
+    const original = createRuntimeStore(options);
+    let reopened: ReturnType<typeof createRuntimeStore> | undefined;
+    try {
+      const ready = await original.ready;
+      await original.mutate({ intentId: 'before-legacy', changes: [{ collection: 'workspaces', key: 'a', value: 'before' }] });
+      const prior = await original.snapshot({ collection: 'workspaces' });
+      await original.close();
+
+      const legacyToken = '55555555-5555-4555-8555-555555555555';
+      const legacy = new DatabaseSync(path.join(stateDirectory, 'runtime/runtime.db'));
+      try {
+        legacy.prepare('INSERT INTO runtime_snapshots VALUES(?,?,?,?,?,?,?)')
+          .run(legacyToken, environmentId, 'workspaces', epoch, 1, 1, Date.now() + 60000);
+        legacy.prepare('INSERT INTO runtime_snapshot_rows VALUES(?,?,?,?)').run(legacyToken, 'a', 1, JSON.stringify('before'));
+        legacy.prepare('UPDATE workspaces SET revision=2,value=? WHERE environment=? AND key=?')
+          .run(JSON.stringify('legacy write'), environmentId, 'a');
+        // A v1 worker owns the next fence and writes without before-images.
+        legacy.prepare('UPDATE runtime_meta SET fence=?,revision=2 WHERE environment=?').run(ready.fence + 1, environmentId);
+      } finally { legacy.close(); }
+
+      reopened = createRuntimeStore(options);
+      await reopened.ready;
+      await expect(reopened.snapshot({ collection: 'workspaces', token: prior.token })).rejects.toMatchObject({ code: 'replay_required' });
+      expect((await reopened.snapshot({ collection: 'workspaces', token: legacyToken })).items)
+        .toEqual([{ key: 'a', revision: 1, value: 'before' }]);
+      expect(await reopened.get({ collection: 'workspaces', key: 'a' })).toMatchObject({ revision: 2, value: 'legacy write' });
+    } finally {
+      await original.close();
+      await reopened?.close();
+      await rm(stateDirectory, { recursive: true, force: true });
+    }
+  });
+  it('discards only optional prior views to retry a normal write at the SQLite space limit', async () => {
+    const stateDirectory = await mkdtemp(path.join(tmpdir(), 'runtime-prior-space-'));
+    const options = { stateDirectory, environmentId, ownerId, epoch };
+    const original = createRuntimeStore(options);
+    let capped: ReturnType<typeof createRuntimeStore> | undefined;
+    try {
+      await original.ready;
+      await original.mutate({ intentId: 'space-seed', changes: [
+        { collection: 'session_summaries', key: 'large', value: 'x'.repeat(60000) },
+        { collection: 'workspaces', key: 'untouched', value: 'y'.repeat(60000) },
+      ] });
+      await original.close();
+      const db = new DatabaseSync(path.join(stateDirectory, 'runtime/runtime.db'), { readOnly: true });
+      let budget: number;
+      try {
+        budget = (Number(db.prepare('PRAGMA page_count').get()?.page_count) + 2)
+          * Number(db.prepare('PRAGMA page_size').get()?.page_size);
+      } finally { db.close(); }
+      capped = createRuntimeStore({ ...options, storageBudgetBytes: budget });
+      await capped.ready;
+      const view = await capped.snapshot({ collection: 'session_summaries' });
+      const other = await capped.snapshot({ collection: 'workspaces' });
+      const mutation = { intentId: 'space-delete', changes: [{ collection: 'session_summaries' as const, key: 'large', value: null }] };
+      const receipt = await capped.mutate(mutation);
+      expect(receipt).toMatchObject({ watermark: view.watermark + 1, revision: view.revision + 1 });
+      expect(await capped.mutate(mutation)).toEqual(receipt);
+      expect(await capped.get({ collection: 'session_summaries', key: 'large' })).toMatchObject({ value: null });
+      await expect(capped.snapshot({ collection: 'session_summaries', token: view.token })).rejects.toMatchObject({ code: 'replay_required' });
+      expect((await capped.snapshot({ collection: 'workspaces', token: other.token })).items.map(row => row.key)).toEqual(['untouched']);
+    } finally {
+      await original.close();
+      await capped?.close();
+      await rm(stateDirectory, { recursive: true, force: true });
+    }
+  });
   it('bounds materialized page bytes and roundtrips maximum-length keys', async () => {
     await withStore(async (store) => {
       const largeKey = '界'.repeat(4096);

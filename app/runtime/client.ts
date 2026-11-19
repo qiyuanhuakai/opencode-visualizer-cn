@@ -1,4 +1,4 @@
-import { METHODS, ProtocolError, requireValue } from '../../shared/runtime/capabilities.js';
+import { METHODS, ProtocolError, requireValue, objectFields } from '../../shared/runtime/capabilities.js';
 import type { ErrorCode } from '../../shared/runtime/capabilities.js';
 import { createProtocolState, decodeBinary, encodeBinary } from '../../shared/runtime/protocol.js';
 import type { BinaryChunk, BinaryInput } from '../../shared/runtime/protocol.js';
@@ -29,7 +29,7 @@ function reserved(method: RuntimeMethod) {
   return method === 'runtime.history.close' || method === 'session.cancel' || method === 'interaction.respond' || method === 'runtime.channel.ack' || method === 'runtime.channel.cancel' || method === 'runtime.observer.resume' || method === 'runtime.observer.close' || method === 'runtime.target.detach';
 }
 
-async function decodeStartupPages(compressed: { readonly data: string; readonly bytes: number }) {
+async function decodeStartupPayload(compressed: { readonly data: string; readonly bytes: number }) {
   const compressedBytes = Uint8Array.from(atob(compressed.data), byte => byte.charCodeAt(0));
   // Feed the decompressor in bounded increments even if the peer supplies
   // an invalid declared size smaller than the represented pages.
@@ -311,25 +311,42 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     return management;
   }
   const bootstrapPages = new WeakMap<ReturnType<typeof getTarget>, readonly Snapshot[]>();
+  let inspectionSequence = 0;
   async function inspect(bootstrapTree = false) {
     const target = managementTarget();
     const attached = getTarget(target);
+    const sequence = ++inspectionSequence;
+    const requireCurrentInspection = () => requireValue(
+      current(attached) && sequence === inspectionSequence, 'inspection.superseded', 'reconcile_required',
+    );
     bootstrapTree &&= attached.hello.capabilities.methods.includes('runtime.snapshot');
-    const result = await request(target, 'runtime.inspect', bootstrapTree ? { bootstrapTree: true, ...(typeof DecompressionStream === 'function' ? { bootstrapEncoding: 'gzip' } : {}) } : {}).catch(error => {
-      if (!bootstrapTree || !(error instanceof RuntimeRequestError) || error.code !== 'invalid_request' || error.field !== 'fields') throw error;
+    const result = await request(target, 'runtime.inspect', bootstrapTree ? { bootstrapTree: true, ...(typeof DecompressionStream === 'function' ? { bootstrapEncoding: 'gzip-inspection' } : {}) } : {}).catch(error => {
+      if (!bootstrapTree || !(error instanceof RuntimeRequestError) || error.code !== 'invalid_request'
+        || !['fields', 'wire.bootstrap_encoding'].includes(error.field)) throw error;
+      requireCurrentInspection();
       return request(target, 'runtime.inspect', {});
     });
-    const { treeBootstrap, treeBootstrapGzip, ...inspection } = result;
-    let pages = treeBootstrap;
-    if (treeBootstrapGzip) {
+    let unpacked = result;
+    if (result.treeBootstrapGzip) {
       try {
-        const decoded = await decodeStartupPages(treeBootstrapGzip);
-        pages = parseRuntimeResult('runtime.inspect', { ...inspection, treeBootstrap: decoded }).treeBootstrap;
+        const payload = await decodeStartupPayload(result.treeBootstrapGzip);
+        const decoded = result.treeBootstrapGzip.includesInspection
+          ? objectFields(payload, ['targets', 'harnesses', 'treeBootstrap'])
+          : { treeBootstrap: payload };
+        const { treeBootstrapGzip: _, ...metadata } = result;
+        unpacked = parseRuntimeResult('runtime.inspect', { ...metadata, ...decoded });
       } catch {
-        // The independently validated inspection can still establish a connection.
+        requireCurrentInspection();
+        if (!bootstrapTree) throw new ProtocolError('reconcile_required', 'snapshot.bootstrap_encoding');
+        return inspect(false);
       }
     }
-    if (pages) bootstrapPages.set(attached, pages);
+    const { treeBootstrap, treeBootstrapGzip: _, ...inspection } = unpacked;
+    if (treeBootstrap && current(attached) && sequence !== inspectionSequence) {
+      void retireView(attached, treeBootstrap[0].token).catch(() => undefined);
+    }
+    requireCurrentInspection();
+    if (treeBootstrap) bootstrapPages.set(attached, treeBootstrap);
     grants.clear();
     for (const grant of inspection.targets) grants.set(grant.target, grant);
     return inspection;

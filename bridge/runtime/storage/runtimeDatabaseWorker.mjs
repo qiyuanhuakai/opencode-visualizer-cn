@@ -31,6 +31,7 @@ function initialize(input) {
     if (options.takeover && options.takeover.expectedFence !== current?.fence) throw new StoreError('conflict', 'stale_takeover');
     fence = (current?.fence ?? 0) + 1;
     db.prepare('INSERT INTO runtime_meta(environment,owner,epoch,fence) VALUES(?,?,?,?) ON CONFLICT(environment) DO UPDATE SET owner=excluded.owner,epoch=excluded.epoch,fence=excluded.fence').run(options.environmentId, lease, options.epoch, fence);
+    queries.claimPriorStorage(current?.fence, fence);
     if (current && current.epoch !== options.epoch) {
       db.prepare('DELETE FROM runtime_events WHERE environment=?').run(options.environmentId);
       db.prepare('DELETE FROM runtime_snapshots WHERE environment=?').run(options.environmentId);
@@ -40,6 +41,21 @@ function initialize(input) {
   return { ...queries.meta(), owner: undefined, fence, epoch: options.epoch, locality, backupPath, pid: process.pid };
 }
 function mutate(params) {
+  const retainedTokens = new Set();
+  try {
+    return writeMutation(params, retainedTokens);
+  } catch (error) {
+    if (retainedTokens.size === 0 || storageError(error).reason !== 'disk_full') throw error;
+    // The mutation rolled back. Make only its optional prior views replayable,
+    // then retry the original intent once without those retention obligations.
+    transaction(db, () => {
+      assertOwner();
+      queries.discardPriorSnapshots(retainedTokens);
+    });
+    return writeMutation(params, new Set());
+  }
+}
+function writeMutation(params, retainedTokens) {
   return transaction(db, () => {
     assertOwner();
     const environment = options.environmentId;
@@ -47,13 +63,23 @@ function mutate(params) {
     const previous = db.prepare('SELECT digest,result FROM runtime_intents WHERE environment=? AND id=?').get(environment, params.intentId);
     if (previous) { if (previous.digest !== digest) throw new StoreError('conflict', 'intent_mismatch'); return JSON.parse(previous.result); }
     let { revision, seq } = queries.meta();
+    const priorSnapshots = queries.activePriorSnapshots();
     for (const change of params.changes) {
       const current = db.prepare(`SELECT revision FROM ${change.collection} WHERE environment=? AND key=?`).get(environment, change.key);
       if (change.expectedRevision !== undefined && change.expectedRevision !== (current?.revision ?? 0)) throw new StoreError('conflict', change.checkOnly === true ? 'entity_precondition' : 'entity_revision');
       if (change.checkOnly === true) continue;
+      if (current) queries.preservePrior(priorSnapshots, change.collection, change.key, current.revision, retainedTokens);
       revision++; seq++;
       db.prepare(`INSERT INTO ${change.collection} VALUES(?,?,?,?) ON CONFLICT(environment,key) DO UPDATE SET revision=excluded.revision,value=excluded.value`).run(environment, change.key, revision, change.value === null ? null : JSON.stringify(change.value));
-      if (change.value === null) db.prepare('INSERT INTO tombstones VALUES(?,?,?,?) ON CONFLICT(environment,key) DO UPDATE SET revision=excluded.revision,value=excluded.value').run(environment, JSON.stringify([change.collection, change.key]), revision, JSON.stringify({ collection: change.collection, key: change.key }));
+      if (change.value === null) {
+        const key = JSON.stringify([change.collection, change.key]);
+        if (priorSnapshots.some(snapshot => snapshot.collections.has('tombstones'))) {
+          const prior = db.prepare('SELECT revision FROM tombstones WHERE environment=? AND key=?').get(environment, key);
+          if (prior) queries.preservePrior(priorSnapshots, 'tombstones', key, prior.revision, retainedTokens);
+        }
+        db.prepare('INSERT INTO tombstones VALUES(?,?,?,?) ON CONFLICT(environment,key) DO UPDATE SET revision=excluded.revision,value=excluded.value')
+          .run(environment, key, revision, JSON.stringify({ collection: change.collection, key: change.key }));
+      }
       // Replay stores identity/revision patches; native transcript remains in its authority.
       const event = JSON.stringify({ seq, entityRevision: revision, epoch: options.epoch, collection: change.collection, key: change.key, deleted: change.value === null });
       db.prepare('INSERT INTO runtime_events VALUES(?,?,?,?,?,?)').run(environment, seq, revision, Date.now(), Buffer.byteLength(event), event);
@@ -78,6 +104,7 @@ process.on('message', (message) => {
         result = row ? JSON.parse(row.result) : null; break;
       }
       case 'get': result = queries.get(params); break;
+      case 'getMany': result = queries.getMany(params); break;
       case 'getControl': assertOwner(); result = queries.get(params); break;
       case 'page': result = queries.page(params); break;
       case 'readChunk': result = queries.readChunk(params); break;

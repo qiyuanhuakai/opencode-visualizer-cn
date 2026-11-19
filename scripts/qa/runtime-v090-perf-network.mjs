@@ -74,7 +74,22 @@ export async function shapeRuntimeNetwork(upstreamPort, rttMs = 0) {
     pipe(downstream, upstream, 'uploadBytes');
     pipe(upstream, downstream, 'downloadBytes');
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  // A failed ephemeral bind must reach the product runner's cleanup handler.
+  // Retry a bounded address collision before recording a failed attempt.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await new Promise((resolve, reject) => {
+        const failed = error => { server.off('listening', listening); reject(error); };
+        const listening = () => { server.off('error', failed); resolve(); };
+        server.once('error', failed);
+        server.once('listening', listening);
+        server.listen(0, '127.0.0.1');
+      });
+      break;
+    } catch (error) {
+      if (error.code !== 'EADDRINUSE' || attempt === 3) throw error;
+    }
+  }
   return { port: server.address().port, stats, async close() {
     for (const socket of sockets) socket.destroy();
     await new Promise((resolve) => server.close(resolve));
