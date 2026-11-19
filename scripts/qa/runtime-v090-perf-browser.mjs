@@ -173,18 +173,64 @@ export async function measureInteractions(page, target) {
   // marker while the search results surface is still on screen.
   await page.getByTestId('search-summary').waitFor({ timeout: 120000 });
   const searchCompleteMs = await page.evaluate(time => performance.now() - time, searchStarted);
-  const selectedAt = await result.evaluate(element => {
-    const selectedAt = performance.now();
-    element.click();
-    return selectedAt;
-  });
   const row = { title: target.title, nativeSessionId: target.nativeSessionId, harness: target.source };
+  const expectedHistory = row.harness === 'opencode' || row.harness === 'acp'
+    ? 'Seed090 selected native history.' : null;
+  const selectedAt = await result.evaluate((element, expected) => {
+    const startedAt = performance.now();
+    if (expected) {
+      window.__visHistoryVisible = new Promise(resolve => {
+        // The runner polls its locators from outside Chromium. Timestamp the
+        // first visible history frame on the same clock as the selection.
+        let scheduledFrame = null;
+        const scroll = new AbortController();
+        function finish(time) {
+          clearTimeout(timeout);
+          if (scheduledFrame !== null) cancelAnimationFrame(scheduledFrame);
+          observer.disconnect();
+          scroll.abort();
+          resolve(time);
+        }
+        function visibleMarker() {
+          const messages = document.querySelectorAll('.output-panel-messages :is(.message-content, p)');
+          return Array.from(messages).some(node => {
+            if (node.textContent.trim() !== expected || !node.checkVisibility({ visibilityProperty: true, opacityProperty: true })) return false;
+            const rect = node.getBoundingClientRect();
+            const panel = node.closest('.output-panel-scroll')?.getBoundingClientRect();
+            return panel && Math.max(0, rect.left, panel.left) < Math.min(innerWidth, rect.right, panel.right)
+              && Math.max(0, rect.top, panel.top) < Math.min(innerHeight, rect.bottom, panel.bottom);
+          });
+        }
+        function measure(time) {
+          scheduledFrame = null;
+          if (visibleMarker()) finish(time - startedAt);
+        }
+        function schedule() {
+          if (scheduledFrame === null) scheduledFrame = requestAnimationFrame(measure);
+        }
+        if (visibleMarker()) throw new Error('Expected history was already visible before selection');
+        const observer = new MutationObserver(schedule);
+        const timeout = setTimeout(() => finish(null), 30000);
+        observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
+        document.addEventListener('scroll', schedule, { capture: true, passive: true, signal: scroll.signal });
+      });
+    }
+    element.click();
+    return startedAt;
+  }, expectedHistory);
   await page.locator('textarea[role="combobox"]').waitFor({ timeout: 30000 });
   const selectionVisibleMs = await page.evaluate((time) => performance.now() - time, selectedAt);
   let historyMs = null;
-  if (row.harness === 'opencode' || row.harness === 'acp') {
-    await page.getByText('Seed090 selected native history.', { exact: true }).first().waitFor({ timeout: 30000 });
-    historyMs = await page.evaluate((time) => performance.now() - time, selectedAt);
+  let historyLocatorMs = null;
+  if (expectedHistory) {
+    await page.getByText(expectedHistory, { exact: true }).first().waitFor({ timeout: 30000 });
+    historyLocatorMs = await page.evaluate((time) => performance.now() - time, selectedAt);
+    historyMs = await page.evaluate(async () => {
+      const time = await window.__visHistoryVisible;
+      delete window.__visHistoryVisible;
+      return time;
+    });
+    if (historyMs === null) throw new Error('Expected history never reached a visible renderer frame');
   }
   const expand = await page.evaluate(async () => {
     const group = document.querySelector('[data-row-kind="section"],[data-row-kind="repo"]');
@@ -197,7 +243,7 @@ export async function measureInteractions(page, target) {
     }
     return samples;
   });
-  return { row, searchMs, searchCompleteMs, selectionVisibleMs, historyMs, expand };
+  return { row, searchMs, searchCompleteMs, selectionVisibleMs, historyMs, historyLocatorMs, expand };
 }
 
 export async function measureEventVisibility(page, nativeOrigin, nativeSessionId) {
