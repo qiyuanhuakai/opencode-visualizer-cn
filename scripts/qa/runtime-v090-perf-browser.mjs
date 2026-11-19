@@ -99,6 +99,7 @@ export async function measureTree(page, connected) {
 export async function measureInteractions(page, target) {
   const search = page.getByTestId('unified-search-input');
   await search.fill(target.title);
+  const searchStarted = await page.evaluate(() => performance.now());
   await search.press('Enter');
   const title = page.getByText(target.title, { exact: true });
   const result = page.getByTestId('search-result').filter({ has: title });
@@ -106,7 +107,8 @@ export async function measureInteractions(page, target) {
     const selectedAt = performance.now();
     element.click();
     return selectedAt;
-  }, undefined, { timeout: 30000 });
+  }, undefined, { timeout: 120000 });
+  const searchMs = selectedAt - searchStarted;
   const row = { title: target.title, nativeSessionId: target.nativeSessionId, harness: target.source };
   await page.locator('textarea[role="combobox"]').waitFor({ timeout: 30000 });
   const selectionVisibleMs = await page.evaluate((time) => performance.now() - time, selectedAt);
@@ -126,5 +128,5 @@ export async function measureInteractions(page, target) {
     }
     return samples;
   });
-  return { row, selectionVisibleMs, historyMs, expand };
+  return { row, searchMs, selectionVisibleMs, historyMs, expand };
 }
