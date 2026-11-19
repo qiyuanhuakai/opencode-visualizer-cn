@@ -94,6 +94,13 @@ function runJoin(root, evidenceRoot) {
   return { label: root === evidenceRoot ? 'live' : 'negative-copy', verdict: allComplete ? 'PASS' : 'REJECT', rows, missing, generatedAt: new Date().toISOString() };
 }
 
+export function assertFinalVerifierReceipt(receipt, root, revision, verifier) {
+  validateEvidence(receipt, root);
+  assert.equal(receipt.productionRevision, revision, `${verifier} belongs to a different candidate`);
+  assert.equal(receipt.selector.verify, verifier, `expected a ${verifier} receipt`);
+  assert.equal(receipt.selector.case, 'happy', `${verifier} requires an explicit --case happy receipt`);
+}
+
 export async function run(context) {
   assert(context.verify === 'F4', 'this module is the F4 verifier registration');
   const lane = context.case ?? (/F4-negative/.test(path.basename(context.out)) ? 'failure' : 'happy');
@@ -124,8 +131,8 @@ export async function run(context) {
     for (const verifier of ['F1', 'F2', 'F3']) {
       const file = path.join(evidenceRoot, 'final', `${verifier}.json`);
       const receipt = JSON.parse(readFileSync(file, 'utf8'));
-      validateEvidence(receipt, root);
-      check(`the candidate has a genuine ${verifier} happy receipt`, { revision: receipt.productionRevision, verifier: receipt.selector.verify, lane: receipt.selector.case ?? 'happy' }, { revision, verifier, lane: 'happy' }, file);
+      assertFinalVerifierReceipt(receipt, root, revision, verifier);
+      check(`the candidate has a genuine ${verifier} happy receipt`, { revision: receipt.productionRevision, verifier: receipt.selector.verify, lane: receipt.selector.case }, { revision, verifier, lane: 'happy' }, file);
       artifacts.push(artifact(file, 'f4-final-verifier'));
     }
     assert.equal(typeof assessment.reviewer, 'string', 'reviewer identity required');
@@ -134,15 +141,20 @@ export async function run(context) {
     for (const row of assessment.rows) {
       assert(typeof row.finding === 'string' && row.finding.trim(), `${row.id} requires a reviewer finding`);
       assert(Array.isArray(row.proofs) && row.proofs.length > 0, `${row.id} requires release proof files`);
+      const expected = ROWS.find((entry) => entry.is === row.id).paths.filter((file) => !file.startsWith('final/'));
+      let covered = false;
       for (const proof of row.proofs) {
         assert(typeof proof.path === 'string' && !path.isAbsolute(proof.path), `${row.id} requires an evidence-relative path`);
         const file = path.resolve(evidenceRoot, proof.path);
         assert(!path.relative(evidenceRoot, file).startsWith('..'), `${row.id} proof is outside the evidence root`);
+        const relative = path.relative(evidenceRoot, file).split(path.sep).join('/');
+        covered ||= expected.some((citation) => citation.endsWith('/') ? relative.startsWith(citation) : relative === citation);
         assert(statSync(file).isFile(), `${row.id} requires a proof file`);
         const bound = artifact(file, 'f4-reviewed-proof');
         assert.equal(bound.sha256, proof.sha256, `${row.id} proof digest mismatch: ${proof.path}`);
         artifacts.push(bound);
       }
+      assert(covered, `${row.id} requires a file from its own plan citations`);
       check(`${row.id} meets the plan in the reviewer assessment`, row.verdict, 'met', assessmentPath);
     }
     const join = runJoin(evidenceRoot, evidenceRoot);
