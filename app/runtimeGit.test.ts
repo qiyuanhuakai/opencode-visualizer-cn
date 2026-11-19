@@ -208,6 +208,63 @@ describe('target Git topology', () => {
     await expect(catalog.registerMany(Array.from({ length: 201 }, () => inputs[0]!))).rejects.toThrow('batch');
   });
 
+  it('commits concurrent discovery batches without dropping sources from a shared worktree', async () => {
+    const f = await fixture();
+    const catalog = createWorkspaceCatalog({ store: f.store, git: f.git });
+    const inputs = Array.from({ length: 12 }, (_, index) => ({
+      workspace: f.workspace,
+      harnessInstanceId: `55555555-5555-4555-8555-${String(index).padStart(12, '0')}`,
+      harness: 'acp' as const,
+    }));
+    const key = encodeWorkspaceKey(f.workspace);
+    const writes = inputs.map(input => catalog.registerMany([input]));
+    expect(await Promise.all(writes)).toEqual(inputs.map(() => [key]));
+    await catalog.probe(key, { selected: true });
+    const row = await f.store.get({ collection: 'workspaces', key });
+    expect(row?.value).toMatchObject({
+      gitKind: 'git',
+      sources: inputs.map(({ harnessInstanceId, harness }) => ({ harnessInstanceId, harness })),
+    });
+  });
+
+  it('returns an empty discovery batch while another catalog write is pending', async () => {
+    const f = await fixture();
+    let startRead!: () => void;
+    let releaseRead!: () => void;
+    const started = new Promise<void>(resolve => { startRead = resolve; });
+    const held = new Promise<void>(resolve => { releaseRead = resolve; });
+    const catalog = createWorkspaceCatalog({
+      store: {
+        ...f.store,
+        async getMany(input) {
+          startRead();
+          await held;
+          return f.store.getMany(input);
+        },
+      },
+      git: f.git,
+    });
+    const registration = catalog.register({ workspace: f.workspace, harnessInstanceId: foreign, harness: 'codex' });
+    try {
+      await started;
+      const nextTurn = new Promise(resolve => setImmediate(() => resolve('queued')));
+      await expect(Promise.race([catalog.registerMany([]), nextTurn])).resolves.toEqual([]);
+    } finally {
+      releaseRead();
+      await registration;
+    }
+  });
+
+  it('does not publish another workspace change for an unchanged Git identity', async () => {
+    const f = await fixture();
+    const catalog = createWorkspaceCatalog({ store: f.store, git: f.git });
+    const key = await catalog.register({ workspace: f.workspace, harnessInstanceId: foreign, harness: 'codex' });
+    const first = await catalog.probe(key, { selected: true });
+    const before = await f.store.inspect();
+    expect(await catalog.probe(key, { visible: true })).toEqual(first);
+    expect((await f.store.inspect()).seq).toBe(before.seq);
+  });
+
   it('requires visibility before metadata can trigger Git', async () => {
     // Given a registered workspace.
     const f = await fixture();
