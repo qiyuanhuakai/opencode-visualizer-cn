@@ -26,6 +26,8 @@ async function fixture() {
   const workspace = await createWorkspaceService({ target: environmentId, epoch, roots: [{ root: directory, permissions: ['read'] }] });
   let receive = (_raw: string) => {}, status: JsonValue = { type: 'active' };
   const methods: string[] = [];
+  const calls: { method: string; params: JsonValue }[] = [];
+  let createdThread: { id: string; cwd: string; modelProvider: string } | undefined;
   const driver = await createCodexDriver({
     environmentId, harnessInstanceId, epoch, processGeneration: 1, store, runtime, workspace,
     allowedWorkspaces: workspace.workspaces.map(root => root.key), isProcessCurrent: () => true,
@@ -34,17 +36,21 @@ async function fixture() {
       send(raw) {
         const message = JSON.parse(raw); if (message.id === undefined) return;
         methods.push(message.method);
+        calls.push({ method: message.method, params: message.params });
+        if (message.method === 'thread/start') createdThread = { id: 'native-custom', cwd: message.params.cwd, modelProvider: message.params.modelProvider };
         const thread = { id: 'native-outside', name: 'Outside turn', cwd: directory, status, modelProvider: 'openai' };
         const result = message.method === 'initialize' ? { userAgent: 'codex-cli/0.160.0 controlled' }
           : message.method === 'thread/list' ? { data: message.params.archived ? [] : [thread], nextCursor: null }
-          : message.method === 'thread/read' ? { thread } : {};
+          : message.method === 'thread/read' ? { thread: message.params.threadId === createdThread?.id ? createdThread : thread }
+          : message.method === 'thread/start' ? { thread: createdThread }
+          : message.method === 'turn/start' ? { turn: { id: 'fixture-turn' } } : {};
         receive(JSON.stringify({ id: message.id, result }));
       },
     },
   });
   const context = { environmentId, harnessInstanceId };
   const core = driver.registration.driver.core;
-  return { core, context, store, methods, status: (value: JsonValue) => { status = value; },
+  return { core, context, store, methods, calls, workspaceKey: workspace.workspaces[0]!.key, status: (value: JsonValue) => { status = value; },
     notify: (method: string, params: JsonValue) => receive(JSON.stringify({ method, params })),
     async close() { await driver.close(); await workspace.close(); await runtime.stop(); await store.close(); await rm(directory, { recursive: true, force: true }); } };
 }
@@ -90,5 +96,24 @@ it('refuses a model from a different provider before dispatching a turn', async 
     })).rejects.toThrow('codex.model_provider_mismatch');
     expect(state.methods).toContain('thread/read');
     expect(state.methods).not.toContain('turn/start');
+  } finally { await state.close(); }
+});
+
+it('creates a custom-provider thread and dispatches its slash-containing model to that thread', async () => {
+  const state = await fixture();
+  try {
+    await state.core.createSession!({
+      ...state.context,
+      params: { workspaceKey: state.workspaceKey, idempotencyKey: 'create-custom', native: { model: 'org/model', modelProvider: 'custom' } },
+    });
+    await state.core.send!({
+      ...state.context,
+      session: { ...state.context, nativeSessionId: 'native-custom' },
+      params: { idempotencyKey: 'send-custom', native: { input: [{ type: 'text', text: 'test prompt' }], model: 'org/model', expectedModelProvider: 'custom' } },
+    });
+    expect(state.calls.find(call => call.method === 'thread/start')?.params).toMatchObject({ modelProvider: 'custom', model: 'org/model' });
+    const sent = state.calls.find(call => call.method === 'turn/start')?.params;
+    expect(sent).toMatchObject({ threadId: 'native-custom', model: 'org/model' });
+    expect(sent).not.toHaveProperty('expectedModelProvider');
   } finally { await state.close(); }
 });
