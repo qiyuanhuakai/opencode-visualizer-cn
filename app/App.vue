@@ -4826,11 +4826,10 @@ function handleModelVisibilityUpdate(next: ModelVisibilityEntry[]) {
 
 async function fetchGlobalProviderConfig() {
   const request = providerConfigRequestFence.start();
-  const activeBackend = getBackendAdapter(request.backend);
   try {
+    const activeBackend = backend();
     const getGlobalConfig = requireBackendMethod(activeBackend.getGlobalConfig, 'global config');
-    const native = selectedRuntimeNativeAdapter();
-    const data = (await (native ? requireBackendMethod(native.getGlobalConfig, 'native global config')() : getGlobalConfig())) as ProviderConfigState;
+    const data = (await getGlobalConfig()) as ProviderConfigState;
     if (!providerConfigRequestFence.isCurrent(request)) return;
     providerConfig.value = data ?? null;
     if (
@@ -5704,15 +5703,13 @@ async function fetchProviders(force = false) {
   if ((!force && providersLoading.value) || (!force && providersLoaded.value)) return;
   const request = providersRequestFence.start();
   providerLoadingOwner = request.generation;
-  const activeBackend = getBackendAdapter(request.backend);
   providersLoading.value = true;
   if (force) providersLoaded.value = false;
   providersFetchCount.value += 1;
   log('providers fetch start', providersFetchCount.value);
   try {
-    const listProviders = requireBackendMethod(activeBackend.listProviders, 'providers');
-    const native = selectedRuntimeNativeFacade();
-    const data = (await (native ? requireBackendMethod(selectedRuntimeNativeAdapter()?.listProviders, 'native providers')() : listProviders())) as ProviderResponse;
+    const listProviders = requireBackendMethod(backend().listProviders, 'providers');
+    const data = (await listProviders()) as ProviderResponse;
     if (!providersRequestFence.isCurrent(request)) return;
     providerDefaults.value = data.default ?? {};
     providers.value = Array.isArray(data.all) ? data.all : [];
