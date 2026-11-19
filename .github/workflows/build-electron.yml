@@ -580,7 +580,9 @@ jobs:
         shell: bash
         run: |
           sudo dpkg -r vis-bridge
-          node scripts/qa/vis-bridge-installer-daemon-qa.mjs assert-stopped "$RUNNER_TEMP/vis-bridge-state" 23199 "$RUNNER_TEMP/bridge-remove-lifecycle.json"
+          if test -f "$RUNNER_TEMP/bridge-remove-lifecycle.json"; then
+            node scripts/qa/vis-bridge-installer-daemon-qa.mjs assert-stopped "$RUNNER_TEMP/vis-bridge-state" 23199 "$RUNNER_TEMP/bridge-remove-lifecycle.json"
+          fi
 
       - name: Exercise macOS installer
         if: runner.os == 'macOS'

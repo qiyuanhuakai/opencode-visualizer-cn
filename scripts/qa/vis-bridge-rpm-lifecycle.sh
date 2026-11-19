@@ -29,20 +29,17 @@ if [ "${1:-}" = '--container' ]; then
   mkdir -p "$qa_root/dist-bridge" "$qa_root/node_modules"
   cp /usr/bin/vis_bridge "$qa_root/dist-bridge/vis_bridge"
   cp -a /usr/lib/vis_bridge/node_modules/node-pty "$qa_root/node_modules/node-pty"
-  # The packager re-stages the runtime store worker plus its import closure from
-  # the root's source-shaped tree (bridge/runtime/storage/** plus the shared
-  # closure), so this QA root must carry the REAL closure the RPM just
-  # installed — never a re-implementation. The installed tree keeps that closure
-  # under its staged names (bridge/runtime/runtime/** and shared/runtime/**);
-  # copying it back into the source-shaped locations is what lets the upgrade
-  # build resolve bridge/runtime/storage/runtimeDatabaseWorker.mjs at all.
-  # Production staging still requires the worker and is never skipped.
-  mkdir -p "$qa_root/bridge/runtime/storage" "$qa_root/shared/runtime"
-  for staged in /usr/lib/vis_bridge/bridge/runtime/runtime/*; do
+  # Reconstruct the source-shaped tree from the installed package. SSH and
+  # Slurm entry points keep their source paths, while the staged store worker
+  # lives under runtime/ rather than storage/.
+  mkdir -p "$qa_root/bridge" "$qa_root/shared/runtime"
+  cp -a /usr/lib/vis_bridge/bridge/. "$qa_root/bridge/"
+  mkdir -p "$qa_root/bridge/runtime/storage"
+  for staged in "$qa_root"/bridge/runtime/runtime/*; do
     case "${staged##*/}" in
       vis_bridge_node|vis_bridge_node.exe) continue ;;
     esac
-    cp -a "$staged" "$qa_root/bridge/runtime/storage/"
+    mv "$staged" "$qa_root/bridge/runtime/storage/"
   done
   cp -a /usr/lib/vis_bridge/shared/runtime/. "$qa_root/shared/runtime/"
   if [ ! -f "$qa_root/bridge/runtime/storage/runtimeDatabaseWorker.mjs" ]; then
