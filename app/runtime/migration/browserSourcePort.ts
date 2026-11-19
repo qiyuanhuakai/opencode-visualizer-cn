@@ -55,6 +55,11 @@ export function createBrowserLegacySourcePort(source: LegacySource): LegacySourc
       };
     },
     async binding(sourceKey: string): Promise<LocalBindingHint> {
+      // `resolveLegacyLocalBinding` yields exactly the `{ key, namespace }` shape
+      // `describeLocalBinding` consumes, so the port classifies a legacy key with
+      // the SAME describer the rest of the pipeline uses. `bindLegacySource`
+      // matches a proven mapping on `scopeFingerprint` AND `nativeSessionId`, so
+      // dropping either silently detaches every history record from its target.
       const resolved = await resolveLegacyLocalBinding(source, sourceKey);
       // The ONE describer. A port-local re-derivation of the hint dropped the
       // composer/question kind and the history `nativeSessionId`, so the archive

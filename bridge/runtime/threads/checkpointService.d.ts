@@ -1,17 +1,25 @@
 import type { ContextCheckpointView } from '../../../shared/runtime/context.js';
 
-/**
- * The bounded context checkpoint store (task 33). Declared here because the
- * module ships no sibling declaration and a static import of a `.d.ts`-less
- * module is TS7016 under the repo's strict gate — the same reason
- * `useRuntimeThread.ts` declares its handoff read model locally.
- */
+/** One canonical Checkpoint service: the id, the store, the frozen read models and the lifecycle. */
 export interface CheckpointService {
   create(input: {
-    readonly scope: Readonly<{ threadId: string; environmentId: string }>;
-    readonly entries: readonly unknown[];
+    readonly checkpointId?: string;
+    readonly scope: unknown;
+    readonly entries: unknown;
+    readonly at?: number;
   }): ContextCheckpointView;
+  /** Re-admit a checkpoint received over the wire; its digest and entry hashes are re-verified. */
+  admit(value: string | Record<string, unknown>): ContextCheckpointView;
   get(checkpointId: string): ContextCheckpointView;
+  checkpoints(): readonly ContextCheckpointView[];
+  close(): void;
+  readonly state: {
+    readonly created: number;
+    readonly bytes: number;
+    readonly entries: number;
+    readonly dropped: number;
+    readonly closed: boolean;
+  };
 }
 
 export function createCheckpointService(): CheckpointService;

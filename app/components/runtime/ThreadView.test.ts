@@ -105,6 +105,11 @@ function nativeGroup(participantId: string, session: SessionRef, label: string, 
   });
 }
 
+/** The same group, marked unavailable: the participant's own target is not readable here. */
+function unavailableNativeGroup(participantId: string, session: SessionRef, label: string): NativeHistoryGroup {
+  return Object.freeze({ ...nativeGroup(participantId, session, label, []), unavailable: true });
+}
+
 async function settle(): Promise<void> {
   await nextTick();
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -460,6 +465,29 @@ describe('task 35 — handoff state and source are visible', () => {
     expect(view.root.querySelector('[data-testid="handoff-active"]')).toBeNull();
   });
 
+  it('offers Begin again once the handoff is cancelled, matching the composable rule', async () => {
+    const services = await buildServices();
+    const view = await mountThreadView(services, { draftText: 'continue from the checkpoint', handoffEntries: HANDOFF_ENTRIES });
+    view.root
+      .querySelector<HTMLButtonElement>(`[data-testid="set-target"][data-participant-id="${services.extra.participantId}"]`)
+      ?.click();
+    await settle();
+    await view.root.querySelector<HTMLButtonElement>('[data-testid="begin-handoff"]')?.click();
+    await settle();
+    await view.root.querySelector<HTMLButtonElement>('[data-testid="cancel-handoff"]')?.click();
+    await settle();
+    expect(view.root.querySelector('[data-testid="handoff-state"]')?.getAttribute('data-state')).toBe('cancelled');
+    const cancelledId = view.state.handoff.value?.handoffId;
+
+    // A cancelled record is history: the composable allows a new handoff, so the button recovers
+    // and the second handoff really starts from it.
+    expect(view.root.querySelector<HTMLButtonElement>('[data-testid="begin-handoff"]')?.disabled).toBe(false);
+    await view.root.querySelector<HTMLButtonElement>('[data-testid="begin-handoff"]')?.click();
+    await settle();
+    expect(view.state.handoff.value?.state).toBe('attached');
+    expect(view.state.handoff.value?.handoffId).not.toBe(cancelledId);
+  });
+
   it('stops an ambiguous send at reconcile and offers no retry', async () => {
     // A send whose outcome is unreadable is never retried and never marked successful.
     const sessions = new Map<string, SessionRef>([
@@ -630,6 +658,25 @@ describe('task 35 — native history is browsed per participant, never merged', 
     expect(extraGroup.textContent).not.toContain('owner entry');
     // The separation is stated explicitly, so a reader cannot mistake it for one history.
     expect(view.root.querySelector('[data-testid="native-history-note"]')?.textContent).toContain('never merged');
+
+    // A participant whose OWN target is not readable here says so explicitly: an empty list
+    // would read as "this participant has no messages".
+    const withUnavailable = await mountThreadView(services, {
+      nativeHistory: [
+        nativeGroup(services.owner.participantId, SESSION_A, 'opencode session-a', ['owner entry one']),
+        unavailableNativeGroup(services.extra.participantId, SESSION_B, 'codex session-b'),
+      ],
+    });
+    const unavailableGroup = [...withUnavailable.root.querySelectorAll('[data-testid="native-history-group"]')].find(
+      (group) => group.getAttribute('data-participant-id') === services.extra.participantId,
+    );
+    const marker = unavailableGroup?.querySelector('[data-testid="native-history-unavailable"]');
+    expect(marker?.getAttribute('data-participant-id')).toBe(services.extra.participantId);
+    expect(marker?.textContent).toContain('unavailable');
+    // The available participant's group states nothing of the sort.
+    expect(
+      [...withUnavailable.root.querySelectorAll('[data-testid="native-history-unavailable"]')],
+    ).toHaveLength(1);
 
     // A left participant keeps its own browsable history.
     await view.root.querySelector<HTMLButtonElement>(

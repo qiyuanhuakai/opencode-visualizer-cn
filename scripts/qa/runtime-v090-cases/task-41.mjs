@@ -359,6 +359,7 @@ export async function run(context) {
   const observations = {};
   const protocol = { node: {}, browser: {} };
   const proof = { case: context.case, runDir, checks, observations, protocol };
+  let cleanupFailure = null;
   let peakHeap = process.memoryUsage().heapUsed;
   const persist = () => writeJson(path.join(runDir, 'proof.json'), proof);
   const scrub = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
@@ -678,7 +679,7 @@ export async function run(context) {
 
       // ── F1: the approved hash is bound at review time; the ACTUAL BYTES are re-hashed ──
       {
-        const repository = await createRepo('hash-bind');
+        const repository = await createRepo('hash-bind', ['integration/target']);
         const harness = await buildHarness('hash-bind');
         resetIds();
         try {
@@ -688,7 +689,7 @@ export async function run(context) {
             await writeFileMode(path.join(cwd, 'untracked.bin'), Buffer.from([0x00, 0xff, 0x10, 0x7f]), 0o644);
           });
           const review = await harness.reviews.create({
-            repository, target: 'main', artifactHash: captured.artifactHash, at: T0,
+            repository, target: 'integration/target', artifactHash: captured.artifactHash, at: T0,
           });
           started.reviews += 1;
           const approval = harness.reviews.approve({ reviewId: review.reviewId, at: T0 + 1, reviewerId: 'reviewer-1' });
@@ -760,7 +761,7 @@ export async function run(context) {
             approvedEqualsCaptured: true,
             bindingEqualsApproved: true,
             bindingBaseEqualsReview: true,
-            bindingTarget: 'main',
+            bindingTarget: 'integration/target',
             tamperedVerify: { ok: false, hashDiffersFromApproved: true, bytes: 41 },
             result: {
               ok: false,
@@ -793,7 +794,7 @@ export async function run(context) {
 
       // ── F2a: a DIRTY target fails and preserves the artifact ──
       {
-        const repository = await createRepo('dirty-target');
+        const repository = await createRepo('dirty-target', ['integration/target']);
         const harness = await buildHarness('dirty-target');
         resetIds();
         try {
@@ -801,7 +802,7 @@ export async function run(context) {
             await writeFileMode(path.join(cwd, 'src', 'a.txt'), 'a\n', 0o644);
           });
           const review = await harness.reviews.create({
-            repository, target: 'main', artifactHash: captured.artifactHash, at: T0,
+            repository, target: 'integration/target', artifactHash: captured.artifactHash, at: T0,
           });
           const approval = harness.reviews.approve({ reviewId: review.reviewId, at: T0 + 1, reviewerId: 'reviewer-1' });
           started.approvals += 1;
@@ -865,7 +866,7 @@ export async function run(context) {
             rejection: {
               code: 'conflict',
               field: 'integration_target_dirty',
-              detail: { repository, target: 'main', dirtyPaths: ['README.md', 'user-local.txt'] },
+              detail: { repository, target: 'integration/target', dirtyPaths: ['README.md', 'user-local.txt'] },
             },
             targetBefore: { clean: false, dirtyPaths: ['README.md', 'user-local.txt'], head: review.base, targetHead: review.base },
             targetAfter: { clean: false, dirtyPaths: ['README.md', 'user-local.txt'], digestEqualsBefore: true },
@@ -886,7 +887,7 @@ export async function run(context) {
 
       // ── F2b: a MOVED HEAD fails and preserves the artifact ──
       {
-        const repository = await createRepo('moved-head');
+        const repository = await createRepo('moved-head', ['integration/target']);
         const harness = await buildHarness('moved-head');
         resetIds();
         try {
@@ -895,15 +896,19 @@ export async function run(context) {
           });
           const reviewedBase = headOf(repository);
           const review = await harness.reviews.create({
-            repository, target: 'main', artifactHash: captured.artifactHash, at: T0,
+            repository, target: 'integration/target', artifactHash: captured.artifactHash, at: T0,
           });
           const approval = harness.reviews.approve({ reviewId: review.reviewId, at: T0 + 1, reviewerId: 'reviewer-1' });
           started.approvals += 1;
-          // The target's HEAD moves AFTER the review: a new commit lands on the target branch.
+          // The target's HEAD moves AFTER the review: a new commit lands, and the target branch is
+          // advanced to it (the branch is NOT checked out anywhere, which is what makes advancing
+          // it by hand the realistic "someone else pushed" move rather than the checked-out
+          // refusal the product now makes).
           await writeFileMode(path.join(repository, 'someone-else.txt'), 'other work\n', 0o644);
           runGit(repository, ['add', '-A']);
           runGit(repository, ['-c', 'user.name=other', '-c', 'user.email=other@example.invalid', 'commit', '-q', '-m', 'other']);
           const movedTo = headOf(repository);
+          runGit(repository, ['update-ref', 'refs/heads/integration/target', movedTo]);
           const userBefore = await observeTree(repository);
           const result = await harness.integration.integrate({
             approvalId: approval.approvalId,
@@ -971,7 +976,7 @@ export async function run(context) {
 
       // ── F3: a failing test cleans ONLY this operation's temp, never the user's files ──
       {
-        const repository = await createRepo('test-fail');
+        const repository = await createRepo('test-fail', ['integration/target']);
         const harness = await buildHarness('test-fail');
         resetIds();
         try {
@@ -981,7 +986,7 @@ export async function run(context) {
             await rm(path.join(cwd, 'gone.txt'));
           });
           const review = await harness.reviews.create({
-            repository, target: 'main', artifactHash: captured.artifactHash, at: T0,
+            repository, target: 'integration/target', artifactHash: captured.artifactHash, at: T0,
           });
           const approval = harness.reviews.approve({ reviewId: review.reviewId, at: T0 + 1, reviewerId: 'reviewer-1' });
           started.approvals += 1;
@@ -1087,7 +1092,7 @@ export async function run(context) {
       }
       // ── F4: a test that CRASHES after the apply is a failure, not a success ──
       {
-        const repository = await createRepo('test-crash');
+        const repository = await createRepo('test-crash', ['integration/target']);
         const harness = await buildHarness('test-crash');
         resetIds();
         try {
@@ -1095,7 +1100,7 @@ export async function run(context) {
             await writeFileMode(path.join(cwd, 'src', 'a.txt'), 'a\n', 0o644);
           });
           const review = await harness.reviews.create({
-            repository, target: 'main', artifactHash: captured.artifactHash, at: T0,
+            repository, target: 'integration/target', artifactHash: captured.artifactHash, at: T0,
           });
           const approval = harness.reviews.approve({ reviewId: review.reviewId, at: T0 + 1, reviewerId: 'reviewer-1' });
           started.approvals += 1;
@@ -1171,7 +1176,7 @@ export async function run(context) {
 
       // ── F5: the artifact object is GONE before the apply — nothing is written ──
       {
-        const repository = await createRepo('lost-object');
+        const repository = await createRepo('lost-object', ['integration/target']);
         const harness = await buildHarness('lost-object');
         resetIds();
         try {
@@ -1179,7 +1184,7 @@ export async function run(context) {
             await writeFileMode(path.join(cwd, 'src', 'a.txt'), 'a\n', 0o644);
           });
           const review = await harness.reviews.create({
-            repository, target: 'main', artifactHash: captured.artifactHash, at: T0,
+            repository, target: 'integration/target', artifactHash: captured.artifactHash, at: T0,
           });
           const approval = harness.reviews.approve({ reviewId: review.reviewId, at: T0 + 1, reviewerId: 'reviewer-1' });
           started.approvals += 1;
@@ -1240,7 +1245,7 @@ export async function run(context) {
 
       // ── F6: the operation's own temporary worktree cannot be created ──
       {
-        const repository = await createRepo('worktree-blocked');
+        const repository = await createRepo('worktree-blocked', ['integration/target']);
         const harness = await buildHarness('worktree-blocked');
         resetIds();
         try {
@@ -1248,7 +1253,7 @@ export async function run(context) {
             await writeFileMode(path.join(cwd, 'src', 'a.txt'), 'a\n', 0o644);
           });
           const review = await harness.reviews.create({
-            repository, target: 'main', artifactHash: captured.artifactHash, at: T0,
+            repository, target: 'integration/target', artifactHash: captured.artifactHash, at: T0,
           });
           const approval = harness.reviews.approve({ reviewId: review.reviewId, at: T0 + 1, reviewerId: 'reviewer-1' });
           started.approvals += 1;
@@ -1331,7 +1336,7 @@ export async function run(context) {
 
       // ── F7: a duplicate approval, and an EXPIRED repository-lock wait ──
       {
-        const repository = await createRepo('approval-once');
+        const repository = await createRepo('approval-once', ['integration/target']);
         const harness = await buildHarness('approval-once');
         resetIds();
         try {
@@ -1339,7 +1344,7 @@ export async function run(context) {
             await writeFileMode(path.join(cwd, 'src', 'a.txt'), 'a\n', 0o644);
           });
           const review = await harness.reviews.create({
-            repository, target: 'main', artifactHash: captured.artifactHash, at: T0,
+            repository, target: 'integration/target', artifactHash: captured.artifactHash, at: T0,
           });
           const approval = harness.reviews.approve({ reviewId: review.reviewId, at: T0 + 1, reviewerId: 'reviewer-1' });
           started.approvals += 1;
@@ -1440,7 +1445,7 @@ export async function run(context) {
               state: 'approved',
               artifactHash: captured.artifactHash,
               base: review.base,
-              target: 'main',
+              target: 'integration/target',
               approvedAt: T0 + 1,
               reviewerId: 'reviewer-1',
             },
@@ -1478,7 +1483,7 @@ export async function run(context) {
 
       // ── F8: the typed rejections, the frozen limits and the frozen durable result ──
       {
-        const repository = await createRepo('typed');
+        const repository = await createRepo('typed', ['integration/target']);
         const harness = await buildHarness('typed');
         resetIds();
         try {
@@ -1486,7 +1491,7 @@ export async function run(context) {
             await writeFileMode(path.join(cwd, 'src', 'a.txt'), 'a\n', 0o644);
           });
           const review = await harness.reviews.create({
-            repository, target: 'main', artifactHash: captured.artifactHash, at: T0,
+            repository, target: 'integration/target', artifactHash: captured.artifactHash, at: T0,
           });
           const approval = harness.reviews.approve({ reviewId: review.reviewId, at: T0 + 1, reviewerId: 'reviewer-1' });
           started.approvals += 1;
@@ -1700,7 +1705,7 @@ export async function run(context) {
 
       // ── H1: the review BINDS the artifact hash, the base and the target ──
       {
-        const repository = await createRepo('binding');
+        const repository = await createRepo('binding', ['integration/target']);
         const harness = await buildHarness('binding');
         resetIds();
         try {
@@ -1710,7 +1715,7 @@ export async function run(context) {
           const observedHead = headOf(repository);
           const observedTargetHead = branchOf(repository, 'main');
           const review = await harness.reviews.create({
-            repository, target: 'main', artifactHash: captured.artifactHash, at: T0,
+            repository, target: 'integration/target', artifactHash: captured.artifactHash, at: T0,
           });
           started.reviews += 1;
           const approval = harness.reviews.approve({ reviewId: review.reviewId, at: T0 + 1, reviewerId: 'reviewer-1' });
@@ -1798,7 +1803,7 @@ export async function run(context) {
             review: {
               repository: repository,
               repositoryIsResolved: true,
-              target: 'main',
+              target: 'integration/target',
               artifactHash: captured.artifactHash,
               base: observedHead,
               baseEqualsObservedHead: true,
@@ -1820,7 +1825,7 @@ export async function run(context) {
               reviewId: reviewIdFor(1),
               reviewerId: 'reviewer-1',
               approvedAt: T0 + 1,
-              binding: { artifactHash: captured.artifactHash, base: observedHead, target: 'main', repository },
+              binding: { artifactHash: captured.artifactHash, base: observedHead, target: 'integration/target', repository },
               bindingFrozen: true,
               approvalFrozen: true,
               bindingIsExactlyTheReviewedFour: true,
@@ -1833,7 +1838,7 @@ export async function run(context) {
               field: 'integration_review_approved',
               detail: { reviewId: review.reviewId, approvedAt: T0 + 1, reviewerId: 'reviewer-1' },
             },
-            reread: { state: 'approved', artifactHash: captured.artifactHash, base: observedHead, target: 'main', approvedAt: T0 + 1 },
+            reread: { state: 'approved', artifactHash: captured.artifactHash, base: observedHead, target: 'integration/target', approvedAt: T0 + 1 },
             snapshotNeverGainsApproval: {
               snapshotState: 'pending',
               snapshotApprovedAt: null,
@@ -2482,11 +2487,23 @@ export async function run(context) {
     persist();
     throw error;
   } finally {
-    const closed = await fixture.close().catch((error) => ({ error: String(error) }));
-    proof.cleanup = closed;
+    // A cleanup failure is EVIDENCE, not a footnote: the receipts are persisted here and the
+    // failure is re-thrown after this block, so the run fails instead of reporting green evidence
+    // over a teardown that did not happen (an owned directory left behind, an owned PID alive).
+    try {
+      proof.cleanup = await fixture.close();
+    } catch (error) {
+      proof.cleanup = {
+        failed: true,
+        message: error?.message ?? String(error),
+        errors: Array.isArray(error?.errors) ? error.errors.map((entry) => String(entry)) : [],
+      };
+      cleanupFailure = error;
+    }
     persist();
     artifacts.push(artifact(path.join(runDir, 'proof.json'), 'registered-case-proof'), artifact(path.join(runDir, 'resources.json'), 'resource-ledger'));
   }
+  if (cleanupFailure !== null) throw cleanupFailure;
 
   return {
     scenarios,
@@ -2509,10 +2526,10 @@ export async function run(context) {
         observed: 'the atomic `git update-ref <ref> <new> <old>` failure path (integration_fast_forward) is not forced, because the repository lock serializes the check and the update inside one service instance and no external ref move can be interleaved',
         coveredInstead: 'the forward-only property is proven by observation instead: merge-base --is-ancestor exits 0 for both fast-forwards, the commit parent is the reviewed base, and the HEAD / ref-name / tree / index / status of the user directory are unchanged; the not-a-descendant refusal is reachable only by an interleaving this single-process service cannot produce',
       },
-      testTimeoutIsAThrowNotAResult: {
+      testRunnerFailureIsADurableResult: {
         severity: 'observation',
-        observed: 'a frozen-criteria test that exceeds testTimeoutMs makes the runner THROW timeout/integration_test_timeout out of integrate() rather than returning a durable refused result, because createTestRunner raises the timeout as a CollaborationError outside the durable-result envelope',
-        assertedAs: 'NOT asserted as a scenario expectation, so a future durable refusal cannot be mistaken for a regression of this case; the crash path that IS asserted (F4) is a child that dies by signal, which the runner records as exitCode -1 with the signal',
+        observed: 'a frozen-criteria test that exceeds testTimeoutMs, fails to spawn or overflows the output limit is recorded as ONE durable refused result (outcome test_runner_failed, the runner own code and field) instead of escaping integrate() as an exception, and the runner STOPS the child on timeout rather than waiting for it to exit',
+        assertedAs: 'asserted in app/runtime/artifactIntegration.test.ts R5: the runner stops the child exactly once on a 10ms timeout and the service returns one durable refused result whose operation is queryable; the crash path that IS asserted here (F4) is a child that dies by signal, which the runner records as exitCode -1 with the signal',
       },
       applyToMissingTargetIsRawFsError: {
         severity: 'observation',

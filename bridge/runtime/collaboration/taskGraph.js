@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import {
-  BUDGET_REASONS,
   COLLABORATION_BUDGETS,
   CollaborationError,
   parseAt,
@@ -12,6 +11,20 @@ import {
   parseTaskTitle,
   parseTeamId,
 } from '../../../shared/runtime/collaboration.js';
+
+/**
+ * The two STRUCTURAL budget reasons this graph owns and re-derives. The other three
+ * (concurrency, session mutation, mailbox) are live counters owned by the coordinator, so a
+ * shape refresh must never write or clear them.
+ */
+const STRUCTURAL_REASONS = Object.freeze(['collaboration_depth', 'collaboration_children']);
+
+/**
+ * The task states a shape refresh may park. A refresh re-derives SHAPE pauses only: it must
+ * never rewrite a terminal state (cancelled/failed/accepted) or an in-flight one
+ * (dispatched/review) into `paused`, or a stopped task would be resurrected into the scheduler.
+ */
+const SHAPE_PARKABLE_STATES = Object.freeze(['pending', 'paused']);
 
 /**
  * Canonical Task graph (task 37): the durable Team task DAG.
@@ -155,19 +168,31 @@ export function createTaskGraph() {
 
   /**
    * Re-derive every depth and every shape pause. A pause is only ever WRITTEN here from the two
-   * structural budgets, so a task can never be paused by a caller's say-so.
+   * structural budgets, so a task can never be paused by a caller's say-so. The coordinator's
+   * dynamic pauses (concurrency, session mutation, mailbox) are PRESERVED across the refresh:
+   * creating an unrelated task re-derives the shape, never the live counters, so a
+   * budget-parked task stays visibly parked and the scheduler can still admit it. That
+   * preservation applies to a task the scheduler may still admit — never to a terminal one:
+   * a refresh must not rewrite cancelled/failed/accepted into `paused`, or a stopped task
+   * would be resurrected and dispatched again.
    */
   function refreshShape() {
     const depths = computeDepths();
     for (const record of tasksById.values()) {
       const next = depths.get(record.taskId);
       if (next !== undefined) record.depth = next;
-      const reasons = shapeReasons(record);
+      const structural = shapeReasons(record);
+      const dynamic = record.paused === null
+        ? []
+        : record.paused.reasons.filter((reason) => !STRUCTURAL_REASONS.includes(reason));
+      const reasons = [...structural, ...dynamic];
       if (reasons.length > 0) {
-        record.paused = Object.freeze({ reasons: Object.freeze(reasons), at: record.updatedAt });
-        if (record.host.state !== 'dispatched' && record.host.state !== 'review') record.host.state = 'paused';
-      } else if (record.paused !== null && record.paused.reasons.every((reason) => BUDGET_REASONS.includes(reason))
-        && record.host.state === 'paused') {
+        record.paused = Object.freeze({
+          reasons: Object.freeze(reasons),
+          at: structural.length > 0 ? record.updatedAt : record.paused?.at ?? record.updatedAt,
+        });
+        if (SHAPE_PARKABLE_STATES.includes(record.host.state)) record.host.state = 'paused';
+      } else if (record.paused !== null && record.host.state === 'paused') {
         record.paused = null;
         record.host.state = 'pending';
       }

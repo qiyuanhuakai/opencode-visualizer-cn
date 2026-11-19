@@ -173,6 +173,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { ParticipantView } from '../../../bridge/runtime/threads/participantService.js';
+import { handoffStateAllowsBegin } from '../../composables/useRuntimeThread';
 import type { RuntimeHandoffOpView, RuntimeHandoffView } from '../../composables/useRuntimeThread';
 
 const props = withDefaults(
@@ -233,7 +234,9 @@ const targetParticipantId = computed(() => props.targetParticipantId ?? '');
 
 const canBegin = computed(() => {
   const current = props.handoff;
-  if (current !== null && current.state !== 'checkpoint' && current.state !== 'attached') return false;
+  // The SAME rule the composable enforces: a resolved record (cancelled/failed/active/reconcile)
+  // never blocks a new handoff; unfinished work does.
+  if (current !== null && !handoffStateAllowsBegin(current.state)) return false;
   if (sourceParticipantId.value === '' || targetParticipantId.value === '') return false;
   if (sourceParticipantId.value === targetParticipantId.value) return false;
   return props.draftText.trim().length > 0;
@@ -251,6 +254,9 @@ const beginDisabledReason = computed(() => {
   }
   if (props.handoffEntries.length === 0) {
     return 'A handoff carries a context checkpoint; no context entries are available to carry';
+  }
+  if (props.handoff !== null && !handoffStateAllowsBegin(props.handoff.state)) {
+    return `This thread already has a handoff at "${props.handoff.state}". Resolve or cancel it before starting another.`;
   }
   return 'Start the handoff from the active participant to the selected target';
 });

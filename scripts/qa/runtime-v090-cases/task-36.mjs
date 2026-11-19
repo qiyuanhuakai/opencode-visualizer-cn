@@ -294,7 +294,8 @@ async function workerChunks() {
   let offset = 0;
   for (let step = 0; step < 200; step += 1) {
     const chunk = await service.chunk(page.pageId, reference.descriptorId, offset);
-    walk.push({ offset, bytes: chunk.bytes, nextOffset: chunk.nextOffset });
+    // chunk() returns a bounded BYTE slice (Uint8Array); its length is the slice's byte count.
+    walk.push({ offset, bytes: chunk.bytes.byteLength, nextOffset: chunk.nextOffset });
     if (chunk.nextOffset === null) break;
     offset = chunk.nextOffset;
   }
@@ -302,7 +303,7 @@ async function workerChunks() {
   let readOffset = 0;
   for (let step = 0; step < 200; step += 1) {
     const chunk = await service.chunk(page.pageId, reference.descriptorId, readOffset);
-    reassembled += serialized.slice(readOffset, readOffset + chunk.bytes);
+    reassembled += new TextDecoder().decode(chunk.bytes);
     if (chunk.nextOffset === null) break;
     readOffset = chunk.nextOffset;
   }
@@ -983,12 +984,12 @@ export async function run(context) {
       });
 
       // ── H3: a single message over 2 MiB is chunked, slice by slice ──
-      await crossRealm('a single 3145728-byte message becomes ONE chunked reference (observed totalBytes 3145822 of the serialized entry) served in 49 observed slices of at most 65536 bytes — offset 0/65536/131072 with nextOffset 65536/131072/196608, the last slice 94 bytes at offset 3145728 with nextOffset null — the page holds 0 inline entries and 256 resident bytes so the body is never held whole, and the reassembly re-hashes to the SAME sha256 46ffe21c… as the serialized entry in both realms', await workerChunks(), await evaluate(() => window.task36.chunks()), {
+      await crossRealm('a single 3145728-byte message becomes ONE chunked reference (observed totalBytes 3145822 of the serialized entry) served in 49 observed slices of at most 65536 bytes — offset 0/65536/131072 with nextOffset 65536/131072/196608, the last slice 94 bytes at offset 3145728 with nextOffset null — the page holds 0 inline entries and charges the body\'s FULL encoded size to the resident budget (observed pageBytes and residentBytes 3145822 of the 16 MiB ceiling, so a 20 MiB body would be refused instead of admitted), no single read materialises more than one 65536-byte slice, and the reassembly re-hashes to the SAME sha256 46ffe21c… as the serialized entry in both realms', await workerChunks(), await evaluate(() => window.task36.chunks()), {
         serializedBytes: 3145822,
         oversized: { entryId: 'big', totalBytes: 3145822 },
-        pageBytes: 256,
+        pageBytes: 3145822,
         pageEntryCount: 0,
-        residentBytes: 256,
+        residentBytes: 3145822,
         chunkCount: 49,
         firstThree: [{ offset: 0, bytes: 65536, nextOffset: 65536 }, { offset: 65536, bytes: 65536, nextOffset: 131072 }, { offset: 131072, bytes: 65536, nextOffset: 196608 }],
         lastTwo: [{ offset: 3080192, bytes: 65536, nextOffset: 3145728 }, { offset: 3145728, bytes: 94, nextOffset: null }],
@@ -996,7 +997,7 @@ export async function run(context) {
         reassemblyEqualsSerialized: true,
         reassemblySha256: '46ffe21cefb51a9978ca872083e7eeb1ef31a5adc17d46b33b6f443c05a5ac43',
         serializedSha256: '46ffe21cefb51a9978ca872083e7eeb1ef31a5adc17d46b33b6f443c05a5ac43',
-        usage: { residentBytes: 256, pageCount: 1, evicted: 0, rereads: 0, dirtyCount: 0, dirtyBytes: 0, retainedBytes: 256, bufferedHistory: false },
+        usage: { residentBytes: 3145822, pageCount: 1, evicted: 0, rereads: 0, dirtyCount: 0, dirtyBytes: 0, retainedBytes: 3145822, bufferedHistory: false },
       });
 
       // ── H4: AC2 — evict, then reopen with hash-equal content ──
@@ -1157,18 +1158,18 @@ export async function run(context) {
       });
 
       // ── F5: a single message over 2 MiB and the chunk contract's refusals ──
-      await crossRealm('a single message over 2 MiB is chunked and never fully resident (observed totalBytes 3145822, pageBytes 256, residentBytes 358 across both pages, residentUnderInlineCeiling true), and the chunk contract refuses every malformed request with the OBSERVED code and field: a descriptor belonging to another page, an unknown descriptor and an unknown page are each invalid_request/history.descriptor, a negative offset and a fractional offset are each invalid_request/history.offset, and the page\'s own descriptor at offset 0 is served — identical in both realms', await workerChunkRefusals(), await evaluate(() => window.task36.chunkRefusals()), {
+      await crossRealm('a single message over 2 MiB is chunked and charged at its FULL encoded size (observed totalBytes 3145822, pageBytes 3145822, residentBytes 3145924 across both pages, residentUnderInlineCeiling false because the whole body counts against the 16 MiB resident ceiling — the bound is the budget, not a 2 MiB per-entry cap), and the chunk contract refuses every malformed request with the OBSERVED code and field: a descriptor belonging to another page, an unknown descriptor and an unknown page are each invalid_request/history.descriptor, a negative offset and a fractional offset are each invalid_request/history.offset, and the page\'s own descriptor at offset 0 is served — identical in both realms', await workerChunkRefusals(), await evaluate(() => window.task36.chunkRefusals()), {
         oversized: { entryId: 'big', totalBytes: 3145822 },
-        pageBytes: 256,
-        residentBytes: 358,
-        residentUnderInlineCeiling: true,
+        pageBytes: 3145822,
+        residentBytes: 3145924,
+        residentUnderInlineCeiling: false,
         foreignDescriptor: { code: 'invalid_request', field: 'history.descriptor' },
         unknownDescriptor: { code: 'invalid_request', field: 'history.descriptor' },
         unknownPage: { code: 'invalid_request', field: 'history.descriptor' },
         negativeOffset: { code: 'invalid_request', field: 'history.offset' },
         fractionalOffset: { code: 'invalid_request', field: 'history.offset' },
         ownDescriptorServed: { code: null, field: null },
-        usage: { residentBytes: 358, pageCount: 2, evicted: 0, rereads: 0, dirtyCount: 0, dirtyBytes: 0, retainedBytes: 358, bufferedHistory: false },
+        usage: { residentBytes: 3145924, pageCount: 2, evicted: 0, rereads: 0, dirtyCount: 0, dirtyBytes: 0, retainedBytes: 3145924, bufferedHistory: false },
       });
 
       // ── F6: the dirty budgets refuse instead of piling up all history ──

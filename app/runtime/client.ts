@@ -1,6 +1,6 @@
 import { METHODS, ProtocolError, requireValue } from '../../shared/runtime/capabilities.js';
 import type { ErrorCode } from '../../shared/runtime/capabilities.js';
-import { createProtocolState } from '../../shared/runtime/protocol.js';
+import { createProtocolState, LIMITS } from '../../shared/runtime/protocol.js';
 import type { Binding, Hello, Result, Snapshot } from '../../shared/runtime/protocol.js';
 import type { FramePreflightDecision, RawFrameSummary } from '../../shared/runtime/rawFrame.js';
 import { HISTORY_LIMITS } from '../../shared/runtime/historyPage.js';
@@ -15,7 +15,18 @@ export type RequestMethod = Exclude<RuntimeMethod, MutationMethod>;
 export type RequestOptions = { readonly signal?: AbortSignal; readonly selectionCurrent?: () => boolean; readonly onDrained?: () => void };
 export type RuntimeScope = { readonly binding: Binding; readonly generation: number; readonly isCurrent: () => boolean };
 type Collection = RuntimeParams['runtime.snapshot']['collection'];
-type Target = { readonly hello: Hello; readonly state: ProtocolState; readonly generation: number; paging: boolean; indexSnapshot?: Readonly<{ token: string; revision: number; watermark: number; expiresAt: number }> };
+/** An index view this client minted, kept only to bound how many are outstanding. */
+type IndexView = Readonly<{ token: string; expiresAt: number }>;
+/**
+ * The bridge bounds live snapshot views per environment (`LIMITS.snapshotTokens`) and exposes no
+ * wire method to release one early, so a view lives for its whole TTL. `LIMITS.snapshotTokens`
+ * counts EVERY live view for the environment — the state layer's observer view plus every index
+ * view this client minted — so an index read may mint only while the target still has budget for
+ * one after reserving the observer's slot. Minting on every `fresh` read instead exhausts the
+ * budget and the store rejects the next mint with `snapshot_limit`.
+ */
+const INDEX_VIEW_BUDGET = LIMITS.snapshotTokens - 1;
+type Target = { readonly hello: Hello; readonly state: ProtocolState; readonly generation: number; paging: boolean; indexSnapshot?: Readonly<{ token: string; revision: number; watermark: number; expiresAt: number }>; indexViews?: readonly IndexView[] };
 type Pending = {
   readonly target: Target; readonly method: RuntimeMethod; readonly current: () => boolean;
   readonly slot: 'normal' | 'reserved';
@@ -26,6 +37,32 @@ type Pending = {
 function bindingOf({ target, epoch, generation }: Binding): Binding { return { target, epoch, generation }; }
 function reserved(method: RuntimeMethod) {
   return method === 'runtime.history.close' || method === 'session.cancel' || method === 'interaction.respond' || method === 'runtime.channel.ack' || method === 'runtime.channel.cancel' || method === 'runtime.observer.resume' || method === 'runtime.observer.close' || method === 'runtime.target.detach';
+}
+
+/**
+ * Block until the target has live-view budget for one index view. The bridge bounds live views per
+ * environment and exposes no wire method to release one early, so a slot opens only when a held view
+ * lapses: the wait is bounded by that view's remaining TTL and is cancellable through `signal`.
+ * `onWaiting` reports each wait so a caller can surface it instead of showing a stalled read.
+ */
+async function acquireIndexSlot(attached: Target, signal: AbortSignal | undefined, onWaiting: ((waitMs: number) => void) | undefined): Promise<void> {
+  for (;;) {
+    // AbortSignal never replays a past abort to a listener registered afterwards, so a caller
+    // whose signal was already aborted when it queued behind another read would otherwise wait
+    // out the full remaining TTL before the listener-free timer resolves. Checking the flag at
+    // the top of every iteration settles both that case and an abort that lands mid-wait.
+    if (signal?.aborted) throw new ProtocolError('cancelled', 'readIndex.slot');
+    const now = Date.now();
+    attached.indexViews = (attached.indexViews ?? []).filter((view) => view.expiresAt > now);
+    const held = attached.indexViews ?? [];
+    if (held.length < INDEX_VIEW_BUDGET) return;
+    const waitMs = Math.max(0, Math.min(...held.map((view) => view.expiresAt)) - Date.now());
+    onWaiting?.(waitMs);
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, waitMs);
+      signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+  }
 }
 
 export class RuntimeRequestError extends ProtocolError {
@@ -372,40 +409,73 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
    * not exhaust the token budget. The reuse window is the snapshot TTL, so an
    * index read observes the index at the shared view's point in time.
    *
-   * `fresh` bypasses that reuse for a caller that knows the cached view cannot
-   * answer — a new user search, an explicit refresh, or an index update the
-   * caller just performed. Pagination inside ONE traversal leaves it unset so
-   * every page of that traversal stays on one consistent view.
-   */
+    * `fresh` bypasses that reuse for a caller that knows the cached view cannot
+    * answer — a new user search, an explicit refresh, or an index update the
+    * caller just performed. Pagination inside ONE traversal leaves it unset so
+    * every page of that traversal stays on one consistent view.
+    *
+    * A `fresh` read always mints its own view: answering it from the cached one
+    * would silently serve rows that predate the request for up to the whole TTL.
+    * Because the bridge cannot release a view early and bounds live views per
+    * environment, a fresh read whose budget is spent first WAITS for a held view
+    * to lapse (bounded by that view's remaining TTL, reported through
+    * `onWaiting`) instead of minting into `snapshot_limit` or reusing the stale
+    * view. The near-expiry reuse bypass applies only while a replacement can
+    * actually be minted — the bridge deletes only truly expired tokens, so a
+    * cached view it still holds stays usable once the budget is spent.
+    */
   async function readIndex(
     target: EnvironmentId,
     collections: Collection | readonly Collection[],
-    options: RequestOptions & { readonly onPage: (collection: Collection, page: Snapshot) => void | Promise<void>; readonly fresh?: boolean },
+    options: RequestOptions & { readonly onPage: (collection: Collection, page: Snapshot) => void | Promise<void>; readonly fresh?: boolean; readonly onWaiting?: (waitMs: number) => void },
   ) {
     const attached = getTarget(target);
     const names = typeof collections === 'string' ? [collections] : collections;
     requireValue(names.length > 0 && names.length <= 5 && new Set(names).size === names.length, 'snapshot.collections');
+    const now = Date.now();
+    // Views whose TTL has lapsed are gone from the store, so they no longer hold budget.
+    attached.indexViews = (attached.indexViews ?? []).filter((view) => view.expiresAt > now);
     const cached = attached.indexSnapshot;
-    const reuse = options.fresh === true || cached === undefined || cached.expiresAt - Date.now() <= 2000
-      ? undefined
-      : cached.token;
-    if (options.fresh === true) attached.indexSnapshot = undefined;
+    // A mint needs budget: the bridge bounds live views per environment and rejects a token-less
+    // read past the budget with `snapshot_limit`, and it exposes no wire method to release a view
+    // early, so a read that must mint first WAITS for a held view to lapse (bounded by that view's
+    // remaining TTL, cancellable through `signal`) instead of failing. A `fresh` read may never
+    // answer from the cached view — an explicit search/refresh would otherwise read rows that
+    // predate the request for up to the whole TTL — so it waits rather than silently reusing.
+    const budget = (attached.indexViews?.length ?? 0) < INDEX_VIEW_BUDGET;
+    // `fresh` bypasses the reuse so the read observes rows the cached view predates. The
+    // near-expiry bypass exists so a view that lapses mid-pagination is not reused past its death,
+    // but only while a replacement can actually be minted: the bridge deletes only truly expired
+    // tokens, so a cached view the bridge still holds stays reusable once the budget is spent.
+    const mint = options.fresh === true || cached === undefined || (cached.expiresAt - now <= 2000 && budget);
+    if (mint) await acquireIndexSlot(attached, options.signal, options.onWaiting);
+    const reuse = mint ? undefined : cached.token;
+    if (mint) attached.indexSnapshot = undefined;
     let first: Snapshot | undefined;
     for (const collection of names) {
       let cursor: string | null = null;
       do {
         const token = first ? first.token : (cursor === null && collection === names[0] ? reuse : undefined);
         let page: Snapshot;
+        let minted: boolean;
         try {
           page = await request(target, 'runtime.snapshot', { collection, ...(token === undefined ? {} : { token }), cursor, limit: 200 }, options);
+          minted = token === undefined;
         } catch (error) {
           if (first !== undefined || token === undefined || !(error instanceof ProtocolError) || error.code !== 'replay_required') throw error;
           attached.indexSnapshot = undefined;
+          const retryNow = Date.now();
+          attached.indexViews = (attached.indexViews ?? []).filter((view) => view.expiresAt > retryNow);
+          await acquireIndexSlot(attached, options.signal, options.onWaiting);
           page = await request(target, 'runtime.snapshot', { collection, cursor, limit: 200 }, options);
+          minted = true;
         }
         if (!first) {
           first = page;
           attached.indexSnapshot = Object.freeze({ token: page.token, revision: page.revision, watermark: page.watermark, expiresAt: page.expiresAt });
+          if (minted) {
+            attached.indexViews = [...(attached.indexViews ?? []), { token: page.token, expiresAt: page.expiresAt }];
+          }
         }
         requireValue(page.token === first.token && page.revision === first.revision && page.watermark === first.watermark && page.target === attached.hello.target && page.epoch === attached.hello.epoch && page.generation === attached.hello.generation, 'snapshot.atomic', 'replay_required');
         requireValue(page.expiresAt > Date.now() && (page.cursor === null || page.cursor !== cursor), 'snapshot.expired', 'replay_required');

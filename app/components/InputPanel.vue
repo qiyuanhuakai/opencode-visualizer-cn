@@ -611,6 +611,7 @@ import { parseLeadingSlashCommand } from '../utils/codexSlashCommands';
 import {
   RUNTIME_SESSION_ACTIONS_KEY,
   bindRuntimeAction,
+  type RuntimeActionBinding,
   type RuntimeSendInput,
   type RuntimeSessionRuntime,
 } from '../composables/useRuntimeSessionActions';
@@ -753,19 +754,88 @@ function runtimeSendInput(): RuntimeSendInput {
   };
 }
 
+/**
+ * The binding the prompt is actually sent through. With a thread open, the prompt goes to the
+ * EFFECTIVE target's own native session — the very participant the chips display (explicit
+ * selection, else the thread's active participant) — instead of whatever session the runtime
+ * binding happens to hold. When that participant cannot be resolved, the answer is `null`: the
+ * caller refuses the send visibly rather than silently falling back to the ambient binding,
+ * which is how a prompt once reached the wrong session.
+ */
+function sendBinding(binding: RuntimeActionBinding): RuntimeActionBinding | null {
+  const state = threadState;
+  if (state === null) return binding;
+  // No thread open: the composer keeps its legacy behaviour exactly.
+  if (state.threadId.value === null) return binding;
+  const effective = state.effectiveTargets.value;
+  const session = effective.length === 1 ? effective[0]?.session : undefined;
+  if (session === undefined) return null;
+  return Object.freeze({ ...binding, session });
+}
+
+/**
+ * The binding the last send actually went through.
+ *
+ * `requestAbort` must cancel the operation THIS composer started, not whatever the ambient
+ * binding happens to hold when Stop is pressed. With a thread open the send is routed to the
+ * effective target's own native session, so re-deriving the binding at cancel time answered a
+ * DIFFERENT session's cancel — the ambient A instead of the B the prompt reached — the moment
+ * the thread's active participant moved. The identity is therefore captured at send and held
+ * for the cancel path, exactly as `sendBinding` already resolves it for the send itself.
+ *
+ * It is only recorded when the send went through a thread-resolved target (the only case where
+ * the two diverge), and it is released BY THE OPERATION'S OWN END — the send handle's reported
+ * completion, or the next send superseding it — never by the thread UI closing. Closing the
+ * thread panel is not evidence that the operation the prompt started has ended: the turn keeps
+ * running on the target's own native session, so dropping the capture on close left Stop
+ * pointing at the ambient session while the real operation was still live and uncancellable.
+ * Without a thread the recorded value stays `null` and the ambient binding is used unchanged.
+ */
+let lastSentBinding: RuntimeActionBinding | null = null;
+
+/**
+ * Retire a captured send identity once the operation it belongs to reports completion.
+ *
+ * The real router hands back the send's mutation, whose `executed` promise settles when the
+ * turn ends; a router that reports nothing simply keeps the capture until a new send
+ * supersedes it, which is the conservative direction — a live operation stays cancellable.
+ */
+function releaseSentBindingOnCompletion(captured: RuntimeActionBinding, handle: unknown): void {
+  const executed = (handle as { executed?: unknown } | null | undefined)?.executed;
+  if (!(executed instanceof Promise)) return;
+  const release = () => {
+    if (lastSentBinding === captured) lastSentBinding = null;
+  };
+  void executed.then(release, release);
+}
+
 function requestSend() {
   const binding = runtimeBinding();
   if (binding && runtimeSessionActions) {
-    void runtimeSessionActions.router.sendMessage(binding, runtimeSendInput());
+    const target = sendBinding(binding);
+    if (target === null) {
+      emit('status-error', t('inputPanel.threadTargetUnresolved'));
+      return;
+    }
+    const handle = runtimeSessionActions.router.sendMessage(target, runtimeSendInput());
+    // The last send's identity is what Stop cancels: a thread-routed send records the target
+    // it reached; an ambient send records nothing, because the ambient binding is then the
+    // honest answer and a capture from an earlier thread send must not outlive it.
+    lastSentBinding = target === binding ? null : target;
+    if (lastSentBinding !== null) releaseSentBindingOnCompletion(lastSentBinding, handle);
     return;
   }
+  lastSentBinding = null;
   emit('send');
 }
 
 function requestAbort() {
   const binding = runtimeBinding();
   if (binding && runtimeSessionActions) {
-    void runtimeSessionActions.router.cancel(binding);
+    // Prefer the session the last send actually reached: that is the operation Stop has to
+    // cancel. The ambient binding is the fallback only when this composer has no recorded
+    // thread send, which is the legacy behaviour exactly.
+    void runtimeSessionActions.router.cancel(lastSentBinding ?? binding);
     return;
   }
   emit('abort');

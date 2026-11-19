@@ -3,6 +3,7 @@ import {
   createAuxiliaryHistoryService,
 } from '../../bridge/runtime/history/historyService.js';
 import type {
+  AuxiliaryHistoryChunk,
   AuxiliaryHistoryLimits,
   AuxiliaryHistoryPage,
   AuxiliaryHistoryService,
@@ -10,7 +11,7 @@ import type {
 } from '../../bridge/runtime/history/historyService.js';
 import type { AuxiliaryEntry } from '../../bridge/runtime/history/auxiliaryMerge.js';
 
-export type { AuxiliaryEntry, AuxiliaryHistoryPage, AuxiliaryHistoryUsage };
+export type { AuxiliaryEntry, AuxiliaryHistoryChunk, AuxiliaryHistoryPage, AuxiliaryHistoryUsage };
 
 /**
  * Task 36 — the app-side bounded auxiliary-history page cache.
@@ -40,7 +41,7 @@ export type HistoryPageCache = Readonly<{
   get(pageId: string): AuxiliaryHistoryPage | null;
   evict(pageId: string): { pageId: string; freedBytes: number; evicted: boolean };
   reread(cursor: string | null): Promise<AuxiliaryHistoryPage>;
-  chunk(pageId: string, descriptorId: string, offset: number): Promise<{ bytes: number; nextOffset: number | null }>;
+  chunk(pageId: string, descriptorId: string, offset: number): Promise<AuxiliaryHistoryChunk>;
   legacyExport(): Promise<readonly AuxiliaryEntry[]>;
   mergeWithCanonical(canonical: readonly AuxiliaryEntry[], page: AuxiliaryHistoryPage | null): readonly AuxiliaryEntry[];
   stage(entries: readonly AuxiliaryEntry[], generation?: number): void;

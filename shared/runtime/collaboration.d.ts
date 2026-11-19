@@ -25,6 +25,11 @@ export const COLLABORATION_BUDGETS: CollaborationBudgets;
 
 /** The task lifecycle. `paused` is the VISIBLE budget state — never a silent drop, never a silent run. */
 export const TASK_STATES: readonly ['pending', 'dispatched', 'review', 'accepted', 'failed', 'cancelled', 'paused'];
+/**
+ * The task states that END a task's lifecycle. No scheduler, graph refresh, stop or acceptance
+ * may revive them: a terminated task is never re-admitted, whatever a stale pause field claims.
+ */
+export const TERMINAL_TASK_STATES: readonly ['accepted', 'failed', 'cancelled'];
 /** The attempt ladder: accepted → sent → observed → terminal, or the reconcile stop. */
 export const ATTEMPT_STATES: readonly ['accepted', 'sent', 'observed', 'terminal', 'reconcile'];
 /** The native terminal reasons an attempt can report. `completed` is NOT a task acceptance. */
@@ -43,6 +48,7 @@ export const BUDGET_REASONS: readonly [
 ];
 
 export type TaskState = (typeof TASK_STATES)[number];
+export type TerminalTaskState = (typeof TERMINAL_TASK_STATES)[number];
 export type AttemptState = (typeof ATTEMPT_STATES)[number];
 export type AttemptTerminalReason = (typeof ATTEMPT_TERMINAL_REASONS)[number];
 export type ReviewState = (typeof REVIEW_STATES)[number];
@@ -106,6 +112,12 @@ export function parseTerminalReason(value: unknown): AttemptTerminalReason;
 export function parseBudgetReason(value: unknown): BudgetReason;
 export function parseReviewState(value: unknown): ReviewState;
 export function parseAcceptanceState(value: unknown): AcceptanceState;
+/** The parsed Host stop payload: bounded code/field/reason, or an explicit refusal. */
+export function parseStopPayload(input: {
+  readonly code?: unknown;
+  readonly field?: unknown;
+  readonly reason?: unknown;
+}): { readonly code: string; readonly field: string; readonly reason: string | null };
 /** A monotonic-ish clock reading: an explicit `at` is required for every observable transition. */
 export function parseAt(value?: number): number;
 export function parseTeamName(value: unknown): string;

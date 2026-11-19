@@ -234,6 +234,19 @@
               {{ entry.text }}
             </li>
           </ol>
+          <!--
+            An unavailable participant's own target is not readable from here: a different
+            environment or harness instance, or a failed read on the right one. It is stated
+            explicitly — an empty list here would read as "this participant has no messages".
+          -->
+          <p
+            v-if="group.unavailable"
+            class="group-unavailable"
+            data-testid="native-history-unavailable"
+            :data-participant-id="group.participantId"
+          >
+            This participant's session belongs to another target; its history is unavailable here.
+          </p>
         </div>
       </section>
 
@@ -255,6 +268,7 @@ import type {
   EvidenceReader,
   EvidenceTarget,
 } from '../../../shared/runtime/context.js';
+import { effectiveTargetParticipants } from '../../composables/useRuntimeThread';
 import type {
   NativeHistoryGroup,
   RuntimeHandoffOpView,
@@ -367,18 +381,11 @@ watch(
 /**
  * THE target rule, in one place: an explicit selection wins; with none, the input follows the
  * thread's active participant. The chips render exactly this list, so the user always sees where
- * the prompt goes.
+ * the prompt goes — and InputPanel sends through the very same rule.
  */
-const effectiveTargets = computed<readonly ParticipantView[]>(() => {
-  const current = props.thread;
-  if (current === null) return Object.freeze([]);
-  const participants = current.participants;
-  if (props.targets.length > 0) {
-    return Object.freeze(participants.filter((participant) => props.targets.includes(participant.participantId)));
-  }
-  const active = participants.find((participant) => participant.participantId === current.activeParticipantId);
-  return Object.freeze(active === undefined ? [] : [active]);
-});
+const effectiveTargets = computed<readonly ParticipantView[]>(() =>
+  effectiveTargetParticipants(props.thread, props.targets),
+);
 
 function stateOf(participantId: string): string {
   return props.thread?.participants.find((participant) => participant.participantId === participantId)?.state ?? 'unknown';
@@ -760,6 +767,13 @@ function handleFanout(): void {
 
 .group-entry::before {
   content: '· ';
+  color: var(--theme-text-muted, #94a3b8);
+}
+
+.group-unavailable {
+  margin: 0;
+  font-size: var(--type-caption, 10px);
+  line-height: 1.45;
   color: var(--theme-text-muted, #94a3b8);
 }
 

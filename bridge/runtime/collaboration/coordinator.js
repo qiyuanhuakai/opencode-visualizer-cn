@@ -7,10 +7,12 @@ import {
   parseCriteria,
   parseOwner,
   parseSessionMutationKey,
+  parseStopPayload,
   parseTeamId,
   parseTeamName,
   parseTaskTitle,
   parseLeaseInput,
+  TERMINAL_TASK_STATES,
 } from '../../../shared/runtime/collaboration.js';
 import { createTaskGraph } from './taskGraph.js';
 import { createAttemptService } from './attemptService.js';
@@ -152,7 +154,10 @@ export function createCollaborationCoordinator({
       sessionRunning.set(sessionKey, (sessionRunning.get(sessionKey) ?? 0) + 1);
       return;
     }
-    running.delete(attemptRecord.attemptId);
+    // Release ONLY a reservation this attempt actually holds. `running` is exactly the set of
+    // in-flight attemptIds, so a duplicate cancel, fail or end is a no-op here and can never
+    // decrement another attempt's share of the Session-mutation budget.
+    if (!running.delete(attemptRecord.attemptId)) return;
     const current = sessionRunning.get(sessionKey) ?? 0;
     if (current <= 1) sessionRunning.delete(sessionKey);
     else sessionRunning.set(sessionKey, current - 1);
@@ -168,13 +173,6 @@ export function createCollaborationCoordinator({
       running.add(record.attemptId);
       const sessionKey = parseSessionMutationKey(record.owner.session);
       sessionRunning.set(sessionKey, (sessionRunning.get(sessionKey) ?? 0) + 1);
-    }
-  }
-
-  function releaseTaskAttempts(taskId) {
-    for (const attemptId of graph.record(taskId).attempts) {
-      const record = attempts.record(attemptId);
-      if (RUNNING_ATTEMPT_STATES.includes(attempts.attempt(attemptId).state)) markRunning(record, false);
     }
   }
 
@@ -258,7 +256,8 @@ export function createCollaborationCoordinator({
     if (record.host.state === 'dispatched') {
       throw new CollaborationError('conflict', 'task_dispatched', { taskId: record.taskId });
     }
-    if (record.host.state === 'accepted' || record.host.state === 'failed' || record.host.state === 'cancelled') {
+    if (record.host.state === 'accepted' || record.host.state === 'failed' || record.host.state === 'cancelled'
+      || record.host.state === 'review') {
       throw new CollaborationError('conflict', 'task_state', { taskId: record.taskId, state: record.host.state });
     }
     if (record.lease === null || record.lease.expiresAt <= at) {
@@ -313,13 +312,21 @@ export function createCollaborationCoordinator({
     try {
       delivered = await attempts.deliver({ attemptId: input.attemptId, deliver: deliverPrompt, at });
     } catch (error) {
+      // Only a send that ACTUALLY terminated may fail the task and free its budget. The
+      // deliver op's outcome is the evidence: `failed` means this call's send stopped, while
+      // a missing or non-failed op means the request was REJECTED by a state check — a
+      // duplicate in-flight send, or a send for an attempt that already stopped. Such a
+      // rejection must leave the original send's lifecycle, and the reservation it still
+      // holds, untouched.
+      const deliverOp = attempts.ops(input.attemptId).find((op) => op.kind === 'deliver');
+      if (deliverOp === undefined || deliverOp.outcome !== 'failed') throw error;
       markRunning(attemptRecord, false);
       if (taskRecord.host.state === 'dispatched' || taskRecord.host.state === 'paused') {
         taskRecord.host.state = 'failed';
         taskRecord.host.endedAt = at;
         taskRecord.updatedAt = at;
+        stats.failures += 1;
       }
-      stats.failures += 1;
       throw error;
     }
     if (delivered.outcome === 'reconcile') {
@@ -342,6 +349,9 @@ export function createCollaborationCoordinator({
     for (const view of graph.tasks()) {
       if (view.state !== 'paused') continue;
       const record = graph.record(view.taskId);
+      // The scheduler admits only live work: a terminal task is never re-admitted, whatever a
+      // stale pause field claims.
+      if (TERMINAL_TASK_STATES.includes(record.host.state)) continue;
       if (budgetReasonsFor(record).length > 0) continue;
       if (graph.blockedBy(record.taskId).length > 0) continue;
       const result = await dispatch({ taskId: view.taskId, at });
@@ -424,15 +434,25 @@ export function createCollaborationCoordinator({
     const at = parseAt(input.at);
     const record = graph.record(input.taskId);
     if (record.host.state === 'accepted') throw new CollaborationError('conflict', 'task_state');
+    // Parse the WHOLE stop payload BEFORE touching a single reservation. A payload the
+    // attempt service would reject — an over-long reason, a missing code — must leave every
+    // budget share exactly where it was: a refused stop frees nothing, so no other task can
+    // spend the session slot this one still holds.
+    const failure = parseStopPayload({ code: input.code, field: input.field, reason: input.reason ?? null });
     for (const attemptId of record.attempts) {
       const state = attempts.attempt(attemptId).state;
       if (!RUNNING_ATTEMPT_STATES.includes(state)) continue;
-      attempts.fail({ attemptId, code: input.code, field: input.field, reason: input.reason ?? null, at });
+      attempts.fail({ attemptId, code: failure.code, field: failure.field, reason: failure.reason, at });
+      // Release only AFTER the stop was accepted, keyed off the reservation this attempt
+      // actually holds — never off the post-stop projection, and never for a refused stop.
+      markRunning(attempts.record(attemptId), false);
     }
-    releaseTaskAttempts(record.taskId);
     record.host.state = 'failed';
     record.host.endedAt = at;
     record.updatedAt = at;
+    // A terminated task keeps no scheduling pause: the graph refresh preserves dynamic
+    // reasons, and a retained one would resurrect this task into the scheduler.
+    record.paused = null;
     stats.failures += 1;
     return graph.task(record.taskId);
   }
@@ -442,15 +462,19 @@ export function createCollaborationCoordinator({
     const at = parseAt(input.at);
     const record = graph.record(input.taskId);
     if (record.host.state === 'accepted') throw new CollaborationError('conflict', 'task_state');
+    // The same ordering as failTask: validate the whole payload first, stop second, release
+    // last — a refused cancel frees no slot and journals no op.
+    const stop = parseStopPayload({ code: 'cancelled', field: 'task_cancelled', reason: input.reason ?? null });
     for (const attemptId of record.attempts) {
       const state = attempts.attempt(attemptId).state;
       if (!RUNNING_ATTEMPT_STATES.includes(state)) continue;
-      attempts.cancel({ attemptId, code: 'cancelled', field: 'task_cancelled', reason: input.reason ?? null, at });
+      attempts.cancel({ attemptId, code: stop.code, field: stop.field, reason: stop.reason, at });
+      markRunning(attempts.record(attemptId), false);
     }
-    releaseTaskAttempts(record.taskId);
     record.host.state = 'cancelled';
     record.host.endedAt = at;
     record.updatedAt = at;
+    record.paused = null;
     return graph.task(record.taskId);
   }
 

@@ -77,6 +77,12 @@ export function createRelayChannel(stream, options = {}) {
   const controlHandlers = [];
   const storageHandlers = [];
   const closeHandlers = [];
+  // Handlers registered through `onReady` run SYNCHRONOUSLY when the handshake completes,
+  // before `ready` settles. One read block can carry the final handshake message and the
+  // first business frame together, and `onData` dispatches the rest of that block
+  // synchronously, so a consumer registered one microtask later would still be absent when
+  // the first frame dispatched — and that frame would be silently dropped.
+  const readyHandlers = [];
   let settleReady;
   let failReady;
   const ready = new Promise((resolve, reject) => {
@@ -130,6 +136,12 @@ export function createRelayChannel(stream, options = {}) {
   function becomeReady() {
     state = 'ready';
     clearHandshakeTimer();
+    // Consumer registration completes synchronously with the handshake success, BEFORE
+    // `ready` settles: every observer of `ready` therefore sees registered consumers, and a
+    // final handshake message merged with the first business frame in one read block loses
+    // no frame. Registering from `ready.then` instead would leave `dataHandlers` empty for
+    // the remainder of that block.
+    for (const handler of readyHandlers) handler();
     settleReady({ role, binding: handshake.binding });
   }
 
@@ -313,6 +325,13 @@ export function createRelayChannel(stream, options = {}) {
     binding: handshake.binding,
     ready,
     state: () => state,
+    onReady(handler) {
+      readyHandlers.push(handler);
+      // An already-ready channel notifies immediately, so registration order never decides
+      // whether a consumer observes the channel.
+      if (state === 'ready') handler();
+      return this;
+    },
     onData(handler) {
       dataHandlers.push(handler);
       return this;
@@ -433,7 +452,13 @@ export function createComputeRelay(options = {}) {
       role: 'compute',
       timeoutMs: options.timeoutMs,
     });
-    channel.ready.then(() => track(channel), () => channels.delete(channel));
+    // The consumer is registered synchronously with the handshake success. Registering it
+    // from `ready.then` instead would leave the channel's data handlers empty for the rest
+    // of the read block that carried the confirm: a legal peer that sends its first business
+    // frame immediately after the confirm can have both frames merged into one read, and
+    // that first frame would be dispatched to nobody and dropped.
+    channel.onReady(() => track(channel));
+    channel.ready.catch(() => channels.delete(channel));
   }
 
   async function listen() {

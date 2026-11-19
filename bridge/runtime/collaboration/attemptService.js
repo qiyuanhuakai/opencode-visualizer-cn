@@ -4,6 +4,7 @@ import {
   parseAttemptId,
   parseAt,
   parseOwner,
+  parseStopPayload,
   parseTaskId,
   parseTerminalReason,
 } from '../../../shared/runtime/collaboration.js';
@@ -449,17 +450,17 @@ export function createAttemptService() {
       }
       return attemptView(record);
     }
-    if (typeof input.code !== 'string' || input.code.length === 0
-      || typeof input.field !== 'string' || input.field.length === 0) {
-      throw new CollaborationError('invalid_request', 'attempt_resolution');
-    }
+    // Parse the WHOLE stop payload BEFORE the op is journaled: a payload the Host sink would
+    // reject — an over-long reason, a missing code — must leave no journaled op behind, so the
+    // refusal is clean, observable and retryable instead of a half-written point of no retry.
+    const payload = parseStopPayload(input);
     const op = journalOp({
       attemptId: record.attemptId,
       kind,
-      fingerprint: fingerprintOf({ attemptId: record.attemptId, kind, code: input.code, field: input.field }),
+      fingerprint: fingerprintOf({ attemptId: record.attemptId, kind, code: payload.code, field: payload.field }),
       at,
     }).op;
-    stopRecord(record, op, kind, { code: input.code, field: input.field, reason: input.reason ?? null }, at);
+    stopRecord(record, op, kind, payload, at);
     return attemptView(record);
   }
 

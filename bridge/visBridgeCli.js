@@ -388,37 +388,30 @@ function createLivenessToken() {
  * process would exit immediately after claiming ownership, since a signal listener does not
  * keep the event loop alive. Every terminating path (SIGINT, SIGTERM, an unexpected error, or
  * an explicit `close()`) releases the on-disk fence before the process ends.
+ *
+ * The store writes its fence before the open completes (the journal fsync that finishes the
+ * open lands after `writeFence`), and `close()` is a no-op until the open has finished. A
+ * signal can therefore arrive while the fence is on disk but the store is still opening, so
+ * shutdown settles the pending open before releasing: only a `close()` that actually ran
+ * counts as a successful release, and an open that failed during shutdown exits non-zero
+ * instead of claiming one.
  */
 export async function runControlStoreCommand(options, dependencies = {}) {
   const stateRoot = options.stateRoot ?? dependencies.stateRoot;
   if (!stateRoot) throw new Error('vis_bridge control-store requires --state-root or VIS_BRIDGE_CONTROL_STORE_ROOT.');
   const environmentId = options.environmentId ?? dependencies.environmentId;
   if (!environmentId) throw new Error('vis_bridge control-store requires an environment id (--environment).');
-  const { createSlurmControlStore } = await import('./runtime/transports/slurmControlStore.js');
-  const store = createSlurmControlStore({
-    root: stateRoot,
-    environmentId,
-    ownerInstanceId: dependencies.ownerInstanceId ?? `control-store-${process.pid}`,
-  });
-  const status = await store.open('owner');
-  console.log(
-    `vis_bridge control-store owns environment ${status.environmentId} at ${status.root} (epoch ${status.epoch}).`,
-  );
 
-  const liveness = createLivenessToken();
-  let released = false;
-  const releaseFence = async () => {
-    if (released) return;
-    released = true;
-    liveness.release();
-    await store.close();
-  };
-  const exitAfterRelease = (code) => {
-    void releaseFence().then(
-      () => process.exit(code),
-      () => process.exit(1),
-    );
-  };
+  // Loaded before any listener is installed: the module load touches no disk, so a signal
+  // during it takes the default disposition with nothing acquired yet, and no shutdown path
+  // can race an open that has not been started.
+  const { createSlurmControlStore } = await import('./runtime/transports/slurmControlStore.js');
+
+  // Installed before the first disk-touching await: a signal landing while the store is still
+  // opening would otherwise take the default disposition and kill the process with the fence
+  // held.
+  /** @type {{ store?: { close(): Promise<unknown> }, opening?: Promise<unknown>, liveness?: { release(): void }, released: boolean, exiting: boolean }} */
+  const role = { store: undefined, opening: undefined, liveness: undefined, released: false, exiting: false };
   const onSignal = () => exitAfterRelease(0);
   const onFatalError = (error) => {
     console.error(error instanceof Error ? error.message : String(error));
@@ -428,17 +421,88 @@ export async function runControlStoreCommand(options, dependencies = {}) {
     console.error(reason instanceof Error ? reason.message : String(reason));
     exitAfterRelease(1);
   };
-  const removeLivenessListeners = () => {
+  const removeProcessListeners = () => {
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);
     process.off('uncaughtException', onFatalError);
     process.off('unhandledRejection', onUnhandledRejection);
   };
+  const releaseFence = async () => {
+    if (role.released) return;
+    role.released = true;
+    role.liveness?.release();
+    // The fence is already on disk while the open is still finishing its journal fsync, and
+    // close() is a no-op until the open completes: settling the pending open first is what
+    // makes the close below a real release instead of a success reported without one.
+    try {
+      await role.opening;
+    } catch (error) {
+      throw new Error(
+        `control-store open failed during shutdown, the fence was not released: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    await role.store?.close();
+  };
+  const exitAfterRelease = (code) => {
+    if (role.exiting) return;
+    role.exiting = true;
+    void releaseFence().then(
+      () => process.exit(code),
+      (error) => {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      },
+    );
+  };
+  const close = async () => {
+    removeProcessListeners();
+    await releaseFence();
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+  process.on('uncaughtException', onFatalError);
+  process.on('unhandledRejection', onUnhandledRejection);
 
-  process.once('SIGINT', onSignal);
-  process.once('SIGTERM', onSignal);
-  process.once('uncaughtException', onFatalError);
-  process.once('unhandledRejection', onUnhandledRejection);
+  const store = createSlurmControlStore({
+    root: stateRoot,
+    environmentId,
+    ownerInstanceId: dependencies.ownerInstanceId ?? `control-store-${process.pid}`,
+  });
+  role.store = store;
+  // Captured synchronously so a signal arriving mid-open awaits this exact open.
+  role.opening = store.open('owner');
+  let status;
+  try {
+    status = await role.opening;
+  } catch (error) {
+    // The open failed after this process installed its listeners; an in-process caller that
+    // retries would otherwise inherit listeners that exit the process on the first signal.
+    removeProcessListeners();
+    throw error;
+  }
+  if (role.exiting) {
+    // Shutdown began while the open was in flight: the pending release is already awaiting
+    // this open and will close the store, so do not publish ready or hold the loop open.
+    return { store, close };
+  }
+  console.log(
+    `vis_bridge control-store owns environment ${status.environmentId} at ${status.root} (epoch ${status.epoch}).`,
+  );
+  role.liveness = createLivenessToken();
+
+  // Announce ownership only after the signal handlers are armed: a caller that treats this line
+  // as the ready signal may deliver SIGINT immediately, and before this point Node's default
+  // handler would terminate the process with the signal instead of releasing the fence.
+  console.log(
+    `vis_bridge control-store owns environment ${status.environmentId} at ${status.root} (epoch ${status.epoch}).`,
+  );
+
+  // Announce ownership only after the signal handlers are armed: a caller that treats this line
+  // as the ready signal may deliver SIGINT immediately, and before this point Node's default
+  // handler would terminate the process with the signal instead of releasing the fence.
+  console.log(
+    `vis_bridge control-store owns environment ${status.environmentId} at ${status.root} (epoch ${status.epoch}).`,
+  );
 
   return {
     store,
@@ -447,10 +511,7 @@ export async function runControlStoreCommand(options, dependencies = {}) {
      * loop open. Signal-driven exits call this internally; an in-process caller uses it to
      * relinquish the role without a signal.
      */
-    async close() {
-      removeLivenessListeners();
-      await releaseFence();
-    },
+    close,
   };
 }
 

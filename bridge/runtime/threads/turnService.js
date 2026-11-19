@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_TIMELINE_PAGE_LIMIT,
   MAX_TIMELINE_PAGE_LIMIT,
+  MAX_TIMELINE_SEQ_SPAN,
   TurnError,
   createHostSink,
   createNativeSink,
@@ -56,13 +57,22 @@ export function createTurnService() {
       turnId: turn.turnId,
       entries: turn.entries,
       seen: turn.seen,
-      seqs: turn.seqs,
+      seqsBySource: turn.seqsBySource,
       native: turn.native,
       nextOrder,
-      nextSeq() {
+      nextSeq(sourceKey) {
+        const bucket = turn.seqsBySource.get(sourceKey);
         let max = 0;
-        for (const value of turn.seqs) if (value > max) max = value;
+        if (bucket !== undefined) for (const value of bucket) if (value > max) max = value;
         return max + 1;
+      },
+      noteSeq(sourceKey, seq) {
+        let bucket = turn.seqsBySource.get(sourceKey);
+        if (bucket === undefined) {
+          bucket = new Set();
+          turn.seqsBySource.set(sourceKey, bucket);
+        }
+        bucket.add(seq);
       },
       note(entry) {
         turn.seqMax = Math.max(turn.seqMax, entry.seq);
@@ -123,7 +133,7 @@ export function createTurnService() {
       entries: [],
       seen: new Map(),
       terminalKeys: new Set(),
-      seqs: new Set(),
+      seqsBySource: new Map(),
       lastOrder: null,
       seqMax: 0,
     };
@@ -220,15 +230,18 @@ export function createTurnService() {
   function gaps(turnId) {
     assertOpen();
     const turn = requireTurn(turnId);
-    if (turn.seqs.size === 0) return Object.freeze([]);
-    const sorted = [...turn.seqs].sort((left, right) => left - right);
-    const first = sorted[0] ?? 0;
-    const last = sorted[sorted.length - 1] ?? 0;
-    const missing = [];
-    for (let value = first; value <= last; value += 1) {
-      if (!turn.seqs.has(value)) missing.push(value);
+    const missing = new Set();
+    for (const bucket of turn.seqsBySource.values()) {
+      if (bucket.size === 0) continue;
+      const sorted = [...bucket].sort((left, right) => left - right);
+      const first = sorted[0];
+      const last = sorted[sorted.length - 1];
+      if (last - first > MAX_TIMELINE_SEQ_SPAN) throw new TurnError('invalid_request', 'timeline_seq_span');
+      for (let value = first; value <= last; value += 1) {
+        if (!bucket.has(value)) missing.add(value);
+      }
     }
-    return Object.freeze(missing);
+    return Object.freeze([...missing].sort((left, right) => left - right));
   }
 
   function close() {

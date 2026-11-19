@@ -112,6 +112,15 @@ function isSendable(recipient) {
 }
 
 /**
+ * Advance the fan-out's top-level clock. A LATE event must never regress it below a decision
+ * already written — the same monotonicity a recipient's own updatedAt keeps — so a dispatch
+ * whose sends settled late cannot write its start time back over a later reconcile or cancel.
+ */
+function touchFanout(record, at) {
+  if (at > record.updatedAt) record.updatedAt = at;
+}
+
+/**
  * Derive the overall fan-out state from the observed per-recipient outcomes. This pure function is
  * the ONLY source of the overall state; an ambiguous recipient makes the whole operation ambiguous,
  * and every other value is the honest read of how the recipients actually settled.
@@ -270,6 +279,11 @@ export function createFanoutService({ deliver } = {}) {
         prompt: record.prompt,
       });
     } catch (error) {
+      // A failure that lands after this recipient was reconciled, cancelled or otherwise
+      // settled while the send was in flight is a LATE result: it must not overwrite the
+      // decision already written — the same guard the success path applies below. A late
+      // failure also leaves updatedAt alone, so the record never regresses to the send time.
+      if (recipient.outcome !== 'pending') return;
       const failure = classifyFailure(error, { code: 'source_unavailable', field: 'fanout_send' });
       recipient.outcome = 'failed';
       recipient.resolution = Object.freeze({ code: failure.code, field: failure.field });
@@ -311,17 +325,28 @@ export function createFanoutService({ deliver } = {}) {
     }
     if (selected.length > 0) stats.dispatches += 1;
     await Promise.all(selected.map((recipient) => sendRecipient(record, recipient, at)));
-    record.updatedAt = at;
+    touchFanout(record, at);
     return fanoutView(record);
   }
 
-  /** Cancel ONE recipient individually. A sibling is never touched; a terminal recipient is left as-is. */
+  /**
+   * Cancel ONE recipient individually. A sibling is never touched; a terminal recipient is
+   * left as-is. A recipient whose send is still IN FLIGHT cannot be stopped — this service has
+   * no cancel port and deliver takes no AbortSignal — so it is RETAINED as ambiguous rather
+   * than claimed cancelled: the read model must never say a send was stopped when the remote
+   * work may still happen.
+   */
   function cancelRecipient(input = {}) {
     assertOpen();
     const record = requireFanout(input.fanoutId);
     const at = parseAt(input.at);
     const recipient = requireRecipient(record, input.recipientId);
-    if (recipient.outcome === 'pending' || recipient.outcome === 'sent') {
+    if (recipient.outcome === 'pending' && recipient.dispatched === true) {
+      recipient.outcome = 'ambiguous';
+      recipient.resolution = Object.freeze({ code: 'reconcile_required', field: 'fanout_ambiguous' });
+      recipient.updatedAt = at;
+      stats.reconciles += 1;
+    } else if (recipient.outcome === 'pending' || recipient.outcome === 'sent') {
       recipient.outcome = 'cancelled';
       recipient.resolution = Object.freeze({ code: 'cancelled', field: 'fanout_cancelled' });
       recipient.updatedAt = at;
@@ -346,7 +371,7 @@ export function createFanoutService({ deliver } = {}) {
         stats.reconciles += 1;
       }
     }
-    record.updatedAt = at;
+    touchFanout(record, at);
     return fanoutView(record);
   }
 

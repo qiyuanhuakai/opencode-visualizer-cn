@@ -40,6 +40,8 @@ import {
   verifyCurrentTarget,
   wrapContextEntry,
 } from '../../shared/runtime/context.js';
+import { createCheckpointService } from '../../bridge/runtime/threads/checkpointService.js';
+import { createEvidenceQuery } from '../../bridge/runtime/threads/evidenceQuery.js';
 import type {
   ContextCheckpointView,
   ContextClass,
@@ -49,10 +51,13 @@ import type {
   ContextScope,
   EvidenceOrigin,
   EvidencePage,
+  EvidenceReader,
   EvidenceRecordView,
   EvidenceRef,
   EvidenceTarget,
+  TargetResolver,
 } from '../../shared/runtime/context.js';
+import type { EvidenceQueryPorts } from '../../bridge/runtime/threads/evidenceQuery.js';
 
 const THREAD_A = '11111111-1111-4111-8111-111111111111';
 const THREAD_B = '22222222-2222-4222-8222-222222222222';
@@ -959,6 +964,64 @@ describe('MCP-compatible read-only tool server', () => {
     });
     expect(page).toEqual({ available: false, unavailableReason: 'evidence_missing' });
   });
+
+  it('serves a published checkpoint page through the bridge service wired with the shared reader contract', () => {
+    const payload = 'diff --git a/src/page.ts b/src/page.ts\n+ctx\n';
+    const evidence = ref(evidenceHash(payload), byteLength(payload), targetOne);
+    const view = build([textEntry('goal', 'service goal', hostOrigin), evidenceEntry('diff', evidence)]);
+    const wire = serializeCheckpoint(view);
+    const live = { bytes: encoder.encode(payload), totalBytes: byteLength(payload) };
+    // The ports are wired with the SHARED reader/target contract: an object reader readEvidencePage
+    // accepts, or null for a missing artifact. This wiring is what the port declaration must
+    // accept, because the service hands both functions to the dispatcher unchanged.
+    const resolveTarget: TargetResolver = () => targetOne;
+    const readEvidence: EvidenceReader = () => live;
+    const ports: EvidenceQueryPorts = { resolveTarget, readEvidence };
+    const query = createEvidenceQuery(ports);
+    expect(query.publish(wire).checkpointId).toBe(view.checkpointId);
+
+    const page = query.callTool({
+      name: 'context.evidence.page',
+      arguments: { checkpointId: view.checkpointId, scope: scopeA, hash: evidence.hash },
+    }) as EvidencePage;
+    expect(page.available).toBe(true);
+    expect(new TextDecoder().decode(page.bytes)).toBe(payload);
+    expect(page.totalBytes).toBe(live.totalBytes);
+
+    // A null reader is the legal missing-artifact answer, not a runtime rejection.
+    const missing = createEvidenceQuery({ resolveTarget, readEvidence: () => null });
+    missing.publish(wire);
+    expect(missing.callTool({
+      name: 'context.evidence.page',
+      arguments: { checkpointId: view.checkpointId, scope: scopeA, hash: evidence.hash },
+    })).toEqual({ available: false, unavailableReason: 'evidence_missing' });
+
+    // The target moved since capture: the page is refused before the reader is ever called.
+    let served = 0;
+    const stale = createEvidenceQuery({
+      resolveTarget: () => targetTwo,
+      readEvidence: () => {
+        served += 1;
+        return live;
+      },
+    });
+    stale.publish(wire);
+    expect(rejectionOf(() => stale.callTool({
+      name: 'context.evidence.page',
+      arguments: { checkpointId: view.checkpointId, scope: scopeA, hash: evidence.hash },
+    }))).toEqual({ code: 'conflict', field: 'evidence_target_stale' });
+    expect(served).toBe(0);
+
+    // A reader answering with a string or raw bytes — the shape the old port declaration
+    // accepted — is refused at runtime, which is why the declaration must name the object
+    // reader contract instead of a byte-ish return type.
+    const raw = createEvidenceQuery({ resolveTarget, readEvidence: (() => '') as unknown as EvidenceReader });
+    raw.publish(wire);
+    expect(rejectionOf(() => raw.callTool({
+      name: 'context.evidence.page',
+      arguments: { checkpointId: view.checkpointId, scope: scopeA, hash: evidence.hash },
+    }))).toEqual({ code: 'invalid_request', field: 'evidence_reader' });
+  });
 });
 
 describe('serialization round-trip and integrity', () => {
@@ -1020,5 +1083,343 @@ describe('serialization round-trip and integrity', () => {
       code: 'invalid_request',
       field: 'checkpoint_schema',
     });
+  });
+});
+
+describe('secret redaction over quoted JSON keys and escaped values', () => {
+  it('redacts a token carried in a double-quoted JSON key/value pair', () => {
+    const outcome = redactSecrets('config {"token":"FAKE_EXAMPLE_SECRET_12345"} end');
+
+    expect(outcome.redactions).toBe(1);
+    expect(outcome.text).not.toContain('FAKE_EXAMPLE_SECRET_12345');
+    expect(outcome.text).toContain(REDACTED_PLACEHOLDER);
+  });
+
+  it('redacts the same secret in a single-quoted, an unquoted and a spaced JSON pair', () => {
+    for (const text of [
+      "{'token': 'FAKE_EXAMPLE_SECRET_12345'}",
+      'token=FAKE_EXAMPLE_SECRET_12345',
+      '"token" : "FAKE_EXAMPLE_SECRET_12345"',
+      '{"api_key":"FAKE_EXAMPLE_SECRET_12345"}',
+      '{"bridge_token":"FAKE_EXAMPLE_SECRET_12345"}',
+    ]) {
+      const outcome = redactSecrets(text);
+      expect(outcome.redactions, text).toBe(1);
+      expect(outcome.text, text).not.toContain('FAKE_EXAMPLE_SECRET_12345');
+    }
+  });
+
+  it('redacts an escaped value inside a JSON string', () => {
+    const outcome = redactSecrets('{"token":"FAKE_EXAMPLE\\"SECRET_12345"}');
+
+    expect(outcome.redactions).toBe(1);
+    expect(outcome.text).not.toContain('FAKE_EXAMPLE');
+  });
+
+  it('keeps the placeholder free of the secret and still redacts the plain separator forms', () => {
+    const quoted = redactSecrets('{"password":"hunter2hunter2"}');
+    expect(quoted.redactions).toBe(1);
+    expect(quoted.text).not.toContain('hunter2hunter2');
+    expect(quoted.text).toContain(REDACTED_PLACEHOLDER);
+    expect(quoted.text).toBe('{' + '"' + 'password' + '"' + ':' + REDACTED_PLACEHOLDER + '}');
+  });
+
+  it('does not redact a key word that is not followed by a separator and value', () => {
+    const outcome = redactSecrets('the token bucket is a rate limiter, say token now: hi');
+    expect(outcome.redactions).toBe(0);
+    expect(outcome.text).toContain('token bucket');
+  });
+});
+
+describe('checkpoint byte budget on the real serialized size', () => {
+  it('refuses a single legal entry that only fits once the envelope is added', () => {
+    const entry = textEntry('goal', 'x'.repeat(31700), { kind: 'host', commandId: 'c'.repeat(512) });
+    const wrapped = wrapContextEntry(entry);
+
+    expect(byteLength(JSON.stringify(wrapped))).toBeLessThanOrEqual(CHECKPOINT_MAX_BYTES);
+    expect(wrapped.estimatedTokens).toBeLessThanOrEqual(CHECKPOINT_MAX_ESTIMATED_TOKENS);
+
+    expect(rejectionOf(() => build([entry]))).toEqual({
+      code: 'invalid_request',
+      field: 'checkpoint_entry_too_large',
+    });
+  });
+
+  it('admits a single entry that fits with the envelope', () => {
+    const view = build([textEntry('goal', 'x'.repeat(31000), { kind: 'host', commandId: 'c'.repeat(512) })]);
+
+    expect(view.bytes).toBeLessThanOrEqual(CHECKPOINT_MAX_BYTES);
+    expect(view.entryCount).toBe(1);
+  });
+});
+
+describe('wire checkpoint capacity re-validation', () => {
+  const wireOf = (overrides: Record<string, unknown>): string => {
+    const text = 'y'.repeat(70000);
+    const entry = {
+      entryId: `${CHECKPOINT_A}:1`,
+      class: 'goal',
+      origin: { kind: 'host', commandId: 'cmd-1' },
+      text,
+      untrusted: false,
+      untrustedReason: null,
+      redactions: 0,
+      estimatedTokens: 17500,
+      hash: evidenceHash(text),
+      evidence: null,
+    };
+    const canonical = {
+      checkpointId: CHECKPOINT_A,
+      schemaVersion: CONTEXT_SCHEMA_VERSION,
+      scope: scopeA,
+      createdAt: 1,
+      entries: [entry],
+      evidence: [],
+      estimatedTokens: 17500,
+      entryCount: 1,
+      droppedEntries: 0,
+      droppedBytes: 0,
+      demoted: 0,
+      untrustedEntries: 0,
+      redactions: 0,
+      transcriptBytes: 70000,
+      ...overrides,
+    };
+    return JSON.stringify({ ...canonical, digest: evidenceHash(JSON.stringify(canonical)) });
+  };
+
+  const smallText = 'a'.repeat(200);
+  const smallEntry = {
+    entryId: `${CHECKPOINT_A}:1`,
+    class: 'goal',
+    origin: { kind: 'host', commandId: 'cmd-1' },
+    text: smallText,
+    untrusted: false,
+    untrustedReason: null,
+    redactions: 0,
+    estimatedTokens: estimateTokens(smallText),
+    hash: evidenceHash(smallText),
+    evidence: null,
+  };
+  const smallWireOf = (overrides: Record<string, unknown>): string => {
+    const canonical = {
+      checkpointId: CHECKPOINT_A,
+      schemaVersion: CONTEXT_SCHEMA_VERSION,
+      scope: scopeA,
+      createdAt: 1,
+      entries: [smallEntry],
+      evidence: [],
+      estimatedTokens: smallEntry.estimatedTokens,
+      entryCount: 1,
+      droppedEntries: 0,
+      droppedBytes: 0,
+      demoted: 0,
+      untrustedEntries: 0,
+      redactions: 0,
+      transcriptBytes: byteLength(JSON.stringify(smallEntry)),
+      ...overrides,
+    };
+    return JSON.stringify({ ...canonical, digest: evidenceHash(JSON.stringify(canonical)) });
+  };
+
+  it('refuses an over-budget wire checkpoint on parse, admit, publish and deserialize', () => {
+    const wire = wireOf({});
+    expect(byteLength(wire)).toBeGreaterThan(CHECKPOINT_MAX_BYTES);
+
+    for (const run of [
+      () => parseCheckpoint(JSON.parse(wire) as Record<string, unknown>),
+      () => deserializeCheckpoint(wire),
+    ]) {
+      expect(rejectionOf(run)).toMatchObject({ code: 'invalid_request' });
+      expect((rejectionOf(run) as { field: string }).field).toMatch(/^checkpoint_/);
+    }
+  });
+
+  it('refuses a wire checkpoint whose derived counters exceed the budget', () => {
+    expect(rejectionOf(() => parseCheckpoint(JSON.parse(wireOf({ estimatedTokens: CHECKPOINT_MAX_ESTIMATED_TOKENS + 1 })) as Record<string, unknown>)))
+      .toMatchObject({ code: 'invalid_request', field: 'checkpoint_tokens' });
+    expect(rejectionOf(() => parseCheckpoint(JSON.parse(smallWireOf({ transcriptBytes: CHECKPOINT_MAX_BYTES + 1 })) as Record<string, unknown>)))
+      .toMatchObject({ code: 'invalid_request', field: 'checkpoint_transcript_bytes' });
+
+    const manyEntries = Array.from({ length: MAX_CHECKPOINT_ENTRIES + 1 }, (_unused, index) => ({
+      entryId: `${CHECKPOINT_A}:${index + 1}`,
+      class: 'goal',
+      origin: { kind: 'host', commandId: 'cmd-1' },
+      text: `entry ${index}`,
+      untrusted: false,
+      untrustedReason: null,
+      redactions: 0,
+      estimatedTokens: 1,
+      hash: evidenceHash(`entry ${index}`),
+      evidence: null,
+    }));
+    expect(rejectionOf(() => parseCheckpoint(JSON.parse(wireOf({
+      entries: manyEntries,
+      entryCount: manyEntries.length,
+      estimatedTokens: manyEntries.length,
+      transcriptBytes: manyEntries.length * 12,
+    })) as Record<string, unknown>)))
+      .toMatchObject({ code: 'invalid_request', field: 'checkpoint_entry_count' });
+  });
+
+  it('refuses a wire entry whose text exceeds the per-entry ceiling', () => {
+    const text = 'z'.repeat(MAX_ENTRY_CHARS + 1);
+    const wire = JSON.stringify({
+      checkpointId: CHECKPOINT_A,
+      schemaVersion: CONTEXT_SCHEMA_VERSION,
+      scope: scopeA,
+      createdAt: 1,
+      entries: [{
+        entryId: `${CHECKPOINT_A}:1`,
+        class: 'goal',
+        origin: { kind: 'host', commandId: 'cmd-1' },
+        text,
+        untrusted: false,
+        untrustedReason: null,
+        redactions: 0,
+        estimatedTokens: 1,
+        hash: evidenceHash(text),
+        evidence: null,
+      }],
+      evidence: [],
+      estimatedTokens: 1,
+      entryCount: 1,
+      droppedEntries: 0,
+      droppedBytes: 0,
+      demoted: 0,
+      untrustedEntries: 0,
+      redactions: 0,
+      transcriptBytes: 1,
+      digest: '0'.repeat(64),
+    });
+
+    expect(rejectionOf(() => deserializeCheckpoint(wire))).toMatchObject({
+      code: 'invalid_request',
+      field: 'checkpoint_entry_text',
+    });
+  });
+
+  it('round-trips a long-history checkpoint the builder trimmed into budget', () => {
+    const entries: ContextEntryInput[] = [textEntry('goal', 'Long-running migration task.', hostOrigin)];
+    for (let index = 0; index < 400; index += 1) {
+      entries.push(textEntry('plan', `plan step ${index}: ${'x'.repeat(400)}`, hostOrigin));
+    }
+    entries.push(textEntry('unresolved', `TAIL-SENTINEL-${'y'.repeat(200)}`, hostOrigin));
+
+    const view = build(entries);
+    const serialized = serializeCheckpoint(view);
+
+    expect(view.bytes).toBeLessThanOrEqual(CHECKPOINT_MAX_BYTES);
+    expect(view.transcriptBytes).toBeGreaterThan(CHECKPOINT_MAX_BYTES);
+
+    const revived = deserializeCheckpoint(serialized);
+    expect(revived.bytes).toBe(view.bytes);
+    expect(revived.entryCount).toBe(view.entryCount);
+    expect(revived.droppedEntries).toBe(view.droppedEntries);
+    expect(revived.droppedBytes).toBe(view.droppedBytes);
+    expect(revived.transcriptBytes).toBe(view.transcriptBytes);
+
+    const service = createCheckpointService();
+    expect(service.admit(serialized).checkpointId).toBe(view.checkpointId);
+    const query = createEvidenceQuery({ resolveTarget: () => targetOne, readEvidence: () => null });
+    expect(query.publish(serialized).checkpointId).toBe(view.checkpointId);
+  });
+
+  it('refuses a wire transcriptBytes that does not match the retained plus dropped cost', () => {
+    expect(rejectionOf(() => parseCheckpoint(JSON.parse(smallWireOf({})) as Record<string, unknown>))).toBeUndefined();
+    for (const lying of [{ transcriptBytes: 1 }, { transcriptBytes: byteLength(JSON.stringify(smallEntry)) + 1 }, { droppedBytes: 5 }]) {
+      expect(rejectionOf(() => parseCheckpoint(JSON.parse(smallWireOf(lying)) as Record<string, unknown>)))
+        .toMatchObject({ code: 'invalid_request', field: 'checkpoint_transcript_bytes' });
+    }
+  });
+
+  it('re-derives the token budget from the retained entries instead of trusting the wire summary', () => {
+    const text = 'a'.repeat(32004);
+    const entry = {
+      entryId: `${CHECKPOINT_A}:1`,
+      class: 'goal',
+      origin: { kind: 'host', commandId: 'cmd-1' },
+      text,
+      untrusted: false,
+      untrustedReason: null,
+      redactions: 0,
+      estimatedTokens: estimateTokens(text),
+      hash: evidenceHash(text),
+      evidence: null,
+    };
+    const wireOf = (overrides: Record<string, unknown>): string => {
+      const canonical = {
+        checkpointId: CHECKPOINT_A,
+        schemaVersion: CONTEXT_SCHEMA_VERSION,
+        scope: scopeA,
+        createdAt: 1,
+        entries: [entry],
+        evidence: [],
+        estimatedTokens: entry.estimatedTokens,
+        entryCount: 1,
+        droppedEntries: 0,
+        droppedBytes: 0,
+        demoted: 0,
+        untrustedEntries: 0,
+        redactions: 0,
+        transcriptBytes: byteLength(JSON.stringify(entry)),
+        ...overrides,
+      };
+      return JSON.stringify({ ...canonical, digest: evidenceHash(JSON.stringify(canonical)) });
+    };
+
+    // The entry really costs 8001 tokens, so the honest wire is refused by the budget itself...
+    expect(rejectionOf(() => parseCheckpoint(JSON.parse(wireOf({})) as Record<string, unknown>)))
+      .toMatchObject({ code: 'invalid_request', field: 'checkpoint_tokens' });
+
+    // ...and a summary that under-reports it cannot smuggle the entry past that budget.
+    const lyingSummary = wireOf({ estimatedTokens: 1 });
+    expect(rejectionOf(() => parseCheckpoint(JSON.parse(lyingSummary) as Record<string, unknown>)))
+      .toMatchObject({ code: 'conflict', field: 'checkpoint_tokens' });
+    expect(rejectionOf(() => deserializeCheckpoint(lyingSummary)))
+      .toMatchObject({ code: 'conflict', field: 'checkpoint_tokens' });
+    const service = createCheckpointService();
+    expect(rejectionOf(() => service.admit(lyingSummary)))
+      .toMatchObject({ code: 'conflict', field: 'checkpoint_tokens' });
+    const query = createEvidenceQuery({ resolveTarget: () => targetOne, readEvidence: () => null });
+    expect(rejectionOf(() => query.publish(lyingSummary)))
+      .toMatchObject({ code: 'conflict', field: 'checkpoint_tokens' });
+
+    // A per-entry count that contradicts the verified text is refused on its own.
+    const lyingEntry = { ...entry, estimatedTokens: 1 };
+    const lyingEntryWire = JSON.stringify({
+      checkpointId: CHECKPOINT_A,
+      schemaVersion: CONTEXT_SCHEMA_VERSION,
+      scope: scopeA,
+      createdAt: 1,
+      entries: [lyingEntry],
+      evidence: [],
+      estimatedTokens: 1,
+      entryCount: 1,
+      droppedEntries: 0,
+      droppedBytes: 0,
+      demoted: 0,
+      untrustedEntries: 0,
+      redactions: 0,
+      transcriptBytes: byteLength(JSON.stringify(lyingEntry)),
+      digest: evidenceHash(JSON.stringify({
+        checkpointId: CHECKPOINT_A,
+        schemaVersion: CONTEXT_SCHEMA_VERSION,
+        scope: scopeA,
+        createdAt: 1,
+        entries: [lyingEntry],
+        evidence: [],
+        estimatedTokens: 1,
+        entryCount: 1,
+        droppedEntries: 0,
+        droppedBytes: 0,
+        demoted: 0,
+        untrustedEntries: 0,
+        redactions: 0,
+        transcriptBytes: byteLength(JSON.stringify(lyingEntry)),
+      })),
+    });
+    expect(rejectionOf(() => parseCheckpoint(JSON.parse(lyingEntryWire) as Record<string, unknown>)))
+      .toMatchObject({ code: 'conflict', field: 'checkpoint_entry_tokens' });
   });
 });
