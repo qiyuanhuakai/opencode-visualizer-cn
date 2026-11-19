@@ -148,7 +148,7 @@ describe('complete CI workflow', () => {
     expect(workflow).toContain('name: Complete CI');
     expect(workflow).toContain('if: always()');
     expect(workflow).toContain(
-      'needs: [validate, build-macos-x64, build-macos-arm64, build-windows-x64, build-windows-arm64, build-linux-x64, bridge-installers]',
+      'needs: [validate, build-macos-x64, build-macos-arm64, build-windows-x64, build-windows-arm64, build-linux-x64, bridge-installers, packaged-bridge-qa]',
     );
     // Every lane result is checked individually: skipped/neutral/cancelled all fail the gate.
     for (const lane of ELECTRON_LANES) {
@@ -492,6 +492,7 @@ describe('workflow step ordering (parsed YAML)', () => {
       'build-windows-arm64',
       'build-linux-x64',
       'bridge-installers',
+      'packaged-bridge-qa',
     ];
     expect([...needs].sort()).toEqual([...laneSet].sort());
     expect(needs.length, 'needs must contain no extras').toBe(laneSet.length);
