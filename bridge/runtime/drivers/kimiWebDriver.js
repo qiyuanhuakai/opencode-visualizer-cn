@@ -58,6 +58,7 @@ export async function createKimiWebDriver(options) {
   const retained = new Map();
   const runningTasks = new Map();
   const endedTasks = new Map();
+  const monitorReads = new Map();
   const uncertain = new Set();
   // A durable read that fails is not evidence about the session, but it is also not a reason to
   // retry forever: one pending re-check per session on a bounded backoff re-reads the lease after
@@ -91,6 +92,28 @@ export async function createKimiWebDriver(options) {
     if (tasks) { tasks.add(operationId); return; }
     runningTasks.set(sessionId, new Set([operationId]));
   }
+  // Keep terminal evidence until every overlapping recovery read has returned.
+  async function restoreTaskMonitor(captured, expectedOperationId) {
+    const sessionId = captured.session.nativeSessionId;
+    const ended = new Set();
+    let reads = monitorReads.get(sessionId);
+    if (!reads) monitorReads.set(sessionId, (reads = new Set()));
+    reads.add(ended);
+    try {
+      const operationId = await operations.liveTask(captured);
+      fence(captured);
+      if (!operationId || ended.has(operationId) ||
+          (expectedOperationId !== undefined && operationId !== expectedOperationId)) return;
+      if (!selected.has(sessionId) && selected.size >= 32) {
+        throw new ProtocolError('source_unavailable', 'selected_session_limit');
+      }
+      registerTask(sessionId, operationId);
+      return operationId;
+    } finally {
+      reads.delete(ended);
+      if (!reads.size) monitorReads.delete(sessionId);
+    }
+  }
   function releaseTask(sessionId, operationId) {
     const tasks = runningTasks.get(sessionId);
     if (!tasks) return;
@@ -100,6 +123,7 @@ export async function createKimiWebDriver(options) {
   // A terminal observed on the native lane is remembered per session, so a late
   // acknowledgement cannot re-register a task whose terminal already released it.
   function noteEndedTask(sessionId, operationId) {
+    for (const ended of monitorReads.get(sessionId) ?? []) ended.add(operationId);
     let ended = endedTasks.get(sessionId);
     if (!ended) endedTasks.set(sessionId, (ended = new Set()));
     ended.add(operationId);
@@ -538,8 +562,7 @@ export async function createKimiWebDriver(options) {
       entry.stream = observer(detach); observers.add(entry);
       try {
         if (captured.session && sessionId !== undefined) {
-          const live = await operations.liveTask(captured);
-          if (live) registerTask(sessionId, live);
+          await restoreTaskMonitor(captured);
           await subscribeSession(sessionId, params.agentId ?? 'main');
         } else await connect();
         fence(captured); return entry.stream;
@@ -594,10 +617,8 @@ export async function createKimiWebDriver(options) {
           if (value.scope.epoch === authority().epoch && !value.recoveredFrom) continue;
           try {
             const captured = capture({ ...scope, session }, true);
-            const operationId = await operations.liveTask(captured);
-            if (operationId !== row.key) continue;
-            if (!selected.has(session.nativeSessionId) && selected.size >= 32) throw new ProtocolError('source_unavailable', 'selected_session_limit');
-            registerTask(session.nativeSessionId, operationId);
+            const operationId = await restoreTaskMonitor(captured, row.key);
+            if (!operationId) continue;
             await subscribeSession(session.nativeSessionId, 'main', 'restored');
             await eventWork;
             if (stopped()) return;
