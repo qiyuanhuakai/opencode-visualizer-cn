@@ -10167,9 +10167,10 @@ async function handleUnifiedSelectKey(key: string, origin: 'session-navigation' 
   if (!session) return;
   const client = requireRuntimeActionClient();
   const capture = tree.selection.value;
-  await client.inspect();
-  if (generation !== runtimeSelectionGeneration || !capture?.isCurrent()) return;
-  const metadata = await createHostClient(client, session.environmentId).read({ domain: 'thread', operation: 'selection', args: { session } }, hostSessionSelection);
+  const [, metadata] = await Promise.all([
+    client.inspect(),
+    createHostClient(client, session.environmentId).read({ domain: 'thread', operation: 'selection', args: { session } }, hostSessionSelection),
+  ]);
   const manifest = metadata.manifest;
   if (generation !== runtimeSelectionGeneration || !capture?.isCurrent() || runtimeActionClient.value !== client || unifiedSessionTree.value !== tree) return;
   if (manifest.environmentId !== session.environmentId || manifest.harnessInstanceId !== session.harnessInstanceId) throw new Error('Agent instance identity changed.');
