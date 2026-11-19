@@ -88,13 +88,13 @@ Kimi Web 是独立于 ACP 中 Kimi Code Agent 的第四个后端，连接的是 
 v0.9.0-alpha 引入统一运行环境：连接一个 Bridge 入口后，在同一 Git/worktree 树浏览全部五类来源（OpenCode、Codex、ACP、Kimi Web、DSH）并显示 Harness 标识；多个会话同时运行，权限、模型、文件和任务状态各有明确归属；Host Thread 可跨 Harness 接力；任务、团队与隔离改动有审查与验收语义；SSH 与 Slurm 目标经同一入口执行。
 
 - 协议：`/runtime` v1，握手 `hello/version/capabilities`，请求带 `idempotencyKey`，`durable-accepted` 与 `native-executed` 分离，独立 binary channel，固定错误码。
-- 升级：旧历史、草稿、收藏、辅助元数据完整迁移（迁移对旧来源只读，卸载保留数据）；旧 Bridge 协议代 `v070-legacy` 在连接前被拒绝并给出升级路径。完整升级路径 backup → bind → import → verify → cutover 见 [迁移说明](docs/migration-v090.md)。
+- 升级：迁移流程保留旧历史、草稿、收藏和辅助元数据（迁移对旧来源只读，卸载保留数据）；旧 Bridge 协议代 `v070-legacy` 在连接前被拒绝并给出升级路径。完整升级路径 backup → bind → import → verify → cutover 见 [迁移说明](docs/migration-v090.md)。
 - 远程：SSH/Slurm 连接、两种通道（TCP 与 step relay）、持久化条件与不支持拓扑见 [远程说明](docs/remote.md)。
 - 协作：Host Thread、handoff、任务/尝试/团队与隔离改动见 [协作说明](docs/collaboration.md)。
 - 性能：1 万会话/200 worktree/5 来源与 10 万 pins 压力档的实测数字（真实 Chromium、真实 IndexedDB、无 store mock、10 次运行）见迁移说明第 11 节；计划规定的 200 worktree 与五类树形构成已播种并已评分（seed 090：五类均分、1001+ Global roots、51+ Codex threads、archive/orphan/child、等时间戳，树形维度在 harness 自有 IndexedDB 上逐维评分）；五个 UI-TREE 渲染指标在 store-substrate 层级评分（性能夹具驱动存储基底，未渲染运行中的 App.vue），不声称运行中应用渲染表现。
-- 平台限制：没有构建也没有声称任何 Windows 或 macOS 安装包产物；未走真实 GitHub-release 更新路径；Electron 运行时只在 Linux 实测；无物理 GPU。详见迁移说明第 9 节。
+- 平台：CI 构建 Windows、macOS 和 Linux 安装包。Windows x64 已验证从安装包解出的应用连接独立 Bridge。在线更新下载校验、物理 GPU 仍待独立验证。详见迁移说明第 9 节。
 
-> ⚠️ 迁移进行中：登录页按后端选择与每后端直连地址已标记废弃但在本 alpha 仍可使用；旧全局后端路由（全局单例与 `getActiveBackendAdapter` 等函数）已移除，生产动作按连接作用域显式解析适配器，被移除函数仅保留在 legacy 导出模块供测试沿袭；主界面已接入新运行时 wire：未建立可用 runtime target（未绑定 bridge 地址，或 bridge 尚未回答 hello）时，会话动作沿用 per-backend 路径；未构建统一树时，侧栏沿用旧树；旧登录和直连路径仍保留。
+> 首屏使用 Vis Bridge 的 `/runtime` 地址连接。连接后从统一会话树选择会话，底部输入栏显示当前会话的原生能力。状态监控和供应商与模型面板可单独切换管理 Agent。升级时先备份旧来源，完成迁移校验后再切换。
 
 ---
 
