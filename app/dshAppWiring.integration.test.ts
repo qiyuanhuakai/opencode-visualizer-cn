@@ -1088,59 +1088,42 @@ describe('dshSessionApi (Todo 27 session action routing)', () => {
 // ---------------------------------------------------------------------------
 
 describe('dsh lifecycle wiring (Todo 33)', () => {
-  const LOGIN_BOXES = {
-    loginCodexBridgeUrl: box(''),
-    loginCodexBridgeToken: box(''),
-    loginAcpBridgeUrl: box(''),
-    loginAcpBridgeToken: box(''),
-    loginAcpAgentId: box(''),
-    loginKimiWebBridgeUrl: box(''),
-    loginKimiWebBridgeToken: box(''),
-    loginDshBridgeUrl: box('ws://localhost:23004/dsh/ws'),
-    loginDshBridgeToken: box('dsh-bridge-token'),
-    loginRequiresAuth: box(false),
-    loginUsername: box(''),
-    loginPassword: box(''),
-    loginUrl: box(''),
-  };
-
-  function runHandleLogin(input: { dshBridgeUrl?: string; saveDsh?: () => void } = {}) {
+  async function runBridgeLogin(connectRuntimeBridge = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)) {
     const program = transpile(`${appFunctionDeclaration('handleLogin')};handleLogin();`);
-    const credentials = credentialsDouble();
-    if (input.saveDsh) credentials.saveDsh.mockImplementation(input.saveDsh);
-    const startInitialization = vi.fn();
+    const activateQualifiedComposerDrafts = vi.fn(async () => {});
+    const uiInitState = box('login');
+    const connectionState = box('idle');
     const initErrorMessage = box('');
-    runInNewContext(program, {
-      ...LOGIN_BOXES,
-      loginBackendKind: box('dsh'),
-      loginDshBridgeUrl: box(input.dshBridgeUrl ?? 'ws://localhost:23004/dsh/ws'),
-      credentials,
-      startInitialization,
+    const sidePanelActiveTab = box('project');
+    await runInNewContext(program, {
+      activateQualifiedComposerDrafts,
+      connectRuntimeBridge,
+      uiInitState,
+      connectionState,
       initErrorMessage,
-      toErrorMessage: (error: unknown) =>
-        error instanceof Error ? error.message : String(error),
+      sidePanelActiveTab,
+      toErrorMessage: String,
     });
-    return { credentials, startInitialization, initErrorMessage };
+    return { activateQualifiedComposerDrafts, connectRuntimeBridge, uiInitState, connectionState, initErrorMessage, sidePanelActiveTab };
   }
 
-  it('saves dsh credentials and starts initialization from the login form', () => {
-    const { credentials, startInitialization } = runHandleLogin();
-    expect(credentials.saveDsh).toHaveBeenCalledWith(
-      'ws://localhost:23004/dsh/ws',
-      'dsh-bridge-token',
-    );
-    expect(startInitialization).toHaveBeenCalledTimes(1);
+  it('activates qualified drafts and connects the Bridge before entering the session view', async () => {
+    const login = await runBridgeLogin();
+    expect(login.activateQualifiedComposerDrafts).toHaveBeenCalledExactlyOnceWith();
+    expect(login.connectRuntimeBridge).toHaveBeenCalledExactlyOnceWith();
+    expect(login.activateQualifiedComposerDrafts).toHaveBeenCalledBefore(login.connectRuntimeBridge);
+    expect(login.uiInitState.value).toBe('ready');
+    expect(login.connectionState.value).toBe('ready');
+    expect(login.sidePanelActiveTab.value).toBe('session');
   });
 
-  it('surfaces a rejected empty dsh bridge URL instead of starting', () => {
-    const { startInitialization, initErrorMessage } = runHandleLogin({
-      dshBridgeUrl: '  ',
-      saveDsh: () => {
-        throw new Error('dsh bridge URL is required.');
-      },
-    });
-    expect(startInitialization).not.toHaveBeenCalled();
-    expect(initErrorMessage.value).toBe('dsh bridge URL is required.');
+  it('shows a rejected Bridge connection and keeps the login form available to retry', async () => {
+    const connect = vi.fn<() => Promise<void>>().mockRejectedValue(new Error('Bridge unavailable'));
+    const login = await runBridgeLogin(connect);
+    expect(login.uiInitState.value).toBe('login');
+    expect(login.connectionState.value).toBe('error');
+    expect(login.initErrorMessage.value).toContain('Bridge unavailable');
+    expect(login.sidePanelActiveTab.value).toBe('project');
   });
 
   it('passes the four dsh activation hooks to useBackendActivation', () => {
