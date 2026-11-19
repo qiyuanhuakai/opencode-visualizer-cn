@@ -311,7 +311,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     requireValue(selectionCurrent(), 'request.selection', 'cancelled');
     // Consume the server's allocation acknowledgement even if the view is cancelled.
     const { observerId } = await request(target, 'runtime.observer.open', { after: options.after }, { onDrained: options.onDrained }).catch(error => {
-      if (error instanceof RuntimeRequestError && error.code === 'timeout' && current(attached)) connection.disconnect();
+      if (error instanceof RuntimeRequestError && error.code === 'timeout' && current(attached)) connection.reconnect();
       throw error;
     });
     let closed = false;

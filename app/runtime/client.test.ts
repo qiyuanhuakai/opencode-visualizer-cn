@@ -315,6 +315,20 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     socket.reply(reopening, { observerId: 'second' });
     await expect(retry).resolves.toHaveProperty('read');
   });
+  it('renews the connection when an observer allocation is not acknowledged', async () => {
+    vi.useFakeTimers();
+    const { client, socket, sockets, connection } = await fixture(true);
+    const observer = client.observe(target, { after: 4, onDelivery: () => {} });
+    const timedOut = expect(observer).rejects.toMatchObject({ code: 'timeout' });
+    expect((await socket.next()).method).toBe('runtime.observer.open');
+    await vi.advanceTimersByTimeAsync(15000);
+    await timedOut;
+    expect(socket.readyState).toBe(3);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(sockets).toHaveLength(2);
+    sockets[1].frame(hello);
+    expect(connection.status.state).toBe('ready');
+  });
   it('prefetches workspace and session pages on one token and applies them in collection order', async () => {
     const { client, socket } = await fixture();
     const pages: string[] = [];
