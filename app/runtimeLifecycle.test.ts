@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { mkdtemp, readFile, writeFile, rm, mkdir, chmod } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
