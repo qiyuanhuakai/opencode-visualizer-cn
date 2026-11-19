@@ -304,10 +304,11 @@ describe('Codex privacy and connection faults', () => {
     const { createCodexDiscovery } =
       await import('../../../shared/runtime/native/codex/discovery.js');
     const clock = vi.spyOn(Date, 'now').mockReturnValue(0);
+    let page = 0;
     const list = createCodexDiscovery({
       generation: 1,
       summary: async () => null,
-      request: async ({ cursor }) => ({ data: [{}], nextCursor: String(Number(cursor) + 1) }),
+      request: async () => ({ data: [{}], nextCursor: String(++page) }),
     });
     try {
       const first = await list();

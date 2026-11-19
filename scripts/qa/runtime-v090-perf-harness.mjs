@@ -36,12 +36,23 @@ export async function startNative(root, count, output) {
   const child = spawn(process.execPath, ['scripts/qa/runtime-v090-perf-native.mjs', root, String(count)], { cwd: repository, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.pipe(stream); child.stderr.pipe(stream);
   const exited = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal, pid: child.pid })));
-  await until(async () => {
-    if (child.exitCode !== null) throw new Error(`Native fixture exited ${child.exitCode}`);
-    try { return JSON.parse(await readFile(path.join(root, 'native.json'), 'utf8')); }
-    catch (error) { if (error.code === 'ENOENT') return false; throw error; }
-  }, 'native descriptor');
-  return { child, exited, descriptor: JSON.parse(await readFile(path.join(root, 'native.json'), 'utf8')), close: async () => { child.kill('SIGTERM'); const exit = await exited; stream.end(); return exit; } };
+  const close = async () => {
+    child.kill('SIGTERM');
+    const exit = await exited;
+    stream.end();
+    return exit;
+  };
+  try {
+    const descriptor = await until(async () => {
+      if (child.exitCode !== null) throw new Error(`Native fixture exited ${child.exitCode}`);
+      try { return JSON.parse(await readFile(path.join(root, 'native.json'), 'utf8')); }
+      catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    }, 'native descriptor');
+    return { child, exited, descriptor, close };
+  } catch (error) {
+    await close();
+    throw error;
+  }
 }
 export async function startBridge(root, stateRoot, output, empty = false) {
   const stream = createWriteStream(`${output}.log`);

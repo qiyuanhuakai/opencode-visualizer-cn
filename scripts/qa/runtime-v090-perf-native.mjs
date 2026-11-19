@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
+import { writeJson } from './runtime-v090-evidence.mjs';
 import path from 'node:path';
 import { summaryAt, wireAt, expectedInventory } from '../../app/dev/runtime-v090/fixtures/inventory.mjs';
 import { startKimiFixture } from './runtime-v090-cases/task-16-fixture.mjs';
@@ -77,7 +78,7 @@ const dshRows = nativeRows(4);
 dsh.state.summaries = dshRows.map(({ wire }) => ({ ...wire, projections: { values: { title: wire.title } } }));
 dsh.state.baseline = { type: 'baseline', value: { items: [], archivedSessionIds: dshRows.filter(({ summary }) => summary.archived).map(({ wire }) => wire.sessionId), pinnedSessionIds: [] } };
 const descriptor = { pid: process.pid, count, root, opencode: `http://127.0.0.1:${server.address().port}`, databasePath, kimi: kimi.endpoint, dsh: dsh.origin };
-await writeFile(path.join(root, 'native.json'), JSON.stringify(descriptor, null, 2));
+writeJson(path.join(root, 'native.json'), descriptor);
 console.log(JSON.stringify(descriptor));
 for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, async () => {
   clearInterval(heartbeat);
