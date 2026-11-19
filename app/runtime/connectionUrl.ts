@@ -1,6 +1,8 @@
 import type { ErrorCode } from '../../shared/runtime/capabilities.js';
 import type { ManagementConnectionCandidate } from '../../shared/runtime/runtimeWire.js';
 
+export const DEFAULT_RUNTIME_BRIDGE_URL = 'ws://127.0.0.1:23004/runtime';
+
 export class RuntimeConnectionError extends Error {
   constructor(readonly code: ErrorCode) { super(`Runtime connection: ${code}`); this.name = 'RuntimeConnectionError'; }
 }

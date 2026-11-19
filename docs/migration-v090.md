@@ -2,9 +2,7 @@
 
 本文档描述 v0.9.0-alpha.1 统一运行环境（Unified Runtime）相对于 v0.8.x 的**协议破坏性变更、废弃登录路径、数据保留承诺、旧 Bridge 拒绝规则、直连与管理浏览器差异、Slurm 持久化条件和不支持拓扑**，并给出完整的升级路径。
 
-**本文所有结论均来自已落地的验收证据**，不是设计意图。每条关键声明后面标注了证据编号（E43、E44、E45、E46、E27 等），可在 `.omo/evidence/vis-v090/` 下对应目录核对。凡本文未标注证据的行为，即为未验证，不得据此声称支持。
-
-**迁移状态：部分完成。** 旧全局后端路由（`useBackend*` 接缝与 `activeBackendKind` 全局单例，即 `getActiveBackendAdapter`/`getActiveBackendKind`/`setActiveBackendKind` 生产路径）已由 task 48 移除：生产动作不再经过全局 backend 路由，运行时消费者按连接作用域携带的 kind 显式解析 `getBackendAdapter(kind)`；被移除的全局函数仅保留在 legacy 导出模块（`app/backends/legacyGlobalRouting.ts`）供测试沿袭，无生产引用。主界面已接入新运行时 wire：`app/App.vue` 在 Bridge 地址就绪后创建真实的 `/runtime` 连接（`createRuntimeConnection` + 真实 WebSocket）与运行时客户端（`createRuntimeClient`），调用 `connection.connect()`，hello 发布 target 身份后构建并 `start()` 统一会话树（`useRuntimeSessionTree`），并把该客户端交给会话动作、消息发送与交互模块（`useRuntimeSessionActions` / `useRuntimeMessageSend` / `useRuntimeInteractions`）。仍为真的限定：未建立可用 runtime target 时（未绑定 bridge 地址，或 bridge 尚未回答 hello 因而 target 未附着，此时限定操作以 `reconcile_required` 失败关闭）会话动作沿用既有 per-backend 路径；未构建统一树时（如裸 OpenCode server 不是 runtime wire 端点）侧栏沿用旧树；连接 listener 只处理 hello，断线不会自动清空 target 与统一树，因此不能由连接失活推导整个界面回退；登录页按后端选择与每后端直连地址在本 alpha 仍存在且仍可使用，详见本文第 3 节。
+Vis 和 Vis Bridge 应使用同一发布版本。旧版本的原生服务地址可保留为迁移信息，首屏连接地址使用 Vis Bridge 的 `/runtime`，默认是 `ws://127.0.0.1:23004/runtime`。连接成功后，会话树加载 Bridge 提供的会话；状态监控和供应商设置可单独切换管理 Agent，输入栏使用当前会话的 Agent。
 
 ---
 
@@ -35,15 +33,13 @@ v0.9.0-alpha.1 引入 `/runtime` v1 协议。这是**新增通道**，不与 v0.
 
 ---
 
-## 3. 废弃登录路径（仍可用于本 alpha）
+## 3. 连接 Vis Bridge
 
-以下路径标记为**废弃（deprecated）**，它们在本 alpha 仍然存在且经过既有回归保护，但不再作为推荐入口：
+1. 在原生服务所在的系统安装同版本的 Vis Bridge，并运行 `vis_bridge start`。
+2. 打开 Vis，使用默认地址 `ws://127.0.0.1:23004/runtime`，或填写当前设备可访问的 Bridge 地址。设置过 Bridge token 时，在首屏填写。
+3. 连接后从统一会话树选择会话。配置或检查其他 Agent 时，可在状态监控或供应商与模型面板切换管理 Agent。
 
-1. **登录页按后端选择**：登录界面先点选 OpenCode / Codex / ACP / Kimi Web / DSH 再连接的方式（`loginBackendKind` 全局选择）。新模型是"一次连接一个 Bridge 入口，按 target 路由"，不再依赖全局后端选择。
-2. **每后端直连地址**：OpenCode `http://localhost:4096`、Codex `ws://localhost:23004/codex`、ACP `ws://localhost:23004`、Kimi Web `ws://localhost:23004/kimi-web/ws` 这类按后端分别填写的 URL。它们对 direct 连接仍然有效，但同一套地址在 managed remote 模式下改由管理端 `/runtime` 逻辑 WS 承载。
-3. **`useBackend*` 接缝与 `activeBackendKind` 全局路由（task 48 已移除，列出以记录对比）**：`app/backends/registry.ts` 不再持有全局后端单例，只导出 `getBackendAdapter(kind)`，未注册 kind 直接抛错（fail-closed，无默认回退）；主界面组件（`ProjectPicker.vue`、`ProjectSettingsDialog.vue`、`ProviderManagerModal.vue`、`StatusMonitorModal.vue`）经连接作用域的显式 kind prop/param 解析适配器，不经过全局单例。被移除的 `getActiveBackendAdapter`/`getActiveBackendKind`/`setActiveBackendKind` 仅保留在 `app/backends/legacyGlobalRouting.ts` 供测试沿袭：仅 4 个测试文件引用、0 生产引用、构建产物 0 匹配。
-
-**为什么仍可用**：全局后端路由的移除已由 task 48 完成（生产零消费，被移除函数仅保留在 legacy 导出模块供测试沿袭）。主界面已在存活 `/runtime` 连接上运行统一会话树（`app/App.vue` 创建真实连接与客户端、hello 后 `start()` 统一树，见本文开头"迁移状态"）；上述每后端选择与直连地址在本 alpha 仍是可用的连接方式——未建立可用 runtime target 时，会话动作沿用该 per-backend 路径；未构建统一树时，侧栏沿用旧树。运行时能力通过共享层、驱动、Bridge 与组合式函数真实交付并有验收证据。
+旧版按 Agent 逐个登录的入口已经移除。升级过程中继续保留旧源备份及迁移导出的校验记录。
 
 ---
 
@@ -72,7 +68,7 @@ v0.9.0-alpha.1 引入 `/runtime` v1 协议。这是**新增通道**，不与 v0.
 
 | 模式 | 行为 | 证据 |
 |---|---|---|
-| direct | 前端直接访问目标 Bridge/服务；预建隧道可用 | E43、E27 |
+| direct | 前端直接访问目标 Bridge 的 `/runtime`；预建隧道可用 | E43、E27 |
 | managed remote | 前端只持有管理端入口的一条 `/runtime` 逻辑 WS，SSH/Slurm 通道由管理端建立 | E46 |
 | 手动隧道（预建） | 用户自建端口转发后按 direct 连接；loopback 健康 URL 会被主机身份判定为 remote | E27 |
 | 纯浏览器无管理 Bridge | managed transport capability 显示 `unavailable`，direct/预建隧道仍可用 | 契约 11（计划固定契约） |
@@ -103,13 +99,11 @@ v0.9.0-alpha.1 引入 `/runtime` v1 协议。这是**新增通道**，不与 v0.
 
 ---
 
-## 9. 平台限制（逐字记录，不得改写为"支持"）
+## 9. 平台验收范围
 
-1. **没有构建、也没有声称任何 Windows 或 macOS 安装包产物**：RPM/Windows-NSIS/macOS-PKG 无法在本 Linux 主机上构建（`rpmbuild`、`makensis`、`pkgbuild` 均未安装），仅验证了各自生成的文本与布局（13/13 项）。E45 `notVerified` 逐条记录。
-2. **没有走真实 GitHub-release 更新下载+校验路径**：更新腿只应用本地新构建的 deb（离线），更新 CLI 自身的守卫由其既有测试覆盖。
-3. **Electron 运行时只在 Linux 实测**：Windows/macOS 运行时未执行。
-4. **没有物理 GPU**：GRES 经 Slurm 真实 generic-GRES 记账演练（两个真实设备文件使 slurmd 真实报告 `gpu:2`），无真实 NVIDIA 设备。
-5. **macOS/Windows live 腿只在 CI 工作流中定义、未执行**：它们消费 task 45 的真实打包产物，必须在 macOS/Windows GitHub runner 上运行。
+- CI 覆盖 Windows x64/arm64、macOS x64/arm64 的 Vis 和 Bridge 构建及已打包 Bridge 验收，以及 Linux x64 Vis、Linux x64/arm64 Bridge 构建。
+- Windows x64 在隔离配置下验证了从安装包解出的 Vis 可连到独立 Bridge。安装器和启动日志按候选提交独立归档。
+- GitHub Release 的在线更新下载与校验、Slurm 物理 GPU 仍需独立验收。隔离 Slurm 环境以 generic GRES 测试资源分配和预留。
 
 ---
 
@@ -156,6 +150,5 @@ v0.9.0-alpha.1 引入 `/runtime` v1 协议。这是**新增通道**，不与 v0.
 
 ## 12. 已知未决项
 
-- 旧全局后端路由移除（task 48）已完成：`registry.ts` 只导出 `getBackendAdapter(kind)`（fail-closed），被移除的三个函数仅保留在 `app/backends/legacyGlobalRouting.ts` 供测试沿袭，生产零消费。主界面接入统一运行时 wire 亦已完成：`App.vue` 在存活 `/runtime` 连接上创建真实连接与运行时客户端、hello 后构建并 `start()` 统一会话树，并把客户端交给会话动作、消息发送与交互模块；仍未完成/仍为真的是：未建立可用 runtime target 时会话动作沿用废弃登录路径（第 3 节）、未构建统一树时侧栏沿用旧树，该路径本身尚未移除。
-- macOS/Windows 安装包产物、真实 GitHub-release 更新、Windows/macOS Electron 运行、真实 GPU、macOS/Windows live 腿均未取得证据（第 9 节）。
-- 已知非阻塞抖动：`app/runtimeGit.test.ts` 的 200-workspaces 用例与 `app/kimiWebWsProxy.boundaries.test.ts` 的 502 用例。
+- GitHub Release 在线更新及物理 GPU 的验收范围见第 9 节。
+- 历史性能表测量的是当时的运行时存储和浏览器环境。发布版本的生产 App 与 Bridge 数据需按最终候选的独立报告判读。

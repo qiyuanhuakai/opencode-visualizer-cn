@@ -2,6 +2,7 @@
 import { useRuntimeUi } from '../../locales/runtimeUi';
 const { rt } = useRuntimeUi();
 import { useI18n } from 'vue-i18n';
+import { DEFAULT_RUNTIME_BRIDGE_URL } from '../../runtime/connectionUrl';
 const url = defineModel<string>('url', { required: true });
 const token = defineModel<string>('token', { required: true });
 defineProps<{ error: string }>();
@@ -14,7 +15,7 @@ const { t } = useI18n();
     <h1 id="bridge-login-title">vis_bridge</h1>
     <p>{{ t('app.runtimeConnection.description') }}</p>
     <label for="bridge-url">{{ rt("Bridge URL") }}</label>
-    <input id="bridge-url" v-model="url" class="bridge-control" name="bridgeUrl" required spellcheck="false" autocomplete="url" placeholder="ws://127.0.0.1:4096/runtime" />
+    <input id="bridge-url" v-model="url" class="bridge-control" name="bridgeUrl" required spellcheck="false" autocomplete="url" :placeholder="DEFAULT_RUNTIME_BRIDGE_URL" />
     <label for="bridge-token">{{ t('app.login.codexBridgeToken') }}</label>
     <input id="bridge-token" v-model="token" class="bridge-control" name="bridgeToken" type="password" autocomplete="current-password" />
     <p v-if="error" role="alert" class="bridge-error">{{ error }}</p>
