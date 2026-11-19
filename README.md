@@ -71,7 +71,7 @@
 
 ### Codex Vis UI
 
-在登录页选择 **Codex** 并连接 `vis_bridge`，即可在 Vis 主界面管理 Codex 会话、选择模型、浏览文件与 Git 变更，并查看思考、工具调用和状态监控。权限请求也在主界面处理；这是正式发布的 Codex 使用入口，无需在设置中开启实验性功能。
+在首屏连接 Vis Bridge（默认 `ws://127.0.0.1:23004/runtime`），再从统一会话树选择 Codex 会话。模型、权限请求、思考和工具调用在会话中处理。查看 Codex 服务状态时，在「状态监控」切换到 **Codex**。
 
 可选的 **Codex Panel** 悬浮面板仍为 Alpha：如需使用，可在“设置”→“实验性功能”中单独开启。
 
@@ -326,7 +326,7 @@ vis_bridge 会自动探测或启动默认的 OpenCode、Codex 与 Kimi Web 服�
 
 1. 在运行 `vis_bridge` 的主机上安装并配置 **`@moonshot-ai/kimi-code`**，确认 `kimi --version` 可运行。首次使用请先按 Kimi Code 自身流程完成登录。
 2. 安装并启动 `vis_bridge`。它默认探测或启动 `kimi web --port 58627 --no-open`；Kimi Web 与 bridge 应运行在同一主机。
-3. 在 Vis 登录页选择 **Kimi Web**，桥接地址使用默认值 `ws://localhost:23004/kimi-web/ws`；如果 bridge 配置了 token，再填写 **Bridge token**。
+3. 在 Vis 首屏连接 Vis Bridge（默认 `ws://127.0.0.1:23004/runtime`）。Bridge 配置了 token 时，在首屏填写，然后从统一会话树选择 Kimi Web 会话。
 4. bridge 从本机 `~/.kimi-code/server.token` 读取上游凭据并转发 REST/WS；无需在 Vis 中填写 Kimi token。连接失败时先检查“状态监控”中的 Kimi Web 服务状态和 bridge 日志。
 
 ---
@@ -486,7 +486,7 @@ All upstream [Vis](https://github.com/xenodrive/vis) core features are fully pre
 
 ### Codex Vis UI
 
-Select **Codex** on the login screen and connect to `vis_bridge` to manage Codex sessions, choose models, browse files and Git changes, and view thinking, tool calls, and status monitoring in the main Vis UI. Permission requests are handled there too. This is the fully released Codex experience and does not require an experimental toggle.
+Connect to Vis Bridge on the first screen (default `ws://127.0.0.1:23004/runtime`), then choose a Codex session in the unified session tree. Manage models, permission requests, thinking, and tool calls in the session. In Status Monitor, switch the managed agent to **Codex** to inspect the service.
 
 The optional **Codex Panel** floating panel remains Alpha. Enable it separately under **Settings → Experimental Features** if needed.
 
@@ -503,13 +503,13 @@ Kimi Web is the fourth backend, separate from the Kimi Code agent available thro
 v0.9.0-alpha adds the unified runtime: connect one Bridge entry, then browse all five sources (OpenCode, Codex, ACP, Kimi Web, DSH) in the same Git/worktree tree with harness badges. Multiple sessions run concurrently with permissions, models, files, and task state clearly owned. A Host Thread can hand off across harnesses; tasks, teams, and isolated changes carry review and acceptance semantics; SSH and Slurm targets execute through the same entry.
 
 - Protocol: `/runtime` v1 with a `hello/version/capabilities` handshake, idempotency keys on requests, `durable-accepted` separated from `native-executed`, an independent binary channel, and fixed error codes.
-- Upgrade: legacy history, drafts, favorites, and auxiliary metadata migrate intact (the migration reads the legacy source read-only and uninstall preserves data); a legacy `v070-legacy` bridge is refused before connecting with an upgrade path. The full path backup → bind → import → verify → cutover is in [migration notes](docs/migration-v090.md).
+- Upgrade: the migration preserves legacy history, drafts, favorites, and auxiliary metadata. Legacy sources are read-only and uninstall preserves data. Vis rejects the legacy `v070-legacy` Bridge and shows the upgrade path. See the [migration guide](docs/migration-v090.md) for backup, binding, import, verification, and cutover.
 - Remote: SSH/Slurm connections, the two channels (TCP and step relay), persistence conditions, and unsupported topologies are in [remote notes](docs/remote.md).
 - Collaboration: Host Thread, handoff, tasks/attempts/teams, and isolated changes are in [collaboration notes](docs/collaboration.md).
 - Performance: measured numbers for 10k sessions / 200 worktrees / 5 sources and the 100k-pin stress profile (real Chromium, real IndexedDB, no store mock, 10 runs) are in section 11 of the migration notes; the prescribed 200 worktrees and the five-category tree composition are seeded and graded (seed 090: five categories split evenly, 1001+ Global roots, 51+ Codex threads, archive/orphan/child members, equal timestamps, each tree dimension graded over the harness-owned IndexedDB); the five UI-TREE render metrics are graded at the store-substrate level (the performance fixture drives the store substrate and does not render the running App.vue), and no running-app rendering is claimed.
-- Platform limits: no Windows or macOS installer artifact was built or claimed; the real GitHub-release update path was not exercised; Electron runtime was exercised on Linux only; no physical GPU. See section 9 of the migration notes.
+- Platforms: CI builds Windows, macOS, and Linux installers. On Windows x64, the unpacked desktop app was verified against a separate Bridge. Online release download verification and physical GPU coverage remain pending. See section 9 of the migration guide.
 
-> ⚠️ Migration in progress: the per-backend login selection and per-backend direct URLs are marked deprecated but remain usable in this alpha; the legacy global backend routing (the module-global singleton and the `getActiveBackendAdapter` family) is retired — production actions resolve adapters explicitly from the connection scope, and the removed functions survive only in the legacy export module for test lineage; the main app is wired to the new runtime: session actions keep the per-backend path until a usable runtime target is attached (no bridge URL bound, or the bridge has not answered hello), the sidebar keeps its legacy tree until the unified tree is built, and the legacy login and direct-connection paths remain.
+> Connect to Vis Bridge on the first screen using its `/runtime` address. Choose a session from the unified session tree. The composer follows the chosen session. Status Monitor and Providers & Models have their own agent selector. Back up legacy sources and verify the import before switching over.
 
 ---
 
@@ -694,7 +694,7 @@ vis_bridge automatically adopts or starts the default OpenCode, Codex, and Kimi 
 
 1. Install and configure **`@moonshot-ai/kimi-code`** on the same host as `vis_bridge`. Check that `kimi --version` works and complete Kimi Code's own sign-in flow.
 2. Install and start `vis_bridge`. By default it probes or starts `kimi web --port 58627 --no-open`; Kimi Web and the bridge must run on the same host.
-3. On the Vis login screen choose **Kimi Web** and use the default bridge URL `ws://localhost:23004/kimi-web/ws`. Enter a **Bridge token** only if you configured one on the bridge.
+3. Connect to Vis Bridge on the first screen (default `ws://127.0.0.1:23004/runtime`). Enter the Bridge token if you configured one, then choose a Kimi Web session from the unified session tree.
 4. The bridge reads the upstream credential from `~/.kimi-code/server.token` and proxies REST/WS. Do not enter the Kimi token in Vis. If connection fails, inspect the Kimi Web service in Status Monitor and the bridge log.
 
 ---
