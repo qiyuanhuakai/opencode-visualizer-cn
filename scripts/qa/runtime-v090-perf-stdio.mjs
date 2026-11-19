@@ -94,7 +94,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (method === 'thread/goal/get') return reply({ goal: null });
   if (['session/load', 'session/resume'].includes(method)) {
-    write({ method: 'session/update', params: { sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Seed090 selected native history.' } } } });
+    write({ method: 'session/update', params: { sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `Seed090 native history for ${params.sessionId}.` } } } });
     return reply({});
   }
   if (method === 'model/list') return reply({ data: [{ id: 'seed-codex-model', model: 'seed-codex-model', displayName: 'Seed Codex model', isDefault: true, inputModalities: ['text', 'image'], supportedReasoningEfforts: [{ reasoningEffort: 'low', description: 'Seed fast' }, { reasoningEffort: 'high', description: 'Seed deep' }] }], nextCursor: null });

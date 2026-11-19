@@ -61,10 +61,13 @@ export async function openBrowser(output, userDataDirectory = `${output}-profile
   await page.setViewportSize({ width: 1440, height: 1000 });
   const cdp = await context.newCDPSession(page);
   await cdp.send('Network.enable');
-  const wire = { frames: 0, bytes: 0, methods: {}, errors: [], timeline: [], startup: {}, last: null };
+  const wire = { frames: 0, bytes: 0, methods: {}, historySessions: [], errors: [], timeline: [], startup: {}, last: null };
   const requests = new Map();
   cdp.on('Network.webSocketFrameSent', ({ requestId, response }) => {
     try { const parsed = JSON.parse(response.payloadData); if (parsed.method) { wire.methods[parsed.method] = (wire.methods[parsed.method] ?? 0) + 1; requests.set(`${requestId}:${parsed.id}`, parsed.method);
+      if (parsed.method === 'runtime.history.open' && parsed.params?.session && wire.historySessions.length < 64) {
+        wire.historySessions.push(parsed.params.session);
+      }
       const startup = wire.startup[requestId];
       if (startup?.length < 20 && ['runtime.inspect', 'runtime.snapshot'].includes(parsed.method)) {
         startup.push({ at: Date.now(), sent: parsed.method, collection: parsed.params?.collection });
@@ -160,7 +163,7 @@ export async function measureTree(page, connected) {
   return { topologyMs, firstSelectableMs, appearance, expansionActions: expanded.size, renderedRows };
 }
 
-export async function measureInteractions(page, target) {
+export async function measureInteractions({ page, wire }, target) {
   const search = page.getByTestId('unified-search-input');
   await search.fill(target.title);
   const searchStarted = await page.evaluate(() => performance.now());
@@ -175,7 +178,8 @@ export async function measureInteractions(page, target) {
   const searchCompleteMs = await page.evaluate(time => performance.now() - time, searchStarted);
   const row = { title: target.title, nativeSessionId: target.nativeSessionId, harness: target.source };
   const expectedHistory = row.harness === 'opencode' || row.harness === 'acp'
-    ? 'Seed090 selected native history.' : null;
+    ? `Seed090 native history for ${target.nativeSessionId}.` : null;
+  const openedBeforeSelection = wire.historySessions.length;
   const selectedAt = await result.evaluate((element, expected) => {
     const startedAt = performance.now();
     if (expected) {
@@ -222,6 +226,7 @@ export async function measureInteractions(page, target) {
   const selectionVisibleMs = await page.evaluate((time) => performance.now() - time, selectedAt);
   let historyMs = null;
   let historyLocatorMs = null;
+  let observedHistorySession = null;
   if (expectedHistory) {
     await page.getByText(expectedHistory, { exact: true }).first().waitFor({ timeout: 30000 });
     historyLocatorMs = await page.evaluate((time) => performance.now() - time, selectedAt);
@@ -231,6 +236,9 @@ export async function measureInteractions(page, target) {
       return time;
     });
     if (historyMs === null) throw new Error('Expected history never reached a visible renderer frame');
+    observedHistorySession = wire.historySessions.slice(openedBeforeSelection)
+      .find(session => session.nativeSessionId === target.nativeSessionId);
+    if (!observedHistorySession) throw new Error('Renderer did not open history for the selected session');
   }
   const expand = await page.evaluate(async () => {
     const group = document.querySelector('[data-row-kind="section"],[data-row-kind="repo"]');
@@ -243,7 +251,7 @@ export async function measureInteractions(page, target) {
     }
     return samples;
   });
-  return { row, searchMs, searchCompleteMs, selectionVisibleMs, historyMs, historyLocatorMs, expand };
+  return { row, searchMs, searchCompleteMs, selectionVisibleMs, historyMs, historyLocatorMs, observedHistorySession, expand };
 }
 
 export async function measureEventVisibility(page, nativeOrigin, nativeSessionId) {
