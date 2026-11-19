@@ -18,7 +18,7 @@ Electron 中打开「设置 → 桌面」。Web 版不显示这些原生功能�
 ## v0.9.0-alpha 运行时桥接与平台边界
 
 - 统一运行环境要求对端 bridge 报告协议代 `v090-runtime`。旧协议代 `v070-legacy`（如 bridge `0.7.10`）在连接前即被拒绝，更新卡片与 `/healthz` 预连接探针给出升级路径；无 bridge 主机给出安装路径。协议帧契约见 [runtime.md](runtime.md)，完整兼容说明见 [migration-v090.md](migration-v090.md)。
-- 应用内更新只适用于已取得的平台产物。本版本的限制逐字记录：没有构建也没有声称任何 Windows 或 macOS 安装包产物（RPM/NSIS/PKG 仅验证生成文本与布局）；未走真实 GitHub-release 更新下载+校验路径（只应用本地 deb）；Electron 运行时只在 Linux 实测；无物理 GPU（GRES 经 Slurm 真实 generic-GRES 记账演练）。未执行平台的能力不得声称支持。
+- CI 构建 Windows、macOS 和 Linux 安装包。已验证 Windows x64 从安装包解出的桌面应用可连接独立 Bridge。应用内更新需要当前平台的发行资产和元数据，GitHub Release 的在线下载与校验仍待独立验证。[平台覆盖与限制](migration-v090.md#9-平台验收范围)
 - 安装目录在无 `node` 的 PATH 下仍启动 store worker 与 PTY（staged Node 24 sidecar）；卸载保留数据，重装后可持续使用既有状态。
 
 ## 托盘与菜单
