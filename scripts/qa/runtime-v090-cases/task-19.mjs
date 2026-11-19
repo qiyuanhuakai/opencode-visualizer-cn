@@ -168,7 +168,7 @@ export async function run(context) {
       check('malformed authority injection is rejected before durable mutation or native call', [malformed.rejected, malformed.code, fixture.secondarySql().operations.length], [true, 'unauthorized', mutationCount]);
       const unauthorized = await page.evaluate(input => window.task19.rawAuthorityProbe(input), { target: fixture.secondary.target, method: 'session.send', params: { harnessInstanceId: session.harnessInstanceId, session: { ...session, environmentId: randomUUID() }, args: { body: { parts: [{ type: 'text', text: 'Must never reach native service' }] } } }, idempotencyKey: 'foreign-session' });
       proof.observations.unauthorized = unauthorized;
-      const unauthorizedFrames = await page.evaluate(() => window.task19.state().trace.filter(row => row.kind === 'frame' && row.value.frame.kind === 'result' && row.value.frame.typedError?.code === 'unauthorized'));
+      const unauthorizedFrames = await page.evaluate(() => window.task19.state().trace.filter(row => row.kind === 'authority-probe-result' && row.value.code === 'unauthorized'));
       proof.observations.unauthorizedFrames = unauthorizedFrames;
       check('authenticated foreign session is rejected by actual Host with typed unauthorized and no durable operation', [unauthorized.rejected, unauthorized.code, fixture.secondarySql().operations.length, unauthorizedFrames.length, fixture.controlled.calls.filter(call => call.path.endsWith('/prompt_async')).length], [true, 'unauthorized', mutationCount, 1, 0]);
       const stale = await page.evaluate(input => window.task19.staleChannel(input), { ...uploadInput, prefix: 'stale.bin' });
