@@ -10774,6 +10774,31 @@ function runtimeComposerTarget(fallback: SessionRef): SessionRef {
   return target;
 }
 
+async function codexComposerDestination(target: SessionRef, input: RuntimeSendInput, isCurrent: () => boolean) {
+  const { providerID, modelID } = parseProviderModelKey(input.model ?? '');
+  if (!providerID || !modelID) return target;
+  const provider = providerID === CODEX_PROJECT_ID ? CODEX_OFFICIAL_MODEL_PROVIDER : providerID;
+  const client = requireRuntimeActionClient();
+  const scope = client.scope(target.environmentId);
+  const response = await client.request(target.environmentId, 'session.get', {
+    session: target, harnessInstanceId: target.harnessInstanceId, args: {},
+  }, { selectionCurrent: scope.isCurrent });
+  const currentProvider = asRuntimeRecord(response).modelProvider;
+  if (!isCurrent()) throw new Error('Codex session changed while preparing the message.');
+  if (typeof currentProvider !== 'string' || !currentProvider || currentProvider === provider) return target;
+  if (threadComposerActive.value || input.queue) throw new Error('Create a Codex session with the selected provider before sending to this target.');
+  const workspace = selectedWorkspaceContext(runtimeSelectedDirectory.value ?? undefined);
+  const created = await completeRuntimeMutation(client.mutate(target.environmentId, 'session.create', {
+    harnessInstanceId: target.harnessInstanceId,
+    workspaceKey: workspace.workspaceKey,
+    args: { native: { model: modelID, modelProvider: provider } },
+  }, { idempotencyKey: crypto.randomUUID(), selectionCurrent: scope.isCurrent }));
+  const session = readCreatedRuntimeSession(created, target);
+  await unifiedSessionTree.value?.retrySource(session.harnessInstanceId);
+  if (!isCurrent() || !scope.isCurrent()) throw new Error('Codex session changed while creating the new thread.');
+  return session;
+}
+
 async function sendRuntimeComposer(binding: RuntimeActionBinding, input: RuntimeSendInput) {
   runtimeBoundSession(binding);
   if (!runtimeOnline.value || !runtimeComposerCanSend() || runtimeSelectionLoading.value || runtimeComposerReadyKey.value !== draftKeyForSelectedContext()) return undefined;
@@ -10788,15 +10813,22 @@ async function sendRuntimeComposer(binding: RuntimeActionBinding, input: Runtime
     const target = runtimeComposerTarget(binding.session);
     if (encodeSessionKey(target) !== ready.sessionKey) throw new Error('Select the Thread participant before sending.');
     const targetInput = input;
-    if (runtimeKindFor(target) === 'dsh' && targetInput.model) await syncRuntimeDshSelection(target, targetInput);
-    const mutation = runtimeMessageSend.send(target, targetInput);
+    const kind = runtimeKindFor(target);
+    if (kind === 'dsh' && targetInput.model) await syncRuntimeDshSelection(target, targetInput);
+    const isCurrentDraft = () => draftKeyForSelectedContext() === ownerKey && messageInput.value === draft.text && attachments.value === draft.attachments;
+    const destination = kind === 'codex' ? await codexComposerDestination(target, targetInput, isCurrentDraft) : target;
+    const mutation = runtimeMessageSend.send(destination, targetInput);
     void mutation.executed.catch(error => {
       if (draftKeyForSelectedContext() === ownerKey) setSendStatusText(toErrorMessage(error));
     });
     const receipt = await mutation.accepted;
+    if (kind === 'codex' && !input.queue) await mutation.executed;
     if (sending.mayClear(composerDraftRevisionByContext.get(ownerKey) ?? 0) && draftKeyForSelectedContext() === ownerKey && messageInput.value === draft.text && attachments.value === draft.attachments) {
       clearComposerInputState();
       persistComposerDraftForCurrentContext();
+    }
+    if (destination !== target && draftKeyForSelectedContext() === ownerKey && !messageInput.value && attachments.value.length === 0) {
+      await handleUnifiedSelectKey(encodeSessionKey(destination));
     }
     return receipt;
   } catch (error) {
@@ -11364,16 +11396,21 @@ async function createRuntimeSession(directory?: string): Promise<BackendSessionI
   }, { idempotencyKey: crypto.randomUUID(), selectionCurrent: scope.isCurrent });
   void mutation.accepted.catch(() => undefined);
   const result = (await mutation.executed).value;
+  const session = readCreatedRuntimeSession(result, manifest);
+  await unifiedSessionTree.value?.retrySource(manifest.harnessInstanceId);
+  await handleUnifiedSelectKey(encodeSessionKey(session));
+  return { id: session.nativeSessionId, projectID: '', directory: workspace.workspace.canonicalPath };
+}
+
+function readCreatedRuntimeSession(result: unknown, owner: Pick<SessionRef, 'environmentId' | 'harnessInstanceId'>): SessionRef {
   const row = asRuntimeRecord(result);
   const sessionRecord = asRuntimeRecord(row.session);
   const nested = asRuntimeRecord(sessionRecord.session);
   const candidate = typeof sessionRecord.nativeSessionId === 'string' ? sessionRecord : typeof nested.nativeSessionId === 'string' ? nested : undefined;
   if (!candidate) throw new Error('Bridge created the session but did not return its qualified identity.');
   const session = parseSessionRef(candidate);
-  if (session.environmentId !== manifest.environmentId || session.harnessInstanceId !== manifest.harnessInstanceId) throw new Error('Bridge returned a session from another Agent instance.');
-  await unifiedSessionTree.value?.retrySource(manifest.harnessInstanceId);
-  await handleUnifiedSelectKey(encodeSessionKey(session));
-  return { id: session.nativeSessionId, projectID: '', directory: workspace.workspace.canonicalPath };
+  if (session.environmentId !== owner.environmentId || session.harnessInstanceId !== owner.harnessInstanceId) throw new Error('Bridge returned a session from another Agent instance.');
+  return session;
 }
 
 function asRuntimeRecord(value: unknown): Record<string, unknown> {

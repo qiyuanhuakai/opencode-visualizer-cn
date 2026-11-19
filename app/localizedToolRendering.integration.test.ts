@@ -21,7 +21,7 @@ function completedTool(
   tool: string,
   input: Record<string, JsonValue>,
   output: string,
-) {
+): Parameters<typeof mountRuntimeApp>[0] {
   const messageID = `assistant-${sessionID}`;
   const id = `tool-${sessionID}`;
   const parentID = `user-${sessionID}`;
