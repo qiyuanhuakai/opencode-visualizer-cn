@@ -94,6 +94,15 @@ try {
     report.network = { ...network.stats };
     if (!report.memory.passed) throw new Error('Production memory sample exceeded the profile budget');
     report.status = 'passed';
+  } catch (error) {
+    try {
+      const screenshot = path.join(output, 'failure.png');
+      await browser.page.screenshot({ path: screenshot, timeout: 5000 });
+      report.failureScreenshot = screenshot;
+    } catch (captureError) {
+      report.failureScreenshotError = String(captureError);
+    }
+    throw error;
   } finally {
     clearInterval(monitor);
   }
