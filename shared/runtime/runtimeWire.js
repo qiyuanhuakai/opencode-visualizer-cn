@@ -16,7 +16,7 @@ const fields = {
   'runtime.history.chunk': [['historyId', 'pageId', 'descriptorId', 'offset'], []],
   'runtime.history.read': [['historyId', 'after'], []],
   'runtime.history.close': [['historyId'], []],
-  'runtime.inspect': [[], []],
+  'runtime.inspect': [[], ['bootstrapTree', 'bootstrapEncoding']],
   'runtime.target.attach': [['target'], []], 'runtime.target.detach': [['target'], []],
   'runtime.snapshot': [['collection'], ['token', 'cursor', 'limit']],
   'runtime.snapshot.chunk': [['collection', 'key', 'revision', 'offset', 'token'], []],
@@ -100,6 +100,10 @@ export function parseRuntimeParams(method, input) {
   for (const key of ['after', 'revision', 'offset', 'size']) if (value[key] !== undefined) integerValue(value[key], key);
   if (value.target !== undefined) parseEnvironmentId(value.target);
   if (method === 'runtime.observer.read' && value.resolveSummary !== undefined) requireValue(value.resolveSummary === true, 'wire.resolve_summary');
+  if (method === 'runtime.inspect' && value.bootstrapTree !== undefined) requireValue(value.bootstrapTree === true, 'wire.bootstrap_tree');
+  if (method === 'runtime.inspect' && value.bootstrapEncoding !== undefined) {
+    requireValue(value.bootstrapTree === true && value.bootstrapEncoding === 'gzip', 'wire.bootstrap_encoding');
+  }
   if (method === 'runtime.snapshot.release') textValue(value.token, 'token');
   if (method === 'runtime.interaction.read') { parseSessionRef(value.session); textValue(value.interactionId, 'interactionId'); }
   if (value.workspaceKey !== undefined) decodeWorkspaceKey(value.workspaceKey);
@@ -154,7 +158,24 @@ export function parseRuntimeResult(method, input) {
       if (value.nextOffset !== null) { integerValue(value.nextOffset, 'nextOffset'); requireValue(value.nextOffset > value.offset && value.nextOffset <= value.size, 'workspace.chunk_offset'); }
       break;
     case 'runtime.inspect':
-      objectFields(value, ['role', 'state', 'subscribers', 'topology', 'sources', 'connectionProfileId', 'targets', 'harnesses', 'transports']);
+      objectFields(value, ['role', 'state', 'subscribers', 'topology', 'sources', 'connectionProfileId', 'targets', 'harnesses', 'transports'], ['treeBootstrap', 'treeBootstrapGzip']);
+      if (value.treeBootstrapGzip !== undefined) {
+        const compressed = objectFields(value.treeBootstrapGzip, ['data', 'bytes']);
+        requireValue(value.treeBootstrap === undefined && typeof compressed.data === 'string'
+          && /^[A-Za-z0-9+/]+={0,2}$/.test(compressed.data), 'wire.bootstrap_encoding');
+        positive(compressed.bytes, 'wire.bootstrap_bytes', LIMITS.jsonBytes);
+      }
+      if (value.treeBootstrap !== undefined) {
+        requireValue(Array.isArray(value.treeBootstrap) && value.treeBootstrap.length === 3, 'wire.bootstrap_tree');
+        const [first] = value.treeBootstrap;
+        value.treeBootstrap.forEach((page, index) => {
+          frame(page, 'snapshot');
+          requireValue(page.items.every(item => item.collection === INDEX_COLLECTIONS[index]), 'wire.bootstrap_collection');
+          requireValue(page.token === first.token && page.target === first.target && page.epoch === first.epoch
+            && page.generation === first.generation && page.revision === first.revision && page.watermark === first.watermark
+            && page.expiresAt === first.expiresAt, 'wire.bootstrap_binding');
+        });
+      }
       role(value.role); textValue(value.state, 'state'); integerValue(value.subscribers, 'subscribers'); parseConnectionProfileId(value.connectionProfileId);
       requireValue(Array.isArray(value.topology) && Array.isArray(value.sources), 'wire.topology');
       value.sources.forEach(source => { objectFields(source, ['id', 'state']); textValue(source.id, 'source.id'); textValue(source.state, 'source.state'); });
