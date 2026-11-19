@@ -13,8 +13,8 @@ import { shapeRuntimeNetwork } from './runtime-v090-perf-network.mjs';
 const { values } = parseArgs({ options: { count: { type: 'string' }, out: { type: 'string' }, rtt: { type: 'string', default: '0' } } });
 const count = Number(values.count);
 const rttMs = Number(values.rtt);
-if (!Number.isInteger(count) || count < 6 || count > 100000 || !values.out || ![0, 100].includes(rttMs)) {
-  throw new Error('Use --count 6..100000 --out <new evidence directory> [--rtt 0|100]');
+if (!Number.isInteger(count) || count < 10 || count > 100000 || count % 5 !== 0 || !values.out || ![0, 100].includes(rttMs)) {
+  throw new Error('Use --count 10..100000 (multiple of 5) --out <new evidence directory> [--rtt 0|100]');
 }
 const output = path.resolve(values.out);
 await mkdir(output);
@@ -53,9 +53,9 @@ try {
   try {
     const connected = await connectApp(browser.page, web.origin, network.port);
     report.tree = await measureTree(browser.page, connected);
-    report.interactions = await measureInteractions(browser.page, summaryAt(5));
     report.index = await bridge.indexed();
     report.inventory = indexInventory(state, count);
+    report.interactions = await measureInteractions(browser.page, { ...summaryAt(5), title: 'Vis measured native history session' });
     report.renderer = await browser.heap();
     report.bridgeObservedRssPeakBytes = Math.max(...rss, bridge.rss().rssBytes);
     report.network = { ...network.stats };
