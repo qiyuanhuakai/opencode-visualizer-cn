@@ -205,7 +205,6 @@ async function run() {
   const log = (step, detail) => { const entry = { at: new Date().toISOString(), step, ...detail }; logs.push(entry); console.log(`[${entry.at}] ${step}${detail === undefined ? '' : ' ' + JSON.stringify(detail)}`); };
   const prefix = `perf-${config.label}`;
   const startedAt = new Date().toISOString();
-  const startedMs = Date.now();
 
   const stack = await createStack({ out, log });
   const cpuStartedMs = performance.now();
