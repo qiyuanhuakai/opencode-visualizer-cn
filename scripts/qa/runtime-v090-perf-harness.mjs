@@ -69,8 +69,9 @@ export async function startBridge(root, stateRoot, output, empty = false) {
   };
 }
 export function indexInventory(stateRoot, count) {
-  const database = new DatabaseSync(path.join(stateRoot, 'runtime', 'runtime.db'), { readOnly: true });
+  const database = new DatabaseSync(path.join(stateRoot, 'runtime', 'runtime.db'), { readOnly: true, timeout: 5000 });
   try {
+    database.exec('BEGIN');
     const harnesses = database.prepare('SELECT value FROM harnesses').all().map((row) => JSON.parse(row.value));
     const kind = new Map(harnesses.map((row) => [row.harnessInstanceId, row.kind]));
     const expected = expectedInventory(count);
