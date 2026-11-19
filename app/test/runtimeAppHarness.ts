@@ -6,6 +6,8 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fingerprint } from '../../bridge/runtime/operationJournal.js';
+import { createInstanceOperations } from '../../shared/runtime/native/opencode/instanceOperations.js';
 import { createRuntimeHost } from '../../bridge/runtime/runtimeHost.js';
 import type { RuntimeDriverFactory } from '../../bridge/runtime/runtimeDriverFactories.js';
 import { unavailableRegistration } from '../../bridge/runtime/runtimeDriverFactories.js';
@@ -86,6 +88,11 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
         'model-a': { id: 'model-a', name: 'QA model', limit: { context: 32000, output: 4000 } },
       };
       if (modelId) models[modelId] = { id: modelId, name: 'Slash Model' };
+      const editableConfig = options.editableProvider ? createInstanceOperations({
+        store: context.store,
+        scope: { environmentId: identity.environmentId, harnessInstanceId: identity.harnessInstanceId, ...context.authority() },
+        current: context.authority, fingerprint, randomUUID,
+      }) : undefined;
       let config: Record<string, JsonValue> = { model: 'provider-a/model-a' };
       const queries: Record<string, JsonValue> = {
         listProviders: { all: [{ id: 'provider-a', name: 'QA provider', models, ...(options.editableProvider ? { source: 'config' } : {}) }], connected: ['provider-a'], default: { 'provider-a': 'model-a' } },
@@ -119,16 +126,24 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
               read: async () => { throw new Error('No fixture live history'); }, close: async () => { historyCloses.push(selected); },
             };
           },
-        }, native: Object.fromEntries(Object.entries(queries).map(([operation, value]) => [operation, input => { nativeQueries.push({ operation, ...(input.session ? { session: input.session } : {}) });
+        }, native: Object.fromEntries(Object.entries(queries).map(([operation, value]) => [operation, async input => {
+          nativeQueries.push({ operation, ...(input.session ? { session: input.session } : {}) });
           if (operation === 'getGlobalConfig') return config;
-          if (operation === 'updateGlobalConfig') {
+          if (operation === 'updateGlobalConfig' && editableConfig) {
             const patch = input.params.body;
-            if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('Fixture config patch required');
-            config = { ...config, ...patch };
-            return config;
+            const idempotencyKey = input.params.idempotencyKey;
+            if (!patch || typeof patch !== 'object' || Array.isArray(patch) || typeof idempotencyKey !== 'string') {
+              throw new Error('Fixture config patch and idempotency key required');
+            }
+            const accepted = await editableConfig.accept({ idempotencyKey, method: operation, payload: patch });
+            return editableConfig.execute(accepted.operationId, async () => {
+              config = { ...config, ...patch };
+              return config;
+            });
           }
-          return value; }])) },
-      }, close: async () => {} };
+          return value;
+        }])) },
+      }, close: async () => { await editableConfig?.close(); } };
     }, acp: async context => {
       const identity = { environmentId: parseEnvironmentId(context.environmentId), harnessInstanceId: parseHarnessInstanceId(context.harnessInstanceId), kind: 'acp' as const };
       const empty = unavailableRegistration(identity, 'starting');
