@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 import { readdirSync } from 'node:fs';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
@@ -197,7 +197,7 @@ export async function run(context) {
     for (const scheme of ['light', 'dark']) for (const width of [1440, 390]) {
       await omowright.emulate(page, { width, height: 900, deviceScaleFactor: 1, mobile: false, hasTouch: false });
       await page.cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] }, await page.resolveSessionId());
-      const filename = path.join(runDir, `browser-${scheme}-${width}.png`); await page.screenshot({ path: filename, fullPage: true }); artifacts.push(artifact(filename, 'screenshot'));
+      const filename = path.join(runDir, `browser-${scheme}-${width}.png`); await writeFile(filename, await page.screenshot({ fullPage: true })); artifacts.push(artifact(filename, 'screenshot'));
       check(`renderer ${scheme} ${width} has no horizontal overflow`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     }
     for (const index of [0, 1]) { const shot = await electron.screenshot(index, `electron-${index}.png`); artifacts.push(artifact(shot.path, 'screenshot')); }
@@ -206,7 +206,7 @@ export async function run(context) {
     proof.observations.finalSql = fixture.sql(); proof.observations.secondaryFinalSql = fixture.secondarySql();
     proof.observations.controlledNativeCalls = fixture.controlled.calls;
     check('dirty worktree source bytes and unrelated uncommitted paths are preserved', worktree(), sourceBefore);
-  } catch (error) { proof.failure = { message: error.message, stack: error.stack }; persist(); if (page) { writeJson(path.join(runDir, 'failure-dom.json'), await page.evaluate(() => ({ url: location.href, body: document.body.innerText, runtime: window.task19?.state() }))); await page.screenshot({ path: path.join(runDir, 'failure.png') }); } throw error; }
+  } catch (error) { proof.failure = { message: error.message, stack: error.stack }; persist(); if (page) { writeJson(path.join(runDir, 'failure-dom.json'), await page.evaluate(() => ({ url: location.href, body: document.body.innerText, runtime: window.task19?.state() }))); await writeFile(path.join(runDir, 'failure.png'), await page.screenshot()); } throw error; }
   finally {
     try {
       await fixture.close();
