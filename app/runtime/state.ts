@@ -93,22 +93,24 @@ export function createRuntimeState(options: RuntimeStateOptions) {
         cache.begin(entry.fence);
       }
       const position = progress(entry, name); const offset = entry.request.offset ?? 0;
-      const show = visible?.target === entry.target && visible.collection === name && !entry.visibleCaptured && position.loaded + page.items.length > offset;
-      if (show) clearWindow();
+      const visibleCollection = visible?.target === entry.target && visible.collection === name;
+      const startWindow = visibleCollection && !entry.visibleCaptured && position.loaded + page.items.length > offset;
+      const fillWindow = visibleCollection && (startWindow || (entry.request.sessionWindow && name === 'session_summaries'));
+      if (startWindow) clearWindow();
       for (let index = 0; index < page.items.length; index++) {
         const item = row(page.items[index], name);
         requireValue(item.revision <= page.revision, 'state.snapshot_revision', 'replay_required');
         const result = cache.admit({ ...item, address: address(entry, item), fence: entry.fence });
         requireValue(result !== 'budget', 'state.entity_budget', 'source_unavailable');
         if (result === 'applied') options.onCanonical?.(item);
-        if (show && position.loaded + index >= offset && item.value !== null) {
+        if (fillWindow && window.length < ENTITY_LIMITS.page && position.loaded + index >= offset && item.value !== null) {
           const lease = cache.get(address(entry, item)); requireValue(lease !== null, 'state.view_budget', 'source_unavailable'); window.push(lease);
-        } else if (entry.visibleCaptured && visible?.target === entry.target && visible.collection === name
-          && lookahead.length < ENTITY_LIMITS.page && item.value !== null) {
+        } else if ((entry.visibleCaptured || startWindow) && visibleCollection
+          && position.loaded + index >= offset && lookahead.length < ENTITY_LIMITS.page && item.value !== null) {
           const lease = cache.get(address(entry, item)); requireValue(lease !== null, 'state.view_budget', 'source_unavailable'); lookahead.push(lease);
         }
       }
-      if (show) entry.visibleCaptured = true;
+      if (startWindow) entry.visibleCaptured = true;
       position.loaded += page.items.length; position.cursor = page.cursor; position.status = 'partial';
       entry.pendingCollection = page.cursor === null ? INDEX_COLLECTIONS[INDEX_COLLECTIONS.indexOf(name) + 1] ?? name : name;
       notify();
@@ -213,12 +215,13 @@ export function createRuntimeState(options: RuntimeStateOptions) {
       let first = true;
       const result = await client.snapshot(entry.target, INDEX_COLLECTIONS, {
         signal: entry.controller.signal, selectionCurrent: () => current(entry),
+        initialSummaryLimit: entry.request.sessionWindow ? 32 : undefined,
         onPage: (name, page) => {
           if (first) { requireValue(firstPage.resize(2048 + 2 * estimateRetainedBytes(page.items) + 4 * page.token.length), 'state.first_page_budget', 'source_unavailable'); first = false; }
           publishPage(entry, name, page);
           // The visible page and its bounded local backfill are ready. The
           // rest of the inventory stays in the Bridge for search and child pages.
-          if (entry.request.sessionWindow && name === 'session_summaries' && visible?.target === entry.target && visible.collection === name && lookahead.length > 0) return false;
+          if (entry.request.sessionWindow && name === 'session_summaries' && visible?.target === entry.target && visible.collection === name && lookahead.length >= ENTITY_LIMITS.page) return false;
         }, onDelivery: delivery => deliver(entry, delivery), onDeliveries: deliveries => deliverMany(entry, deliveries),
       });
       entry.observer = result.observer; check(entry);
