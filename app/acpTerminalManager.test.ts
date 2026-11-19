@@ -123,7 +123,8 @@ describe('acpTerminalManager', () => {
     }
   });
 
-  it('releases descendants after the terminal leader already exited', { timeout: 10_000 }, async () => {
+  // On Windows the exited leader requires a PowerShell/CIM descendant sweep.
+  it('releases descendants after the terminal leader already exited', { timeout: process.platform === 'win32' ? 20_000 : 10_000 }, async () => {
     const manager = createAcpTerminalManager();
     const script = `
       const { spawn } = require('node:child_process');
@@ -135,16 +136,20 @@ describe('acpTerminalManager', () => {
       command: process.execPath,
       args: ['-e', script],
     });
-    await manager.waitForExit(terminalId);
-    const descendantPid = Number.parseInt(manager.output(terminalId).output, 10);
-
+    let descendantPid: number | undefined;
     try {
+      await manager.waitForExit(terminalId);
+      const pid = Number(manager.output(terminalId).output);
+      expect(Number.isInteger(pid) && pid > 0).toBe(true);
+      descendantPid = pid;
       await manager.release(terminalId);
-      await vi.waitFor(() => expect(() => process.kill(descendantPid, 0)).toThrow());
+      await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
     } finally {
-      try {
-        process.kill(descendantPid, 'SIGKILL');
-      } catch {}
+      if (descendantPid !== undefined) {
+        try {
+          process.kill(descendantPid, 'SIGKILL');
+        } catch {}
+      }
       await manager.stopAll();
     }
   });
