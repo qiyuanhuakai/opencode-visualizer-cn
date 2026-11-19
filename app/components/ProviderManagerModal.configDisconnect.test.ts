@@ -54,6 +54,29 @@ describe('ProviderManagerModal config-backed disconnect (PR #182 finding 2)', ()
     expect(events.providersChanged).toHaveBeenCalledOnce();
   });
 
+  it('does not apply an earlier Agent’s config response to the newly selected Agent', async () => {
+    const previous = realCodexBackend();
+    const replacement = realCodexBackend();
+    const response = Promise.withResolvers<Record<string, unknown>>();
+    previous.updateGlobalConfig.mockReturnValueOnce(response.promise);
+    setProviderBackend(previous);
+    const { host, events } = await mountProviderManager({
+      backendKind: 'codex',
+      providers: [{ id: 'proxyhub', name: 'Proxy Hub', source: 'config', models: {} }],
+      connectedProviderIds: ['proxyhub'],
+      showConfirm: vi.fn(async () => true),
+    });
+    buttonByText(host, 'Disconnect').click();
+    await vi.waitFor(() => expect(previous.updateGlobalConfig).toHaveBeenCalledOnce());
+
+    setProviderBackend(replacement);
+    response.resolve({ disabled_providers: ['proxyhub'] });
+    await flushUi();
+    expect(replacement.updateGlobalConfig).not.toHaveBeenCalled();
+    expect(events.configUpdated).not.toHaveBeenCalled();
+    expect(events.providersChanged).not.toHaveBeenCalled();
+  });
+
   it('keeps a credential-backed provider gated on the auth-deletion branch it actually uses', async () => {
     const backend = realCodexBackend();
     setProviderBackend(backend);

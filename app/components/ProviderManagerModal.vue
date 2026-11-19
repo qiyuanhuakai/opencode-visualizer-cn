@@ -944,6 +944,15 @@ watch(
   },
 );
 
+watch(() => props.nativeAdapter, () => {
+  authMethods.value = {};
+  busyProviderId.value = '';
+  feedbackMessage.value = '';
+  closeCustomProviderForm();
+  resetCustomProviderForm();
+  if (props.open) void fetchAuthMethods();
+});
+
 function setFeedback(message: string, tone: 'info' | 'success' | 'error' = 'info') {
   feedbackMessage.value = message;
   feedbackTone.value = tone;
@@ -1003,19 +1012,22 @@ function removeCustomHeader(index: number) {
 }
 
 async function fetchAuthMethods() {
+  const target = backend();
   try {
     if (!providerControlAvailable('listProviderAuthMethods')) {
       authMethods.value = {};
       return;
     }
-    const listProviderAuthMethods = backend().listProviderAuthMethods;
+    const listProviderAuthMethods = target.listProviderAuthMethods;
     if (!listProviderAuthMethods) {
       authMethods.value = {};
       return;
     }
     const data = (await listProviderAuthMethods()) as Record<string, ProviderAuthMethod[]>;
+    if (backend() !== target) return;
     authMethods.value = data && typeof data === 'object' ? data : {};
   } catch (error) {
+    if (backend() !== target) return;
     setFeedback(error instanceof Error ? error.message : String(error), 'error');
   }
 }
@@ -1301,6 +1313,7 @@ function validateCustomProvider() {
 }
 
 async function submitCustomProvider() {
+  const target = backend();
   const result = validateCustomProvider();
   if (!result) {
     customProviderErrors.value = {
@@ -1326,7 +1339,7 @@ async function submitCustomProvider() {
   busyProviderId.value = CUSTOM_PROVIDER_BUSY_ID;
   try {
     const updateGlobalConfig = requireBackendMethod(
-      backend().updateGlobalConfig,
+      target.updateGlobalConfig,
       'global config updates',
     );
     const providerEnablePatch = buildProviderDisabledPatch(
@@ -1334,7 +1347,7 @@ async function submitCustomProvider() {
       result.providerID,
       true,
     );
-    if (backend().kind === 'codex') {
+    if (target.kind === 'codex') {
       const codexConfig = result.config as CodexCustomProviderConfig;
       const modelMetadata = codexConfig.models ?? {};
       const nextConfig = (await updateGlobalConfig({
@@ -1342,6 +1355,7 @@ async function submitCustomProvider() {
         [`vis.model_providers.${result.providerID}`]: { models: modelMetadata },
         ...providerEnablePatch,
       })) as ProviderConfigState;
+      if (backend() !== target) return;
       emit('config-updated', nextConfig ?? {});
       emit('providers-changed');
       setFeedback(t('providerManager.messages.connected', { name: result.name }), 'success');
@@ -1350,9 +1364,10 @@ async function submitCustomProvider() {
       return;
     }
     if (result.key) {
-      const setProviderAuth = requireBackendMethod(backend().setProviderAuth, 'provider auth');
+      const setProviderAuth = requireBackendMethod(target.setProviderAuth, 'provider auth');
       await setProviderAuth(result.providerID, { type: 'api', key: result.key });
     }
+    if (backend() !== target) return;
     const nextConfig = (await updateGlobalConfig({
       provider: {
         ...props.providerConfig?.provider,
@@ -1360,15 +1375,16 @@ async function submitCustomProvider() {
       },
       ...providerEnablePatch,
     })) as ProviderConfigState;
+    if (backend() !== target) return;
     emit('config-updated', nextConfig ?? {});
     emit('providers-changed');
     setFeedback(t('providerManager.messages.connected', { name: result.name }), 'success');
     closeCustomProviderForm();
     resetCustomProviderForm();
   } catch (error) {
-    setFeedback(error instanceof Error ? error.message : String(error), 'error');
+    if (backend() === target) setFeedback(error instanceof Error ? error.message : String(error), 'error');
   } finally {
-    busyProviderId.value = '';
+    if (backend() === target) busyProviderId.value = '';
   }
 }
 
@@ -1438,6 +1454,7 @@ async function collectAuthPromptInputs(provider: ProviderInfo, method: ProviderA
 }
 
 async function toggleProvider(providerId: string, nextEnabled: boolean) {
+  const target = backend();
   const provider = props.providers.find((item) => item.id === providerId);
   if (provider && isBackendManagedProvider(provider)) {
     setFeedback(t('providerManager.messages.backendManagedProvider'), 'info');
@@ -1446,12 +1463,13 @@ async function toggleProvider(providerId: string, nextEnabled: boolean) {
   busyProviderId.value = providerId;
   try {
     const updateGlobalConfig = requireBackendMethod(
-      backend().updateGlobalConfig,
+      target.updateGlobalConfig,
       'global config updates',
     );
     const result = (await updateGlobalConfig(
       buildProviderDisabledPatch(props.providerConfig, providerId, nextEnabled),
     )) as ProviderConfigState;
+    if (backend() !== target) return;
     emit('config-updated', result ?? {});
     setFeedback(
       nextEnabled
@@ -1460,9 +1478,9 @@ async function toggleProvider(providerId: string, nextEnabled: boolean) {
       'success',
     );
   } catch (error) {
-    setFeedback(error instanceof Error ? error.message : String(error), 'error');
+    if (backend() === target) setFeedback(error instanceof Error ? error.message : String(error), 'error');
   } finally {
-    busyProviderId.value = '';
+    if (backend() === target) busyProviderId.value = '';
   }
 }
 
@@ -1496,13 +1514,14 @@ function toggleModel(modelKey: string, nextEnabled: boolean) {
 }
 
 async function connectProvider(provider: ProviderInfo) {
+  const target = backend();
   if (isDshBackend.value && props.dshRpcClient) { dshProviderManager.value?.openSettings(provider.id); return; }
   if (isBackendManagedProvider(provider)) {
     setFeedback(t('providerManager.messages.backendManagedProvider'), 'info');
     return;
   }
   const picked = await pickAuthMethod(provider.id);
-  if (!picked) return;
+  if (!picked || backend() !== target) return;
   busyProviderId.value = provider.id;
   try {
     if (picked.method.type === 'api') {
@@ -1513,25 +1532,27 @@ async function connectProvider(provider: ProviderInfo) {
             }),
           )
         : null;
-      if (!key) return;
+      if (!key || backend() !== target) return;
       const trimmedKey = key.trim();
-      const setProviderAuth = requireBackendMethod(backend().setProviderAuth, 'provider auth');
+      const setProviderAuth = requireBackendMethod(target.setProviderAuth, 'provider auth');
       await setProviderAuth(provider.id, { type: 'api', key: trimmedKey });
+      if (backend() !== target) return;
       emit('providers-changed');
       setFeedback(t('providerManager.messages.connected', { name: provider.id }), 'success');
       return;
     }
 
     const inputs = await collectAuthPromptInputs(provider, picked.method);
-    if (!inputs) return;
+    if (!inputs || backend() !== target) return;
     const authorizeProviderOAuth = requireBackendMethod(
-      backend().authorizeProviderOAuth,
+      target.authorizeProviderOAuth,
       'provider OAuth authorization',
     );
     const authorization = (await authorizeProviderOAuth(provider.id, {
       method: picked.index,
       inputs,
     })) as ProviderAuthAuthorization;
+    if (backend() !== target) return;
     if (authorization?.url) {
       window.open(authorization.url, '_blank', 'noopener,noreferrer');
     }
@@ -1542,9 +1563,9 @@ async function connectProvider(provider: ProviderInfo) {
               t('providerManager.prompts.pasteAuthCode', { providerId: provider.id }),
           )
         : null;
-      if (!code) return;
+      if (!code || backend() !== target) return;
       const completeProviderOAuth = requireBackendMethod(
-        backend().completeProviderOAuth,
+        target.completeProviderOAuth,
         'provider OAuth completion',
       );
       await completeProviderOAuth(provider.id, {
@@ -1558,25 +1579,27 @@ async function connectProvider(provider: ProviderInfo) {
               t('providerManager.prompts.completeOAuth', { providerId: provider.id }),
           )
         : true;
-      if (!confirmed) return;
+      if (!confirmed || backend() !== target) return;
       const completeProviderOAuth = requireBackendMethod(
-        backend().completeProviderOAuth,
+        target.completeProviderOAuth,
         'provider OAuth completion',
       );
       await completeProviderOAuth(provider.id, {
         method: picked.index,
       });
     }
+    if (backend() !== target) return;
     emit('providers-changed');
     setFeedback(t('providerManager.messages.connected', { name: provider.id }), 'success');
   } catch (error) {
-    setFeedback(error instanceof Error ? error.message : String(error), 'error');
+    if (backend() === target) setFeedback(error instanceof Error ? error.message : String(error), 'error');
   } finally {
-    busyProviderId.value = '';
+    if (backend() === target) busyProviderId.value = '';
   }
 }
 
 async function disconnectProvider(provider: ProviderInfo) {
+  const target = backend();
   if (isBackendManagedProvider(provider)) {
     setFeedback(t('providerManager.messages.backendManagedProvider'), 'info');
     return;
@@ -1586,33 +1609,36 @@ async function disconnectProvider(provider: ProviderInfo) {
   const confirmed = showConfirm
     ? await showConfirm(t('providerManager.confirm.disconnect', { providerId }))
     : true;
-  if (!confirmed) return;
+  if (!confirmed || backend() !== target) return;
   busyProviderId.value = providerId;
   try {
     if (isConfigBackedProvider(provider)) {
       const updateGlobalConfig = requireBackendMethod(
-        backend().updateGlobalConfig,
+        target.updateGlobalConfig,
         'global config updates',
       );
-      const deleteProviderAuth = backend().deleteProviderAuth;
+      const deleteProviderAuth = target.deleteProviderAuth;
       if (deleteProviderAuth) await deleteProviderAuth(providerId).catch(() => undefined);
+      if (backend() !== target) return;
       const result = (await updateGlobalConfig(
         buildProviderDisabledPatch(props.providerConfig, providerId, false),
       )) as ProviderConfigState;
+      if (backend() !== target) return;
       emit('config-updated', result ?? {});
     } else {
       const deleteProviderAuth = requireBackendMethod(
-        backend().deleteProviderAuth,
+        target.deleteProviderAuth,
         'provider auth deletion',
       );
       await deleteProviderAuth(providerId);
     }
+    if (backend() !== target) return;
     emit('providers-changed');
     setFeedback(t('providerManager.messages.disconnected', { providerId }), 'success');
   } catch (error) {
-    setFeedback(error instanceof Error ? error.message : String(error), 'error');
+    if (backend() === target) setFeedback(error instanceof Error ? error.message : String(error), 'error');
   } finally {
-    busyProviderId.value = '';
+    if (backend() === target) busyProviderId.value = '';
   }
 }
 </script>
