@@ -84,7 +84,9 @@ export async function openBrowser(output, userDataDirectory = `${output}-profile
       });
     }
     if (wire.timeline.length < 100 && ['runtime.inspect', 'runtime.snapshot'].includes(method)) wire.timeline.push({ at: Date.now(), method, collection: parsed.result?.items?.[0]?.collection, count: parsed.result?.items?.length, watermark: parsed.result?.watermark });
-    if (!wire.firstCanonicalSessionAt && method === 'runtime.entity.resolve' && parsed.result?.collection === 'session_summaries' && parsed.result.value) wire.firstCanonicalSessionAt = Date.now();
+    const canonical = method === 'runtime.entity.resolve' ? parsed.result
+      : method === 'runtime.observer.read' ? parsed.result?.canonical : undefined;
+    if (!wire.firstCanonicalSessionAt && canonical?.collection === 'session_summaries' && canonical.value) wire.firstCanonicalSessionAt = Date.now();
     if (parsed?.ok === false && wire.errors.length < 100) wire.errors.push({ id: parsed.id, ...parsed.typedError });
     if (parsed) wire.last = parsed;
   });

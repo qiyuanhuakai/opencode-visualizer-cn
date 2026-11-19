@@ -158,19 +158,17 @@ describe('target Git topology', () => {
       },
     });
     const harnesses = ['opencode', 'codex', 'kimi', 'dsh', 'acp'] as const;
-    for (let i = 0; i < 200; i++)
-      await catalog.register({
-        workspace: f.ref(path.join(f.root, `metadata-${i}`)),
-        harnessInstanceId: foreign,
-        harness: 'codex',
-        orphan: true,
-      });
-    for (const [index, harness] of harnesses.entries())
-      await catalog.register({
-        workspace: f.workspace,
-        harnessInstanceId: `55555555-5555-4555-8555-55555555555${index}`,
-        harness,
-      });
+    await catalog.registerMany(Array.from({ length: 200 }, (_, index) => ({
+      workspace: f.ref(path.join(f.root, `metadata-${index}`)),
+      harnessInstanceId: foreign,
+      harness: 'codex',
+      orphan: true,
+    })));
+    await catalog.registerMany(harnesses.map((harness, index) => ({
+      workspace: f.workspace,
+      harnessInstanceId: `55555555-5555-4555-8555-55555555555${index}`,
+      harness,
+    })));
     // When browsing metadata and explicitly selecting a real workspace.
     const page = await catalog.page({ limit: 200 });
     expect(probes).toBe(0);
