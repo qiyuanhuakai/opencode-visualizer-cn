@@ -472,6 +472,52 @@ const project: ProjectState = {
   },
 };
 
+/**
+ * A SECOND sandbox of the SAME project, installed on request so a directory
+ * switch is drivable through the real app: `activeDirectory` is the sandbox of
+ * the selected session, so switching the selection to a session of this sandbox
+ * moves the ambient directory without leaving the target. It is opt-in because a
+ * test that does not ask for it must see exactly the tree it saw before.
+ */
+const OTHER_DIRECTORY = '/other-project';
+const OTHER_SESSION_ID = 'session-other';
+
+function installOtherDirectorySandbox(): void {
+  if (project.sandboxes[OTHER_DIRECTORY] !== undefined) return;
+  project.sandboxes[OTHER_DIRECTORY] = {
+    directory: OTHER_DIRECTORY,
+    name: 'other',
+    rootSessions: [OTHER_SESSION_ID],
+    sessions: {
+      [OTHER_SESSION_ID]: {
+        id: OTHER_SESSION_ID,
+        title: 'Session Other',
+        status: 'idle',
+        timeCreated: 0,
+        timeUpdated: 0,
+      },
+    },
+  };
+}
+
+function removeOtherDirectorySandbox(): void {
+  delete project.sandboxes[OTHER_DIRECTORY];
+}
+
+/** Select the session that lives in the SECOND sandbox, moving the ambient directory. */
+async function selectOtherDirectorySession(fixture: { host: HTMLElement }) {
+  await fixture.host.querySelector<HTMLElement>('.top-panel .ui-dropdown-button')?.dispatchEvent(
+    new MouseEvent('click', { bubbles: true }),
+  );
+  await vi.waitFor(() => {
+    const session = Array.from(fixture.host.querySelectorAll('.ui-dropdown-item')).find((item) =>
+      item.textContent?.includes('Session Other'),
+    );
+    if (!session) throw new Error('Session Other did not appear in the picker');
+    session.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}
+
 let mountSequence = 0;
 
 vi.mock('@iconify/vue', () => ({
@@ -516,6 +562,7 @@ async function mountApp(
   pauseInitialization: boolean,
   seedOpenCodeCredentials = true,
   startupBackend: 'opencode' | 'codex' = 'opencode',
+  withOtherDirectory = false,
 ) {
   harness.resetConnection();
   harness.createPty.mockClear();
@@ -580,9 +627,11 @@ async function mountApp(
     harness.resetConnection();
     window.localStorage.clear();
     vi.unstubAllGlobals();
+    if (withOtherDirectory) removeOtherDirectorySandbox();
   }
   onTestFinished(unmount);
   document.body.append(host);
+  if (withOtherDirectory) installOtherDirectorySandbox();
   const { default: App } = await import('../App.vue');
   lifetime.signal.throwIfAborted();
   const app = createApp(App);
@@ -611,7 +660,7 @@ async function mountApp(
     setupState && typeof setupState === 'object' ? Reflect.get(setupState, 'codexApi') : undefined;
   if (!isCodexSendClient(codexApi)) throw new Error('App Codex client binding is unavailable');
   const codexSendPrompt = vi.spyOn(codexApi, 'sendPrompt');
-  return {
+  const fixture = {
     host,
     listSessionMessages: harness.listSessionMessages,
     getPathInfo: harness.getPathInfo,
@@ -645,6 +694,16 @@ async function mountApp(
       window.localStorage.setItem(storageKey(StorageKeys.auth.backendKind), kind);
       dispatchStorageChange(StorageKeys.auth.backendKind, kind);
     },
+    /**
+     * Move the ACTIVE environment by re-pointing the stored server URL. The environment
+     * identity is derived from the active bridge target, so this is a real target switch
+     * that leaves the session tree — and a thread's participants, qualified under the
+     * previous environment — exactly where they were.
+     */
+    setStoredServerUrl(url: string) {
+      window.localStorage.setItem(storageKey(StorageKeys.auth.serverUrl), url);
+      dispatchStorageChange(StorageKeys.auth.serverUrl, url);
+    },
     readSetupBinding(name: string): unknown {
       const instance = Reflect.get(app, '_instance');
       if (!instance || typeof instance !== 'object') return undefined;
@@ -652,6 +711,7 @@ async function mountApp(
       if (!setupState || typeof setupState !== 'object') return undefined;
       return Reflect.get(setupState, name);
     },
+    selectOtherDirectorySession: withOtherDirectory ? () => selectOtherDirectorySession(fixture) : undefined,
     async releaseInitialization() {
       harness.releaseConnection();
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -659,10 +719,11 @@ async function mountApp(
     },
     unmount,
   };
+  return fixture;
 }
 
-export async function mountHistoryApp(history: unknown[]) {
-  return mountApp(history, false);
+export async function mountHistoryApp(history: unknown[], options: { readonly otherDirectory?: boolean } = {}) {
+  return mountApp(history, false, true, 'opencode', options.otherDirectory === true);
 }
 
 export async function mountPausedInitializationApp() {
