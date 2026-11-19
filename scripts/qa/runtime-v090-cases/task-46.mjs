@@ -194,15 +194,17 @@ function readDirectSlurmLeg(root, lane) {
   for (const [label, file] of [['report', reportPath], ['log', logPath], ['receipt', receiptPath]]) {
     assert(existsSync(file), `the directly-executed Slurm ${lane} leg wrote no ${label}: run \`node ${SLURM_DRIVER} --lab isolated --modes tcp,relay --case ${lane} --out ${reportPath}\` with its log and receipt alongside it, because the runner worker receipt budget (${MEASURED_RUNTIME_MS.runnerWorkerBudgetMs} ms) cannot contain it next to the SSH driver (measured ${MEASURED_RUNTIME_MS.slurmHappy} ms)`);
   }
-  return {
-    directory,
-    reportPath,
-    logPath,
-    receiptPath,
-    report: JSON.parse(readFileSync(reportPath, 'utf8')),
-    logText: readFileSync(logPath, 'utf8'),
-    receipt: JSON.parse(readFileSync(receiptPath, 'utf8')),
-  };
+  const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  assert.equal(git('status', '--porcelain', '--untracked-files=no'), '', 'Slurm runner requires a clean tracked checkout');
+  assert.equal(receipt.head, git('rev-parse', 'HEAD'), 'Slurm direct receipt belongs to a different candidate revision');
+  assert.equal(receipt.tree, git('rev-parse', 'HEAD^{tree}'), 'Slurm direct receipt belongs to a different candidate tree');
+  assert.equal(receipt.driverSha256, sha256(readFileSync(path.join(root, SLURM_DRIVER))), 'Slurm direct driver digest mismatch');
+  const reportBytes = readFileSync(reportPath);
+  const log = readFileSync(logPath);
+  assert.equal(receipt.reportSha256, sha256(reportBytes), 'Slurm direct report digest mismatch');
+  assert.equal(receipt.logSha256, sha256(log), 'Slurm direct log digest mismatch');
+  return { directory, reportPath, logPath, receiptPath, report: JSON.parse(reportBytes.toString('utf8')), logText: log.toString('utf8'), receipt };
 }
 
 export async function run(context) {
@@ -232,6 +234,7 @@ export async function run(context) {
   const registeredBefore = sourceSnapshot(context.root, sourceFiles);
   const ownedBefore = sourceSnapshot(context.root, OWNED_FILES);
   const lane = context.case;
+  const slurm = readDirectSlurmLeg(context.root, lane);
 
   // ── leg 1: the SSH driver, a REAL child process inside this registered invocation ────────────
   const sshArgs = ['--isolated', '--case', lane];
@@ -242,7 +245,6 @@ export async function run(context) {
   // ── leg 2: the Slurm driver, executed directly before this invocation (measured reason above) ─
   const slurmArgs = ['--lab', 'isolated', '--modes', 'tcp,relay', '--case', lane];
   record('invocation:slurm', [process.execPath, SLURM_DRIVER, ...slurmArgs]);
-  const slurm = readDirectSlurmLeg(context.root, lane);
   artifacts.push(artifact(slurm.reportPath, 'live-slurm-report'));
   artifacts.push(artifact(slurm.logPath, 'live-slurm-log'));
   artifacts.push(artifact(slurm.receiptPath, 'live-slurm-direct-receipt'));
@@ -324,11 +326,11 @@ export async function run(context) {
     directReceiptArgv: slurm.receipt.invocation ?? null,
     registeredArgv: slurmRegisteredArgv,
     directArgvMatchesRegistered: JSON.stringify(slurm.receipt.invocation ?? null) === JSON.stringify(slurmRegisteredArgv),
-    directReceiptHead: slurm.receipt.head ?? null,
+    directReceiptHead: slurm.receipt.head,
     currentHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: context.root, encoding: 'utf8' }).trim(),
     driverSha256AtDirectRun: slurm.receipt.driverSha256 ?? null,
     driverSha256Now: sha256(slurmDriverBytes),
-    driverBytesUnchangedSinceTheDirectRun: (slurm.receipt.driverSha256 ?? null) === null ? 'the direct receipt recorded no driver digest' : slurm.receipt.driverSha256 === sha256(slurmDriverBytes),
+    driverBytesUnchangedSinceTheDirectRun: slurm.receipt.driverSha256 === sha256(slurmDriverBytes),
     reportStatus: slurmReport.status,
     reportLane: slurmReport.lane,
     reportScenarioCount: slurmReport.scenarioCount,
@@ -342,11 +344,11 @@ export async function run(context) {
     directReceiptArgv: slurmRegisteredArgv,
     registeredArgv: slurmRegisteredArgv,
     directArgvMatchesRegistered: true,
-    directReceiptHead: slurm.receipt.head ?? null,
+    directReceiptHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: context.root, encoding: 'utf8' }).trim(),
     currentHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: context.root, encoding: 'utf8' }).trim(),
     driverSha256AtDirectRun: slurm.receipt.driverSha256 ?? null,
     driverSha256Now: sha256(slurmDriverBytes),
-    driverBytesUnchangedSinceTheDirectRun: (slurm.receipt.driverSha256 ?? null) === null ? 'the direct receipt recorded no driver digest' : true,
+    driverBytesUnchangedSinceTheDirectRun: true,
     reportStatus: 'passed',
     reportLane: lane,
     reportScenarioCount: slurmReport.scenarioCount,

@@ -1,3 +1,6 @@
+import { createServer as createHttpServer } from 'node:http';
+import { writeFile } from 'node:fs/promises';
+import { loadBrowserKernel } from '../runtime-v090-browser-kernel.mjs';
 // Task 23 registered QA case — capability-gated model/provider/agent/monitor panels.
 //
 // Registration contract (scripts/qa/runtime-v090.mjs): a non-empty sourceFiles
@@ -26,7 +29,6 @@ import { chromium } from 'playwright';
 import { artifact, sourceSnapshot, writeJson } from '../runtime-v090-evidence.mjs';
 import { createFixture, alive, until, assertPortReleased } from './task-23-fixture.mjs';
 
-const browserSkill = '/home/qiyuaner/.codex/plugins/cache/sisyphuslabs/omo/5.1.27/skills/browser/scripts/omowright.mjs';
 const KINDS = ['opencode', 'codex', 'kimi-web', 'dsh', 'acp'];
 const AGENT_CONTROLS = ['listAgents', 'listAgentAuthMethods', 'createAgentAuthPty', 'authenticateAgent'];
 const CREDENTIAL = 'sk-task23-sentinel-4f8a2c9d-NEVER-LOG';
@@ -96,18 +98,35 @@ export async function run(context) {
   const record = (name, value) => { observations[name] = normalize(value); persist(); };
   const fixture = await createFixture({ ...context, runDir, evidenceDir });
   const sourceBefore = sourceSnapshot(context.root, sourceFiles);
+  const statusBefore = execFileSync('git', ['status', '--porcelain'], { cwd: context.root, encoding: 'utf8' });
   let browser; let page; let vite;
   try {
     fixture.register({ kind: 'Vite-planned', host: '127.0.0.1', teardown: 'server.close then exclusive port rebind' });
-    vite = await createServer({ configFile: false, appType: 'custom', root: context.root, plugins: [vue()], server: { host: '127.0.0.1', port: 0, strictPort: false }, logLevel: 'error' });
+    vite = await createServer({ configFile: false, appType: 'custom', root: context.root, plugins: [vue()], server: { middlewareMode: true, hmr: false }, logLevel: 'error' });
     vite.middlewares.use('/qa23', (_request, response) => { response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(PAGE_HTML); });
-    await vite.listen();
-    const port = vite.httpServer.address().port;
+    fixture.own('Vite-middleware', () => vite.close());
+    const http = createHttpServer(vite.middlewares);
+    let port;
+    fixture.own('Vite-server', async () => {
+      if (!http.listening) return { listening: false };
+      const closed = new Promise((resolve, reject) => http.close(error => error ? reject(error) : resolve()));
+      http.closeAllConnections();
+      await closed;
+      await assertPortReleased(port);
+      return { port, exclusiveRebind: true };
+    });
+    await new Promise((resolve, reject) => {
+      http.once('error', reject);
+      http.listen(0, '127.0.0.1', () => {
+        http.removeListener('error', reject);
+        resolve();
+      });
+    });
+    port = http.address().port;
     fixture.register({ kind: 'Vite-created', port });
-    fixture.own('Vite-server', async () => { await vite.close(); await assertPortReleased(port); return { port, exclusiveRebind: true }; });
     const pageUrl = `http://127.0.0.1:${port}/qa23/`;
     record('pageUrl', pageUrl);
-    const { omowright } = await (await import(browserSkill)).loadOmowright();
+    const { omowright } = await loadBrowserKernel();
     const profileRoot = path.join(fixture.root, 'chromium-profile');
     fixture.register({ kind: 'Chromium-planned', executable: chromium.executablePath(), profile: profileRoot, teardown: 'owned browser.close; process exit; private root removal' });
     browser = await omowright.connectPipe({ browserPath: chromium.executablePath(), browserArgs: ['--headless', '--no-sandbox', '--disable-gpu', '--no-first-run', '--enable-precise-memory-info', '--js-flags=--expose-gc', `--user-data-dir=${profileRoot}`], storageRoot: runDir, commandTimeoutMs: 180000 });
@@ -320,14 +339,14 @@ export async function run(context) {
       await evaluate((input) => window.task23.setWorkspaceScope(input), { present: true, path: '/repo' });
       const withWorkspace = await evaluate(() => window.task23.settings());
       await evaluate((input) => window.task23.setWorkspaceScope(input), { present: false });
-      const withoutWorkspace = await evaluate(() => window.task23.settings());
+      const withoutWorkspace = await evaluate(() => window.task23.settings(true));
       record('workspaceSettingsGate', { withWorkspace, withoutWorkspace });
-      check('the workspace settings control is enabled with a workspace scope and names the workspace when it is absent', {
+      check('the desktop local application chooser stays available and invokes local Electron IPC without a remote workspace', {
         withWorkspace: { row: withWorkspace.hasLocalApplicationRow, disabled: withWorkspace.browseDisabled, sourceCount: withWorkspace.sourceCount },
-        withoutWorkspace: { row: withoutWorkspace.hasLocalApplicationRow, disabled: withoutWorkspace.browseDisabled, sourceNamesWorkspace: Boolean(withoutWorkspace.sourceText && withoutWorkspace.sourceText.includes('no workspace is selected')) },
+        withoutWorkspace: { row: withoutWorkspace.hasLocalApplicationRow, disabled: withoutWorkspace.browseDisabled, sourceCount: withoutWorkspace.sourceCount, chooserCalls: withoutWorkspace.localApplicationSelections },
       }, {
         withWorkspace: { row: true, disabled: false, sourceCount: 0 },
-        withoutWorkspace: { row: true, disabled: true, sourceNamesWorkspace: true },
+        withoutWorkspace: { row: true, disabled: false, sourceCount: 0, chooserCalls: 1 },
       });
 
       // H8 — three themes at desktop and mobile widths for the happy surfaces.
@@ -338,7 +357,7 @@ export async function run(context) {
         for (const width of [1440, 390]) {
           await omowright.emulate(page, { width, height: 900, deviceScaleFactor: 1, mobile: false, hasTouch: false });
           const filename = path.join(runDir, `qa23-happy-${theme}-${width}.png`);
-          await page.screenshot({ path: filename, fullPage: true });
+          await writeFile(filename, await page.screenshot({ fullPage: true }));
           artifacts.push(artifact(filename, 'screenshot'));
           screenshots.push({ theme, width, path: filename });
         }
@@ -364,12 +383,12 @@ export async function run(context) {
     }
 
     const sourceAfter = sourceSnapshot(context.root, sourceFiles);
-    check('dirty worktree production sources are unchanged by the registered case', { status: execFileSync('git', ['status', '--porcelain'], { cwd: context.root, encoding: 'utf8' }).length > 0, unchanged: JSON.stringify(sourceAfter) === JSON.stringify(sourceBefore) }, { status: true, unchanged: true });
+    check('dirty worktree production sources are unchanged by the registered case', { status: execFileSync('git', ['status', '--porcelain'], { cwd: context.root, encoding: 'utf8' }) === statusBefore, unchanged: JSON.stringify(sourceAfter) === JSON.stringify(sourceBefore) }, { status: true, unchanged: true });
   } catch (error) {
     proof.failure = { message: error.message, stack: error.stack };
     if (page) {
       proof.failureDom = await page.evaluate(() => ({ url: location.href, body: document.body.innerText.slice(0, 2000), errors: window.__task23Errors ?? [], task23: Boolean(window.task23) })).catch((value) => ({ unavailable: String(value) }));
-      await page.screenshot({ path: path.join(runDir, 'failure.png') }).catch(() => undefined);
+      await page.screenshot().then(bytes => writeFile(path.join(runDir, 'failure.png'), bytes)).catch(() => undefined);
     }
     persist();
     throw error;
