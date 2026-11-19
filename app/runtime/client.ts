@@ -307,10 +307,25 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
   }
   async function observe(target: EnvironmentId, options: RequestOptions & { readonly after: number; readonly onDelivery: (delivery: ObserverDelivery) => void | Promise<void>; readonly onDeliveries?: (deliveries: readonly ObserverDelivery[]) => Promise<void> }) {
     const attached = getTarget(target);
-    const { observerId } = await request(target, 'runtime.observer.open', { after: options.after }, options);
+    const selectionCurrent = () => !options.signal?.aborted && (options.selectionCurrent?.() ?? true);
+    requireValue(selectionCurrent(), 'request.selection', 'cancelled');
+    // Consume the server's allocation acknowledgement even if the view is cancelled.
+    const { observerId } = await request(target, 'runtime.observer.open', { after: options.after }, { onDrained: options.onDrained }).catch(error => {
+      if (error instanceof RuntimeRequestError && error.code === 'timeout' && current(attached)) connection.disconnect();
+      throw error;
+    });
     let closed = false;
     let reading = false;
-    const active = () => requireValue(!closed && current(attached) && (options.selectionCurrent?.() ?? true), 'observer.closed', 'reconcile_required');
+    async function close() {
+      if (closed) return;
+      closed = true;
+      if (current(attached)) await request(target, 'runtime.observer.close', { observerId });
+    }
+    if (!selectionCurrent()) {
+      await close();
+      throw new ProtocolError('cancelled', 'request.selection');
+    }
+    const active = () => requireValue(!closed && current(attached) && selectionCurrent(), 'observer.closed', 'reconcile_required');
     async function resume(after: number) {
       active();
       await request(target, 'runtime.observer.resume', { observerId, after }, options);
@@ -363,11 +378,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
         } finally { reading = false; }
       },
       resume,
-      async close() {
-        if (closed) return;
-        closed = true;
-        if (current(attached)) await request(target, 'runtime.observer.close', { observerId });
-      },
+      close,
     };
   }
   async function snapshot(target: EnvironmentId, collections: Collection | readonly Collection[], options: RequestOptions & { readonly onPage: (collection: Collection, page: Snapshot) => void | Promise<void>; readonly onDelivery?: (delivery: ObserverDelivery) => void | Promise<void>; readonly onDeliveries?: (deliveries: readonly ObserverDelivery[]) => Promise<void> }) {

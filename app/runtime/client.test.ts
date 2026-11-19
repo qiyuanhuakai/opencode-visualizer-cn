@@ -290,6 +290,31 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     await reading;
     expect(pages).toEqual(['workspaces', 'workspaces', 'session_summaries']);
   });
+  it('closes a late observer acknowledgement after cancelling the first snapshot page', async () => {
+    const { client, socket } = await fixture();
+    const controller = new AbortController();
+    const page = { version: 1, kind: 'snapshot', target, epoch: 'epoch', generation: 1, token: 'atomic', revision: 10, watermark: 4, expiresAt: Date.now() + 60000, items: [], cursor: 'next' };
+    const snapshot = client.snapshot(target, 'workspaces', {
+      signal: controller.signal,
+      onPage: () => controller.abort(),
+    });
+    const cancelled = expect(snapshot).rejects.toMatchObject({ code: 'cancelled' });
+    socket.reply(await socket.next(), page);
+    const opening = await socket.next();
+    expect(opening.method).toBe('runtime.observer.open');
+    await vi.waitFor(() => expect(controller.signal.aborted).toBe(true));
+    socket.reply(opening, { observerId: 'first' });
+    const closing = await socket.next();
+    expect(closing).toMatchObject({ method: 'runtime.observer.close', params: { observerId: 'first' } });
+    socket.reply(closing, { closed: true });
+    await cancelled;
+
+    const retry = client.observe(target, { after: 4, onDelivery: () => {} });
+    const reopening = await socket.next();
+    expect(reopening.method).toBe('runtime.observer.open');
+    socket.reply(reopening, { observerId: 'second' });
+    await expect(retry).resolves.toHaveProperty('read');
+  });
   it('prefetches workspace and session pages on one token and applies them in collection order', async () => {
     const { client, socket } = await fixture();
     const pages: string[] = [];
