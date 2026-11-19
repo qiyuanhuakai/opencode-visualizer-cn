@@ -6700,9 +6700,11 @@ const ptyWindowOwner = usePtyWindowOwner({
   },
   cleanupSession: (ptyId: string, session: ShellSession, options: { readonly kill: boolean }) => {
     pendingShellFits.delete(ptyId);
+    // The runtime PTY socket dispatches close synchronously. Retire the
+    // renderer's ownership before those callbacks can act on this window.
+    shellSessionsByPtyId.delete(ptyId);
     session.socket?.close();
     session.terminal.dispose();
-    shellSessionsByPtyId.delete(ptyId);
     if (forgePtyId === ptyId) {
       forgePtyId = '';
       if (options.kill) storageRemove(StorageKeys.state.forgePtyId);

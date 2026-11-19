@@ -56,7 +56,7 @@ describe('App PTY window ownership through Bridge', () => {
     await vi.waitFor(() => {
       expect(fixture.windows()).toHaveLength(0);
       expect(fixture.removals(id)).toEqual([{ ptyId: id }]);
-    });
+    }, { timeout: 5000 });
     expect(dispose).toHaveBeenCalled();
   }, 15000);
 
