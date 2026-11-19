@@ -1,4 +1,4 @@
-import { getCurrentScope, onScopeDispose, readonly, shallowRef } from 'vue';
+import { getCurrentScope, onScopeDispose, readonly, shallowReadonly, shallowRef } from 'vue';
 import type { PublicConnectionReference, RuntimeInspection } from '../../shared/runtime/runtimeWire.js';
 import type { SessionRef } from '../../shared/runtime/identity.js';
 import { createRuntimeClient } from '../runtime/client';
@@ -61,7 +61,7 @@ export function useRuntimeConnection(options: RuntimeConnectionOptions & Readonl
   }
   if (getCurrentScope()) onScopeDispose(dispose);
   return {
-    connection, client, status: readonly(status), reference: readonly(reference), inspection: readonly(inspection), selection: readonly(selection),
+    connection, client, status: readonly(status), reference: readonly(reference), inspection: shallowReadonly(inspection), selection: readonly(selection),
     async connect(): Promise<PublicConnectionReference> {
       const opening = connection.connect(); status.value = connection.status;
       await opening;
