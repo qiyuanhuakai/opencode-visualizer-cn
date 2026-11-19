@@ -6,7 +6,8 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, it } from 'vitest';
+import { zipSync } from 'fflate';
+import { expect, it, vi } from 'vitest';
 
 const require = createRequire(import.meta.url);
 const builderRequire = createRequire(require.resolve('electron-builder'));
@@ -17,8 +18,10 @@ const { getConfig, validateConfiguration } = builderRequire('app-builder-lib/out
   getConfig(root: string, config?: string | null, overrides?: Record<string, unknown>): Promise<Configuration>;
   validateConfiguration(config: Configuration, logger: { isEnabled: boolean; add(): void }): Promise<void>;
 };
-const { downloadElectronArtifactZip } = builderRequire('app-builder-lib/out/util/electronGet.js') as {
-  downloadElectronArtifactZip(options: Record<string, unknown>): Promise<string>;
+const { createElectronFrameworkSupport } = builderRequire('app-builder-lib/out/electron/ElectronFramework.js') as {
+  createElectronFrameworkSupport(config: Configuration, packager: object): Promise<{
+    prepareApplicationStageDirectory(options: object): Promise<void>;
+  }>;
 };
 const { version } = require('electron/package.json') as { version: string };
 const official = require('electron/checksums.json') as Record<string, string>;
@@ -33,7 +36,8 @@ it('loads the official locked package manifest through the real builder configur
 
 it.each([false, true])('validates archive bytes without a remote manifest request (corrupt=%s)', async corrupt => {
   const directory = await mkdtemp(path.join(tmpdir(), 'vis-electron-download-'));
-  const content = Buffer.from('controlled Electron archive boundary fixture');
+  const executable = Buffer.from('controlled Electron archive boundary fixture');
+  const content = zipSync({ electron: executable });
   const requests: string[] = [];
   const server = createServer((req, res) => {
     requests.push(req.url ?? '');
@@ -52,18 +56,34 @@ it.each([false, true])('validates archive bytes without a remote manifest reques
     expect(config.electronDownload.checksums[filename]).toBe(official[filename]);
     // The archive is controlled test bytes; retain the production option shape and
     // replace only this fixture's hash and endpoint. No third-party mirror is used.
-    const download = downloadElectronArtifactZip({
-      version, platformName: 'linux', arch: 'x64', artifactName: 'electron', cacheDir: path.join(directory, 'cache'),
-      electronDownload: { ...config.electronDownload,
-        mirrorOptions: { ...config.electronDownload.mirrorOptions, mirror: `http://127.0.0.1:${address.port}/` },
+    vi.stubEnv('ELECTRON_DOWNLOAD_CACHE_MODE', '3');
+    const fixtureConfig = {
+      ...config,
+      electronVersion: version,
+      electronDownload: {
+        ...config.electronDownload,
+        mirrorOptions: { mirror: `http://127.0.0.1:${address.port}/` },
+        tempDirectory: directory,
         checksums: { [filename]: createHash('sha256').update(content).digest('hex') },
       },
-    });
-    if (corrupt) await expect(download).rejects.toThrow(/checksum/i);
-    else expect(await readFile(await download)).toEqual(content);
+    };
+    const packager = {
+      config: fixtureConfig,
+      appInfo: { type: 'commonjs' },
+      info: { getWorkspaceRoot: async () => root },
+    };
+    const framework = await createElectronFrameworkSupport(fixtureConfig, packager);
+    const appOutDir = path.join(directory, 'app');
+    const stage = framework.prepareApplicationStageDirectory({ packager, appOutDir, platformName: 'linux', arch: 'x64', version });
+    if (corrupt) await expect(stage).rejects.toThrow(/checksum/i);
+    else {
+      await stage;
+      expect(await readFile(path.join(appOutDir, 'electron'))).toEqual(executable);
+    }
     expect(requests.some(url => url.endsWith('SHASUMS256.txt'))).toBe(false);
     expect(requests.filter(url => url.endsWith('.zip'))).toHaveLength(1);
   } finally {
+    vi.unstubAllEnvs();
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(directory, { recursive: true, force: true });
