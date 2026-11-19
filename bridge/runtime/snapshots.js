@@ -44,6 +44,7 @@ export function createRuntimeSnapshots({ store }) {
             current();
           }
           current();
+          if (owned && tokens.get(result.token) !== owned) throw new StoreError('replay_required', 'snapshot_connection_token');
           const state = owned ?? { expiresAt: result.expiresAt, cursors: new Map() };
           let cursor = null;
           if (result.cursor !== null) {
@@ -70,8 +71,8 @@ export function createRuntimeSnapshots({ store }) {
         async release(input) {
           current(); token(input);
           if (!tokens.has(input.token)) throw new StoreError('replay_required', 'snapshot_connection_token');
-          const result = await store.releaseSnapshot({ token: input.token, epoch: binding.epoch });
           tokens.delete(input.token);
+          const result = await store.releaseSnapshot({ token: input.token, epoch: binding.epoch });
           current();
           return result;
         },

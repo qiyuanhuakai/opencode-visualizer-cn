@@ -41,6 +41,21 @@ function initialize(input) {
   return { ...queries.meta(), owner: undefined, fence, epoch: options.epoch, locality, backupPath, pid: process.pid };
 }
 function mutate(params) {
+  const retainedTokens = new Set();
+  try {
+    return writeMutation(params, retainedTokens);
+  } catch (error) {
+    if (retainedTokens.size === 0 || storageError(error).reason !== 'disk_full') throw error;
+    // The mutation rolled back. Make only its optional prior views replayable,
+    // then retry the original intent once without those retention obligations.
+    transaction(db, () => {
+      assertOwner();
+      queries.discardPriorSnapshots(retainedTokens);
+    });
+    return writeMutation(params, new Set());
+  }
+}
+function writeMutation(params, retainedTokens) {
   return transaction(db, () => {
     assertOwner();
     const environment = options.environmentId;
@@ -53,14 +68,14 @@ function mutate(params) {
       const current = db.prepare(`SELECT revision FROM ${change.collection} WHERE environment=? AND key=?`).get(environment, change.key);
       if (change.expectedRevision !== undefined && change.expectedRevision !== (current?.revision ?? 0)) throw new StoreError('conflict', change.checkOnly === true ? 'entity_precondition' : 'entity_revision');
       if (change.checkOnly === true) continue;
-      if (current) queries.preservePrior(priorSnapshots, change.collection, change.key, current.revision);
+      if (current) queries.preservePrior(priorSnapshots, change.collection, change.key, current.revision, retainedTokens);
       revision++; seq++;
       db.prepare(`INSERT INTO ${change.collection} VALUES(?,?,?,?) ON CONFLICT(environment,key) DO UPDATE SET revision=excluded.revision,value=excluded.value`).run(environment, change.key, revision, change.value === null ? null : JSON.stringify(change.value));
       if (change.value === null) {
         const key = JSON.stringify([change.collection, change.key]);
         if (priorSnapshots.some(snapshot => snapshot.collections.has('tombstones'))) {
           const prior = db.prepare('SELECT revision FROM tombstones WHERE environment=? AND key=?').get(environment, key);
-          if (prior) queries.preservePrior(priorSnapshots, 'tombstones', key, prior.revision);
+          if (prior) queries.preservePrior(priorSnapshots, 'tombstones', key, prior.revision, retainedTokens);
         }
         db.prepare('INSERT INTO tombstones VALUES(?,?,?,?) ON CONFLICT(environment,key) DO UPDATE SET revision=excluded.revision,value=excluded.value')
           .run(environment, key, revision, JSON.stringify({ collection: change.collection, key: change.key }));

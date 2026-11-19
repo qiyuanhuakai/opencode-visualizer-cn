@@ -230,6 +230,39 @@ describe('runtime real WebSocket dispatch', () => {
     }
     await expect(released.promise).resolves.toEqual(expect.any(String));
   });
+  it('frees an owned startup token before admitting paging while its optional continuation stalls', async () => {
+    const { services } = await graph();
+    const resume = Promise.withResolvers<void>();
+    const continuation = Promise.withResolvers<string>();
+    const host = createRuntimeHost({
+      environmentId: services.target, role: 'local',
+      services: { ...services, snapshots: { async connect(binding, isCurrent) {
+        const snapshots = await services.snapshots.connect(binding, isCurrent);
+        return { ...snapshots, async page(input) {
+          if (input?.collection === 'workspaces' && input.token) {
+            continuation.resolve(input.token);
+            await resume.promise;
+          }
+          return snapshots.page(input);
+        } };
+      } } },
+    });
+    host.start(); cleanups.push(() => host.stop());
+    const connection = await client(host);
+    await connection.request('runtime.snapshot', { collection: 'workspaces' });
+    await connection.request('runtime.snapshot', { collection: 'workspaces' });
+    try {
+      const opening = connection.request('runtime.inspect', { bootstrapTree: true });
+      const token = await continuation.promise;
+      const inspection = await opening;
+      if (!inspection.ok) throw new Error(inspection.typedError.message);
+      expect(inspection.result).not.toHaveProperty('treeBootstrap');
+      expect(await connection.request('runtime.snapshot', { collection: 'workspaces' })).toMatchObject({ ok: true });
+      expect(await connection.request('runtime.snapshot', { collection: 'harnesses', token })).toMatchObject({
+        ok: false, typedError: { code: 'replay_required' },
+      });
+    } finally { resume.resolve(); }
+  });
   it('reads pending interaction details only for the captured authorized session and current native generation', async () => {
     const fixture = await historyRuntime();
     const connection = await client(fixture.host);

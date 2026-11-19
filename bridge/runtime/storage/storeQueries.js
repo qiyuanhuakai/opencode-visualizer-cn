@@ -101,14 +101,19 @@ export function createQueries(db, binding) {
       .all(environment, binding.epoch, Date.now())
       .map(row => ({ ...row, collections: new Set(snapshotCollections(row.collection.slice(PRIOR_SNAPSHOT_MARKER.length))) }));
   }
-  function preservePrior(snapshots, collection, key, revision) {
+  function preservePrior(snapshots, collection, key, revision, retainedTokens) {
     for (const snapshot of snapshots) {
       if (snapshot.revision < revision || !snapshot.collections.has(collection)) continue;
+      retainedTokens.add(snapshot.token);
       db.prepare(`
         INSERT OR IGNORE INTO runtime_snapshot_priors
         SELECT ?,?,key,revision,value FROM ${collection} WHERE environment=? AND key=?
       `).run(snapshot.token, collection, environment, key);
     }
+  }
+  function discardPriorSnapshots(tokens) {
+    const discard = db.prepare('DELETE FROM runtime_snapshots WHERE token=? AND environment=? AND epoch=? AND collection LIKE ?');
+    for (const token of tokens) discard.run(token, environment, binding.epoch, PRIOR_SNAPSHOT_MARKER + '%');
   }
   function replay(params) {
     const state = meta();
@@ -131,7 +136,7 @@ export function createQueries(db, binding) {
     db.prepare('UPDATE runtime_meta SET floor=? WHERE environment=?').run(floor, environment);
   }
   return {
-    meta, page, snapshot, replay, trim, claimPriorStorage, activePriorSnapshots, preservePrior,
+    meta, page, snapshot, replay, trim, claimPriorStorage, activePriorSnapshots, preservePrior, discardPriorSnapshots,
     releaseSnapshot(params) {
       return transaction(db, () => {
         binding.assertOwner();

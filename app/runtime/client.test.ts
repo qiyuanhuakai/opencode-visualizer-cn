@@ -125,6 +125,25 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     expect(order).toEqual(['harnesses', 'workspaces', 'session_summaries']);
     expect(socket.sent.map(frame => frame.method)).toEqual(['runtime.inspect', 'runtime.observer.open']);
   });
+  it('cannot replace grants with a compressed inspection superseded during decoding', async () => {
+    const { client, socket } = await fixture();
+    const earlier = client.inspect(true);
+    const request = await socket.next();
+    const page = { kind: 'snapshot', version: 1, target, epoch: hello.epoch, generation: hello.generation,
+      token: 'stale-startup', revision: 10, watermark: 4, expiresAt: Date.now() + 60000, items: [], cursor: null };
+    const payload = Buffer.from(JSON.stringify({ targets: inspection.targets, harnesses: [], treeBootstrap: [page, page, page] }));
+    socket.reply(request, {
+      ...inspection, targets: [], treeBootstrapGzip: { data: gzipSync(payload).toString('base64'), bytes: payload.length, includesInspection: true },
+    });
+    const newer = client.inspect();
+    socket.reply(await socket.next(), { ...inspection, targets: [grant()] });
+    await newer;
+    await expect(earlier).rejects.toMatchObject({ code: 'reconcile_required', field: 'inspection.superseded' });
+    const released = await socket.next();
+    expect(released).toMatchObject({ method: 'runtime.snapshot.release', params: { token: 'stale-startup' } });
+    socket.reply(released, { released: true });
+    await expect(client.attach(other)).rejects.toMatchObject({ code: 'unauthorized' });
+  });
   it('uses a refreshed source grant after startup and enforces later permission revocation on the same binding', async () => {
     const { client, socket } = await fixture();
     const query = { harnessInstanceId: harness, operation: 'listProviders', args: {} };

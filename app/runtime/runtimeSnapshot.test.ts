@@ -261,6 +261,41 @@ describe('runtime common-watermark snapshots', () => {
       await rm(stateDirectory, { recursive: true, force: true });
     }
   });
+  it('discards only optional prior views to retry a normal write at the SQLite space limit', async () => {
+    const stateDirectory = await mkdtemp(path.join(tmpdir(), 'runtime-prior-space-'));
+    const options = { stateDirectory, environmentId, ownerId, epoch };
+    const original = createRuntimeStore(options);
+    let capped: ReturnType<typeof createRuntimeStore> | undefined;
+    try {
+      await original.ready;
+      await original.mutate({ intentId: 'space-seed', changes: [
+        { collection: 'session_summaries', key: 'large', value: 'x'.repeat(60000) },
+        { collection: 'workspaces', key: 'untouched', value: 'y'.repeat(60000) },
+      ] });
+      await original.close();
+      const db = new DatabaseSync(path.join(stateDirectory, 'runtime/runtime.db'), { readOnly: true });
+      let budget: number;
+      try {
+        budget = (Number(db.prepare('PRAGMA page_count').get()?.page_count) + 2)
+          * Number(db.prepare('PRAGMA page_size').get()?.page_size);
+      } finally { db.close(); }
+      capped = createRuntimeStore({ ...options, storageBudgetBytes: budget });
+      await capped.ready;
+      const view = await capped.snapshot({ collection: 'session_summaries' });
+      const other = await capped.snapshot({ collection: 'workspaces' });
+      const mutation = { intentId: 'space-delete', changes: [{ collection: 'session_summaries' as const, key: 'large', value: null }] };
+      const receipt = await capped.mutate(mutation);
+      expect(receipt).toMatchObject({ watermark: view.watermark + 1, revision: view.revision + 1 });
+      expect(await capped.mutate(mutation)).toEqual(receipt);
+      expect(await capped.get({ collection: 'session_summaries', key: 'large' })).toMatchObject({ value: null });
+      await expect(capped.snapshot({ collection: 'session_summaries', token: view.token })).rejects.toMatchObject({ code: 'replay_required' });
+      expect((await capped.snapshot({ collection: 'workspaces', token: other.token })).items.map(row => row.key)).toEqual(['untouched']);
+    } finally {
+      await original.close();
+      await capped?.close();
+      await rm(stateDirectory, { recursive: true, force: true });
+    }
+  });
   it('bounds materialized page bytes and roundtrips maximum-length keys', async () => {
     await withStore(async (store) => {
       const largeKey = '界'.repeat(4096);

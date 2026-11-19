@@ -280,9 +280,10 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
           // A slow store request may still create a token after plain inspection has returned.
           if (!keep) {
             abandoned = true;
-            void loaded.then(async () => {
+            const release = async () => {
               if (first) await (await view).release({ token: first.token });
-            }).catch(() => {});
+            };
+            void (first ? release() : loaded.then(release)).catch(() => {});
           }
         }
       }

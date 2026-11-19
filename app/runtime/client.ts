@@ -311,13 +311,19 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     return management;
   }
   const bootstrapPages = new WeakMap<ReturnType<typeof getTarget>, readonly Snapshot[]>();
+  let inspectionSequence = 0;
   async function inspect(bootstrapTree = false) {
     const target = managementTarget();
     const attached = getTarget(target);
+    const sequence = ++inspectionSequence;
+    const requireCurrentInspection = () => requireValue(
+      current(attached) && sequence === inspectionSequence, 'inspection.superseded', 'reconcile_required',
+    );
     bootstrapTree &&= attached.hello.capabilities.methods.includes('runtime.snapshot');
     const result = await request(target, 'runtime.inspect', bootstrapTree ? { bootstrapTree: true, ...(typeof DecompressionStream === 'function' ? { bootstrapEncoding: 'gzip-inspection' } : {}) } : {}).catch(error => {
       if (!bootstrapTree || !(error instanceof RuntimeRequestError) || error.code !== 'invalid_request'
         || !['fields', 'wire.bootstrap_encoding'].includes(error.field)) throw error;
+      requireCurrentInspection();
       return request(target, 'runtime.inspect', {});
     });
     let unpacked = result;
@@ -330,11 +336,16 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
         const { treeBootstrapGzip: _, ...metadata } = result;
         unpacked = parseRuntimeResult('runtime.inspect', { ...metadata, ...decoded });
       } catch {
+        requireCurrentInspection();
         if (!bootstrapTree) throw new ProtocolError('reconcile_required', 'snapshot.bootstrap_encoding');
         return inspect(false);
       }
     }
     const { treeBootstrap, treeBootstrapGzip: _, ...inspection } = unpacked;
+    if (treeBootstrap && current(attached) && sequence !== inspectionSequence) {
+      void retireView(attached, treeBootstrap[0].token).catch(() => undefined);
+    }
+    requireCurrentInspection();
     if (treeBootstrap) bootstrapPages.set(attached, treeBootstrap);
     grants.clear();
     for (const grant of inspection.targets) grants.set(grant.target, grant);
