@@ -158,9 +158,13 @@ export function parseRuntimeResult(method, input) {
       objectFields(value, ['role', 'state', 'subscribers', 'topology', 'sources', 'connectionProfileId', 'targets', 'harnesses', 'transports'], ['treeBootstrap']);
       if (value.treeBootstrap !== undefined) {
         requireValue(Array.isArray(value.treeBootstrap) && value.treeBootstrap.length === 3, 'wire.bootstrap_tree');
+        const [first] = value.treeBootstrap;
         value.treeBootstrap.forEach((page, index) => {
           frame(page, 'snapshot');
           requireValue(page.items.every(item => item.collection === INDEX_COLLECTIONS[index]), 'wire.bootstrap_collection');
+          requireValue(page.token === first.token && page.target === first.target && page.epoch === first.epoch
+            && page.generation === first.generation && page.revision === first.revision && page.watermark === first.watermark
+            && page.expiresAt === first.expiresAt, 'wire.bootstrap_binding');
         });
       }
       role(value.role); textValue(value.state, 'state'); integerValue(value.subscribers, 'subscribers'); parseConnectionProfileId(value.connectionProfileId);

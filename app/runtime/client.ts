@@ -285,10 +285,11 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       if (!bootstrapTree || !(error instanceof RuntimeRequestError) || error.code !== 'invalid_request' || error.field !== 'fields') throw error;
       return request(target, 'runtime.inspect', {});
     });
-    if (result.treeBootstrap) bootstrapPages.set(attached, result.treeBootstrap);
+    const { treeBootstrap, ...inspection } = result;
+    if (treeBootstrap) bootstrapPages.set(attached, treeBootstrap);
     grants.clear();
-    for (const grant of result.targets) grants.set(grant.target, grant);
-    return result;
+    for (const grant of inspection.targets) grants.set(grant.target, grant);
+    return inspection;
   }
   async function attach(target: EnvironmentId) {
     requireValue(grants.has(target), 'target.grant', 'unauthorized');
