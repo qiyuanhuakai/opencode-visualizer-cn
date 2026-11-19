@@ -91,9 +91,26 @@ export async function connectApp(page, origin, port) {
   await page.locator('#bridge-url').waitFor();
   await page.locator('#bridge-url').fill(`ws://127.0.0.1:${port}/runtime`);
   const start = await page.evaluate(() => {
-    const now = performance.now();
+    const start = performance.now();
+    const times = { topology: null, selectable: null };
+    const visible = selector => {
+      const element = document.querySelector(selector);
+      return element instanceof HTMLElement && element.getClientRects().length > 0;
+    };
+    const observer = new MutationObserver(() => {
+      const time = performance.now();
+      if (times.topology === null && visible('[data-tree-row]')) times.topology = time;
+      if (times.selectable === null && visible('[data-row-kind="session"]')) times.selectable = time;
+      if (times.topology !== null && times.selectable !== null) {
+        clearTimeout(timeout);
+        observer.disconnect();
+      }
+    });
+    const timeout = setTimeout(() => observer.disconnect(), 180000);
+    window.__visMeasuredTree = times;
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true });
     document.querySelector('[data-testid="bridge-login"] button[type="submit"]').click();
-    return now;
+    return start;
   });
   await page.locator('[data-testid="unified-session-tree"]').waitFor({ timeout: 180000 });
   return { start, startEpoch: Date.now() - await page.evaluate((time) => performance.now() - time, start), shellMs: await page.evaluate((time) => performance.now() - time, start) };
@@ -101,7 +118,8 @@ export async function connectApp(page, origin, port) {
 
 export async function measureTree(page, connected) {
   await page.locator('[data-tree-row]').first().waitFor({ timeout: 30000 });
-  const topologyMs = await page.evaluate((time) => performance.now() - time, connected.start);
+  const topologyMs = await page.evaluate(start => window.__visMeasuredTree.topology - start, connected.start);
+  if (topologyMs < 0) throw new Error('The first topology DOM update was not recorded');
   const expanded = new Set();
   await until(async () => {
     const visible = page.locator('[data-row-kind="session"]');
@@ -116,7 +134,8 @@ export async function measureTree(page, connected) {
     }
     return false;
   }, 'actual tree first selectable session');
-  const firstSelectableMs = await page.evaluate((time) => performance.now() - time, connected.start);
+  const firstSelectableMs = await page.evaluate(start => window.__visMeasuredTree.selectable - start, connected.start);
+  if (firstSelectableMs < topologyMs) throw new Error('The first selectable session DOM update was not recorded');
   const renderedRows = await page.locator('[data-tree-row]').count();
   return { topologyMs, firstSelectableMs, renderedRows };
 }
