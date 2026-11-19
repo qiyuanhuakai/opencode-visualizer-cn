@@ -1,10 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
+  closeSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   rmSync,
   statSync,
@@ -96,12 +98,13 @@ describe.runIf(rpmToolsAvailable)('vis_bridge RPM package', () => {
 
       const extractionPath = path.join(root, 'extracted');
       mkdirSync(extractionPath);
-      const archive = execFileSync('rpm2cpio', [rpmPath]);
-      execFileSync('cpio', ['-idmu'], {
-        cwd: extractionPath,
-        input: archive,
-        stdio: ['pipe', 'ignore', 'pipe'],
-      });
+      const archivePath = path.join(root, 'payload.cpio');
+      const output = openSync(archivePath, 'wx');
+      try { execFileSync('rpm2cpio', [rpmPath], { stdio: ['ignore', output, 'pipe'] }); }
+      finally { closeSync(output); }
+      const input = openSync(archivePath, 'r');
+      try { execFileSync('cpio', ['-idmu'], { cwd: extractionPath, stdio: [input, 'ignore', 'pipe'] }); }
+      finally { closeSync(input); }
       const extractedBridge = path.join(extractionPath, 'usr', 'bin', 'vis_bridge');
       const extractedPrebuild = path.join(
         extractionPath,
