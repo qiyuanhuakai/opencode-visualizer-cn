@@ -8,6 +8,10 @@ html [data-runtime-ui] textarea[class] {
   font-size: var(--type-sm);
 }
 
+html [data-runtime-ui] input:is([type='checkbox'], [type='radio']) {
+  accent-color: var(--ui-form-button-primary-border);
+}
+
 html [data-runtime-ui] input[class]::placeholder,
 html [data-runtime-ui] textarea[class]::placeholder {
   color: var(--ui-form-control-placeholder);
@@ -48,7 +52,8 @@ html [data-runtime-ui] button.action-button.active:hover:not(:disabled) {
   background: var(--ui-form-button-primary-hover-bg);
 }
 
-html [data-runtime-ui] button:focus-visible {
+html [data-runtime-ui] button:focus-visible,
+html [data-runtime-ui] input:is([type='checkbox'], [type='radio']):focus-visible {
   outline: 2px solid var(--ui-form-control-focus-border);
   outline-offset: 2px;
 }
