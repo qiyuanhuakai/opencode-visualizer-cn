@@ -227,6 +227,16 @@ describe('target Git topology', () => {
     });
   });
 
+  it('does not publish another workspace change for an unchanged Git identity', async () => {
+    const f = await fixture();
+    const catalog = createWorkspaceCatalog({ store: f.store, git: f.git });
+    const key = await catalog.register({ workspace: f.workspace, harnessInstanceId: foreign, harness: 'codex' });
+    const first = await catalog.probe(key, { selected: true });
+    const before = await f.store.inspect();
+    expect(await catalog.probe(key, { visible: true })).toEqual(first);
+    expect((await f.store.inspect()).seq).toBe(before.seq);
+  });
+
   it('requires visibility before metadata can trigger Git', async () => {
     // Given a registered workspace.
     const f = await fixture();

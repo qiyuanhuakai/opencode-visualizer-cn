@@ -66,14 +66,13 @@ export function createWorkspaceCatalog({ store, git }) {
       const prior = await store.get({ collection: 'workspaces', key });
       requireValue(prior?.value?.workspace, 'git.workspace');
       const info = await (identityOnly ? git.repository(prior.value.workspace) : git.probe(prior.value.workspace));
+      const repoKey = info.kind === 'git' ? info.repoKey : null;
       return write(async () => {
         for (let attempt = 0; attempt < 8; attempt++) {
           const latest = await store.get({ collection: 'workspaces', key });
-          const value = {
-            ...latest.value,
-            gitKind: info.kind,
-            repoKey: info.kind === 'git' ? info.repoKey : null,
-          };
+          requireValue(latest?.value?.workspace, 'git.workspace');
+          if (latest.value.gitKind === info.kind && latest.value.repoKey === repoKey) return info;
+          const value = { ...latest.value, gitKind: info.kind, repoKey };
           try {
             await store.mutate({
               intentId: randomUUID(),
