@@ -208,6 +208,25 @@ describe('target Git topology', () => {
     await expect(catalog.registerMany(Array.from({ length: 201 }, () => inputs[0]!))).rejects.toThrow('batch');
   });
 
+  it('commits concurrent discovery batches without dropping sources from a shared worktree', async () => {
+    const f = await fixture();
+    const catalog = createWorkspaceCatalog({ store: f.store, git: f.git });
+    const inputs = Array.from({ length: 12 }, (_, index) => ({
+      workspace: f.workspace,
+      harnessInstanceId: `55555555-5555-4555-8555-${String(index).padStart(12, '0')}`,
+      harness: 'acp' as const,
+    }));
+    const key = encodeWorkspaceKey(f.workspace);
+    const writes = inputs.map(input => catalog.registerMany([input]));
+    expect(await Promise.all(writes)).toEqual(inputs.map(() => [key]));
+    await catalog.probe(key, { selected: true });
+    const row = await f.store.get({ collection: 'workspaces', key });
+    expect(row?.value).toMatchObject({
+      gitKind: 'git',
+      sources: inputs.map(({ harnessInstanceId, harness }) => ({ harnessInstanceId, harness })),
+    });
+  });
+
   it('requires visibility before metadata can trigger Git', async () => {
     // Given a registered workspace.
     const f = await fixture();
