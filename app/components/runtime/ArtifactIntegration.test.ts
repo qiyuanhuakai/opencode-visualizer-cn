@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createApp, h, nextTick } from 'vue';
+import { createApp, h, nextTick, shallowRef } from 'vue';
 import { createI18n } from 'vue-i18n';
 import { parseSessionRef } from '../../../shared/runtime/identity.js';
 import type { CollaborationTaskView } from '../../composables/useRuntimeCollaboration';
@@ -29,11 +29,12 @@ afterEach(() => { for (const close of cleanups.splice(0)) close(); });
 async function mount(view: ArtifactWorkflowView) {
   const actions: ArtifactAction[] = [];
   const root = document.createElement('div'); document.body.appendChild(root);
-  const app = createApp({ render: () => h(ArtifactIntegration, { task, workflow: view, onAction: (action: ArtifactAction) => actions.push(action) }) });
+  const selectedTask = shallowRef(task);
+  const app = createApp({ render: () => h(ArtifactIntegration, { task: selectedTask.value, workflow: view, onAction: (action: ArtifactAction) => actions.push(action) }) });
   app.use(createI18n({ legacy: false, locale: 'en', messages: { en: {} }, missingWarn: false, fallbackWarn: false }));
   app.mount(root); await nextTick();
   cleanups.push(() => { app.unmount(); root.remove(); });
-  return { root, actions };
+  return { root, actions, selectedTask };
 }
 function button(root: HTMLElement, label: string): HTMLButtonElement {
   const found = Array.from(root.querySelectorAll('button')).find((button) => button.textContent?.trim() === label);
@@ -42,6 +43,33 @@ function button(root: HTMLElement, label: string): HTMLButtonElement {
 }
 
 describe('explicit artifact integration controls', () => {
+  it('requires approval before requesting a repository integration preview', async () => {
+    const { root, actions, selectedTask } = await mount(workflow());
+    const prepare = button(root, 'Prepare integration review');
+    const form = prepare.closest('form');
+    if (!form) throw new Error('Missing integration preview form');
+    const submit = () => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    const fields = Array.from(form.querySelectorAll('input'));
+    for (const [index, value] of ['/repo', 'main'].entries()) {
+      const field = fields[index];
+      if (!field) throw new Error('Missing integration preview input');
+      field.value = value;
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    await nextTick();
+    expect(root.textContent).toContain('Approve the current artifact review first.');
+    expect(prepare.disabled).toBe(true);
+    submit();
+    expect(actions.some(action => action.type === 'prepare')).toBe(false);
+    selectedTask.value = { ...task, review: { ...task.review, state: 'approved' } };
+    await nextTick();
+    expect(prepare.disabled).toBe(false);
+    submit();
+    expect(actions.find(action => action.type === 'prepare')).toMatchObject({
+      type: 'prepare', taskId: task.taskId, artifactHash: hash, repository: '/repo', target: 'main',
+    });
+  });
+
   it('requires human confirmation and never turns review approval into integration', async () => {
     const { root, actions } = await mount(workflow());
     const approve = button(root, 'Approve captured change');

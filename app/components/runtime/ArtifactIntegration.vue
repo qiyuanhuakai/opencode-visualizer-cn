@@ -29,7 +29,8 @@
       <label>{{ rt("Target repository path") }}<input v-model="repository" required :disabled="busy" autocomplete="off" /></label>
       <label>{{ rt("Target branch") }}<input v-model="branch" required :disabled="busy" autocomplete="off" /></label>
       <p>{{ rt("Choose an existing integration branch that is not checked out in any worktree.") }}</p>
-      <button type="submit" class="action-button" data-testid="prepare-artifact-review" :disabled="busy || !selected || !repository.trim() || !branch.trim()">{{ rt("Prepare integration review") }}</button>
+      <p v-if="!reviewApproved">{{ rt("Approve the current artifact review first.") }}</p>
+      <button type="submit" class="action-button" data-testid="prepare-artifact-review" :disabled="busy || !reviewApproved || !selected || !repository.trim() || !branch.trim()">{{ rt("Prepare integration review") }}</button>
     </form>
 
     <div v-if="workflow?.review" class="integration-review">
@@ -70,6 +71,7 @@ import type { CollaborationTaskView } from '../../composables/useRuntimeCollabor
 const props = defineProps<{ task: CollaborationTaskView; workflow?: ArtifactWorkflowView; busy?: boolean }>();
 const emit = defineEmits<{ action: [action: ArtifactAction] }>();
 const selectedId = ref<string>();
+const reviewApproved = computed(() => props.task.review.state === 'approved');
 const selected = computed(() => props.task.deliverables.find((value) => value.deliverableId === selectedId.value) ?? props.task.deliverables[0]);
 const workflow = computed(() => props.workflow?.artifactHash === selected.value?.artifactHash ? props.workflow : undefined);
 const repository = ref('');
@@ -98,7 +100,7 @@ function read(path: string, offset = 0): void {
   if (selected.value) emit('action', { type: 'read', taskId: props.task.taskId, artifactHash: selected.value.artifactHash, path, offset });
 }
 function prepare(): void {
-  if (props.busy || !selected.value || !repository.value.trim() || !branch.value.trim()) return;
+  if (props.busy || !reviewApproved.value || !selected.value || !repository.value.trim() || !branch.value.trim()) return;
   emit('action', { type: 'prepare', taskId: props.task.taskId, artifactHash: selected.value.artifactHash, repository: repository.value.trim(), target: branch.value.trim() });
 }
 function integrate(): void {

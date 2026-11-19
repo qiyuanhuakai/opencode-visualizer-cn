@@ -1,6 +1,7 @@
 import type { RuntimeCopy } from './runtimeUiCommon';
 
 export const runtimeFeedbackCopy: readonly RuntimeCopy[] = [
+  ['Choose the repository used to allocate this writer.', '请选择分配此写入者时使用的仓库。', '請選擇分配此寫入者時使用的儲存庫。', 'この書き込み担当を割り当てたリポジトリを選択してください。', 'Elektu la deponejon uzitan por asigni ĉi tiun verkanton.'],
   ['Allocate a writer for this task before capturing changes.', '捕获变更前，请先为此任务分配写入者。', '擷取變更前，請先為此任務分配寫入者。', '変更を取得する前に、このタスクに書き込み担当を割り当ててください。', 'Asignu verkanton al ĉi tiu tasko antaŭ kapti ŝanĝojn.'],
   ['Prepare and inspect the current artifact review first.', '请先准备并检查当前交付物的审查。', '請先準備並檢查目前交付物的審查。', 'まず現在の成果物のレビューを準備して確認してください。', 'Unue preparu kaj inspektu la revizion de la nuna liveraĵo.'],
   ['Approve the current artifact review first.', '请先批准当前交付物的审查。', '請先核准目前交付物的審查。', 'まず現在の成果物のレビューを承認してください。', 'Unue aprobu la revizion de la nuna liveraĵo.'],
@@ -22,7 +23,8 @@ export const runtimeFeedbackCopy: readonly RuntimeCopy[] = [
   ['Native completion is reported by the Agent through the Bridge.', '原生执行完成由代理通过 Bridge 报告。', '原生執行完成由代理透過 Bridge 回報。', 'ネイティブ実行の完了は、エージェントが Bridge 経由で報告します。', 'La agento raportas indiĝenan finon per Bridge.'],
   ['Select the task that owns this writer before recovery.', '恢复前，请选择拥有此写入者的任务。', '恢復前，請選擇擁有此寫入者的任務。', '復旧する前に、この書き込み担当を所有するタスクを選択してください。', 'Elektu la taskon kiu posedas ĉi tiun verkanton antaŭ reakiro.'],
   ['an exclusive writer lease over a dedicated git worktree of the pinned base commit', '在固定基准提交的专用 Git 工作树上持有独占写入者租约', '在固定基準提交的專用 Git 工作樹上持有獨占寫入者租約', '固定した基準コミットの専用 Git 作業ツリーで、排他的な書き込みリースを保持', 'ekskluziva verkanta luo super dediĉita Git-labortreejo de la fiksita baza enmeto'],
-  ['one writer lease per task, and at most WRITER_LIMITS.maxWritersPerRepository per repository', '每项任务一个写入者租约，每个仓库最多 WRITER_LIMITS.maxWritersPerRepository 个', '每項任務一個寫入者租約，每個儲存庫最多 WRITER_LIMITS.maxWritersPerRepository 個', '各タスクに1つの書き込みリース、各リポジトリに最大 WRITER_LIMITS.maxWritersPerRepository 個', 'unu verkanta luo por ĉiu tasko, kaj maksimume WRITER_LIMITS.maxWritersPerRepository por ĉiu deponejo'],
+  ['Each task has at most one writer lease. Each repository limits simultaneous writers.', '每项任务最多有一个写入者租约。每个仓库限制同时运行的写入者数量。', '每項任務最多有一個寫入者租約。每個儲存庫限制同時運行的寫入者數量。', 'タスクごとに書き込みリースは最大1つです。リポジトリごとに同時に作業できる書き込み担当数に上限があります。', 'Ĉiu tasko havas maksimume unu verkantan luon. Ĉiu deponejo limigas la nombron de samtempaj verkantoj.'],
+  ['Check the writer lease and its Agent session before retrying.', '请检查写入者租约和对应的 Agent 会话，然后重试。', '請檢查寫入者租約及對應的 Agent 工作階段，然後重試。', '書き込みリースと対応するエージェントセッションを確認してから再試行してください。', 'Kontrolu la verkantan luon kaj ĝian agentan seancon antaŭ ol reprovi.'],
   ['every writer gets its own worktree, its own base commit and its own native cwd', '每个写入者都有独立工作树、基准提交和原生工作目录', '每個寫入者都有獨立工作樹、基準提交和原生工作目錄', '各担当に独立した作業ツリー・基準コミット・作業ディレクトリを割り当て', 'ĉiu verkanto ricevas propran labortreejon, bazan enmeton kaj indiĝenan labordosierujon'],
   ["the user's repository is read-only to every writer; no writer path may leave its own cwd", '所有写入者只能读取用户仓库；写入路径不能超出各自工作目录', '所有寫入者只能讀取使用者儲存庫；寫入路徑不能超出各自工作目錄', 'ユーザーのリポジトリは各担当に対して読み取り専用で、書き込みパスは自分の作業ディレクトリ内に限定', 'la uzanta deponejo estas nurlegebla por ĉiu verkanto; neniu verkanta vojo rajtas eliri sian propran labordosierujon'],
   ['a released worktree is retained until a user explicitly confirms its removal', '释放的工作树会保留，直到用户明确确认删除', '釋放的工作樹會保留，直到使用者明確確認刪除', '解放した作業ツリーは、ユーザーが削除を明示的に確認するまで保持', 'liberigita labortreejo restas ĝis la uzanto eksplicite konfirmas ĝian forigon'],

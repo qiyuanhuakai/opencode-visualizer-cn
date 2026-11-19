@@ -3,7 +3,7 @@ import { createApp, h, nextTick } from 'vue';
 import { createI18n } from 'vue-i18n';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { runtimeCopy, runtimeCopyKey, runtimeUiMessages } from './runtimeUi';
+import { runtimeCopy, runtimeCopyKey, runtimeUiMessages, translateRuntimeUi } from './runtimeUi';
 import { runtimeEntryMessages } from './runtimeEntry';
 import SlurmExecutionForm from '../components/runtime/SlurmExecutionForm.vue';
 import SshHostForm from '../components/runtime/SshHostForm.vue';
@@ -56,6 +56,22 @@ describe('runtime UI translation coverage', () => {
         expect([...translated?.matchAll(/\{(\w+)\}/gu) ?? []].map((match) => match[1]).sort())
           .toEqual([...row[0].matchAll(/\{(\w+)\}/gu)].map((match) => match[1]).sort());
         if (locale !== 'en' && row[0] !== 'Bridge URL') expect(translated, `${locale}: ${row[0]}`).not.toBe(row[0]);
+      }
+    }
+  });
+
+  it('renders Bridge writer and artifact messages as readable copy', () => {
+    const aliases = [
+      ['one writer lease per task, and at most WRITER_LIMITS.maxWritersPerRepository per repository', 'Each task has at most one writer lease. Each repository limits simultaneous writers.'],
+      ['conflict: host.writer_lease', 'Check the writer lease and its Agent session before retrying.'],
+      ['unauthorized: host.artifact_repository', 'Choose the repository used to allocate this writer.'],
+      ['conflict: host.artifact_review', 'Approve the current artifact review first.'],
+    ];
+    for (const locale of locales) {
+      const i18n = createI18n({ legacy: false, locale, messages: runtimeUiMessages });
+      const translate = (key: string) => i18n.global.t(key);
+      for (const [wireCopy, readableCopy] of aliases) {
+        expect(translateRuntimeUi(wireCopy!, translate)).toBe(translate(runtimeCopyKey(readableCopy!)));
       }
     }
   });
