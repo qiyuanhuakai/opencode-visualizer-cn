@@ -1,0 +1,18 @@
+export const KIMI_SESSION_OPERATIONS = Object.freeze({
+  forkSession: { method: 'POST', suffix: ':fork' },
+  compactSession: { method: 'POST', suffix: ':compact' },
+  'kimi.btw': { method: 'POST', suffix: ':btw' },
+  'kimi.undo': { method: 'POST', suffix: ':undo' },
+  'kimi.children.list': { method: 'GET', suffix: '/children', query: ['page_size', 'before_id', 'busy'] },
+  'kimi.children.create': { method: 'POST', suffix: '/children' },
+  'kimi.tasks.list': { method: 'GET', suffix: '/tasks' },
+  'kimi.tasks.cancel': { method: 'POST', suffix: '/tasks/{id}:cancel' },
+  'kimi.transcript': { method: 'GET', suffix: '/transcript', query: ['agent_id', 'page_size', 'before_turn'] },
+  'kimi.fileChanges': { method: 'GET', suffix: '/file-history/changes', query: ['turn_id'] },
+  'kimi.fileContent': { method: 'GET', suffix: '/file-history/content', query: ['turn_id', 'path', 'phase'] },
+  'kimi.goal': { method: 'GET', suffix: '/goal' },
+  'kimi.goal.update': { method: 'PATCH', suffix: '/goal' },
+  'kimi.snapshot': { method: 'GET', suffix: '/snapshot' },
+  'kimi.messages': { method: 'GET', suffix: '/messages', query: ['page_size', 'before_id', 'after_id'] },
+  'kimi.agents': { method: 'GET', suffix: '/agents' },
+});

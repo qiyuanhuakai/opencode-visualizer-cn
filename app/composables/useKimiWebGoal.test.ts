@@ -27,6 +27,29 @@ async function settle() {
 }
 
 describe('Kimi Web thread goal', () => {
+  it('edits an existing goal through the advertised native PATCH while creation and controls keep the profile route', async () => {
+    let current: KimiWebGoal | null = null;
+    const client = {
+      getGoal: vi.fn(async () => current),
+      updateProfile: vi.fn(async () => { current = goal; return session; }),
+      updateGoalObjective: vi.fn(async () => { current = { ...goal, objective: 'Edited objective' }; }),
+      canUpdateGoalObjective: true,
+    };
+    const scope = effectScope();
+    const state = scope.run(() => useKimiWebGoal(() => ({ sessionId: session.id, client })));
+    if (!state) throw new Error('Missing goal state');
+    try {
+      await settle();
+      await state.refresh({ goal_objective: goal.objective });
+      expect(client.updateProfile).toHaveBeenCalledTimes(1);
+      expect(client.updateGoalObjective).not.toHaveBeenCalled();
+      await state.refresh({ goal_objective: 'Edited objective' });
+      expect(client.updateGoalObjective).toHaveBeenCalledWith(session.id, 'Edited objective');
+      expect(state.objective.value).toBe('Edited objective');
+      await state.refresh({ goal_control: 'pause' });
+      expect(client.updateProfile).toHaveBeenLastCalledWith(session.id, { agent_config: { goal_control: 'pause' } });
+    } finally { scope.stop(); }
+  });
   it('reads goals through the authenticated encoded endpoint and rejects malformed data', async () => {
     const fetcher = vi
       .fn<typeof fetch>()

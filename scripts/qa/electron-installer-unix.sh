@@ -236,8 +236,14 @@ if [[ "$PLATFORM" == "linux" ]]; then
     if dpkg-query -W -f='${db:Status-Abbrev}' "$DEB_PKG_NAME" 2>/dev/null | grep -q '^ii '; then
       DEB_PREEXISTED=1
     fi
+    # Resolve and fetch dependencies before the install can change package state.
+    apt_network=(-o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
+    if ! sudo apt-get "${apt_network[@]}" install --download-only -y "$deb"; then
+      sudo apt-get "${apt_network[@]}" update --error-on=any
+      sudo apt-get "${apt_network[@]}" install --download-only -y "$deb"
+    fi
     DEB_INSTALL_ATTEMPTED=1
-    sudo apt-get install -y "$deb"
+    sudo apt-get "${apt_network[@]}" install -y "$deb"
     INSTALLED_EXE="/opt/Vis/$EXECUTABLE_NAME"
   fi
   [[ -x "$INSTALLED_EXE" ]] || die "installed executable missing: $INSTALLED_EXE"

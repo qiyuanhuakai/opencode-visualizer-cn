@@ -12,9 +12,14 @@ export default defineConfig({
   resolve: {
     alias: {
       buffer: 'buffer/',
-      fs: path.resolve(__dirname, 'app/utils/node-polyfill.ts'),
-      path: path.resolve(__dirname, 'app/utils/node-polyfill.ts'),
-      crypto: path.resolve(__dirname, 'app/utils/node-polyfill.ts'),
+      fs: path.resolve(import.meta.dirname, 'app/utils/node-polyfill.ts'),
+      path: path.resolve(import.meta.dirname, 'app/utils/node-polyfill.ts'),
+      crypto: path.resolve(import.meta.dirname, 'app/utils/node-polyfill.ts'),
+      // The renderer composes the landed Thread/Handoff/collaboration services,
+      // whose only Node dependency is node:crypto. The seam returns the REAL
+      // builtin in a Node realm (bridge, SEA, workers, tests) and the browser
+      // primitives only in a browser realm.
+      'node:crypto': path.resolve(import.meta.dirname, 'app/utils/nodeCrypto.ts'),
     },
   },
   server: {

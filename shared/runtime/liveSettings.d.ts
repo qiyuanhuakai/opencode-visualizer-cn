@@ -1,0 +1,11 @@
+export type LiveSettingRead = { kind: 'value'; value: string } | { kind: 'missing' } | { kind: 'error' };
+export type SettingsChange = { key: string | null; newValue: string | null };
+export const LIVE_SETTINGS_PREFIX: string;
+export const LIVE_SETTING_KEYS: readonly string[];
+export const APPROVED_APPLICATION_KEY: string;
+export function isLiveSetting(key: unknown): key is string;
+export function liveSettingKey(key: string): string;
+export function parseLiveSettingKey(key: unknown): string | null;
+export function encodeLiveSetting(value: string | null): string;
+export function decodeLiveSetting(raw: string): LiveSettingRead;
+export function normalizeSettingsChange(event: SettingsChange, read: (key: string) => LiveSettingRead): SettingsChange | null;

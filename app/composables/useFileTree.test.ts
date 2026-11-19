@@ -2,13 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, nextTick, ref } from 'vue';
 import { createI18n } from 'vue-i18n';
 import { DshRemoteRpcError } from '../utils/dshRpc';
+import type { BackendKind } from '../backends/types';
 
 const mockRunOneShotPtyCommand = vi.fn<(command: string, args?: string[]) => Promise<string>>();
 const mockListFiles = vi.fn<(input: { directory: string; path: string }) => Promise<unknown[]>>();
 const mockGetVcsInfo = vi.fn<(directory: string) => Promise<unknown>>();
 
 vi.mock('../backends/registry', () => ({
-  getActiveBackendAdapter: () => ({
+  getBackendAdapter: () => ({
     listFiles: mockListFiles,
     getVcsInfo: mockGetVcsInfo,
   }),
@@ -47,7 +48,7 @@ function statusRefreshCount() {
   return ptyScripts().filter((script) => script.includes('status --porcelain')).length;
 }
 
-async function mountComposable(backendKind = 'opencode') {
+async function mountComposable(backendKind: BackendKind = 'opencode') {
   vi.resetModules();
 
   let api!: Awaited<typeof import('./useFileTree')>['useFileTree'] extends (
@@ -240,7 +241,7 @@ describe('useFileTree initial git hydration and selective refresh', () => {
     vi.resetModules();
 
     const activeDirectory = ref('/repo');
-    const activeBackendKind = ref('codex');
+    const activeBackendKind = ref<BackendKind>('codex');
     const { useFileTree } = await import('./useFileTree');
 
     const i18n = createI18n({

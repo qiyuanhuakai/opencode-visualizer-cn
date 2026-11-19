@@ -11,6 +11,7 @@ import {
   type DshMoreSessionCard,
   type DshMoreSessionsMenu,
 } from './dshSessionEvents';
+import { bindRuntimeAction, type RuntimeSessionRuntime } from './useRuntimeSessionActions';
 
 type OpenCodeApiLike = {
   createSession: (directory: string) => Promise<BackendSessionInfo | undefined>;
@@ -180,6 +181,8 @@ export function useBackendSessionLifecycle(params: {
   dshApi?: DshSessionApiLike;
   onDshSessionCreated?: (session: BackendSessionInfo) => void;
   selectDshSession?: (projectId: string, sessionId: string) => Promise<void>;
+  runtime?: RuntimeSessionRuntime;
+  createRuntimeSession?: (directory?: string) => Promise<BackendSessionInfo | undefined>;
 }) {
   let kimiWebCreationGeneration = 0;
   watch(
@@ -277,6 +280,7 @@ export function useBackendSessionLifecycle(params: {
     directory: string,
     options?: { reuseExisting?: boolean },
   ) {
+    if (params.createRuntimeSession) return params.createRuntimeSession(directory);
     if (params.activeBackendKind.value === 'kimi-web') {
       return createKimiWebSessionInDirectory(directory);
     }
@@ -354,6 +358,7 @@ export function useBackendSessionLifecycle(params: {
       return undefined;
     params.clearSessionError();
     try {
+      if (params.createRuntimeSession) return await params.createRuntimeSession(params.activeDirectory.value.trim());
       const directory = params.activeDirectory.value.trim();
       if (!directory) throw new Error(params.translate('errors.sessionCreateEmptyDirectory'));
       return await createSessionInDirectory(directory, { reuseExisting: false });
@@ -395,6 +400,8 @@ export function useBackendSessionLifecycle(params: {
   }
 
   async function abortSession() {
+    const bound = bindRuntimeAction(params.runtime);
+    if (bound && params.runtime) { await params.runtime.router.cancel(bound); return; }
     if (!params.ensureConnectionReady(params.translate('app.actions.stopping'))) return;
     const sessionId = params.selectedSessionId.value;
     if (!sessionId || params.isAborting.value) return;

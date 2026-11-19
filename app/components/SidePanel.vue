@@ -23,6 +23,18 @@
           :projects="sessionTreeData"
           :expanded-paths="sessionTreeExpandedPaths"
           :selected-session-id="selectedSessionId"
+          :tree-rows="unifiedTreeRows"
+          :selected-key="unifiedTreeSelectedKey"
+          :sources="unifiedTreeSources"
+          :retrying="unifiedTreeRetrying"
+          :child-scans="unifiedTreeChildScans"
+          :view-status="unifiedTreeStatus"
+          :view-loaded="unifiedTreeLoaded"
+          :view-error="unifiedTreeError"
+          :filter-kinds="unifiedTreeFilterKinds"
+          :search-state="unifiedTreeSearch"
+          :pin-state="runtimePins"
+          @select-qualified="emit('select-qualified', $event)"
           @toggle-expand="(path) => emit('toggle-expand', path)"
           @select-session="(payload) => emit('select-session', payload)"
           @pin-project="(projectId) => emit('pin-project', projectId)"
@@ -32,6 +44,13 @@
           @pin-session="(payload) => emit('pin-session', payload)"
           @unpin-session="(payload) => emit('unpin-session', payload)"
           @reload="emit('reload')"
+          @toggle-key="(key) => emit('toggle-key', key)"
+          @select-key="(key) => emit('select-key', key)"
+          @retry-source="(harnessInstanceId) => emit('retry-source', harnessInstanceId)"
+          @filter-change="(kinds) => emit('filter-change', kinds)"
+          @search="(query) => emit('search', query)"
+          @search-more="emit('search-more')"
+          @load-more-children="(key) => emit('load-more-children', key)"
         />
       </div>
       <TreeView
@@ -61,14 +80,25 @@
 </template>
 
 <script setup lang="ts">
-import { computed, toRefs } from 'vue';
+import { computed, defineAsyncComponent, toRefs } from 'vue';
 import TodoList from './TodoList.vue';
-import SessionTree from './SessionTree.vue';
 import type { BranchEntry, GitBranchInfo, GitDiffStats, GitFileStatus } from '../types/git';
 import type { ContainerPinPayload } from '../types/pin';
 import type { SessionTreeData } from '../types/session-tree';
 import type { TreeNode } from '../types/tree';
+import type {
+  HarnessEntry,
+  SessionHarness,
+  UnifiedFlatRow,
+  UnifiedSearchState,
+} from '../composables/useRuntimeSessionTree';
 import TreeView from './TreeView.vue';
+
+// The unified session tree is a 1000+ line virtualized sidebar surface used only
+// on the session tab. Load it as its own async chunk (defineAsyncComponent) so
+// it stays out of the entry bundle and within the frozen entry-js budget, while
+// every prop, emitted event and theme token behaves exactly as before.
+const SessionTree = defineAsyncComponent(() => import('./SessionTree.vue'));
 
 type TodoItem = {
   content: string;
@@ -107,9 +137,22 @@ const props = defineProps<{
   treeBranchListLoading?: boolean;
   runShellCommand?: (command: string) => Promise<void>;
   ensureBranchEntriesLoaded?: () => Promise<void>;
+  /** Undefined keeps the legacy per-backend tree; a list switches to the unified one. */
+  unifiedTreeRows?: readonly UnifiedFlatRow[];
+  unifiedTreeSelectedKey?: string;
+  unifiedTreeSources?: readonly HarnessEntry[];
+  unifiedTreeRetrying?: ReadonlySet<string>;
+  unifiedTreeChildScans?: ReadonlySet<string>;
+  unifiedTreeStatus?: 'loading' | 'partial' | 'complete' | 'error';
+  unifiedTreeLoaded?: number;
+  unifiedTreeError?: string | null;
+  unifiedTreeFilterKinds?: ReadonlySet<SessionHarness>;
+  unifiedTreeSearch?: UnifiedSearchState | null;
+  runtimePins?: import('../composables/useRuntimePins').RuntimePinsState;
 }>();
 
 const emit = defineEmits<{
+  (event: 'select-qualified', selection: import('../runtime/selectionScope').QualifiedSession): void;
   (event: 'change-tab', value: 'todo' | 'session' | 'tree'): void;
   (event: 'select-session', payload: { projectId: string; sessionId: string }): void;
   (event: 'toggle-expand', path: string): void;
@@ -125,7 +168,13 @@ const emit = defineEmits<{
   (event: 'open-diff', payload: { path: string; staged: boolean }): void;
   (event: 'open-diff-all', payload: { mode: 'staged' | 'changes' | 'all' }): void;
   (event: 'open-file', path: string): void;
-  (event: 'reload'): void;
+  (event: 'toggle-key', key: string): void;
+  (event: 'select-key', key: string): void;
+  (event: 'retry-source', harnessInstanceId: string): void;
+  (event: 'filter-change', kinds: SessionHarness[]): void;
+  (event: 'search', query: string): void;
+  (event: 'search-more'): void;
+  (event: 'load-more-children', key: string): void;
 }>();
 
 import { useI18n } from 'vue-i18n';
@@ -139,6 +188,7 @@ const tabs = computed(() => [
 ]);
 
 const sessionTreeSessionCount = computed(() => {
+  if (props.unifiedTreeRows !== undefined) return props.unifiedTreeLoaded ?? 0;
   return props.sessionTreeData.reduce(
     (count, project) =>
       count + project.sandboxes.reduce((sCount, sandbox) => sCount + sandbox.sessions.length, 0),

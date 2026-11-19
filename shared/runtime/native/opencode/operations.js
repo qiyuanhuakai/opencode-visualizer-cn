@@ -6,6 +6,7 @@ const sessionWrite = (method, suffix) => ({ method, scope: 'session', suffix });
 const instance = (method, path, redact = false) => ({ method, scope: 'instance', path, redact });
 export const OPEN_CODE_OPERATIONS = Object.freeze({
   forkSession: sessionWrite('POST', '/fork'),
+  compactSession: sessionWrite('POST', '/summarize'),
   updateSession: sessionWrite('PATCH', ''),
   deleteSession: sessionWrite('DELETE', ''),
   revertSession: sessionWrite('POST', '/revert'),

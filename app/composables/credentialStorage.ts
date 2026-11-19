@@ -11,7 +11,7 @@ export type StoredCredentials = {
   password: string;
 };
 
-const LEGACY_CREDENTIALS_STORAGE_KEY = 'credentials.v1';
+export const LEGACY_CREDENTIALS_STORAGE_KEY = 'credentials.v1';
 
 export function parseStoredCredentials(raw: string | null): StoredCredentials | null {
   if (!raw) return null;
@@ -33,8 +33,8 @@ export function migrateLegacyCredentials() {
   const legacy = parseStoredCredentials(storageGet(LEGACY_CREDENTIALS_STORAGE_KEY));
   if (!legacy) return null;
   const next = { ...legacy, url: legacy.url.trim() };
-  if (next.url) storageSet(StorageKeys.auth.serverUrl, next.url);
-  storageSet(StorageKeys.auth.credentials, JSON.stringify(next));
-  storageRemove(LEGACY_CREDENTIALS_STORAGE_KEY);
+  if (next.url && !storageSet(StorageKeys.auth.serverUrl, next.url)) return null;
+  if (!storageSet(StorageKeys.auth.credentials, JSON.stringify(next))) return null;
+  if (!storageRemove(LEGACY_CREDENTIALS_STORAGE_KEY)) return null;
   return next;
 }

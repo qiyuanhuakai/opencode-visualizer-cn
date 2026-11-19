@@ -66,4 +66,3 @@ export function terminalTurn(value, afterSeq) {
   }
   return terminal;
 }
-

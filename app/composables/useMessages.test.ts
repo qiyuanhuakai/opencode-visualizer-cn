@@ -4,6 +4,35 @@ import { useMessages } from './useMessages';
 import { assistantMessage, textPart, toolPart, userMessage } from './useMessages.test-helpers';
 
 describe('useMessages history and realtime state', () => {
+  it('preserves an explicitly ordered native window despite missing or tied timestamps and opposite lexical ids', async () => {
+    const messages = useMessages();
+    const entries = ['z-old', 'a-new'].map(id => ({ info: userMessage(id, { time: { created: 1 } }), parts: [] }));
+    messages.loadHistory(entries, { replace: true, canonical: true, preserveOrder: true });
+    expect(messages.roots.value.map(info => info.id)).toEqual(['z-old', 'a-new']);
+    messages.loadHistory(structuredClone(entries).toReversed(), { replace: true, canonical: true, preserveOrder: true });
+    await vi.waitFor(() => expect(messages.roots.value.map(info => info.id)).toEqual(['a-new', 'z-old']));
+    messages.loadHistory(entries, { replace: true, canonical: true, preserveOrder: true });
+    await vi.waitFor(() => expect(messages.roots.value.map(info => info.id)).toEqual(['z-old', 'a-new']));
+    messages.loadHistory(entries, { replace: true, canonical: true });
+    await vi.waitFor(() => expect(messages.roots.value.map(info => info.id)).toEqual(['a-new', 'z-old']));
+  });
+  it('replaces canonical history without retaining removed messages or removed parts', () => {
+    const messages = useMessages();
+    messages.loadHistory([
+      { info: userMessage('old'), parts: [textPart('old', { id: 'old-text', text: 'removed' })] },
+      { info: assistantMessage('retained'), parts: [textPart('retained', { id: 'keep', text: 'before' }), textPart('retained', { id: 'remove', text: 'obsolete' })] },
+    ]);
+    messages.loadHistory([{ info: assistantMessage('retained'), parts: [textPart('retained', { id: 'keep', text: 'after' })] }], { replace: true, canonical: true });
+    expect([...messages.messages.value.keys()]).toEqual(['retained']);
+    expect(messages.getParts('retained')).toEqual([expect.objectContaining({ id: 'keep', text: 'after' })]);
+    messages.loadHistory([], { replace: true, canonical: true });
+    expect(messages.messages.value.size).toBe(0);
+  });
+  it('renders historical user metadata without a recorded native model', () => {
+    const messages = useMessages();
+    messages.loadHistory([{ info: { id: 'model-missing', sessionID: 'session', role: 'user', time: { created: 1 } }, parts: [] }]);
+    expect(messages.getModelPath('model-missing')).toBeUndefined();
+  });
   it('shows a qualified model id only once in message metadata', () => {
     const messages = useMessages();
     messages.updateMessage(userMessage('model-1', {

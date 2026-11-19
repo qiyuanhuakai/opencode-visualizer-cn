@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, vi } from 'vitest';
 
 import type { useSettings } from './useSettings';
+import { storageGet } from '../utils/storageKeys';
+import { encodeLiveSetting, liveSettingKey } from '../../shared/runtime/liveSettings.js';
 
 class MemoryStorage implements Storage {
   readonly #values = new Map<string, string>();
@@ -72,6 +74,15 @@ export function useSettingsTestHarness() {
     },
     storageEvent(key: string, newValue: string | null): StorageEvent {
       return new StorageEvent('storage', { key, newValue, storageArea: storage });
+    },
+    readSetting(key: string): string | null {
+      return storageGet(key.replace(/^opencode\./, ''));
+    },
+    peerSetting(key: string, newValue: string | null): StorageEvent {
+      const physicalKey = liveSettingKey(key.replace(/^opencode\./, ''));
+      const envelope = encodeLiveSetting(newValue);
+      storage.setItem(physicalKey, envelope);
+      return new StorageEvent('storage', { key: physicalKey, newValue: envelope, storageArea: storage });
     },
     async importFresh(): Promise<Settings> {
       const mod = await import('./useSettings');

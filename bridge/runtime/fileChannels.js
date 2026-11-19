@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { mkdtemp, open, link, rm } from 'node:fs/promises';
+import { mkdtemp, open, link, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { LIMITS, validateChunk } from '../../shared/runtime/protocol.js';
 import { integerValue, requireValue, textValue } from '../../shared/runtime/capabilities.js';
@@ -28,7 +28,7 @@ export function createFileChannels() {
       return entry;
     }
     return {
-      async open({ workspaceKey, path: relative, size, sha256 }) {
+      async open({ workspaceKey, path: relative, size, sha256, replace = false }) {
         const grant = scope.authorize(workspaceKey, 'write');
         textValue(relative, 'path'); integerValue(size, 'size');
         requireValue(typeof sha256 === 'string' && /^[a-f0-9]{64}$/.test(sha256), 'sha256');
@@ -45,7 +45,7 @@ export function createFileChannels() {
           entry.handle = await open(path.join(entry.staging, 'payload'), constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
           scope.assertCurrent();
           requireValue(!closed, 'channel.closed', 'cancelled');
-          Object.assign(entry, { root: grant.root, destination, size, sha256, next: 0, inflight: new Map(), hash: createHash('sha256'), pending: Promise.resolve(), finishing: false });
+          Object.assign(entry, { root: grant.root, destination, size, sha256, replace, next: 0, inflight: new Map(), hash: createHash('sha256'), pending: Promise.resolve(), finishing: false });
           return { channelId: id, credits: LIMITS.channelCredits, chunkBytes: LIMITS.binaryBytes };
         } catch (error) {
           if (entry.handle) await entry.handle.close();
@@ -88,12 +88,16 @@ export function createFileChannels() {
           await entry.pending;
           if (entry.error) throw entry.error;
           requireValue(entry.hash.digest('hex') === entry.sha256, 'attachment.hash', 'conflict');
+          if (entry.replace) {
+            const previous = await stat(entry.destination).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+            if (previous) await entry.handle.chmod(previous.mode & 0o777);
+          }
           await entry.handle.sync();
           scope.assertCurrent();
           await resolveWritablePath(entry.destination, entry.root);
           scope.assertCurrent();
-          // A hard link publishes only a new destination; existing caller bytes are never overwritten.
-          await link(path.join(entry.staging, 'payload'), entry.destination);
+          if (entry.replace) await rename(path.join(entry.staging, 'payload'), entry.destination);
+          else await link(path.join(entry.staging, 'payload'), entry.destination);
           return { path: entry.destination, sha256: entry.sha256, size: entry.size };
         } finally { await discard(entry); }
         })();

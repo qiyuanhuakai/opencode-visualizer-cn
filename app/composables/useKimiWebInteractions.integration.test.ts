@@ -381,6 +381,7 @@ async function mountInteractionChain(options: {
         fw,
         allowedSessionIds: computed(() => new Set([selectedSessionId.value])),
         activeDirectory,
+        activeBackendKind,
         ensureConnectionReady: () => true,
         sendReply: async (requestId, reply) => {
           if (activeBackendKind.value === 'kimi-web') {
@@ -398,6 +399,7 @@ async function mountInteractionChain(options: {
         fw,
         allowedSessionIds: computed(() => new Set([selectedSessionId.value])),
         activeDirectory,
+        activeBackendKind,
         ensureConnectionReady: () => true,
         getTextContent: () => '',
         sendReply: async (requestId, answers) => {

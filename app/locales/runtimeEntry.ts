@@ -1,0 +1,42 @@
+export const runtimeEntryMessages = {
+  en: { runtime: {
+    sessionTree: { waitingIndexView: "Waiting for an index view…", searchAll: "Search all sessions", filterSources: "Filter sources", loading: "Loading sessions…", indexError: "Session index unavailable", rowsLoaded: "Loaded", rowsShown: "rows", matches: "matches", scanned: "scanned", pages: "pages", treeLabel: "Sessions" },
+    sessionArchived: 'This session is archived. Restore it to send new messages.',
+    draftRecovery: { failed: 'Draft saving failed. Your current input is preserved.', conflict: 'Another window updated this draft. Your current input is preserved; copy it before reloading to merge the changes.', retry: 'Retry storage' },
+    thread: { open: 'Host Thread', openTitle: 'Open a Host Thread for the selected session' },
+    collaboration: { open: 'Team', openTitle: 'Open the team for the current Host Thread' },
+    session: { selectPrompt: 'Select a session to start a conversation.', saveBeforeSwitch: 'Save the current draft before switching connections.', reconnectTarget: 'Reconnect the session host in Bridge connections to restore this conversation.', noWorkspace: 'This session has no authorized workspace. Native history, sending and terminals are unavailable; you can still edit its local draft.' },
+  } },
+  'zh-CN': { runtime: {
+    sessionTree: { waitingIndexView: "正在等待索引视图…", searchAll: "搜索全部会话", filterSources: "筛选来源", loading: "正在加载会话…", indexError: "会话索引不可用", rowsLoaded: "已加载", rowsShown: "行", matches: "匹配", scanned: "已扫描", pages: "页", treeLabel: "会话" },
+    sessionArchived: '此会话已归档。恢复后可继续发送消息。',
+    draftRecovery: { failed: '草稿保存失败，当前输入已保留。', conflict: '另一窗口已更新此草稿。当前输入已保留，请复制后重新加载并合并更改。', retry: '重试存储' },
+    thread: { open: '主机线程', openTitle: '打开所选会话的主机线程' },
+    collaboration: { open: '团队', openTitle: '打开当前主机线程的团队' },
+    session: { selectPrompt: '选择会话以开始对话。', saveBeforeSwitch: '请先保存当前草稿，再切换连接。', reconnectTarget: '请在 Bridge 连接中重新连接会话主机，以恢复当前对话。', noWorkspace: '此会话没有授权工作目录，无法读取原生历史、发送或打开终端；仍可编辑本地草稿。' },
+  } },
+  'zh-TW': { runtime: {
+    sessionTree: { waitingIndexView: "正在等待索引檢視…", searchAll: "搜尋全部工作階段", filterSources: "篩選來源", loading: "正在載入工作階段…", indexError: "工作階段索引無法使用", rowsLoaded: "已載入", rowsShown: "列", matches: "符合項目", scanned: "已掃描", pages: "頁", treeLabel: "工作階段" },
+    sessionArchived: '此工作階段已封存。還原後可繼續傳送訊息。',
+    draftRecovery: { failed: '草稿儲存失敗，目前輸入已保留。', conflict: '另一視窗已更新此草稿。目前輸入已保留，請複製後重新載入並合併變更。', retry: '重試儲存' },
+    thread: { open: '主機執行緒', openTitle: '開啟所選工作階段的主機執行緒' },
+    collaboration: { open: '團隊', openTitle: '開啟目前主機執行緒的團隊' },
+    session: { selectPrompt: '選擇工作階段以開始對話。', saveBeforeSwitch: '請先儲存目前草稿，再切換連線。', reconnectTarget: '請在 Bridge 連線中重新連接工作階段主機，以還原目前對話。', noWorkspace: '此工作階段沒有授權工作目錄，無法讀取原生歷史、傳送或開啟終端；仍可編輯本機草稿。' },
+  } },
+  ja: { runtime: {
+    sessionTree: { waitingIndexView: "インデックスビューを待機中…", searchAll: "すべてのセッションを検索", filterSources: "接続元で絞り込む", loading: "セッションを読み込み中…", indexError: "セッション索引を利用できません", rowsLoaded: "読み込み済み", rowsShown: "行", matches: "一致", scanned: "検索済み", pages: "ページ", treeLabel: "セッション" },
+    sessionArchived: 'このセッションはアーカイブされています。復元するとメッセージを送信できます。',
+    draftRecovery: { failed: '下書きを保存できませんでした。現在の入力は保持されています。', conflict: '別のウィンドウで下書きが更新されました。現在の入力をコピーしてから再読み込みし、変更を統合してください。', retry: '保存を再試行' },
+    thread: { open: 'ホストスレッド', openTitle: '選択したセッションのホストスレッドを開く' },
+    collaboration: { open: 'チーム', openTitle: '現在のホストスレッドのチームを開く' },
+    session: { selectPrompt: 'セッションを選択して会話を開始してください。', saveBeforeSwitch: '接続を切り替える前に現在の下書きを保存してください。', reconnectTarget: 'Bridge 接続でセッションのホストに再接続すると会話が復元されます。', noWorkspace: 'このセッションには許可された作業ディレクトリがありません。履歴、送信、ターミナルは利用できませんが、ローカルの下書きは編集できます。' },
+  } },
+  eo: { runtime: {
+    sessionTree: { waitingIndexView: "Atendante indeksan vidon…", searchAll: "Serĉi ĉiujn seancojn", filterSources: "Filtri fontojn", loading: "Ŝargante seancojn…", indexError: "Seanca indekso ne disponeblas", rowsLoaded: "Ŝargitaj", rowsShown: "vicoj", matches: "kongruoj", scanned: "skanitaj", pages: "paĝoj", treeLabel: "Seancoj" },
+    sessionArchived: 'Ĉi tiu seanco estas arkivita. Restarigu ĝin por sendi novajn mesaĝojn.',
+    draftRecovery: { failed: 'Konservo de la malneto malsukcesis. Via nuna enigo restas.', conflict: 'Alia fenestro ĝisdatigis ĉi tiun malneton. Kopiu vian nunan enigon antaŭ reŝargo por kunigi la ŝanĝojn.', retry: 'Reprovi konservadon' },
+    thread: { open: 'Gastiga fadeno', openTitle: 'Malfermi gastigan fadenon por la elektita seanco' },
+    collaboration: { open: 'Teamo', openTitle: 'Malfermi la teamon de la nuna gastiga fadeno' },
+    session: { selectPrompt: 'Elektu seancon por komenci konversacion.', saveBeforeSwitch: 'Konservu la nunan malneton antaŭ ŝanĝi konektojn.', reconnectTarget: 'Rekonektu la gastiganton de la seanco en Bridge-konektoj por restarigi la konversacion.', noWorkspace: 'Ĉi tiu seanco ne havas rajtigitan labordosierujon. Historio, sendo kaj terminaloj ne disponeblas; vi ankoraŭ povas redakti la lokan malneton.' },
+  } },
+} as const;

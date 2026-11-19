@@ -2,7 +2,7 @@ import type { EnvironmentId, HarnessInstanceId, SessionRef } from './identity.js
 import type { JsonValue } from './capabilities.js';
 import type { LegacyCapability } from './nativeExtensions.js';
 export type HarnessKind = 'opencode' | 'codex' | 'acp' | 'kimi-web' | 'dsh';
-export type CoreOperation = 'inspect' | 'listSessionPage' | 'getSession' | 'readHistoryPage' | 'createSession' | 'send' | 'cancel' | 'respondInteraction' | 'subscribe' | 'close';
+export type CoreOperation = 'inspect' | 'listSessionPage' | 'getSession' | 'readHistoryPage' | 'openHistory' | 'createSession' | 'send' | 'cancel' | 'respondInteraction' | 'subscribe' | 'close';
 export type OperationScope = 'instance' | 'session' | 'optional-session';
 export type InspectionState = 'supported' | 'disabled' | 'missing' | 'auth-required' | 'starting' | 'ready' | 'failed';
 export type Inspection = { readonly state: InspectionState; readonly protocolVersion: 1 };
@@ -20,7 +20,7 @@ export type NativeExtensionDeclaration = {
 export type HarnessManifest = HarnessScope & {
   readonly kind: HarnessKind;
   readonly protocolVersion: 1;
-  readonly core: Readonly<Record<CoreOperation, Support>>;
+  readonly core: Readonly<Record<Exclude<CoreOperation, 'openHistory'>, Support> & { openHistory?: Support }>;
   readonly extensions: readonly NativeExtensionDeclaration[];
   readonly capabilities: Readonly<Partial<Record<LegacyCapability, Support>>>;
 };

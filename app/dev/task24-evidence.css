@@ -1,0 +1,50 @@
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  font: 1rem/1.6 system-ui;
+  background: var(--theme-surface-base, #0f172a);
+  color: var(--theme-text-primary, #e2e8f0);
+}
+
+#app {
+  min-height: 100%;
+}
+
+.task24-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  align-items: flex-start;
+}
+
+.task24-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task24-controls button {
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--theme-border-default, #334155);
+  background: var(--theme-surface-panel, #1e293b);
+  color: var(--theme-text-primary, #e2e8f0);
+  cursor: pointer;
+}
+
+.task24-controls button[aria-pressed='true'] {
+  border-color: var(--color-region-accent, #3b82f6);
+}
+
+.task24-mount {
+  position: relative;
+  width: 100%;
+}

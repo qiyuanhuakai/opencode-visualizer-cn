@@ -7,11 +7,12 @@ import {
   DEFAULT_KIMI_WEB_BRIDGE_URL,
   configureDshBackend,
   disconnectDshBackend,
-  getActiveBackendKind,
   getBackendAdapter,
   registerDshAdapterFactory,
-  setActiveBackendKind,
 } from './registry';
+// The retired global routing is kept as the legacy export; these lineage tests
+// exercise exactly what production stopped using in task 48.
+import { getActiveBackendKind, setActiveBackendKind } from './legacyGlobalRouting';
 import type { BackendAdapter } from './types';
 
 // Todo 15 owns the real `createDshAdapter`; until then the registry exposes a

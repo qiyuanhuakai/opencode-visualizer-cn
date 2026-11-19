@@ -11,6 +11,9 @@ export type AcpStdoutEntry = {
   readonly clientGeneration: number;
   readonly child: { readonly stdin: { write(message: string): unknown } };
   discardingOversizedFrame?: boolean;
+  runtimeOwned?: boolean;
+  /** Raw stdout tap, installed only by the selected runtime-owned history producer. */
+  rawTap?: (chunk: Uint8Array) => void;
 };
 
 export function createAcpStdoutForwarder(options: {

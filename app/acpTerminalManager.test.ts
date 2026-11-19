@@ -47,6 +47,7 @@ describe('acpTerminalManager', () => {
       setInterval(() => {}, 1000);
     `;
     let descendantPid: number | undefined;
+    const failures: unknown[] = [];
 
     try {
       await manager.create({ command: process.execPath, args: ['-e', script, pidPath] });
@@ -64,14 +65,28 @@ describe('acpTerminalManager', () => {
       await manager.stopAll();
 
       expect(() => process.kill(activeDescendantPid, 0)).toThrow();
+    } catch (error) {
+      failures.push(error);
     } finally {
       if (descendantPid) {
         try {
           process.kill(descendantPid, 'SIGKILL');
         } catch {}
       }
-      await manager.stopAll();
-      await rm(directory, { recursive: true, force: true });
+      try {
+        await manager.stopAll();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await rm(directory, { recursive: true, force: true });
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, 'Terminal shutdown and cleanup failed', { cause: failures[0] });
     }
   });
 

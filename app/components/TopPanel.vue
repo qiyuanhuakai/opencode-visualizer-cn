@@ -2,7 +2,10 @@
   <div class="top-panel" :style="regionStyle">
     <div class="top-row">
       <div class="top-left flex items-center gap-2" :title="gitRevision">
-        <img width="48px" height="24px" src="/logo.svg" class="" />
+        <svg width="48" height="24" viewBox="0 0 24 12" role="img" aria-label="Vis" class="shrink-0">
+          <path fill="currentColor" d="m12.342 2.4512v3.328l1.3352 1.3352v3.9658l-0.67757 0.67756h-1.2953l-0.67757-0.67756v-8.629zm0-1.0562h-1.3153l-0.23914-0.23914v-0.91671l0.23914-0.23914h1.3153l0.23914 0.23914v0.91671zm10.602 9.6852-0.67756 0.67756h-6.6162l-0.67756-0.67756v-1.9928h1.3352v1.3352h2.6305v-2.6505h-3.2882l-0.67756-0.67756v-3.9658l0.67756-0.67757h6.6162l0.67756 0.67757v1.9729h-1.3153v-1.3153h-3.9857v2.6505h4.6234l0.67756 0.67757z" />
+          <path fill="#60a5fa" d="m1 0 5.4506 6-5.4506 6h3.6337l4.851-5.34v-1.32l-4.851-5.34z" />
+        </svg>
         <div class="font-normal hidden lg:block relative top-0.5">{{ $t('topPanel.title') }}</div>
       </div>
       <div class="top-center">
@@ -34,8 +37,8 @@
           :placeholder="$t('topPanel.selectSession')"
           :title="$t('topPanel.selectSession') + ' (Ctrl-G)'"
           :auto-close="!managementMode"
-          :popup-style="{ minWidth: '420px', width: 'min(680px, 90vw)', maxWidth: '90vw' }"
-          popup-class="max-lg:left-0! max-lg:w-screen! max-lg:min-w-0! max-lg:max-w-none!"
+          :popup-style="runtimeMode ? { minWidth: '200px', width: '240px', maxWidth: '90vw' } : { minWidth: '420px', width: 'min(680px, 90vw)', maxWidth: '90vw' }"
+          :popup-class="runtimeMode ? '' : 'max-lg:left-0! max-lg:w-screen! max-lg:min-w-0! max-lg:max-w-none!'"
           @select="onTreeSelect"
         >
           <template #label>
@@ -55,6 +58,17 @@
             <span v-else class="selected-title">{{ $t('topPanel.selectSession') }}</span>
           </template>
           <template #default="{ close }">
+            <template v-if="runtimeMode">
+              <DropdownItem value="browse" @click="emit('open-runtime-sessions'); close()">{{ $t('topPanel.selectSession') }}</DropdownItem>
+              <DropdownItem v-if="selectedSessionId && sessionActions.rename" value="rename" @click="handleSessionRename(selectedSessionId); close()">{{ $t('topPanel.sessionActions.rename') }}</DropdownItem>
+              <DropdownItem v-if="selectedSessionId && runtimeForkAvailable" value="fork" @click="emit('fork-session', selectedSessionId); close()">{{ $t('topPanel.sessionActions.fork') }}</DropdownItem>
+              <DropdownItem v-if="selectedSessionId && runtimeCompactAvailable" value="compact" @click="emit('compact-session', selectedSessionId); close()">{{ $t('topPanel.sessionActions.compact') }}</DropdownItem>
+              <DropdownItem v-if="selectedSessionId && runtimePinsAvailable" value="pin" @click="emit('toggle-runtime-pin'); close()">{{ $t(runtimePinned ? 'topPanel.sessionActions.unpin' : 'topPanel.sessionActions.pin') }}</DropdownItem>
+              <DropdownItem v-if="selectedSessionId && !runtimeArchived && sessionActions.archive" value="archive" @click="emit('archive-session', selectedSessionId); close()">{{ $t('topPanel.management.archive') }}</DropdownItem>
+              <DropdownItem v-if="selectedSessionId && runtimeArchived && sessionActions.unarchive" value="restore" @click="emit('unarchive-session', selectedSessionId); close()">{{ $t('topPanel.sessionActions.unarchive') }}</DropdownItem>
+              <DropdownItem v-if="selectedSessionId && sessionActions.delete" value="delete" @click="emit('delete-session', selectedSessionId); close()">{{ $t('topPanel.sessionActions.deletePermanently') }}</DropdownItem>
+            </template>
+            <template v-else>
             <div class="tree-menu">
               <DropdownSearch
                 v-model="searchQuery"
@@ -621,13 +635,14 @@
                 {{ $t('topPanel.openProject') }}
               </button>
             </div>
+            </template>
           </template>
         </Dropdown>
 
         <button
           type="button"
           class="control-button new-session-button"
-          :disabled="!selectedSessionId"
+          :disabled="!selectedSessionId && !runtimeCreateAvailable"
           @click="$emit('new-session')"
           :title="$t('topPanel.newSessionShortcut')"
         >
@@ -647,15 +662,15 @@
           class="control-button management-toggle-button"
           :class="{ 'is-active': managementMode }"
           :title="
-            managementMode
+            runtimeMode ? $t('topPanel.selectSession') : managementMode
               ? $t('topPanel.managementMode.exit')
               : $t('topPanel.managementMode.enter')
           "
           @pointerdown.stop.prevent
-          @click.stop="toggleManagementMode"
+          @click.stop="runtimeMode ? emit('open-runtime-sessions') : toggleManagementMode()"
         >
           <Icon
-            :icon="managementMode ? 'lucide:check-check' : 'lucide:list-checks'"
+            :icon="runtimeMode ? 'lucide:list-tree' : managementMode ? 'lucide:check-check' : 'lucide:list-checks'"
             :width="16"
             :height="16"
           />
@@ -803,6 +818,15 @@
         </Dropdown>
       </div>
       <div class="top-right">
+        <Dropdown :aria-label="$t('app.runtimeBridgeMenu.title')" :button-class="['control-button']" :popup-style="{ minWidth: '220px' }">
+          <template #label><Icon icon="lucide:server" :width="16" :height="16" /></template>
+          <template #default="{ close }">
+            <DropdownItem value="connections" @click="$emit('open-connection-entry'); close()">{{ $t('app.runtimeBridgeMenu.connections') }}</DropdownItem>
+            <DropdownItem value="migration" @click="$emit('open-workspace-migration'); close()">{{ $t('app.runtimeBridgeMenu.migration') }}</DropdownItem>
+            <DropdownItem value="agents" @click="$emit('open-harness-settings'); close()">{{ $t('app.runtimeBridgeMenu.agentSettings') }}</DropdownItem>
+          </template>
+        </Dropdown>
+
         <a
           href="https://github.com/qiyuanhuakai/opencode-visualizer-cn"
           target="_blank"
@@ -928,6 +952,14 @@ type SessionActionCapabilities = {
 };
 
 const props = defineProps<{
+  runtimeMode?: boolean;
+  runtimeArchived?: boolean;
+  runtimeForkAvailable?: boolean;
+  runtimeCompactAvailable?: boolean;
+  runtimePinsAvailable?: boolean;
+  runtimePinned?: boolean;
+  runtimeCreateAvailable?: boolean;
+  nativeSelectedDisplay?: { branch: string; title: string; status: 'idle' | 'busy' | 'retry' | 'unknown' };
   treeData: TopPanelWorktree[];
   notificationSessions: TopPanelNotificationSession[];
   projectDirectory: string;
@@ -965,6 +997,10 @@ const emit = defineEmits<{
   (event: 'create-worktree-from', worktree: string): void;
   (event: 'new-session'): void;
   (event: 'new-session-in', payload: { worktree: string; directory: string }): void;
+  (event: 'open-runtime-sessions'): void;
+  (event: 'fork-session', value: string): void;
+  (event: 'compact-session', value: string): void;
+  (event: 'toggle-runtime-pin'): void;
   (event: 'delete-active-directory', payload: SandboxDeletePayload): void;
   (event: 'delete-session', value: string): void;
   (event: 'archive-session', value: string): void;
@@ -981,6 +1017,9 @@ const emit = defineEmits<{
   (event: 'open-forge-panel'): void;
   (event: 'edit-project', payload: { projectId: string; worktree: string }): void;
   (event: 'open-settings'): void;
+  (event: 'open-connection-entry'): void;
+  (event: 'open-workspace-migration'): void;
+  (event: 'open-harness-settings'): void;
   (event: 'open-provider-manager'): void;
   (event: 'open-status-monitor'): void;
   (event: 'open-codex-panel'): void;
@@ -1003,6 +1042,7 @@ watch(treeDropdownOpen, (open) => {
 });
 
 function openSessionDropdown() {
+  if (props.runtimeMode) { emit('open-runtime-sessions'); return; }
   treeDropdownOpen.value = true;
 }
 
@@ -1011,6 +1051,7 @@ function closeSessionDropdown() {
 }
 
 function toggleSessionDropdown() {
+  if (props.runtimeMode) { emit('open-runtime-sessions'); return; }
   treeDropdownOpen.value = !treeDropdownOpen.value;
 }
 
@@ -1133,6 +1174,7 @@ watch(sessionTargetMapByKey, (map) => {
 });
 
 const selectedDisplay = computed(() => {
+  if (props.nativeSelectedDisplay) return props.nativeSelectedDisplay;
   const sid = props.selectedSessionId;
   if (!sid) return null;
   for (const worktree of props.treeData) {

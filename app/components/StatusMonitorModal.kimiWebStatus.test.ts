@@ -45,7 +45,7 @@ function openCodeAdapter() {
 vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 vi.mock('../backends/registry', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../backends/registry')>();
-  return { ...actual, getActiveBackendAdapter: () => adapterMock.getAdapter() };
+  return { ...actual, getBackendAdapter: () => adapterMock.getAdapter() };
 });
 vi.mock('../composables/useDesktopBridgeVersion', () => ({
   resolveDesktopBridgeHealthUrl: (target: unknown) => healthUrlMock(target),

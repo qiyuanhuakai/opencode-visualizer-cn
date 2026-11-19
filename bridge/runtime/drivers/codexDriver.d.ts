@@ -13,6 +13,7 @@ export type CodexDriverOptions = HarnessScope & {
   readonly store: RuntimeStore;
   readonly runtime: RuntimeHost;
   readonly workspace: Awaited<ReturnType<typeof createWorkspaceService>>;
+  readonly authorizeDirectory?: (directory: string) => Promise<{ readonly canonicalPath: string }>;
   readonly allowedWorkspaces: readonly string[];
   readonly transport?: NativeTransport;
   readonly process?: Parameters<typeof createCodexProcess>[0];

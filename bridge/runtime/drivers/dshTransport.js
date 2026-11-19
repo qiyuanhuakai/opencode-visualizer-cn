@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
+import { Readable } from 'node:stream';
 import { connectUpstreamWebSocket } from '../../codexWebSocketProxy.js';
 import { decodeWebSocketFrames, encodeWebSocketFrame } from '../../webSocketFrames.js';
 import { request, response, muxFrame, fail, DshError } from '../../../shared/runtime/native/dsh/protocol.js';
@@ -98,6 +99,43 @@ export function createDshTransport({ getOwnedEndpoint, auth, deadlineMs = 15000 
       },
     };
   }
+  /** Raw native HTTP body for one selected-history pull: same trusted owned-endpoint/cookie admission and
+   * deadline as `prepare`, but the response body is handed back as a bounded ReadableStream WITHOUT any
+   * JSON parse, so the history substrate can reject oversized/hostile payloads before the removed 2MiB parse.
+   * `release` drops the in-flight request and settles the body; the caller invokes it on drain or cancel.
+   */
+  async function pullRaw(method, args, { signal } = {}) {
+    const lease = capture(), rpcId = randomUUID();
+    const payload = Buffer.from(JSON.stringify(request(method, args, rpcId)));
+    if (payload.length > 1048576) fail('invalid_request', 'request_size');
+    const cookie = await cookieFor(lease);
+    if (signal?.aborted) fail('cancelled', 'request');
+    let released = false, req, timer;
+    const release = () => {
+      if (released) return; released = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', release);
+      if (req) { requests.delete(req); req.destroy(new DshError('cancelled', 'dsh.request')); }
+    };
+    signal?.addEventListener('abort', release, { once: true });
+    return new Promise((resolve, reject) => {
+      req = httpRequest(`${lease.origin}/api/${method}`, { method: 'POST', agent: false,
+        headers: { cookie, 'content-type': 'application/json', 'content-length': payload.length } });
+      requests.add(req);
+      timer = setTimeout(() => req.destroy(new DshError('timeout', 'dsh.deadline')), deadlineMs);
+      const failFast = (error) => { release(); reject(error instanceof DshError ? error : new DshError('source_unavailable', 'dsh.transport')); };
+      req.once('error', (error) => { if (!released) failFast(error); });
+      req.once('response', (res) => {
+        if (released) { res.resume(); return; }
+        if (res.statusCode === 401 || res.statusCode === 403) { auth.invalidate(lease.authority); res.resume(); return failFast(new DshError('unauthorized', 'native_auth')); }
+        if (res.statusCode !== 200) { res.resume(); return failFast(new DshError('source_unavailable', 'http_status')); }
+        try { assertCurrent(lease); } catch (error) { res.resume(); return failFast(error); }
+        const body = Readable.toWeb(res);
+        resolve({ lease, body, release: () => { release(); void body.cancel().catch(() => {}); } });
+      });
+      req.end(payload);
+    });
+  }
   async function connect({ onDisconnect } = {}) {
     const lease = capture(), cookie = await cookieFor(lease);
     let upstream;
@@ -122,11 +160,21 @@ export function createDshTransport({ getOwnedEndpoint, auth, deadlineMs = 15000 
       streams.clear(); onDisconnect?.(error);
     };
     const deliver = (bytes) => {
-      const frame = muxFrame(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
-      const stream = streams.get(frame.streamId);
+      // Route on the leading type+streamId fields only; a raw stream keeps its whole frame unparsed.
+      const prefix = new TextDecoder('utf-8', { fatal: false }).decode(bytes.subarray(0, Math.min(bytes.length, 512)));
+      const route = /^\{\s*"type"\s*:\s*"([a-z]+)"\s*,\s*"streamId"\s*:\s*"([^"\\]+)"/u.exec(prefix);
+      const streamId = route ? route[2] : muxFrame(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))).streamId;
+      const stream = streams.get(streamId);
       if (!stream) return;
+      if (stream.raw) {
+        if (route && route[1] === 'item') { stream.frame(bytes); return; }
+        const terminal = muxFrame(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
+        streams.delete(streamId); stream.end(terminal.type === 'error' ? new DshError('source_unavailable', 'dsh.stream_error') : undefined);
+        return;
+      }
+      const frame = muxFrame(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
       if (frame.type === 'item') stream.item(frame.value ?? null);
-      else { streams.delete(frame.streamId); stream.end(frame.type === 'error' ? new DshError('source_unavailable', 'dsh.stream_error') : undefined); }
+      else { streams.delete(streamId); stream.end(frame.type === 'error' ? new DshError('source_unavailable', 'dsh.stream_error') : undefined); }
     };
     const consume = (chunk) => {
       try {
@@ -167,10 +215,22 @@ export function createDshTransport({ getOwnedEndpoint, auth, deadlineMs = 15000 
           if (!ended) send(JSON.stringify({ type: 'cancel', streamId }));
         } };
       },
+      openRaw(endpoint, args, { onFrame, onEnd } = {}) {
+        if (streams.size >= 16) fail('source_unavailable', 'stream_limit');
+        const streamId = `${connectionId}:${++counter}`;
+        const entry = { raw: true, frame: onFrame ?? (() => {}), item: () => {}, end: onEnd ?? (() => {}) };
+        streams.set(streamId, entry);
+        try { send(JSON.stringify({ type: 'open', streamId, endpoint, payload: { args } })); }
+        catch (error) { streams.delete(streamId); throw error; }
+        return { streamId, cancel() {
+          if (!streams.delete(streamId)) return;
+          if (!ended) send(JSON.stringify({ type: 'cancel', streamId }));
+        } };
+      },
       close() { finish(new DshError('cancelled', 'dsh.mux_closed')); },
     };
   }
-  return { capture, assertCurrent, prepare, connect,
+  return { capture, assertCurrent, prepare, pullRaw, connect,
     async call(method, args, options) { const prepared = await prepare(method, args, options); return prepared.send(); },
     close() { closed = true; for (const req of requests) req.destroy(new DshError('cancelled', 'dsh.closed')); for (const socket of sockets) socket.destroy(); },
   };

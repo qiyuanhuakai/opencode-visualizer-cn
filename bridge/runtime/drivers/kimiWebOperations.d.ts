@@ -9,6 +9,7 @@ export interface KimiInstanceScope { readonly target: string; readonly harnessIn
 export type KimiExecution = { readonly phase: 'native-executed'; readonly operationId: string; readonly result: Json; readonly promptId?: string };
 export interface KimiWebOperations {
   instance(scope: KimiInstanceScope, method: string, payload: Json, idempotencyKey: string, pathname: string): Promise<KimiExecution>;
+  nativeMutation(scope: OperationScope, method: string, payload: Json, idempotencyKey: string, pathname: string, httpMethod?: 'POST' | 'PATCH'): Promise<KimiExecution>;
   send(scope: OperationScope, payload: Json, idempotencyKey: string): Promise<KimiExecution>;
   started(scope: OperationScope, payload: Readonly<Record<string, Json>>): Promise<void>;
   cancel(scope: OperationScope, operationId: string, idempotencyKey: string): Promise<KimiExecution>;

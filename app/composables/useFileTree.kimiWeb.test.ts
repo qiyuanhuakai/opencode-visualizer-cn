@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, nextTick, ref } from 'vue';
 import { createI18n } from 'vue-i18n';
+import type { BackendKind } from '../backends/types';
 
 const { runOneShotPtyCommand } = vi.hoisted(() => ({
   runOneShotPtyCommand: vi.fn<(command: string, args?: string[]) => Promise<string>>(),
@@ -143,10 +144,9 @@ async function mountKimiFileTree(fakeFetch: ReturnType<typeof createFakeFetch>) 
     bridgeUrl: 'ws://bridge.test/kimi-web/ws',
     bridgeToken: 'bridge-token',
   });
-  registry.setActiveBackendKind('kimi-web');
   const { useFileTree } = await import('./useFileTree');
   const activeDirectory = ref(SESSION_CWD);
-  const activeBackendKind = ref('kimi-web');
+  const activeBackendKind = ref<BackendKind>('kimi-web');
   const refreshEnabled = ref(false);
   let fileTree: ReturnType<typeof useFileTree> | undefined;
   const root = document.createElement('div');

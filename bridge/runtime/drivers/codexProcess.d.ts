@@ -13,6 +13,7 @@ export interface CodexProcess extends NativeTransport {
     readonly stderrBytes: number;
     readonly maxFrameBytes: number;
     readonly failed: boolean;
+    readonly rawPending: boolean;
   };
 }
 export function createCodexProcess(options?: {

@@ -49,7 +49,7 @@ async function withStore(action: (store: RuntimeStore) => Promise<void>) {
   }
 }
 
-function isJsonObject(value: Json): value is { readonly [key: string]: Json } {
+function isJsonObject(value: Json | undefined): value is { readonly [key: string]: Json } {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
@@ -80,7 +80,10 @@ interface InteractionHarness {
   readonly requests: string[];
   readonly events: AcpObject[];
   readonly reusePromises: Promise<unknown>[];
-  startParent(key: string, scope: SessionRef): Promise<{
+  startParent(
+    key: string,
+    scope: SessionRef,
+  ): Promise<{
     readonly parent: string;
     readonly prompt: Promise<unknown>;
     release(): void;
@@ -113,6 +116,7 @@ async function openInteractions(
     active: true,
     processGeneration: binding.processGeneration,
     pid: 1,
+    setRawTap() {},
     async close() {},
   };
   const active = new Map<string, string>();
@@ -256,7 +260,12 @@ test('five and eight in-flight sessions completing together all finalize and rel
         runs.push({
           scope,
           run: mutations.run(
-            { session: scope, idempotencyKey: `prompt-${index}`, method: 'session/prompt', payload: {} },
+            {
+              session: scope,
+              idempotencyKey: `prompt-${index}`,
+              method: 'session/prompt',
+              payload: {},
+            },
             async () => {
               nativeCalls[index] += 1;
               entered.resolve();
@@ -437,12 +446,15 @@ test('an older receipt finalization does not clear a newer receipt answered mark
     // while the newer receipt still occupies the reused native ID.
     const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
     let finalizations = 0;
-    const terminalPhase = (value: Json) =>
+    const terminalPhase = (value: Json | undefined) =>
       isJsonObject(value) && value.phase === 'terminal';
     const wrapped: RuntimeStore = {
       ...store,
       async mutateControl(input) {
-        if (input.changes.some((change) => terminalPhase(change.value)) && finalizations < gates.length)
+        if (
+          input.changes.some((change) => terminalPhase(change.value)) &&
+          finalizations < gates.length
+        )
           await gates[finalizations++].promise;
         return store.mutateControl(input);
       },
@@ -541,6 +553,7 @@ test('retrying an older config operation does not roll back the current cache', 
       active: true,
       processGeneration: binding.processGeneration,
       pid: 1,
+      setRawTap() {},
       async close() {},
     };
     const sessions = createAcpSessions({
@@ -683,6 +696,7 @@ test('a claim parked under the previous release sweep still admits the reused na
       active: true,
       processGeneration: binding.processGeneration,
       pid: 1,
+      setRawTap() {},
       async close() {},
     };
     const active = new Map<string, string>();
@@ -730,9 +744,9 @@ test('a claim parked under the previous release sweep still admits the reused na
     const secondOutcome = await second;
     gate.resolve();
     await prompt;
-    expect([
-      replies.includes(7),
-      secondOutcome,
-      interactionIds(events).length,
-    ]).toEqual([true, undefined, 2]);
+    expect([replies.includes(7), secondOutcome, interactionIds(events).length]).toEqual([
+      true,
+      undefined,
+      2,
+    ]);
   }));

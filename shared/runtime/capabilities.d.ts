@@ -7,13 +7,19 @@ export class ProtocolError extends TypeError {
   readonly field: string;
   constructor(code: ErrorCode, field: string);
 }
-export type Method = 'runtime.inspect' | 'runtime.snapshot' | 'runtime.replay'
+export type Method = 'runtime.history.open' | 'runtime.history.page' | 'runtime.history.chunk' | 'runtime.history.read' | 'runtime.history.close' | 'runtime.inspect' | 'runtime.snapshot' | 'runtime.replay'
+  | 'runtime.target.attach' | 'runtime.target.detach' | 'runtime.snapshot.chunk' | 'runtime.snapshot.release' | 'runtime.entity.resolve'
+  | 'runtime.observer.open' | 'runtime.observer.read' | 'runtime.observer.resume' | 'runtime.observer.close'
+  | 'runtime.channel.open' | 'runtime.channel.ack' | 'runtime.channel.finish' | 'runtime.channel.cancel'
+  | 'runtime.pty.create' | 'runtime.pty.read' | 'runtime.pty.write' | 'runtime.pty.resize' | 'runtime.pty.detach' | 'runtime.pty.remove'
+  | 'runtime.interaction.read'
+  | 'runtime.workspace.info' | 'runtime.workspace.list' | 'runtime.workspace.read'
   | 'session.list' | 'session.get' | 'session.history' | 'session.create' | 'session.send'
   | 'session.cancel' | 'interaction.respond' | 'session.subscribe' | 'session.close'
   | 'session.rename' | 'session.archive' | 'session.delete' | 'session.fork' | 'session.revert'
   | 'session.compact' | 'harness.models' | 'harness.providers' | 'harness.auth' | 'harness.settings'
-  | 'harness.skills' | 'harness.mcp' | 'harness.commands' | 'harness.usage' | 'native.extension';
-export const METHODS: Readonly<Record<Method, 'read' | 'mutation'>>;
+  | 'harness.skills' | 'harness.mcp' | 'harness.commands' | 'harness.usage' | 'runtime.host.read' | 'runtime.host.mutate' | 'native.query' | 'native.extension';
+export const METHODS: Readonly<Record<Method, 'read' | 'control' | 'mutation'>>;
 export type NativeExtension = {
   readonly owner: HarnessInstanceId;
   readonly name: string;

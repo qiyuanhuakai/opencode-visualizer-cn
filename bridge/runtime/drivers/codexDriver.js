@@ -26,7 +26,7 @@ import { createCodexCatalog } from '../../../shared/runtime/native/codex/catalog
 import { CODEX_PROFILE, codexManifest } from '../../../shared/runtime/native/codex/capabilities.js';
 import { createOperationJournal, fingerprint } from '../operationJournal.js';
 import { createInteractionStore } from '../interactionStore.js';
-import { createCodexHistory } from './codexHistory.js';
+import { createCodexHistory, createCodexHistoryStream } from './codexHistory.js';
 import { createCodexProcess } from './codexProcess.js';
 
 export async function createCodexDriver(options) {
@@ -84,6 +84,9 @@ export async function createCodexDriver(options) {
   };
   function emit(event) {
     subscriptions.emit({ ...event, epoch, processGeneration, payload: privacy(event.payload) });
+    const status = event.type === 'turn/started' ? 'running'
+      : event.type === 'turn/completed' || event.type === 'error' && event.payload?.willRetry === false && typeof event.payload?.turnId === 'string' ? 'idle' : null;
+    if (status && event.session) subscriptions.emit({ type: 'session.activity', session: event.session, status, epoch, processGeneration, payload: {} });
   }
   const client = createAppServerClient({
     transport,
@@ -121,6 +124,11 @@ export async function createCodexDriver(options) {
           (!path.relative(entry.root, canonical).startsWith('..') &&
             !path.isAbsolute(path.relative(entry.root, canonical)))),
     );
+    if (!root && options.authorizeDirectory) {
+      const granted = await options.authorizeDirectory(canonical);
+      requireValue(options.workspace.workspaces.some(entry => options.allowedWorkspaces.includes(entry.key) && (!workspaceKey || workspaceKey === entry.key) && entry.root === granted?.canonicalPath), 'codex.writer_workspace', 'unauthorized');
+      assertCurrent(); return canonical;
+    }
     requireValue(root, 'codex.workspace', 'unauthorized');
     await workspace.list({
       workspaceKey: root.key,
@@ -129,7 +137,7 @@ export async function createCodexDriver(options) {
     assertCurrent();
     return canonical;
   }
-  async function authorizeSession(session) {
+  async function authorizeSession(session, expectedModelProvider) {
     const result = await request('thread/read', {
       threadId: session.nativeSessionId,
       includeTurns: false,
@@ -138,6 +146,9 @@ export async function createCodexDriver(options) {
       result.thread?.id === session.nativeSessionId && typeof result.thread.cwd === 'string',
       'codex.thread.scope',
     );
+    if (expectedModelProvider && result.thread.modelProvider) {
+      requireValue(result.thread.modelProvider === expectedModelProvider, 'codex.model_provider_mismatch', 'conflict');
+    }
     return authorizeCwd(result.thread.cwd);
   }
   const journal = createOperationJournal({
@@ -274,12 +285,35 @@ export async function createCodexDriver(options) {
         ...fields(context.params ?? {}, ['cursor', 'limit']),
       });
     },
+    openHistory(context) {
+      validateContext(context, true);
+      requireValue(
+        context.params?.epoch === epoch && context.params?.processGeneration === processGeneration,
+        'codex.request_generation',
+        'reconcile_required',
+      );
+      assertCurrent();
+      return createCodexHistoryStream({
+        session: context.session,
+        subscribe: () => subscriptions.subscribe(context.session),
+        request,
+        requestHistory: (method, params) => {
+          assertCurrent();
+          return client.requestHistory(method, params);
+        },
+        processGeneration,
+        epoch,
+        assertCurrent,
+        randomUUID,
+        secrets: options.credentialValues ?? [],
+      });
+    },
     async createSession(context) {
       validateContext(context);
-      const params = fields(context.params, ['workspaceKey', 'idempotencyKey', 'native']);
+      const params = fields(context.params, ['workspaceKey', 'idempotencyKey', 'native', 'directory']);
       const root = options.workspace.workspaces.find((entry) => entry.key === params.workspaceKey);
       requireValue(root, 'codex.workspace', 'unauthorized');
-      const cwd = await authorizeCwd(root.root, params.workspaceKey);
+      const cwd = await authorizeCwd(params.directory ?? root.root, params.workspaceKey);
       const payload = nativeArguments(params.native, [
         'model',
         'modelProvider',
@@ -312,6 +346,7 @@ export async function createCodexDriver(options) {
       const payload = nativeArguments(params.native, [
         'input',
         'model',
+        'expectedModelProvider',
         'effort',
         'summary',
         'approvalPolicy',
@@ -320,9 +355,12 @@ export async function createCodexDriver(options) {
         'serviceTierForTurn',
         'clientUserMessageId',
         'outputSchema',
+        'collaborationMode',
       ]);
       requireValue(Array.isArray(payload.input), 'codex.send.input');
-      const cwd = await authorizeSession(context.session);
+      const { expectedModelProvider, ...turnPayload } = payload;
+      requireValue(expectedModelProvider === undefined || typeof expectedModelProvider === 'string', 'codex.model_provider');
+      const cwd = await authorizeSession(context.session, expectedModelProvider);
       for (const input of payload.input) {
         requireValue(
           ['text', 'image', 'localImage'].includes(input.type),
@@ -335,7 +373,7 @@ export async function createCodexDriver(options) {
       return sessions.mutate({
         session: context.session,
         method: 'turn/start',
-        payload: { ...payload, cwd },
+        payload: { ...turnPayload, cwd },
         idempotencyKey: params.idempotencyKey,
         turn: true,
         queue: params.queue === true,

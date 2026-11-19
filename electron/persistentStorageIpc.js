@@ -1,7 +1,36 @@
+import {
+  APPROVED_APPLICATION_KEY,
+  decodeLiveSetting,
+  encodeLiveSetting,
+  liveSettingKey,
+  parseLiveSettingKey,
+} from '../shared/runtime/liveSettings.js';
+
+function isLiveNamespace(key) {
+  return key.startsWith('vis.live-settings.');
+}
+
+export async function readConfiguredMaxLocalFileBytes(getStorage, getLiveStorage) {
+  const logicalKey = 'settings.openInEditorMaxSizeMb.v1';
+  const live = getLiveStorage().getItem(liveSettingKey(logicalKey));
+  let raw;
+  if (live === null) {
+    raw = await getStorage().getItem(`opencode.${logicalKey}`);
+  } else {
+    const decoded = decodeLiveSetting(live);
+    if (decoded.kind === 'error') throw new TypeError('Invalid live file size setting');
+    raw = decoded.kind === 'value' ? decoded.value : null;
+  }
+  const megabytes = Number(raw);
+  if (!Number.isFinite(megabytes) || megabytes <= 0) return 20 * 1024 * 1024;
+  return Math.min(Math.round(megabytes), 100) * 1024 * 1024;
+}
+
 export function registerPersistentStorageIpc({
   ipcMain,
   assertTrustedRenderer,
   getStorage,
+  getLiveStorage,
   broadcastChange,
   getLocalApplicationPath,
   localApplicationPathKey,
@@ -12,6 +41,7 @@ export function registerPersistentStorageIpc({
     if (typeof payload?.key !== 'string' || (typeof payload.value !== 'string' && payload.value !== null)) {
       throw new TypeError('Invalid asynchronous storage mutation');
     }
+    if (isLiveNamespace(payload.key)) throw new TypeError('Live settings require synchronous storage');
     const storage = getStorage();
     await storage.setItemAsync(payload.key, payload.value);
     for (const change of storage.drainPendingChanges()) {
@@ -20,7 +50,7 @@ export function registerPersistentStorageIpc({
     return true;
   });
 
-  function commitMutation(event, mutation, excludedKey) {
+  function commitMutation(event, mutation, excludedKey, storageProvider = getStorage) {
     const complete = (storage) => {
       for (const change of storage.drainPendingChanges()) {
         const excludedSenderId = change.key === excludedKey ? event.sender.id : undefined;
@@ -29,7 +59,7 @@ export function registerPersistentStorageIpc({
       event.returnValue = true;
     };
     try {
-      const storage = getStorage();
+      const storage = storageProvider();
       const result = mutation(storage);
       if (result && typeof result.then === 'function') {
         return result.then(() => complete(storage), () => { event.returnValue = false; });
@@ -51,7 +81,22 @@ export function registerPersistentStorageIpc({
       return;
     }
     try {
-      const value = getStorage().getItem(key);
+      let storage;
+      if (isLiveNamespace(key)) {
+        const logicalKey = parseLiveSettingKey(key);
+        if (logicalKey === null) throw new TypeError('Unknown live setting');
+        if (logicalKey === APPROVED_APPLICATION_KEY) {
+          event.returnValue = { ok: true, value: null };
+          return;
+        }
+        storage = getLiveStorage();
+      } else {
+        storage = getStorage();
+      }
+      const value = storage.getItem(key);
+      if (isLiveNamespace(key) && value !== null && decodeLiveSetting(value).kind === 'error') {
+        throw new TypeError('Invalid live setting envelope');
+      }
       if (value && typeof value.then === 'function') {
         return value.then((resolved) => { event.returnValue = { ok: true, value: resolved }; }, (error) => {
           event.returnValue = { ok: false, error: { name: error.name, message: error.message } };
@@ -81,6 +126,14 @@ export function registerPersistentStorageIpc({
       event.returnValue = true;
       return;
     }
+    if (isLiveNamespace(key)) {
+      const logicalKey = parseLiveSettingKey(key);
+      if (logicalKey === null || logicalKey === APPROVED_APPLICATION_KEY || decodeLiveSetting(value).kind === 'error') {
+        event.returnValue = false;
+        return;
+      }
+      return commitMutation(event, (storage) => storage.setItem(key, value), key, () => getLiveStorage());
+    }
     return commitMutation(event, (storage) => storage.setItem(key, value), key);
   });
 
@@ -93,6 +146,14 @@ export function registerPersistentStorageIpc({
     if (key === localApplicationPathKey) {
       event.returnValue = true;
       return;
+    }
+    if (isLiveNamespace(key)) {
+      const logicalKey = parseLiveSettingKey(key);
+      if (logicalKey === null || logicalKey === APPROVED_APPLICATION_KEY) {
+        event.returnValue = false;
+        return;
+      }
+      return commitMutation(event, (storage) => storage.setItem(key, encodeLiveSetting(null)), key, () => getLiveStorage());
     }
     return commitMutation(event, (storage) => storage.removeItem(key), key);
   });

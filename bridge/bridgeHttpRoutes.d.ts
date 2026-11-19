@@ -1,3 +1,5 @@
+import type { ConnectionManager } from './runtime/transports/connectionManager.js';
+
 export type JsonBodyRequest = {
   on(event: 'data', listener: (chunk: Buffer | string) => void): unknown;
   on(event: 'error', listener: (error: Error) => void): unknown;
@@ -22,4 +24,14 @@ export function handlePtyHttpRequest(
     resize(id: string, rows: unknown, cols: unknown): boolean;
     remove(id: string): boolean;
   },
+): Promise<boolean>;
+export function profileErrorStatus(error: unknown): number;
+export function handleProfileHttpRequest(
+  request: JsonBodyRequest & { readonly method?: string },
+  response: {
+    writeHead(statusCode: number, headers?: Record<string, string>): unknown;
+    end(body?: string): unknown;
+  },
+  requestUrl: URL,
+  manager: ConnectionManager,
 ): Promise<boolean>;

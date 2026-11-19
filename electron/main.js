@@ -12,8 +12,9 @@ import {
 import { createLocalFileEditor } from './localFileEditor.js';
 import { closeOwnedLocalFileSession } from './localFileSessionOwnership.js';
 import { createSessionStorage, createLegacyExportStorage } from './sessionStorage.js';
+import { createPersistentStorage } from './persistentStorage.js';
 import { registerSessionDatabaseIpc } from './sessionDatabaseIpc.js';
-import { registerPersistentStorageIpc } from './persistentStorageIpc.js';
+import { readConfiguredMaxLocalFileBytes, registerPersistentStorageIpc } from './persistentStorageIpc.js';
 import {
   classifyMime,
   classifyNavigation,
@@ -26,12 +27,11 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
 const PERSISTENT_STORAGE_FILE = 'renderer-storage.json';
+const LIVE_SETTINGS_FILE = 'renderer-live-settings.json';
 const LOCAL_APPLICATION_APPROVAL_FILE = 'local-application.json';
 const DEV_SERVER_URL = 'http://127.0.0.1:5173';
 const LOCAL_APPLICATION_PATH_KEY = 'opencode.settings.localApplicationPath.v1';
-const OPEN_IN_EDITOR_MAX_SIZE_KEY = 'opencode.settings.openInEditorMaxSizeMb.v1';
 const RENDERER_STORAGE_PREFIX = 'opencode.';
-const DEFAULT_MAX_LOCAL_FILE_BYTES = 20 * 1024 * 1024;
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -48,6 +48,7 @@ protocol.registerSchemesAsPrivileged([
 let mainWindow = null;
 let desktopRuntime = null;
 let persistentStorage = null;
+let liveSettingsStorage = null;
 let approvedLocalApplicationPath = null;
 const localFileSessionOwners = new Map();
 const localFileEditor = createLocalFileEditor({
@@ -85,6 +86,11 @@ function getPersistentStorage() {
   return persistentStorage;
 }
 
+function getLiveSettingsStorage() {
+  liveSettingsStorage ??= createPersistentStorage(path.join(app.getPath('userData'), LIVE_SETTINGS_FILE));
+  return liveSettingsStorage;
+}
+
 function broadcastPersistentStorageChange(change, sourceWebContentsId) {
   for (const window of BrowserWindow.getAllWindows()) {
     const { webContents } = window;
@@ -108,10 +114,7 @@ function assertTrustedRenderer(event) {
 }
 
 function configuredMaxLocalFileBytes() {
-  const raw = getPersistentStorage().getItem(OPEN_IN_EDITOR_MAX_SIZE_KEY);
-  const megabytes = Number(raw);
-  if (!Number.isFinite(megabytes) || megabytes <= 0) return DEFAULT_MAX_LOCAL_FILE_BYTES;
-  return Math.min(Math.round(megabytes), 100) * 1024 * 1024;
+  return readConfiguredMaxLocalFileBytes(getPersistentStorage, getLiveSettingsStorage);
 }
 
 async function closeLocalFileSessionsForOwner(ownerId) {
@@ -377,7 +380,7 @@ ipcMain.handle('local-file-open', async (event, payload) => {
       applicationPath: approvedLocalApplicationPath,
       fileName: payload?.fileName,
       content: payload?.content,
-      maxContentBytes: configuredMaxLocalFileBytes(),
+      maxContentBytes: await configuredMaxLocalFileBytes(),
     });
     return { sessionId: opened.sessionId };
   } catch (error) {
@@ -401,6 +404,7 @@ registerPersistentStorageIpc({
   ipcMain,
   assertTrustedRenderer,
   getStorage: getPersistentStorage,
+  getLiveStorage: getLiveSettingsStorage,
   broadcastChange: broadcastPersistentStorageChange,
   getLocalApplicationPath: () => approvedLocalApplicationPath,
   localApplicationPathKey: LOCAL_APPLICATION_PATH_KEY,

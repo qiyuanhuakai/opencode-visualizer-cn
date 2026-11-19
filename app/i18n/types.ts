@@ -44,6 +44,50 @@ export interface LocaleMessages {
       retry: string;
       abort: string;
       error: string;
+      remoteWorkspaceAction: string;
+      remoteLocalShell: string;
+      remoteLocalEditor: string;
+      remoteLocalApplication: string;
+    };
+    runtimeConnection: {
+      title: string;
+      description: string;
+      profilesLabel: string;
+      unsupported: string;
+      connect: string;
+      retry: string;
+      status: {
+        idle: string;
+        connecting: string;
+        ready: string;
+        error: string;
+      };
+    };
+    runtimeBridgeMenu: { title: string; connections: string; migration: string; agentSettings: string };
+    runtimeMigration: {
+      title: string;
+      description: string;
+      inventory: string;
+      sourcesLabel: string;
+      kind: {
+        composer: string;
+        question: string;
+        history: string;
+        metadata: string;
+        local: string;
+      };
+      boundCount: string;
+      backup: string;
+      backupProgress: string;
+      result: string;
+      backupOnly: string;
+      resultSummary: string;
+      retained: string;
+      storageUnavailable: string;
+      storageFull: string;
+      storagePaused: string;
+      start: string;
+      retry: string;
     };
     connection: {
       connecting: string;
@@ -657,6 +701,10 @@ export interface LocaleMessages {
     searchPlaceholder: string;
     noMatchingModels: string;
     clipboardReadFailed: string;
+    threadOpen: string;
+    threadClose: string;
+    threadOpenUnavailable: string;
+    threadTargetUnresolved: string;
     bookmark: string;
     removeFromFavorites: string;
     createSnippetFromFavorite: string;
@@ -1494,6 +1542,8 @@ export interface LocaleMessages {
     viewSubagentTitle: string;
   };
   subagentHistory: {
+    loadFailed: string;
+    nextPage: string;
     title: string;
     close: string;
     empty: string;

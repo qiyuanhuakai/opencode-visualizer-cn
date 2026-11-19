@@ -2,7 +2,10 @@ import { onScopeDispose, ref, shallowRef, watch } from 'vue';
 import type { KimiWebGoal, KimiWebGoalChange } from '../backends/kimiWeb/goal';
 import type { KimiWebClient } from '../utils/kimiWeb';
 
-export type KimiWebGoalClient = Pick<KimiWebClient, 'getGoal' | 'updateProfile'>;
+export type KimiWebGoalClient = Pick<KimiWebClient, 'getGoal' | 'updateProfile'> & {
+  readonly canUpdateGoalObjective?: boolean;
+  readonly updateGoalObjective?: KimiWebClient['updateGoalObjective'];
+};
 
 export function useKimiWebGoal(target: () => { sessionId: string; client: KimiWebGoalClient; revision?: number } | null) {
   const goal = shallowRef<KimiWebGoal | null>(null);
@@ -22,7 +25,11 @@ export function useKimiWebGoal(target: () => { sessionId: string; client: KimiWe
     error.value = '';
     try {
       if (change) {
-        await client.updateProfile(sessionId, { agent_config: change });
+        if ('goal_objective' in change && goal.value && client.canUpdateGoalObjective && client.updateGoalObjective) {
+          await client.updateGoalObjective(sessionId, change.goal_objective);
+        } else {
+          await client.updateProfile(sessionId, { agent_config: change });
+        }
         mutated = true;
       }
       if (requestGeneration !== generation) return false;

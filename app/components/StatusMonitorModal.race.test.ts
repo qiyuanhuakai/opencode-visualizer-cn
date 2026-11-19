@@ -8,7 +8,7 @@ vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 vi.mock('../backends/registry', () => ({
   getPersistedCodexBridgeUrl: () => 'ws://localhost:23004/codex',
   getPersistedCodexBridgeToken: () => '',
-  getActiveBackendAdapter: () => registryMock.getAdapter(),
+  getBackendAdapter: () => registryMock.getAdapter(),
 }));
 vi.mock('../composables/useMessages', () => ({
   useMessages: () => ({

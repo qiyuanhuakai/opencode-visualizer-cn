@@ -53,8 +53,8 @@
                   :card-actions-disabled="(backendKind === 'kimi-web' || backendKind === 'dsh') && isThinking"
                   :is-latest-root="root.id === latestRootId"
                   :assistant-html="getAssistantHtml(root.id)"
-                  @fork-message="emit('fork-message', $event)"
-                  @revert-message="emit('revert-message', $event)"
+                  @fork-message="onForkMessage"
+                  @revert-message="onRevertMessage"
                   @undo-revert="emit('undo-revert')"
                   @show-message-diff="emit('show-message-diff', $event)"
                   @card-notice="emit('card-notice', $event)"
@@ -69,6 +69,61 @@
             <FileRefPopup ref="fileRefPopupRef" :files="files" @open-file="handlePopupOpenFile" />
           </div>
         </div>
+
+        <!--
+          Task 35: the thread surface. The container supplies the read models through the injected
+          state; this panel renders them and forwards every action back into the composable, which
+          drives the landed task-31/34 services.
+        -->
+        <ThreadPanel
+          v-if="threadState && threadState.summary.value"
+          variant="panel"
+          :open="threadPanelOpen ?? false"
+          :thread="threadState.summary.value"
+          :targets="threadState.targets.value"
+          :handoff="threadState.handoff.value"
+          :handoff-ops="threadState.handoffOps.value"
+          :handoffs="threadState.handoffs?.value"
+          :handoff-page="threadState.handoffPage?.value"
+          :checkpoint="threadState.checkpoint?.value"
+          :current-target="threadState.currentTarget?.value"
+          :evidence-target-error="threadState.evidenceTargetError?.value"
+          :read-evidence-page="threadState.readEvidencePage"
+          :capture-evidence="threadState.captureEvidence"
+          :captured-evidence="threadState.capturedEvidence?.value"
+          :remove-evidence="threadState.removeCapturedEvidence"
+          :native-history="threadNativeHistory ?? []"
+          :timeline="threadState.timelinePage.value"
+          :timeline-offset="threadState.timelineOffset?.value"
+          :participant-page="threadState.participantPage?.value"
+          :draft-text="threadDraftText ?? ''"
+          :handoff-entries="threadHandoffEntries ?? []"
+          :available-sessions="threadAvailableSessions ?? []"
+          :harness-labels="threadHarnessLabels"
+          :fanout-enabled="true"
+          :selected-session="threadState.selectedSession.value"
+          :selected-session-resolution="threadState.selectedSessionResolution.value"
+          @fanout="$emit('open-team-dispatch')"
+          :busy="threadState.busy.value"
+          :error="threadState.error.value"
+          @timeline-page="threadState.loadTimelinePage?.($event)"
+          @handoff-page="threadState.loadHandoffPage?.($event)"
+          @select-handoff="threadState.selectHandoff?.($event)"
+          @participant-page="threadState.loadParticipantPage?.($event)"
+          @select-target="onThreadSelectTarget"
+          @activate="onThreadActivate"
+          @leave="onThreadLeave"
+          @resume="onThreadResume"
+          @join="onThreadJoin"
+          @begin-handoff="onThreadBeginHandoff"
+          @prepare-handoff="onThreadPrepareHandoff"
+          @deliver-handoff="onThreadDeliverHandoff"
+          @observe-handoff="onThreadObserveHandoff"
+          @cancel-handoff="onThreadCancelHandoff"
+          @locate-session="onThreadLocateSession"
+          @browse-native-history="participantId => $emit('browse-thread-history', participantId)"
+          @close="onThreadClose"
+        />
 
         <button
           v-show="!isFollowing"
@@ -93,7 +148,7 @@
 
 <script setup lang="ts">
 import { Icon } from '@iconify/vue';
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import FileRefPopup from './FileRefPopup.vue';
 import StatusBar from './StatusBar.vue';
@@ -104,10 +159,20 @@ import { useMessages } from '../composables/useMessages';
 import { useAssistantPreRenderer } from '../composables/useAssistantPreRenderer';
 import { useThinkingAnimation } from '../composables/useThinkingAnimation';
 import type { HistoryWindowEntry, MessageDiffEntry, MessageTokens } from '../types/message';
+import type { SessionRef } from '../../shared/runtime/identity.js';
 import type { MessageInfo } from '../types/sse';
 import type { BackendKind } from '../backends/types';
 import { resolveChildOwners } from '../utils/threadSubagents';
 import type { ModelMeta } from '../utils/resolveModelMeta';
+import {
+  RUNTIME_SESSION_ACTIONS_KEY,
+  bindRuntimeAction,
+  type RuntimeSessionRuntime,
+} from '../composables/useRuntimeSessionActions';
+import { useRuntimeThreadState } from '../composables/useRuntimeThread';
+
+// Task 35: the full thread surface, lazily loaded so the output panel's entry chunk keeps its size.
+const ThreadPanel = defineAsyncComponent(() => import('./runtime/ThreadView.vue'));
 import {
   initialProgressiveRootWindow,
   preserveProgressiveRootWindowOnAppend,
@@ -119,6 +184,12 @@ const msg = useMessages();
 const { t } = useI18n();
 
 const props = defineProps<{
+  threadNativeHistory?: readonly import('../composables/useRuntimeThread').NativeHistoryGroup[];
+  threadHarnessLabels?: Readonly<Record<string, string>>;
+  threadPanelOpen?: boolean;
+  threadDraftText?: string;
+  threadHandoffEntries?: readonly unknown[];
+  threadAvailableSessions?: readonly { session: SessionRef; label: string; harness: string }[];
   isFollowing: boolean;
   statusText: string;
   isStatusError: boolean;
@@ -161,7 +232,12 @@ const props = defineProps<{
   kimiSessionContext?: { used: number; limit: number } | null;
 }>();
 
+
 const emit = defineEmits<{
+  (event: 'close-thread-panel'): void;
+  (event: 'locate-thread-session', session: SessionRef): void;
+  (event: 'open-team-dispatch'): void;
+  (event: 'browse-thread-history', participantId: string): void;
   (event: 'scroll'): void;
   (event: 'wheel', eventArg: WheelEvent): void;
   (event: 'touchmove'): void;
@@ -173,12 +249,109 @@ const emit = defineEmits<{
   (event: 'card-notice', message: string): void;
   (event: 'open-image', payload: { url: string; filename: string }): void;
   (event: 'show-thread-history', payload: { entries: HistoryWindowEntry[] }): void;
+  (event: 'refresh-native-history', payload: { participantId: string; session: SessionRef }): void;
   (event: 'show-subagent-history', payload: { sessionId: string; label: string }): void;
   (event: 'open-file', path: string, lines?: string): void;
   (event: 'show-commit', hash: string): void;
   (event: 'message-rendered'): void;
   (event: 'content-resized'): void;
 }>();
+
+// Task 22: prefer the injected qualified runtime action port for fork/revert;
+// fall back to the legacy emits when no container provides it.
+const runtimeSessionActions = inject<RuntimeSessionRuntime | null>(RUNTIME_SESSION_ACTIONS_KEY, null);
+
+// Task 35: when a container provides the thread state, the output panel hosts the full thread
+// surface — participants, handoff, causal timeline, checkpoint/evidence and per-participant
+// native history. Absent → nothing renders and the panel is unchanged.
+const threadState = useRuntimeThreadState();
+
+/*
+ * Task 35 handlers. Each forwards into the composable, which drives the landed task-31/34
+ * services; the null guard keeps the handlers total even though the template only renders the
+ * panel when the state exists.
+ */
+function onThreadJoin(session: SessionRef): void {
+  if (threadState === null) return;
+  void threadState.joinThread(session);
+}
+
+function onThreadLocateSession(session: SessionRef): void {
+  if (threadState === null) return;
+  emit('locate-thread-session', session);
+}
+
+function onThreadBeginHandoff(input: {
+  sourceParticipantId: string;
+  targetParticipantId: string;
+  prompt: string;
+  entries: readonly unknown[];
+}): void {
+  if (threadState === null) return;
+  void threadState.beginHandoff(input);
+}
+
+function onThreadSelectTarget(participantId: string): void {
+  if (threadState === null) return;
+  threadState.setTarget(participantId);
+}
+
+function onThreadActivate(participantId: string): void {
+  if (threadState === null) return;
+  void threadState.activateParticipant(participantId);
+}
+
+function onThreadLeave(participantId: string): void {
+  if (threadState === null) return;
+  void threadState.leaveParticipant(participantId);
+}
+
+function onThreadResume(participantId: string): void {
+  if (threadState === null) return;
+  void threadState.resumeParticipant(participantId);
+}
+
+function onThreadPrepareHandoff(prompt: string): void {
+  if (threadState === null) return;
+  void threadState.prepareHandoff(prompt);
+}
+
+function onThreadDeliverHandoff(): void {
+  if (threadState === null) return;
+  void threadState.deliverHandoff();
+}
+
+function onThreadObserveHandoff(nativeEventId: string): void {
+  if (threadState === null) return;
+  void threadState.observeHandoff(nativeEventId);
+}
+
+function onThreadCancelHandoff(reason?: string): void {
+  if (threadState === null) return;
+  void threadState.cancelHandoff(reason);
+}
+
+function onThreadClose(): void {
+  emit('close-thread-panel');
+}
+
+function onForkMessage(payload: { sessionId: string; messageId: string }): void {
+  const binding = runtimeSessionActions ? bindRuntimeAction(runtimeSessionActions) : null;
+  if (binding && runtimeSessionActions) {
+    void runtimeSessionActions.router.fork(binding, { messageId: payload.messageId });
+    return;
+  }
+  emit('fork-message', payload);
+}
+
+function onRevertMessage(payload: { sessionId: string; messageId: string }): void {
+  const binding = runtimeSessionActions ? bindRuntimeAction(runtimeSessionActions) : null;
+  if (binding && runtimeSessionActions) {
+    void runtimeSessionActions.router.revert(binding, { messageId: payload.messageId });
+    return;
+  }
+  emit('revert-message', payload);
+}
 
 const visibleRoots = computed(() => {
   const currentSessionId = props.currentSessionId?.trim();

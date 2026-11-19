@@ -180,6 +180,39 @@ are intentionally excluded from this table.
 `vis-bridge-installer-daemon-qa.mjs` are support modules. Run them through
 their parent driver so the parent owns the process and cleanup receipts.
 
+## Runtime v0.9 QA runner (tasks 6-48)
+
+`scripts/qa/runtime-v090.mjs` is the single entrypoint the v0.9.0-alpha plan
+registers per-task scenarios through. A task above 5 without a registered case
+module is refused, so loading `scripts/qa/runtime-v090-cases/task-<N>.mjs` is
+part of the contract.
+
+```sh
+node scripts/qa/runtime-v090.mjs --task <N> --case happy|failure \
+  --out .omo/evidence/vis-v090/task-<N>/<case>.json
+```
+
+What the runner guarantees on a green run:
+
+- The case module runs in a spawned worker with an isolated temporary root;
+  the parent asserts a clean receipt (exit code 0, no signal, not interrupted)
+  before writing any manifest. A failed worker leaves receipts and logs only.
+- Every registered source file is re-hashed and bound into the manifest
+  (`sourceHashes`, `productionRevision`, `productionSource`), so evidence
+  cannot drift from the bytes it was produced against.
+- `validateEvidence` requires a non-empty scenario list where every assertion
+  carries `observed === expected`, exactly one raw scenario result, and one
+  independent execution receipt whose digest matches the raw result.
+- Unknown task/case selectors, a missing registration, zero scenarios, zero
+  assertions, and a failing assertion all exit non-zero. No skip or
+  passed-flag path can fabricate success.
+
+Task-specific drivers (performance profiles, fault injection, live SSH/Slurm,
+packaged artifacts) are invoked by their own registered cases; their reports
+live under the same evidence root. Docs and release-note claims must trace to
+those reports, and platform-dependent legs only count on the platform where
+they were actually executed.
+
 ## Native environment notes
 
 Native checks are platform-specific evidence. A Linux packaged Electron run
@@ -198,10 +231,10 @@ For the RPM integration lane, use the same absolute worktree path when the
 checkout has a linked `.git`, install `rpm`, `cpio`, and `rpm2cpio` only inside
 the disposable environment, and run the test as the unprivileged container
 user. Record the unique container name before launch and verify no matching
-container or task-owned profile remains afterward. The reusable environment
-recipe and its receipts are documented in
-[`task-22/native-environment.md`](../.omo/evidence/test-suite-organization/task-22/native-environment.md)
-and [`native-environment.md`](../.omo/evidence/test-suite-organization/native-environment.md).
+container or task-owned profile remains afterward. The environment recipe
+itself is not linked from this file: `.omo/` is gitignored, so evidence paths
+do not resolve in a clone. Keep the recipe in the evidence tree and repeat the
+prerequisites above when a lane needs them.
 
 These prerequisites define when a lane can run; they do not claim that any
 unavailable platform, live ACP service, or real model has been executed.

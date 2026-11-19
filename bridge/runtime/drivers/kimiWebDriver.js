@@ -1,12 +1,17 @@
+import { randomUUID } from 'node:crypto';
+import { KIMI_SESSION_OPERATIONS } from '../../../shared/runtime/native/kimiWeb/sessionOperations.js';
 import { parseEnvironmentId, parseHarnessInstanceId, parseSessionRef, parseInstanceId } from '../../../shared/runtime/identity.js';
-import { ProtocolError, jsonValue } from '../../../shared/runtime/capabilities.js';
+import { ProtocolError, jsonValue, requireValue } from '../../../shared/runtime/capabilities.js';
+import { KIMI_PROVIDER_OPERATIONS } from '../../../shared/runtime/native/kimiWeb/providerOperations.js';
+import { redactSettings } from '../../../shared/runtime/native/opencode/protocol.js';
 import { CORE_OPERATIONS, unsupported, validateHarnessRegistration } from '../../../shared/runtime/harnessContract.js';
 import { record, nativeText, pageSize, parseCatalogPage, sessionSummary, parseNativeCapabilities } from '../../../shared/runtime/native/kimiWeb/protocol.js';
 import { createAdmissionQueue } from '../admissionQueue.js';
 import { createKimiWebTransport } from './kimiWebTransport.js';
-import { createKimiWebHistory } from './kimiWebHistory.js';
+import { createKimiWebHistory, createKimiWebHistoryProducer, KIMI_WEB_HISTORY_LIMITS } from './kimiWebHistory.js';
 import { createKimiWebOperations } from './kimiWebOperations.js';
 
+function failure(code, reason) { return new ProtocolError(code, reason); }
 function observer(onReturn) {
   const queue = []; let bytes = 0, waiter, done = false;
   return {
@@ -47,12 +52,16 @@ export async function createKimiWebDriver(options) {
   let sourceAuthority = authority();
   let state = options.enabled === false ? 'disabled' : options.installed === false ? 'missing' : 'starting';
   let closed = false, closing, sourceId, ownedStopped = false;
+  let transcriptPageSize = 100;
   let capabilities = parseNativeCapabilities({}, { paths: {} }, { components: { messages: {} } });
+  const providerSupport = new Map();
+  const sessionSupport = new Map();
   const admission = options.admission ?? createAdmissionQueue();
   const transport = state === 'starting' ? createKimiWebTransport({ endpoint: options.endpoint, getAuthorization: options.getAuthorization, deadlineMs: options.deadlineMs }) : undefined;
   const lifecycleTransport = transport ? createKimiWebTransport({ endpoint: options.endpoint, getAuthorization: options.getAuthorization, deadlineMs: options.deadlineMs }) : undefined;
   const lifecycleCursors = new Map();
   const lifecycleSubscriptions = new Map();
+  const lifecycleSessions = new Set();
   const observers = new Set();
   const selected = new Map();
   const retained = new Map();
@@ -83,7 +92,7 @@ export async function createKimiWebDriver(options) {
       released = true;
       const count = (retained.get(sessionId) ?? 0) - 1;
       if (count > 0) retained.set(sessionId, count);
-      else { retained.delete(sessionId); reclaim(sessionId); }
+      else { retained.delete(sessionId); return reclaim(sessionId); }
     };
   }
   // A submitted turn is tracked by the identity of the operation that submitted it, so only that turn's terminal frame can release it.
@@ -163,17 +172,19 @@ export async function createKimiWebDriver(options) {
     // re-read it and keep monitoring until the answer is reliable.
     if (uncertain.has(sessionId)) { void verify(sessionId); return; }
     const pending = selected.get(sessionId);
-    if (!pending) return;
+    if (!pending || [...pending.values()].some(entry => entry.held > 0)) return;
     const agents = [...new Set([...pending.keys()].map((key) => key.slice(key.indexOf(':') + 1)))];
     selected.delete(sessionId);
     lifecycleCursors.delete(sessionId);
+    lifecycleSessions.delete(sessionId);
+    invalidated.delete(sessionId);
     endedTasks.delete(sessionId);
     uncertain.delete(sessionId);
     forgetRecheck(sessionId);
     for (const key of lifecycleSubscriptions.keys()) if (key.endsWith(`:${sessionId}`)) lifecycleSubscriptions.delete(key);
     history.release(sessionId);
     stats.reclaimed++;
-    detachNative(sessionId, agents);
+    return detachNative(sessionId, agents);
   }
   async function verify(sessionId) {
     let live = null;
@@ -189,8 +200,10 @@ export async function createKimiWebDriver(options) {
   }
   function detachNative(sessionId, agents) {
     const transcript = Object.fromEntries(agents.map((agentId) => [agentId, 'off']));
-    const lanes = [transport?.control('unsubscribe_v2', { session_id: sessionId, transcript }), lifecycleTransport?.control('unsubscribe', { session_ids: [sessionId] })];
-    for (const lane of lanes) void lane?.catch(() => undefined);
+    return Promise.allSettled([
+      teardown('unsubscribe_v2', { session_id: sessionId, transcript }),
+      teardown('unsubscribe', { session_ids: [sessionId] }),
+    ]);
   }
   function emit(value, sessionId) {
     for (const entry of observers) if (!entry.sessionId || entry.sessionId === sessionId) entry.stream.push(value);
@@ -373,13 +386,23 @@ export async function createKimiWebDriver(options) {
     if (frame.seq === undefined || !frame.epoch || (prior?.epoch === frame.epoch && prior.seq >= frame.seq)) return;
     lifecycleCursors.set(sessionId, { epoch: frame.epoch, seq: frame.seq });
     const payload = frame.payload ?? {};
-    if (frame.type === 'turn.started') scheduled(() => operations.started(captured, payload));
+    const refreshActivity = async () => {
+      if ((payload.agentId ?? payload.agent_id ?? 'main') !== 'main' || !capabilities.status) return;
+      fence(captured);
+      const status = record(await transport.request('GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/status`));
+      requireValue(typeof status.busy === 'boolean', 'kimi.activity_status');
+      fence(captured);
+      emit({ type: 'session.activity', session, status: status.busy ? 'running' : 'idle' }, sessionId);
+    };
+    if (frame.type === 'turn.started') scheduled(async () => {
+      await operations.started(captured, payload);
+      await refreshActivity();
+    });
     else if (frame.type === 'turn.ended') scheduled(async () => {
       const ended = await operations.terminal(captured, payload);
-      // A genuine terminal of the session's own main task is reliable evidence about its
-      // durable state, so it also resolves a session kept only by an unreadable read.
       if (ended) { noteEndedTask(sessionId, ended.operationId); releaseTask(sessionId, ended.operationId); uncertain.delete(sessionId); forgetRecheck(sessionId); }
       reclaim(sessionId);
+      await refreshActivity();
       emit({ type: 'turn.ended', session, reason: payload.reason }, sessionId);
     });
     else if (frame.type === 'event.approval.requested' || frame.type === 'event.question.requested') {
@@ -405,6 +428,7 @@ export async function createKimiWebDriver(options) {
         throw new ProtocolError('reconcile_required', 'lifecycle_replay_required');
       }
       if (!lifecycleCursors.has(sessionId) && ack.payload.cursors?.[sessionId]) lifecycleCursors.set(sessionId, ack.payload.cursors[sessionId]);
+      lifecycleSessions.add(sessionId);
     })();
     lifecycleSubscriptions.set(key, work);
     try { await work; } catch (error) { lifecycleSubscriptions.delete(key); throw error; }
@@ -416,6 +440,19 @@ export async function createKimiWebDriver(options) {
         transport.request('GET', '/api/v1/meta'), transport.request('GET', '/openapi.json'), transport.request('GET', '/asyncapi.json'),
       ]);
       capabilities = parseNativeCapabilities(meta, spec, asyncspec);
+      const nativePageMaximum = spec.paths?.['/api/v1/sessions/{session_id}/transcript']?.get?.parameters?.find(parameter => parameter.in === 'query' && parameter.name === 'page_size')?.schema?.maximum;
+      requireValue(nativePageMaximum === undefined || Number.isSafeInteger(nativePageMaximum) && nativePageMaximum >= 1, 'kimi.transcript_page_size');
+      transcriptPageSize = Math.min(KIMI_WEB_HISTORY_LIMITS.page, nativePageMaximum ?? 100);
+      for (const [name, route] of Object.entries(KIMI_SESSION_OPERATIONS)) {
+        const template = `/api/v1/sessions/{session_id}${route.suffix}`.replace(/\{[^}]+\}/g, '{}');
+        sessionSupport.set(name, Object.entries(record(spec).paths ?? {}).some(([pathname, methods]) =>
+          pathname.replace(/\{[^}]+\}/g, '{}') === template && typeof methods?.[route.method.toLowerCase()] === 'object'));
+      }
+      for (const [name, route] of Object.entries(KIMI_PROVIDER_OPERATIONS)) {
+        const template = route.path.replace(/\{id\}/g, '{}');
+        const found = Object.entries(record(spec).paths ?? {}).some(([pathname, methods]) => pathname.replace(/\{[^}]+\}/g, '{}') === template && typeof methods?.[route.method.toLowerCase()] === 'object');
+        providerSupport.set(name, found);
+      }
       const id = nativeText(record(meta).server_id, 'native_server_id', 512);
       if (sourceId && sourceId !== id) {
         for (const [sid] of selected) {
@@ -437,34 +474,97 @@ export async function createKimiWebDriver(options) {
     requireCapability('subscribeV2'); if (capabilities.snapshot) requireCapability('subscribe');
     await transport.open(onFrame, () => { stats.sourceDisconnects++; if (!closed) emit({ type: 'source_disconnected' }); });
   }
-  async function subscribeSession(sessionId, agentId = 'main') {
+  function agentSlot(sessionId, agentId) {
+    const pending = selected.get(sessionId);
+    if (pending) for (const [key, entry] of pending) if (key.slice(key.indexOf(':') + 1) === agentId) return { pending, key, entry };
+    return { pending, key: `${transport.generation}:${agentId}`, entry: undefined };
+  }
+  async function subscribeSession(sessionId, agentId = 'main', hold = 'permanent') {
     requireHistory();
     history.selected(sessionId, agentId);
-    let pending = selected.get(sessionId);
-    if (!pending) { pending = new Map(); selected.set(sessionId, pending); }
-    const key = `${transport.generation}:${agentId}`;
-    if (pending.has(key)) return pending.get(key);
-    const work = (async () => {
-      if (!history.cursor(sessionId)) await history.recover(sessionId);
-      await connect();
-      if (capabilities.snapshot) {
-        await subscribeLifecycle(sessionId);
-        const cursor = history.cursor(sessionId);
-        const replay = await transport.control('subscribe', { session_ids: [sessionId], ...(cursor ? { cursors: { [sessionId]: cursor } } : {}) });
-        if (replay.payload.not_found?.includes(sessionId)) throw new ProtocolError('source_unavailable', 'native_session_missing');
-        if (replay.resync.includes(sessionId)) await history.recover(sessionId);
+    const found = agentSlot(sessionId, agentId);
+    const pending = found.pending ?? selected.set(sessionId, new Map()).get(sessionId);
+    const key = found.key;
+    let entry = found.entry;
+    if (!entry || entry.work === undefined) {
+      entry = { permanent: 0, held: 0, work: undefined };
+      pending.set(key, entry);
+      entry.work = (async () => {
+        if (!history.cursor(sessionId)) await history.recover(sessionId);
+        await connect();
+        if (capabilities.snapshot) {
+          await subscribeLifecycle(sessionId);
+          const cursor = history.cursor(sessionId);
+          const replay = await transport.control('subscribe', { session_ids: [sessionId], ...(cursor ? { cursors: { [sessionId]: cursor } } : {}) });
+          if (replay.payload.not_found?.includes(sessionId)) throw new ProtocolError('source_unavailable', 'native_session_missing');
+          if (replay.resync.includes(sessionId)) await history.recover(sessionId);
         }
-      const since = history.transcriptCursors(sessionId);
-      const grades = Object.fromEntries([...new Set([...pending.keys()].map((entry) => entry.slice(entry.indexOf(':') + 1)).concat(agentId))].map((id) => [id, 'delta']));
-      const attached = await transport.control('subscribe_v2', { session_id: sessionId, transcript: grades, ...(Object.keys(since).length ? { transcript_since: since } : {}) });
-      if (attached.payload.not_found?.includes(sessionId)) throw new ProtocolError('source_unavailable', 'native_session_missing');
-      if (attached.resync.includes(sessionId)) await history.recover(sessionId);
-      if (!history.cursor(sessionId)) await history.recover(sessionId);
+        const since = history.transcriptCursors(sessionId);
+        const grades = Object.fromEntries([...new Set([...pending.keys()].map((entry) => entry.slice(entry.indexOf(':') + 1)).concat(agentId))].map((id) => [id, 'delta']));
+        const attached = await transport.control('subscribe_v2', { session_id: sessionId, transcript: grades, ...(Object.keys(since).length ? { transcript_since: since } : {}) });
+        if (attached.payload.not_found?.includes(sessionId)) throw new ProtocolError('source_unavailable', 'native_session_missing');
+        if (attached.resync.includes(sessionId)) await history.recover(sessionId);
+        if (!history.cursor(sessionId)) await history.recover(sessionId);
+      })();
+      void entry.work.catch(() => {});
+    }
+    const counted = hold === 'permanent' ? 'permanent' : hold === 'held' ? 'held' : undefined;
+    if (counted === 'permanent') entry.permanent++;
+    else if (counted === 'held') entry.held++;
+    try { await entry.work; }
+    catch (error) {
+      if (counted === 'permanent') entry.permanent--;
+      else if (counted === 'held') entry.held--;
+      if (entry.permanent === 0 && entry.held === 0) pending.delete(key);
+      throw error;
+    }
+  }
+  function observe(captured) {
+    const entry = { sessionId: captured.session.nativeSessionId, stream: undefined };
+    entry.stream = observer(() => observers.delete(entry)); observers.add(entry);
+    return entry.stream;
+  }
+  /** Raw native transcript pull: the driver alone builds the endpoint and holds the admission slot. */
+  function pullTranscript(captured, agentId, before, signal) {
+    const sessionId = captured.session.nativeSessionId;
+    return (async () => {
+      fence(captured);
+      const query = new URLSearchParams({ agent_id: agentId, page_size: String(transcriptPageSize), ...(before === null ? {} : { before_turn: before }) });
+      const path = `/api/v1/sessions/${encodeURIComponent(sessionId)}/transcript?${query}`;
+      const ready = Promise.withResolvers();
+      let finish = () => {};
+      const drained = new Promise((resolve) => { finish = resolve; });
+      const work = admission.run({}, async (admissionSignal) => {
+        const pulled = await transport.stream(path, signal ? AbortSignal.any([admissionSignal, signal]) : admissionSignal);
+        if (!pulled) throw failure('source_unavailable', 'kimi.history_body');
+        let released = false;
+        const release = () => { if (released) return; released = true; finish(); pulled.release(); };
+        const body = (async function* () {
+          try { for await (const piece of pulled.body) yield piece; }
+          finally { release(); }
+        })();
+        ready.resolve({ body, release });
+        await drained;
+      });
+      void work.catch((error) => ready.reject(error));
+      return await ready.promise;
     })();
-    pending.set(key, work);
-    try { await work; } catch (error) { pending.delete(key); throw error; }
-    // A session whose only reference disappeared while it was attaching is reclaimed here.
-    finally { reclaim(sessionId); }
+  }
+  async function teardown(type, payload) {
+    const lane = type === 'unsubscribe_v2' ? transport : lifecycleTransport;
+    if (!lane?.connected) return;
+    try { await lane.control(type, payload, { destructive: false }); }
+    catch (error) { if (!(error instanceof ProtocolError)) throw error; }
+  }
+  async function releaseHistoryOwner(sessionId, agentId) {
+    const { pending, key, entry } = agentSlot(sessionId, agentId);
+    if (!entry || entry.held === 0) return;
+    entry.held--;
+    if (entry.held > 0) return;
+    if (entry.permanent > 0 || pending.size === 1) return reclaim(sessionId);
+    if (agentId === 'main' && (runningTasks.has(sessionId) || uncertain.has(sessionId))) return;
+    pending.delete(key);
+    await teardown('unsubscribe_v2', { session_id: sessionId, transcript: { [agentId]: 'off' } });
   }
   const methods = {
     async inspect(context) { capture(context); return inspectNative(); },
@@ -498,6 +598,37 @@ export async function createKimiWebDriver(options) {
         fence(captured); return page;
       } finally { release(); }
     },
+    async openHistory(context) {
+      const captured = capture(context, true);
+      requireHistory();
+      const params = record(context.params);
+      const present = authority();
+      requireValue(params.epoch === present.epoch && params.processGeneration === present.processGeneration, 'kimi.request_generation', 'reconcile_required');
+      const agentId = nativeText(params.agentId ?? 'main', 'agent_id', 128);
+      const sessionId = captured.session.nativeSessionId;
+      const release = retain(sessionId);
+      let held = false;
+      try {
+        await subscribeSession(sessionId, agentId, 'held');
+        held = true;
+        fence(captured);
+        return createKimiWebHistoryProducer({
+          session: captured.session,
+          authority: Object.freeze({ epoch: captured.epoch, processGeneration: captured.processGeneration }),
+          current: () => isCurrent(captured),
+          assertCurrent: async () => fence(captured),
+          pull: ({ before, signal }) => pullTranscript(captured, agentId, before, signal),
+          subscribe: () => observe(captured),
+          releaseOwner: async () => { await release(); await releaseHistoryOwner(sessionId, agentId); },
+          sessionEpoch: () => history.cursor(sessionId)?.epoch,
+          randomUUID,
+        });
+      } catch (error) {
+        await release();
+        if (held) await releaseHistoryOwner(sessionId, agentId);
+        throw error;
+      }
+    },
     async createSession(context) {
       const captured = capture(context); requireCapability('create');
       if (captured.session) throw new ProtocolError('invalid_request', 'instance_scope');
@@ -511,8 +642,20 @@ export async function createKimiWebDriver(options) {
     async send(context) {
       const captured = capture(context, true); requireCapability('send');
       const params = record(context.params); const content = params.content;
-      if (!Array.isArray(content) || !content.length || content.some((part) => !part || part.type !== 'text' || typeof part.text !== 'string'))
-        throw new ProtocolError('invalid_request', 'prompt_content');
+      requireValue(Array.isArray(content) && content.length > 0 && content.length <= 64, 'prompt_content');
+      for (const part of content) {
+        record(part);
+        if (part.type === 'text') nativeText(part.text, 'prompt_text', 512 * 1024);
+        else if (part.type === 'image' || part.type === 'video') {
+          const source = record(part.source);
+          requireValue(source.path === undefined, 'prompt_media_path', 'unauthorized');
+          requireValue(['base64', 'file', 'session_media', 'url'].includes(source.kind), 'prompt_media_source');
+          if (source.kind === 'base64') { nativeText(source.media_type, 'media_type', 128); nativeText(source.data, 'media_data', 768 * 1024); }
+          else if (source.kind === 'url') nativeText(source.url, 'media_url', 8192);
+          else nativeText(source.file_id, 'media_file_id', 512);
+        } else if (part.type === 'file') { nativeText(part.file_id, 'media_file_id', 512); requireValue(part.path === undefined, 'prompt_file_path', 'unauthorized'); }
+        else throw new ProtocolError('invalid_request', 'prompt_content');
+      }
       const payload = jsonValue({ content, ...(params.agentId ? { agent_id: nativeText(params.agentId, 'agent_id', 128) } : {}), ...(params.model ? { model: nativeText(params.model, 'model_id', 512) } : {}) });
       nativeText(params.idempotencyKey, 'idempotency_key', 512);
       const release = retain(captured.session.nativeSessionId);
@@ -570,6 +713,39 @@ export async function createKimiWebDriver(options) {
     async close(context) { capture(context); await close(); return { closed: true }; },
   };
   const native = {
+    ...Object.fromEntries(Object.entries(KIMI_SESSION_OPERATIONS).map(([name, route]) => [name, async context => {
+      const captured = capture(context, true), params = record(context.params);
+      requireValue(sessionSupport.get(name), 'kimi.session_operation', 'unsupported');
+      const suffix = route.suffix.replace('{id}', route.suffix.includes('{id}') ? encodeURIComponent(nativeText(params.id, 'kimi.task_id', 512)) : '');
+      let pathname = `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}${suffix}`;
+      if (route.method === 'GET') {
+        const query = new URLSearchParams();
+        for (const [key, value] of Object.entries(record(params.query ?? {}))) {
+          requireValue(route.query?.includes(key) && ['string', 'number', 'boolean'].includes(typeof value), 'kimi.session_query');
+          if (key === 'page_size') pageSize(value);
+          query.set(key, String(value));
+        }
+        if (query.size) pathname += `?${query}`;
+        const result = await transport.request('GET', pathname); fence(captured); return result;
+      }
+      const body = record(params.body ?? {});
+      if (name === 'kimi.goal.update') {
+        requireValue(Object.keys(body).length === 1 && typeof body.objective === 'string' && body.objective.trim().length > 0, 'kimi.goal_objective');
+      }
+      return operations.nativeMutation(captured, route.suffix.includes('{id}') ? `${name}:${suffix}` : name, body, params.idempotencyKey, pathname, route.method);
+    }])),
+    ...Object.fromEntries(Object.entries(KIMI_PROVIDER_OPERATIONS).map(([name, route]) => [name, async context => {
+      const captured = capture(context), params = record(context.params);
+      requireValue(providerSupport.get(name), 'kimi.provider_operation', 'unsupported');
+      const pathname = route.path.includes('{id}') ? route.path.replace('{id}', encodeURIComponent(nativeText(params.id, 'kimi.provider_id', 512))) : route.path;
+      if (route.method === 'GET') {
+        const result = await transport.request('GET', pathname);
+        fence(captured); return redactSettings(result);
+      }
+      const result = await operations.instance(captured, name, params.body ?? {}, params.idempotencyKey, pathname, route.method, false);
+      return { ...result, result: redactSettings(result.result ?? null) };
+    }])),
+    async 'kimi.meta'(context) { const captured = capture(context); const value = await transport.request('GET', '/api/v1/meta'); fence(captured); return value; },
     async 'kimi.listWorkspacePage'(context) {
       const captured = capture(context); requireCapability('catalogV2');
       const params = record(context.params); const limit = pageSize(params.limit);
@@ -583,12 +759,20 @@ export async function createKimiWebDriver(options) {
       const captured = capture(context); requireCapability('models');
       const value = record(await transport.request('GET', '/api/v1/models')); fence(captured);
       if (!Array.isArray(value.items) || value.items.length > 200) throw new ProtocolError('replay_required', 'models_page_size');
-      return { items: value.items.map((item) => ({ id: nativeText(item.model, 'model_alias', 512), name: item.display_name ?? item.model, provider: nativeText(item.provider, 'provider_id', 512) })), completeness: 'complete' };
+      return { items: value.items.map((item) => ({ ...record(item), id: nativeText(item.model, 'model_alias', 512), name: item.display_name ?? item.model, provider: nativeText(item.provider, 'provider_id', 512) })), completeness: 'complete' };
     },
     async 'kimi.sessionStatus'(context) {
       const captured = capture(context, true); requireCapability('status');
       const value = await transport.request('GET', `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}/status`); fence(captured); return value;
     },
+  };
+  for (const [operation, capability, suffix] of [
+    ['kimi.updateProfile', 'updateProfile', '/profile'], ['archiveSession', 'archive', ':archive'],
+    ['restoreSession', 'restore', ':restore'], ['deleteSession', 'delete', ':delete'],
+  ]) native[operation] = async context => {
+    const captured = capture(context, true); requireCapability(capability);
+    const params = record(context.params), body = operation === 'kimi.updateProfile' ? record(params.body) : {};
+    return operations.nativeMutation(captured, operation, body, params.idempotencyKey, `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}${suffix}`);
   };
   function queueStartupRecovery() {
     const generation = ++startupGeneration;
@@ -670,12 +854,17 @@ export async function createKimiWebDriver(options) {
   const support = {
     inspect: true, close: true, listSessionPage: capabilities.catalogV2,
     getSession: capabilities.snapshot || capabilities.sessionRead, readHistoryPage: supportsHistory(),
+    openHistory: supportsHistory(),
     createSession: capabilities.create,
     subscribe: supportsHistory(),
     send: capabilities.send && supportsHistory() && (capabilities.snapshot || capabilities.promptAbort),
     cancel: capabilities.cancel, respondInteraction: capabilities.approvals || capabilities.questions,
   };
   const extensions = [
+    ...Object.entries(KIMI_SESSION_OPERATIONS).map(([name, route]) => ({ name, scope: 'session', enabled: sessionSupport.get(name) === true, mutation: route.method !== 'GET' })),
+    ...Object.entries(KIMI_PROVIDER_OPERATIONS).map(([name, route]) => ({ name, scope: 'instance', enabled: providerSupport.get(name) === true, mutation: route.method !== 'GET' })),
+    { name: 'kimi.meta', scope: 'instance', enabled: true },
+    ...[['kimi.updateProfile', 'updateProfile'], ['archiveSession', 'archive'], ['restoreSession', 'restore'], ['deleteSession', 'delete']].map(([name, capability]) => ({ name, scope: 'session', enabled: capabilities[capability], mutation: true })),
     { name: 'kimi.listWorkspacePage', scope: 'instance', enabled: capabilities.catalogV2 },
     { name: 'listProviders', scope: 'instance', enabled: capabilities.models },
     { name: 'kimi.sessionStatus', scope: 'session', enabled: capabilities.status },
@@ -683,7 +872,7 @@ export async function createKimiWebDriver(options) {
   const registration = validateHarnessRegistration({
     manifest: { ...scope, kind: 'kimi-web', protocolVersion: 1,
       core: Object.fromEntries(Object.keys(CORE_OPERATIONS).map((name) => [name, support[name] ? supported : denied])),
-      extensions: extensions.map(({ name, scope: extensionScope, enabled }) => ({ name, owner: scope.harnessInstanceId, scope: extensionScope, permission: 'kimi.read', schemaVersion: 1, support: enabled ? supported : denied })),
+      extensions: extensions.map(({ name, scope: extensionScope, enabled, mutation }) => ({ name, owner: scope.harnessInstanceId, scope: extensionScope, permission: mutation ? 'kimi.write' : 'kimi.read', schemaVersion: 1, support: enabled ? supported : denied })),
       capabilities: { sessions: support.listSessionPage ? supported : denied, permissions: support.respondInteraction ? supported : denied, questions: capabilities.questions ? supported : denied },
     },
     driver: { core: Object.fromEntries(Object.entries(methods).filter(([name]) => support[name])), native: Object.fromEntries(extensions.filter(({ enabled }) => enabled).map(({ name }) => [name, native[name]])) },
@@ -700,9 +889,13 @@ export async function createKimiWebDriver(options) {
       await inspectNative();
       if (state !== 'ready') throw new ProtocolError('source_unavailable', 'native_reconnect');
       const sessions = [...selected].map(([id, pending]) => [id, [...new Set([...pending.keys()].map((key) => key.slice(key.indexOf(':') + 1)))]]);
-      for (const [, pending] of selected) pending.clear();
+      for (const [, pending] of selected) {
+        const slots = [...pending.entries()];
+        pending.clear();
+        for (const [key, entry] of slots) { entry.work = undefined; pending.set(`${transport.generation}:${key.slice(key.indexOf(':') + 1)}`, entry); }
+      }
       await connect();
-      for (const [sessionId, agentIds] of sessions) for (const agentId of agentIds) await subscribeSession(sessionId, agentId);
+      for (const [sessionId, agentIds] of sessions) for (const agentId of agentIds) await subscribeSession(sessionId, agentId, 'restored');
       await eventWork;
       queueStartupRecovery();
     },

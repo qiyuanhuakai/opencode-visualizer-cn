@@ -46,6 +46,10 @@ export async function createFixture(register, wire, options = {}) {
         let value;
         if (method === 'session/list') value = { items: state.summaries };
         else if (method === 'session/modelCatalog') value = state.catalog;
+        else if (options.advanced && method === 'agentPresets/list') value = { presets: [{ id: 'minimal', name: 'Minimal', isDefault: true }] };
+        else if (options.advanced && method === 'agentPresets/select') value = args.agentPreset;
+        else if (options.advanced && method === 'commands/list') value = [];
+        else if (options.advanced && method === 'permissionPresets/catalog') value = { options: [{ value: 'safe', name: 'Safe' }] };
         else if (method === 'session/selectModel') value = { selected: { provider: args.request.provider, model: args.request.model } };
         else if (method === 'session/page') {
           const entry = state.snapshots.get(args.request.address.sessionId) ?? snapshot(args.request.address.sessionId);

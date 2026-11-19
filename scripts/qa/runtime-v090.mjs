@@ -24,9 +24,9 @@ export function parseSelector(args) {
     assert(['happy', 'failure'].includes(values['--case']), 'unknown case');
   } else {
     assert(['F1', 'F2', 'F3', 'F4'].includes(values['--verify']), 'unknown verifier');
-    assert(!values['--case'], 'verify cannot select a case');
+    assert(values['--case'] === undefined || ['happy', 'failure'].includes(values['--case']), 'unknown case');
   }
-  return { ...(values['--task'] ? { task: Number(values['--task']), case: values['--case'] } : { verify: values['--verify'] }), out: path.resolve(values['--out']), ...(values['--evidence-root'] ? { evidenceRoot: path.resolve(values['--evidence-root']) } : {}) };
+  return { ...(values['--task'] ? { task: Number(values['--task']), case: values['--case'] } : { verify: values['--verify'], ...(values['--case'] ? { case: values['--case'] } : {}) }), out: path.resolve(values['--out']), ...(values['--evidence-root'] ? { evidenceRoot: path.resolve(values['--evidence-root']) } : {}) };
 }
 function inventory(root) {
   const directories = ['shared/runtime', 'scripts/qa', 'app/dev/runtime-v090'];

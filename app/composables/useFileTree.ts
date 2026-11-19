@@ -9,7 +9,8 @@ import type {
   GitBranchInfo,
   BranchEntry,
 } from '../types/git';
-import { getActiveBackendAdapter } from '../backends/registry';
+import { getBackendAdapter } from '../backends/registry';
+import type { BackendAdapter, BackendKind } from '../backends/types';
 import { normalizeDirectory } from '../utils/path';
 import { uniqueBy } from '../utils/array';
 import { createWorkspaceRefreshLoop } from '../utils/workspaceRefreshLoop';
@@ -78,8 +79,10 @@ type FileTreeStrategy = 'filesystem' | 'git';
 
 type UseFileTreeOptions = {
   activeDirectory: Ref<string>;
-  activeBackendKind?: Ref<string>;
+  activeBackendKind: Ref<BackendKind>;
   refreshEnabled?: Readonly<Ref<boolean>>;
+  backend?: () => BackendAdapter;
+  runtimeWorkspace?: Readonly<Ref<boolean>>;
 };
 
 type DirectorySidebarSnapshot = {
@@ -148,10 +151,15 @@ function getOptions(): UseFileTreeOptions {
 }
 
 function usesAdapterFileTreeStatus() {
-  const backendKind = getOptions().activeBackendKind?.value;
+  if (getOptions().runtimeWorkspace?.value) return false;
+  const backendKind = getOptions().activeBackendKind.value;
   // dsh lists via adapter `listFiles` (bridge `/dsh` prefix), never a PTY
   // `git ls-files`; its `workspaceFiles` answers carry no Git metadata.
   return backendKind === 'kimi-web' || backendKind === 'dsh';
+}
+
+function activeBackendAdapter() {
+  return getOptions().backend?.() ?? getBackendAdapter(getOptions().activeBackendKind.value);
 }
 
 function normalizeRelativePath(path: string) {
@@ -747,7 +755,7 @@ async function listFilesWithRetry(
   const data = await retryOnce(
     async () => {
       if (!isRefreshCurrent(directory, refreshToken)) return [];
-      const listFiles = getActiveBackendAdapter().listFiles;
+      const listFiles = activeBackendAdapter().listFiles;
       if (!listFiles) throw new Error('Active backend does not support file listing.');
       return await listFiles({ directory, path });
     },
@@ -816,7 +824,7 @@ async function detectFileTreeStrategy(directory: string): Promise<FileTreeStrate
   try {
     const raw = await retryOnce(
       async () => {
-        const getVcsInfo = getActiveBackendAdapter().getVcsInfo;
+        const getVcsInfo = activeBackendAdapter().getVcsInfo;
         if (!getVcsInfo) throw new Error('Active backend does not support VCS info.');
         return await getVcsInfo(directory);
       },
@@ -1028,7 +1036,7 @@ async function refreshGitStatusOnly(refreshToken = workspaceRefreshToken) {
 
   if (!isRefreshCurrent(directory, refreshToken)) return;
   if (usesAdapterFileTreeStatus()) {
-    const getVcsInfo = getActiveBackendAdapter().getVcsInfo;
+    const getVcsInfo = activeBackendAdapter().getVcsInfo;
     if (!getVcsInfo) {
       setGitStatus(null);
       return;
@@ -1551,9 +1559,13 @@ function invalidateWorkspaceRefreshes() {
 function initializeFileTree(options: UseFileTreeOptions) {
   if (boundOptions) return;
   boundOptions = options;
-  usePtyOneshot({ activeDirectory: options.activeDirectory, translate: tFunction ?? undefined });
+  usePtyOneshot({
+    activeDirectory: options.activeDirectory,
+    activeBackendKind: options.activeBackendKind,
+    translate: tFunction ?? undefined,
+  });
   watch(
-    () => [options.activeDirectory.value, options.activeBackendKind?.value ?? ''] as const,
+    () => [options.activeDirectory.value, options.activeBackendKind.value] as const,
     ([directory]) => {
       clearScheduledDirectoryReloads();
       clearScheduledGitStatusReload();

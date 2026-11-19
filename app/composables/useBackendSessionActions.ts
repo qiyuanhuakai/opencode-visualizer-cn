@@ -12,6 +12,8 @@ import { isBatchSessionAction, normalizeBatchSessionTargets } from '../utils/bat
 import type { KimiWebSessionApiLike } from './useBackendSessionLifecycle';
 import type { KimiWebSession } from '../utils/kimiWeb';
 import { mapKimiWebSession, upsertKimiWebSessionIntoProjects } from '../backends/kimiWeb/kimiWebAdapter';
+import { bindRuntimeAction, type RuntimeActionBinding, type RuntimeSessionRuntime } from './useRuntimeSessionActions';
+import { encodeSessionKey, parseSessionRef } from '../../shared/runtime/identity.js';
 import {
   archiveDshSession,
   deleteDshSession,
@@ -140,6 +142,7 @@ export function useBackendSessionActions(params: {
     undoSessionFromMessage?: (sessionId: string, messageId: string) => Promise<void>;
   };
   dshSessionApi?: DshSessionActionApi;
+  runtime?: RuntimeSessionRuntime;
 }) {
   type MutationRollback = () => void;
   type SessionOperationHints = { projectId?: string; directory?: string };
@@ -174,6 +177,41 @@ export function useBackendSessionActions(params: {
     return (
       params.codexApi.activeThreadId.value || params.codexApi.visibleThreads.value[0]?.id || ''
     );
+  }
+  async function runRuntimeMutation(errorKey: string, apply: (runtime: RuntimeSessionRuntime) => unknown) {
+    const runtime = params.runtime;
+    if (!runtime) return;
+    const owner = runtime.binding();
+    params.clearSessionError();
+    try { await apply(runtime); }
+    catch (error) {
+      const current = runtime.binding();
+      if (!owner || !current || owner.profileId !== current.profileId || encodeSessionKey(owner.session) !== encodeSessionKey(current.session)) return;
+      params.setSessionError(params.translate(errorKey, { message: params.toErrorMessage(error) }));
+    }
+  }
+
+  // Invariant (finding A): the seam binds the operation to the session it was
+  // GIVEN. The ambient binding supplies only the profile/environment/harness
+  // context; a global selection switch must never redirect the action.
+  function resolveTargetBinding(
+    sessionId: string,
+    _hints?: SessionOperationHints,
+  ): RuntimeActionBinding | null {
+    if (!params.runtime || !sessionId) return null;
+    const current = bindRuntimeAction(params.runtime);
+    if (!current) return null;
+    if (current.session.nativeSessionId === sessionId) return current;
+    try {
+      const session = parseSessionRef({
+        environmentId: current.session.environmentId,
+        harnessInstanceId: current.session.harnessInstanceId,
+        nativeSessionId: sessionId,
+      });
+      return Object.freeze({ profileId: current.profileId, session });
+    } catch {
+      return null;
+    }
   }
 
   function removeKimiWebSession(sessionId: string) {
@@ -269,6 +307,11 @@ export function useBackendSessionActions(params: {
   }
 
   async function deleteSession(sessionId: string, hints?: SessionOperationHints) {
+    const bound = resolveTargetBinding(sessionId, hints);
+    if (bound && params.runtime) {
+      if (!await params.showConfirm(params.translate('topPanel.confirm.deleteSession'))) return;
+      return runRuntimeMutation('app.error.sessionDeleteFailed', runtime => runtime.router.delete(bound));
+    }
     await runSessionMutation({
       sessionId,
       actionLabel: 'app.actions.deletingSession',
@@ -328,6 +371,8 @@ export function useBackendSessionActions(params: {
   }
 
   async function archiveSession(sessionId: string, hints?: SessionOperationHints) {
+    const bound = resolveTargetBinding(sessionId, hints);
+    if (bound && params.runtime) return runRuntimeMutation('app.error.sessionArchiveFailed', runtime => runtime.router.archive(bound));
     await runSessionMutation({
       sessionId,
       actionLabel: 'app.actions.archivingSession',
@@ -393,6 +438,8 @@ export function useBackendSessionActions(params: {
   }
 
   async function unarchiveSession(sessionId: string, hints?: SessionOperationHints) {
+    const bound = resolveTargetBinding(sessionId, hints);
+    if (bound && params.runtime) return runRuntimeMutation('app.error.sessionArchiveFailed', runtime => runtime.router.unarchive(bound));
     await runSessionMutation({
       sessionId,
       actionLabel: 'app.actions.unarchivingSession',
@@ -443,12 +490,16 @@ export function useBackendSessionActions(params: {
     params.clearSessionError();
     if (!sessionId) return;
     const backendKind = params.activeBackendKind.value;
+    // Freeze the target binding BEFORE awaiting the dialog: a selection switch
+    // while the prompt is open must not rename whichever session is now current.
+    const bound = resolveTargetBinding(sessionId, hints);
     try {
       if (backendKind === 'acp') {
         throw new Error('ACP agent does not support session/set_name.');
       }
       const resolved = params.findSessionInProjects(sessionId);
       const currentTitle =
+        (bound ? params.runtime?.title?.(bound.session)?.trim() : undefined) ||
         resolved?.session.title?.trim() || resolved?.session.slug?.trim() || sessionId;
       const nextTitle = await params.showPrompt(
         params.translate('topPanel.sessionActions.rename'),
@@ -458,6 +509,7 @@ export function useBackendSessionActions(params: {
       if (params.activeBackendKind.value !== backendKind) return;
       const trimmedTitle = nextTitle.trim();
       if (!trimmedTitle || trimmedTitle === currentTitle) return;
+      if (bound && params.runtime) return runRuntimeMutation('app.error.sessionRenameFailed', runtime => runtime.router.rename(bound, trimmedTitle));
       if (backendKind === 'codex') {
         await params.codexApi.setThreadName(sessionId, trimmedTitle);
         return;
@@ -635,6 +687,8 @@ export function useBackendSessionActions(params: {
   }
 
   async function handleForkSession(sessionId: string) {
+    const bound = resolveTargetBinding(sessionId);
+    if (bound && params.runtime) return runRuntimeMutation('app.error.sessionForkFailed', runtime => runtime.router.fork(bound, {}));
     await runSessionMutation({
       sessionId,
       actionLabel: 'app.actions.fork',
@@ -664,6 +718,8 @@ export function useBackendSessionActions(params: {
   }
 
   async function handleCompactSession(sessionId: string) {
+    const bound = resolveTargetBinding(sessionId);
+    if (bound && params.runtime) return runRuntimeMutation('app.error.sendFailed', runtime => runtime.router.compact(bound));
     await runSessionMutation({
       sessionId,
       actionLabel: 'codex.compactThread',
@@ -681,6 +737,8 @@ export function useBackendSessionActions(params: {
   const pendingCardMutations = new Set<string>();
 
   async function handleForkMessage(payload: { sessionId: string; messageId: string }) {
+    const bound = resolveTargetBinding(payload.sessionId);
+    if (bound && params.runtime) return runRuntimeMutation('app.error.sessionForkFailed', runtime => runtime.router.fork(bound, { messageId: payload.messageId }));
     if (pendingCardMutations.has(payload.sessionId)) return;
     if (!params.ensureConnectionReady(params.translate('app.actions.fork'))) return;
     const requestBackend = params.activeBackendKind.value;
@@ -740,6 +798,8 @@ export function useBackendSessionActions(params: {
   }
 
   async function handleRevertMessage(payload: { sessionId: string; messageId: string }) {
+    const bound = resolveTargetBinding(payload.sessionId);
+    if (bound && params.runtime) return runRuntimeMutation('app.error.sessionRevertFailed', runtime => runtime.router.revert(bound, { messageId: payload.messageId }));
     if (pendingCardMutations.has(payload.sessionId)) return;
     if (!params.ensureConnectionReady(params.translate('app.actions.revert'))) return;
     const requestBackend = params.activeBackendKind.value;

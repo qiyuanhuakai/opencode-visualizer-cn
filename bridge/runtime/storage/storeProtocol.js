@@ -35,15 +35,27 @@ export function parseRequest(method, input = {}) {
       requireStore(['interactions', 'operations'].includes(params.collection), 'control_collection');
       return parseRequest('get', params);
     case 'readIntent': text(params.intentId); break;
+    case 'releaseSnapshot':
+      requireStore(Object.keys(params).length === 2 && Object.keys(params).every(key => key === 'token' || key === 'epoch'), 'snapshot_release');
+      try { parseInstanceId(params.token); parseInstanceId(params.epoch); }
+      catch (error) { if (error instanceof TypeError) throw new StoreError('invalid_request', 'snapshot_release'); throw error; }
+      break;
     case 'mutate':
       text(params.intentId);
       requireStore(Array.isArray(params.changes) && params.changes.length > 0 && params.changes.length <= 200, 'changes');
       for (const change of params.changes) {
         requireStore(change !== null && typeof change === 'object' && !Array.isArray(change), 'change');
         collection(change.collection); text(change.key);
-        requireStore(Object.hasOwn(change, 'value'), 'value');
+        if (change.checkOnly !== undefined) {
+          // Omitting value also makes an older write-only worker reject this
+          // request before its transaction, rather than silently dropping a fence.
+          requireStore(change.checkOnly === true && !Object.hasOwn(change, 'value')
+            && Object.keys(change).every(key => ['collection', 'key', 'expectedRevision', 'checkOnly'].includes(key)), 'check_only');
+          requireStore(Number.isSafeInteger(change.expectedRevision) && change.expectedRevision >= 0, 'revision');
+        } else requireStore(Object.hasOwn(change, 'value'), 'value');
         if (change.expectedRevision !== undefined) requireStore(Number.isSafeInteger(change.expectedRevision) && change.expectedRevision >= 0, 'revision');
       }
+      requireStore(params.changes.some(change => change.checkOnly !== true), 'changes');
       break;
     case 'get': case 'readChunk':
       collection(params.collection); text(params.key);
@@ -55,7 +67,16 @@ export function parseRequest(method, input = {}) {
       break;
     case 'page': case 'snapshot':
       collection(params.collection);
-      if (params.cursor !== undefined && params.cursor !== null) text(params.cursor);
+      if (params.collections !== undefined) {
+        requireStore(method === 'snapshot' && Array.isArray(params.collections) && params.collections.length > 0 && params.collections.length <= COLLECTIONS.length, 'snapshot_collections');
+        params.collections.forEach(collection);
+        requireStore(new Set(params.collections).size === params.collections.length && params.collections.includes(params.collection), 'snapshot_collections');
+        params = { ...params, collections: [...params.collections].sort() };
+      }
+      if (params.cursor !== undefined && params.cursor !== null) {
+        if (method === 'snapshot') requireStore(typeof params.cursor === 'string' && params.cursor.length > 0 && params.cursor.length <= 32768, 'snapshot_cursor');
+        else text(params.cursor);
+      }
       if (params.token !== undefined) text(params.token);
       if (params.limit !== undefined) requireStore(Number.isInteger(params.limit) && params.limit > 0 && params.limit <= STORE_LIMITS.maxPage, 'limit');
       break;

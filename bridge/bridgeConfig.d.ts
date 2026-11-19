@@ -15,6 +15,7 @@ export type BridgeConfig = {
 
 export type BridgeConfigStore = {
   configPath: string;
+  profilePath?: string;
   load(): Promise<BridgeConfig>;
   save(config: BridgeConfig): Promise<BridgeConfig>;
   getConfig(): Promise<BridgeConfig>;
@@ -25,4 +26,6 @@ export type BridgeConfigStore = {
 export function createDefaultBridgeConfig(): BridgeConfig;
 export function parseBridgeConfig(input: unknown): BridgeConfig;
 export function defaultBridgeConfigPath(env?: NodeJS.ProcessEnv): string;
-export function createBridgeConfigStore(options?: { configPath?: string }): BridgeConfigStore;
+export function defaultBridgeProfilePath(env?: NodeJS.ProcessEnv): string;
+export function resolveBridgeProfilePath(configPath: string): string;
+export function createBridgeConfigStore(options?: { configPath?: string; profilePath?: string }): BridgeConfigStore;

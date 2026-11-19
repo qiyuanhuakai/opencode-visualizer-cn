@@ -5,16 +5,24 @@
       <header class="app-header">
         <TopPanel
           ref="topPanelRef"
+          :runtime-mode="!!runtimeActionClient"
+          :runtime-archived="runtimeSelectedArchived"
+          :runtime-fork-available="runtimeSupports('forkSession')"
+          :runtime-compact-available="runtimeSupports('compactSession')"
+          :runtime-pins-available="runtimePins?.pinned.value !== null && !!runtimePins"
+          :runtime-pinned="runtimePins?.pinned.value === true"
           :tree-data="topPanelTreeData"
           :notification-sessions="notificationSessions"
           :project-directory="projectDirectory"
           :active-directory="activeDirectory"
           :selected-session-id="selectedSessionId"
+          :runtime-create-available="(runtimeConversationManifest ?? managementManifest)?.core.createSession.state === 'supported' && !!runtimeActionClient"
+          :native-selected-display="nativeSelectedDisplay"
           :home-path="homePath"
           :sandbox-first-mode="activeBackendCapabilities.sessionManagementMode === 'sandbox-first'"
           :codex-connected="codexApi.connected.value"
           :pty-supported="ptySupported"
-          :session-action-capabilities="{
+          :session-action-capabilities="runtimeActionClient ? runtimeSessionActionCapabilities : {
             rename: activeBackendCapabilities.sessionRename,
             pin: activeBackendCapabilities.sessionPin,
             unpin: activeBackendCapabilities.sessionUnpin,
@@ -30,6 +38,10 @@
           @open-shell="openShellFromInput('')"
           @delete-active-directory="deleteWorktree"
           @delete-session="backendSessionActions.deleteSession"
+          @fork-session="backendSessionActions.handleForkSession"
+          @compact-session="backendSessionActions.handleCompactSession"
+          @toggle-runtime-pin="runtimePins?.toggleSelected()"
+          @open-runtime-sessions="openRuntimeSessionTree"
           @archive-session="backendSessionActions.archiveSession"
           @unarchive-session="backendSessionActions.unarchiveSession"
           @rename-session="backendSessionActions.renameSession"
@@ -44,6 +56,9 @@
           @open-directory="handleOpenProjectDirectory"
           @edit-project="handleEditProject"
           @open-settings="openSettings()"
+          @open-connection-entry="openConnectionEntry()"
+          @open-harness-settings="isHarnessSettingsOpen = true"
+          @open-workspace-migration="openWorkspaceMigration()"
           @open-provider-manager="isProviderManagerOpen = true"
           @open-status-monitor="isStatusMonitorOpen = true"
           @open-codex-panel="openCodexPanel"
@@ -52,6 +67,29 @@
           @logout="handleLogout"
           @dropdown-closed="focusInput"
         />
+        <div class="app-runtime-actions">
+          <AgentInstanceSelector :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
+          <button
+            type="button"
+            class="app-runtime-action"
+            data-testid="open-runtime-thread"
+            :disabled="unifiedSessionTree === null || !runtimeSelectedSessionRef || (!runtimeSelectedDirectory && !runtimeThreadState.threadId.value)"
+            :title="t('runtime.thread.openTitle')"
+            @click="openRuntimeThreadForSelection()"
+          >
+            {{ t('runtime.thread.open') }}
+          </button>
+          <button
+            type="button"
+            class="app-runtime-action"
+            data-testid="open-runtime-collaboration"
+            :disabled="runtimeThreadState.threadId.value === null"
+            :title="t('runtime.collaboration.openTitle')"
+            @click="openCollaborationPanel()"
+          >
+            {{ t('runtime.collaboration.open') }}
+          </button>
+        </div>
       </header>
       <div
         ref="appBodyEl"
@@ -66,14 +104,25 @@
         <div ref="sidePanelAreaEl" class="side-panel-area">
           <SidePanel
             class="todo-panel"
-            :class="{ 'is-disabled': !hasSession }"
+            :class="{ 'is-disabled': !hasSession && !unifiedSessionTree }"
             :collapsed="sidePanelCollapsed"
             :active-tab="sidePanelActiveTab"
             :selected-session-id="selectedSessionId"
             :todo-sessions="todoPanelSessions"
             :todo-label="activeBackendKind === 'codex' ? t('codexPanel.planTitle') : undefined"
             :session-tree-data="sessionTreeData"
-            :session-tree-expanded-paths="sessionTreeExpandedPaths"
+            :session-tree-expanded-paths="unifiedSessionTree ? [...unifiedSessionTree.expanded.value] : sessionTreeExpandedPaths"
+            :unified-tree-rows="unifiedTreeRows"
+            :unified-tree-selected-key="unifiedTreeSelectedKey"
+            :unified-tree-sources="unifiedTreeSources"
+            :unified-tree-retrying="unifiedTreeRetrying"
+            :unified-tree-child-scans="unifiedTreeChildScans"
+            :unified-tree-status="unifiedTreeStatus"
+            :unified-tree-loaded="unifiedTreeLoaded"
+            :unified-tree-error="unifiedTreeError"
+            :unified-tree-filter-kinds="unifiedTreeFilterKinds"
+            :unified-tree-search="unifiedTreeSearch"
+            :runtime-pins="runtimePins ?? undefined"
             :tree-nodes="treeNodes"
             :expanded-tree-paths="expandedTreePaths"
             :selected-tree-path="selectedTreePath"
@@ -90,6 +139,14 @@
             @change-tab="setSidePanelTab"
             @select-session="handleSidePanelSessionSelect"
             @toggle-expand="toggleSessionTreeExpand"
+            @toggle-key="handleUnifiedToggleKey"
+            @select-key="handleUnifiedSelectKey"
+            @select-qualified="handlePinnedSessionSelect"
+            @retry-source="handleUnifiedRetrySource"
+            @filter-change="handleUnifiedFilterChange"
+            @search="handleUnifiedSearch"
+            @search-more="handleUnifiedSearchMore"
+            @load-more-children="handleUnifiedLoadMoreChildren"
             @pin-project="pinProject"
             @unpin-project="unpinProject"
             @pin-sandbox="pinSandbox"
@@ -115,12 +172,24 @@
         <div class="app-main-column">
           <main ref="outputEl" class="app-output">
             <div class="output-workspace">
+              <p v-if="runtimeConversation.error.value" class="runtime-history-notice" :class="{ 'is-unavailable': runtimeSelectedSessionRef && !runtimeSelectedDirectory }" role="alert">{{ runtimeConversation.error.value }}</p>
+              <button v-if="runtimeConversation.hasMore.value" type="button" class="app-runtime-action" :disabled="runtimeConversation.loading.value" @click="runtimeConversation.loadMore()">{{ t('common.loadMore', 'Load more') }}</button>
               <div class="tool-window-layer">
                 <div class="output-split">
                   <OutputPanel
                     ref="outputPanelRef"
                     :key="selectedSessionId"
                     class="output-panel"
+                    :thread-panel-open="isThreadPanelOpen"
+                    @close-thread-panel="isThreadPanelOpen = false"
+                    @locate-thread-session="locateHostThreadSession"
+                    :thread-draft-text="messageInput"
+                    :thread-handoff-entries="runtimeHandoffEntries"
+                    :thread-native-history="runtimeThreadNativeHistory"
+                    @browse-thread-history="loadThreadNativeHistory"
+                    :thread-available-sessions="runtimeThreadAvailableSessions"
+                    :thread-harness-labels="runtimeThreadHarnessLabels"
+                    @open-team-dispatch="openCollaborationPanel"
                     :project-name="currentProjectName"
                     :project-color="currentProjectColor"
                     :current-session-id="selectedSessionId"
@@ -171,15 +240,22 @@
           <footer
             ref="inputEl"
             class="app-input"
-            :class="{ 'is-disabled': !hasSession }"
             :style="inputHeight !== null ? { height: `${inputHeight}px` } : undefined"
           >
             <div class="input-resizer" @pointerdown="startInputResize"></div>
+            <p v-if="runtimeActionClient && runtimeSelectedArchived" class="runtime-history-notice is-unavailable" role="status">{{ t('runtime.sessionArchived') }}</p>
+            <div v-if="runtimeDraftFailure" class="runtime-draft-recovery" data-runtime-ui role="alert">
+              <span>{{ runtimeDraftFailureMessage }}</span>
+              <button type="button" class="action-button" :disabled="runtimeDraftRetrying" @click="retryQualifiedDraftStorage">{{ t('runtime.draftRecovery.retry') }}</button>
+            </div>
+            <p v-if="!hasSession" class="runtime-empty-composer" role="status">{{ t('runtime.session.selectPrompt') }}</p>
+            <RuntimeDraftEditor ref="runtimeDraftEditorRef" v-else-if="segmentedComposerDraft && qualifiedComposerDrafts" :key="segmentedComposerDraft.context" :context="segmentedComposerDraft.context" :header="segmentedComposerDraft.header" :storage="qualifiedComposerDrafts" @saved="segmentedComposerDraft = { ...segmentedComposerDraft, header: $event }" />
             <InputPanel
+              v-else
               ref="inputPanelRef"
               :codex-commands-enabled="activeBackendKind === 'codex'"
               :read-only="migrationStoragePaused"
-              :disabled="migrationStoragePaused || connectionState !== 'ready' || (!!dshComposerClient && isSending)"
+              :disabled="migrationStoragePaused || runtimeSelectionLoading || (!!runtimeActionClient && runtimeComposerReadyKey !== draftKeyForSelectedContext()) || connectionState !== 'ready' || (!!dshComposerPermissionClient && isSending)"
               :current-session-id="selectedSessionId"
               :session-parent-by-id="sessionParentById"
               :can-send="canSend"
@@ -188,20 +264,21 @@
                   ? codexAgentOptions
                   : activeBackendKind === 'kimi-web'
                     ? kimiWebAgentOptions
-                    : dshComposerClient ? dshPermissionControls.agentOptions.value : agentOptions
+                    : dshComposerPermissionClient ? dshPermissionControls.agentOptions.value : agentOptions
               "
               :subagent-options="activeBackendKind === 'dsh' ? [] : subagentOptions"
               :mention-agent-options="activeBackendKind === 'dsh' ? [] : undefined"
               :mention-files="composerMentionFiles"
               :mention-directories="composerMentionDirectories"
               :prefer-file-mentions="activeBackendKind === 'dsh' || activeBackendKind === 'acp' || activeBackendKind === 'kimi-web' || activeBackendKind === 'codex'"
-              :has-agent-options="dshComposerClient ? dshPermissionControls.agentOptions.value.length > 0 : hasAgentOptions"
-              :agent-picker-state="dshComposerClient ? (dshPermissionControls.loading.value ? 'loading' : dshPermissionControls.agentOptions.value.length ? 'ready' : 'unsupported') : agentPickerState"
-              :agent-picker-disabled="dshComposerClient ? dshPermissionControls.disabled.value : false"
-              :agent-picker-title="dshComposerClient ? t('inputPanel.permissionModeTitle') : undefined"
-              :hide-thinking-picker="activeBackendKind === 'dsh' && !hasThinkingOptions"
-              :agent-color="dshComposerClient ? dshPermissionColor(dshPermissionControls.selected.value) : currentAgentColor"
-              :resolve-agent-color="dshComposerClient ? dshPermissionColor : resolveAgentColorForName"
+              :has-agent-options="dshComposerPermissionClient ? dshPermissionControls.agentOptions.value.length > 0 : hasAgentOptions"
+              :agent-picker-state="dshComposerPermissionClient ? (dshPermissionControls.loading.value ? 'loading' : dshPermissionControls.agentOptions.value.length ? 'ready' : 'unsupported') : agentPickerState"
+              :agent-picker-disabled="dshComposerPermissionClient ? dshPermissionControls.disabled.value : false"
+              :agent-picker-title="dshComposerPermissionClient ? t('inputPanel.permissionModeTitle') : undefined"
+              :hide-thinking-picker="!providersLoading && !hasThinkingOptions"
+              :model-options-loading="providersLoading"
+              :agent-color="dshComposerPermissionClient ? dshPermissionColor(dshPermissionControls.selected.value) : currentAgentColor"
+              :resolve-agent-color="dshComposerPermissionClient ? dshPermissionColor : resolveAgentColorForName"
               :model-options="availableModelOptions"
               :thinking-options="thinkingOptions"
               :has-model-options="hasModelOptions"
@@ -216,7 +293,7 @@
               :active-directory="activeDirectory"
               :active-file="selectedTreePath"
               :message-input="messageInput"
-              :selected-mode="dshComposerClient ? dshPermissionControls.selected.value : selectedMode"
+              :selected-mode="dshComposerPermissionClient ? dshPermissionControls.selected.value : selectedMode"
               :selected-permission-mode="selectedAcpPermissionMode"
               :permission-mode-options="activeBackendKind === 'acp' ? acpPermissionModeOptions : []"
               :acp-permission-controls="activeBackendKind === 'acp'"
@@ -225,7 +302,7 @@
               :selected-model="selectedModel"
               :selected-thinking="selectedThinking"
               @update:message-input="handleMessageInputUpdate"
-              @update:selected-mode="dshComposerClient ? dshPermissionControls.select($event) : handleSelectedModeUpdate($event)"
+              @update:selected-mode="dshComposerPermissionClient ? dshPermissionControls.select($event) : handleSelectedModeUpdate($event)"
               @update:selected-permission-mode="handleSelectedPermissionModeUpdate"
               @toggle-plan="handleAcpPlanToggle"
               @update:selected-model="handleSelectedModelUpdate"
@@ -240,7 +317,7 @@
               @status-error="setSendStatusErrorText"
             >
               <template #after-agent>
-                <DshComposerMode v-if="dshComposerClient" :current="selectedMode" :options="agentOptions" :disabled="dshPresetDisabled" :locked="dshPresetLocked" @select="handleSelectedModeUpdate" />
+                <DshComposerMode v-if="dshComposerPermissionClient" :current="selectedMode" :options="agentOptions" :disabled="dshPresetDisabled" :locked="dshPresetLocked" @select="handleSelectedModeUpdate" />
                 <KimiWebComposerModes
                   v-if="activeBackendKind === 'kimi-web'"
                   v-bind="kimiWebSelectedModeState"
@@ -273,7 +350,7 @@
                   />
                 </template>
                 <template v-else-if="activeBackendKind === 'dsh'">
-                  <DshComposerActions v-if="dshComposerClient" :client="dshComposerClient" :rpc="dshSettingsRpcClient" :session-id="selectedSessionId" :preset-id="dshCurrentPreset" :disabled="connectionState !== 'ready'" />
+                  <DshComposerActions v-if="dshComposerManagementClient" :client="dshComposerManagementClient" :rpc="dshSettingsRpcClient" :session-id="selectedSessionId" :preset-id="dshCurrentPreset" :disabled="connectionState !== 'ready'" />
                   <DshComposerPlanGoal :control="dshPlanGoal" @open="openDshThreadGoal" />
                 </template>
               </template>
@@ -317,9 +394,9 @@
       </footer>
     </template>
     <div v-else class="app-loading-view" role="status" aria-live="polite">
-      <div class="app-loading-card">
-        <div class="absolute w-0 h-0 -z-10 flex items-center justify-center">
-          <div class="flex fixed flex-col items-center w-96 h-40 translate-x-1/2 -translate-y-1/2">
+      <div class="app-loading-stack">
+        <div class="app-loading-identity">
+          <div class="app-loading-heading">
             <div class="mb-4">
               <svg
                 width="24mm"
@@ -343,188 +420,14 @@
             </div>
           </div>
         </div>
+        <div class="app-loading-card">
         <div v-if="uiInitState === 'login'" class="app-login-form">
-          <p class="app-loading-title">{{ loginTitle }}</p>
-          <div class="app-login-backends" role="group" :aria-label="t('app.login.backendLabel')">
-            <button
-              type="button"
-              class="app-login-backend"
-              :class="{ active: loginBackendKind === 'opencode' }"
-              :aria-pressed="loginBackendKind === 'opencode'"
-              @click="loginBackendKind = 'opencode'"
-            >
-              {{ t('app.login.openCodeBackend') }}
-            </button>
-            <button
-              type="button"
-              class="app-login-backend"
-              :class="{ active: loginBackendKind === 'codex' }"
-              :aria-pressed="loginBackendKind === 'codex'"
-              @click="loginBackendKind = 'codex'"
-            >
-              {{ t('app.login.codexBackend') }}
-            </button>
-            <button
-              type="button"
-              class="app-login-backend"
-              :class="{ active: loginBackendKind === 'acp' }"
-              :aria-pressed="loginBackendKind === 'acp'"
-              @click="loginBackendKind = 'acp'"
-            >
-              {{ t('app.login.acpBackend') }}
-            </button>
-            <button
-              type="button"
-              class="app-login-backend"
-              :class="{ active: loginBackendKind === 'kimi-web' }"
-              :aria-pressed="loginBackendKind === 'kimi-web'"
-              @click="loginBackendKind = 'kimi-web'"
-            >
-              {{ t('app.login.kimiWebBackend') }}
-            </button>
-            <button
-              type="button"
-              class="app-login-backend"
-              :class="{ active: loginBackendKind === 'dsh' }"
-              :aria-pressed="loginBackendKind === 'dsh'"
-              @click="loginBackendKind = 'dsh'"
-            >
-              {{ t('app.login.dshBackend') }}
-            </button>
-          </div>
-          <div class="app-login-fields">
-            <template v-if="loginBackendKind === 'opencode'">
-              <input
-                v-model="loginUsername"
-                type="text"
-                class="app-login-input"
-                :placeholder="t('app.login.username')"
-                name="username"
-                :disabled="!loginRequiresAuth"
-                @keydown.enter="handleLogin"
-              />
-              <input
-                v-model="loginPassword"
-                type="password"
-                class="app-login-input"
-                :placeholder="t('app.login.password')"
-                :disabled="!loginRequiresAuth"
-                @keydown.enter="handleLogin"
-              />
-              <label class="app-login-checkbox">
-                <input v-model="loginRequiresAuth" type="checkbox" />
-                {{ t('app.login.authRequired') }}
-              </label>
-              <input
-                v-model="loginUrl"
-                type="text"
-                class="app-login-input"
-                :placeholder="$t('app.login.url')"
-                name="url"
-                @keydown.enter="handleLogin"
-              />
-            </template>
-            <template v-else-if="loginBackendKind === 'codex'">
-              <input
-                v-model="loginCodexBridgeUrl"
-                type="text"
-                class="app-login-input"
-                :placeholder="t('app.login.codexBridgeUrl')"
-                name="codexBridgeUrl"
-                @keydown.enter="handleLogin"
-              />
-              <input
-                v-model="loginCodexBridgeToken"
-                type="password"
-                class="app-login-input"
-                :placeholder="t('app.login.codexBridgeToken')"
-                name="codexBridgeToken"
-                @keydown.enter="handleLogin"
-              />
-              <p class="app-login-hint">{{ t('app.login.codexBridgeHint') }}</p>
-            </template>
-            <template v-else-if="loginBackendKind === 'kimi-web'">
-              <input
-                v-model="loginKimiWebBridgeUrl"
-                type="text"
-                class="app-login-input"
-                :placeholder="t('app.login.kimiWebBridgeUrl')"
-                name="kimiWebBridgeUrl"
-                @keydown.enter="handleLogin"
-              />
-              <input
-                v-model="loginKimiWebBridgeToken"
-                type="password"
-                class="app-login-input"
-                :placeholder="t('app.login.kimiWebBridgeToken')"
-                name="kimiWebBridgeToken"
-                @keydown.enter="handleLogin"
-              />
-              <p class="app-login-hint">{{ t('app.login.kimiWebBridgeHint') }}</p>
-            </template>
-            <template v-else-if="loginBackendKind === 'dsh'">
-              <input
-                v-model="loginDshBridgeUrl"
-                type="text"
-                class="app-login-input"
-                :placeholder="t('app.login.dshBridgeUrl')"
-                name="dshBridgeUrl"
-                @keydown.enter="handleLogin"
-              />
-              <input
-                v-model="loginDshBridgeToken"
-                type="password"
-                class="app-login-input"
-                :placeholder="t('app.login.dshBridgeToken')"
-                name="dshBridgeToken"
-                @keydown.enter="handleLogin"
-              />
-              <p class="app-login-hint">{{ t('app.login.dshBridgeHint') }}</p>
-            </template>
-            <template v-else>
-              <input
-                v-model="loginAcpBridgeUrl"
-                type="text"
-                class="app-login-input"
-                :placeholder="t('app.login.acpBridgeUrl')"
-                name="acpBridgeUrl"
-                @keydown.enter="handleLogin"
-              />
-              <input
-                v-model="loginAcpBridgeToken"
-                type="password"
-                class="app-login-input"
-                :placeholder="t('app.login.acpBridgeToken')"
-                name="acpBridgeToken"
-                @keydown.enter="handleLogin"
-              />
-              <Dropdown
-                :model-value="loginAcpAgentId || undefined"
-                class="app-login-select"
-                :placeholder="t('app.login.acpAgentId')"
-                auto-close
-                @update:model-value="loginAcpAgentId = $event ?? ''"
-              >
-                <template #value="{ value }">{{ loginAcpAgentLabel(value) }}</template>
-                <DropdownItem
-                  v-for="agent in loginAcpAgentOptions"
-                  :key="agent.id"
-                  :value="agent.id"
-                >
-                  {{ agent.name }} ({{ agent.id }})
-                </DropdownItem>
-              </Dropdown>
-              <p class="app-login-hint">{{ t('app.login.acpBridgeHint') }}</p>
-            </template>
-          </div>
-          <p v-if="initErrorMessage" class="app-loading-message app-error-message">
-            {{ initErrorMessage }}
-          </p>
-          <button type="button" class="app-loading-retry app-loading-connect" @click="handleLogin">
-            {{ t('app.login.connect') }}
-          </button>
-
-          <Welcome :theme="shikiTheme" class="mt-8" />
+          <BridgeLogin
+            v-model:url="bridgeLoginUrl"
+            v-model:token="bridgeLoginToken"
+            :error="initErrorMessage"
+            @connect="handleLogin"
+          />
         </div>
         <div v-else>
           <div class="app-loading-spinner" aria-hidden="true"></div>
@@ -537,7 +440,7 @@
               v-if="uiInitState === 'error'"
               type="button"
               class="app-loading-retry"
-              @click="startInitialization"
+              @click="handleLogin"
             >
               {{ t('app.login.retry') }}
             </button>
@@ -551,13 +454,120 @@
             </button>
           </div>
         </div>
+        </div>
       </div>
     </div>
+    <ConnectionManager
+      :open="isConnectionEntryOpen"
+      :client="managedRemote.client"
+      :management-target="managementEnvironmentId ?? bridgeReference?.expectedEnvironmentId ?? ''"
+      :can-return-to-initial-manager="Boolean(managementEnvironmentId && managementEnvironmentId !== bridgeReference?.expectedEnvironmentId)"
+      @return-to-initial-manager="returnToInitialManager"
+      :profiles="managedRemote.profiles.value"
+      :selected-profile-id="managedRemote.selectedProfileId.value"
+      :identity="managedRemote.identity.value"
+      :status="managedRemote.status.value"
+      :slurm="managedRemote.slurm.value"
+      :challenge="managedRemote.challenge.value"
+      :preview="managedRemote.preview.value"
+      :capability-entry="managedRemote.capabilityEntry.value"
+      :managed-transport="managedRemote.managedTransport.value"
+      :busy="managedRemote.busy.value"
+      :error="managedRemote.error.value"
+      @close="closeConnectionManager"
+      @select="managedRemote.select"
+      @connect="managedRemote.connect"
+      @reconnect="managedRemote.reconnect"
+      @cancel="managedRemote.disconnect"
+      @detach="managedRemote.intentAction('detach')"
+      @stop="managedRemote.intentAction('stop')"
+      @challenge-answer="managedRemote.respond"
+      @save-ssh="managedRemote.saveProfile"
+      @set-enabled="managedRemote.setEnabled"
+      @submit-slurm="managedRemote.submitSlurm"
+      @preview-request="input => managedRemote.previewSlurm(input.resources)"
+    />
+    <MigrationWizard
+      :open="isMigrationWizardOpen"
+      :inventory="migrationWizardInventory"
+      :status="migrationWizardStatus"
+      :backup="migrationWizardBackup"
+      :result="migrationWizardResult ?? undefined"
+      :error="migrationWizardError"
+      :retained="migrationWizardStatus === 'failed'"
+      @close="isMigrationWizardOpen = false"
+      :bound-source-keys="migrationBoundSourceKeys"
+      :has-more="migrationInventoryNext !== null"
+      :binding-target-label="migrationBindingTargetLabel"
+      @next-page="loadMigrationInventory(true)"
+      @first-page="loadMigrationInventory(false)"
+      @bind="handleMigrationBind"
+      @start="handleMigrationStart"
+      @retry="handleMigrationRetry"
+    />
     <ProjectPicker
       :open="isProjectPickerOpen"
       :home-path="projectPickerHomePath"
+      :backend-kind="activeBackendKind"
       @close="isProjectPickerOpen = false"
       @select="handleProjectDirectorySelect"
+    />
+    <dialog ref="harnessSettingsDialog" class="runtime-settings-dialog" data-runtime-ui aria-labelledby="runtime-settings-title" @cancel.prevent="isHarnessSettingsOpen = false" @close="isHarnessSettingsOpen = false">
+      <header>
+        <h2 id="runtime-settings-title">{{ t('app.runtimeBridgeMenu.agentSettings') }}</h2>
+        <button type="button" class="action-button" @click="isHarnessSettingsOpen = false">{{ t('floatingWindow.close') }}</button>
+      </header>
+      <AgentInstanceSelector :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
+      <HarnessSettings v-if="harnessInstanceScope" :harness-kind="harnessSettingsKind" :manifests="harnessManifests" :scope="harnessInstanceScope" :controls="harnessSettingsControls" :action-labels="harnessSettingsActions" @save="handleHarnessSettingsSave" />
+    </dialog>
+    <CollaborationPanel
+      v-if="isCollaborationPanelOpen"
+      :open="isCollaborationPanelOpen"
+      :thread-id="runtimeCollaborationState.threadId.value"
+      :team="runtimeCollaborationState.team.value"
+      :available-members="collaborationAvailableMembers"
+      :tasks="runtimeCollaborationState.tasks.value"
+      :selected-task-id="runtimeCollaborationState.selectedTaskId.value"
+      :selected-task="runtimeCollaborationState.selectedTask.value"
+      :attempts="runtimeCollaborationState.attempts.value"
+      :budgets="runtimeCollaborationState.budgets.value"
+      :fanout="runtimeCollaborationState.fanout.value"
+      :fanouts="runtimeCollaborationState.fanouts.value"
+      :fanout-page="runtimeCollaborationState.fanoutPage.value"
+      :fanout-action="runtimeCollaborationState.handleFanoutAction"
+      :writer="runtimeCollaborationState.writer.value"
+      :artifact-status="runtimeCollaborationState.artifactStatus.value"
+      :artifact-workflow="runtimeCollaborationState.artifacts.presentation.value"
+      :member-page="runtimeCollaborationState.memberPage.value"
+      :task-page="runtimeCollaborationState.taskPage.value"
+      :attempt-page="runtimeCollaborationState.attemptPage.value"
+      :busy="runtimeCollaborationState.busy.value"
+      :error="runtimeCollaborationState.error.value"
+      @close="isCollaborationPanelOpen = false"
+      @select-task="runtimeCollaborationState.selectTask"
+      @add-member="runtimeCollaborationState.addMember"
+      @create-task="runtimeCollaborationState.createTask"
+      @fan-out="(input) => runtimeCollaborationState.fanOut(input.prompt, input.targets)"
+      @dispatch="(taskId) => runtimeCollaborationState.dispatchTask(taskId)"
+      @send="(taskId) => runtimeCollaborationState.sendTask(taskId)"
+      @finish="(input) => runtimeCollaborationState.finishTask(input.taskId, input.nativeEventId)"
+      @register-deliverable="(input) => runtimeCollaborationState.registerDeliverable(input.taskId, input.deliverable)"
+      @submit-review="(input) => runtimeCollaborationState.submitForReview(input.taskId, input.reviewer)"
+      @review="(input) => runtimeCollaborationState.reviewTask(input.taskId, input.decision, input.reviewer)"
+      @accept="(input) => runtimeCollaborationState.acceptTask(input.taskId, input)"
+      @reject="(input) => runtimeCollaborationState.rejectTask(input.taskId, input.reason)"
+      @cancel="(input) => runtimeCollaborationState.cancelTask(input.taskId, input.reason)"
+      @allocate-writer="(input) => runtimeCollaborationState.allocateWriter(input.taskId, input.repository)"
+      @writer-recovery="runtimeCollaborationState.recoverWriter($event)"
+      @member-page="runtimeCollaborationState.loadMemberPage($event)"
+      @fanout-page="runtimeCollaborationState.loadFanoutPage($event)"
+      @select-fanout="runtimeCollaborationState.selectFanout($event)"
+      @task-page="runtimeCollaborationState.loadTaskPage($event)"
+      @attempt-page="runtimeCollaborationState.loadAttemptPage($event)"
+      @capture-deliverable="runtimeCollaborationState.captureDeliverable"
+      @artifact-action="runtimeCollaborationState.artifacts.handleAction"
+      @apply-artifact="runtimeCollaborationState.applyArtifact"
+      @approve="(input) => runtimeCollaborationState.approveReview(input.taskId, input.reviewerId)"
     />
     <SettingsModal
       :open="isSettingsOpen"
@@ -568,36 +578,53 @@
     />
     <ProviderManagerModal
       :open="isProviderManagerOpen"
-      :providers="providers"
-      :connected-provider-ids="connectedProviderIds"
-      :selected-model="selectedModel"
+      :providers="managementProviders"
+      :connected-provider-ids="managementConnectedProviders"
+      :selected-model="''"
       :hidden-models="hiddenModels"
-      :provider-config="providerConfig"
-      :backend-kind="activeBackendKind"
-      :dsh-rpc-client="dshSettingsRpcClient"
+      :provider-config="managementProviderConfig"
+      :backend-kind="managementManifest?.kind ?? activeBackendKind"
+      :native-adapter="managementNativeAdapter ?? undefined"
+      :native-kimi-providers-client="managementKimiProviders ?? undefined"
+      :dsh-rpc-client="managementDshRpcClient"
+      :harness-scope="harnessInstanceScope ?? undefined"
+      :harness-manifests="harnessManifests"
       @close="isProviderManagerOpen = false"
       @update:model-visibility="handleModelVisibilityUpdate"
-      @config-updated="handleProviderConfigUpdated"
-      @providers-changed="handleProvidersChanged"
+      @config-updated="managementProviderConfig = $event"
+      @providers-changed="refreshManagementProviders"
       @open-acp-auth-terminal="openAcpAuthTerminal"
-    />
+    >
+      <template #agent-selector>
+        <AgentInstanceSelector v-if="harnessManifests.length" :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
+      </template>
+    </ProviderManagerModal>
     <StatusMonitorModal
       :open="isStatusMonitorOpen"
       :initial-tab="statusMonitorTab"
       :initial-usage-view="statusMonitorUsageView"
       :preload="connectionState === 'ready'"
-      :session-id="selectedSessionId"
-      :codex-api="codexApi"
-      :active-backend-kind="activeBackendKind"
+      :session-id="''"
+      :codex-api="managementCodexApi"
+      :active-backend-kind="managementManifest?.kind ?? activeBackendKind"
+      :native-adapter="managementNativeAdapter ?? undefined"
       :magic-context-workers="magicContextWorkers"
       :kimi-web-bridge="kimiWebMessageBridge"
-      :dsh-status="dshStatusSnapshot"
+      :dsh-status="runtimeActionClient ? managementDshStatus : dshStatusSnapshot"
+      :harness-scope="harnessInstanceScope ?? undefined"
+      :harness-manifests="harnessManifests"
       @close="isStatusMonitorOpen = false"
-    />
+      @refresh="managementDshStatusRefresh++"
+    >
+      <template #agent-selector>
+        <AgentInstanceSelector v-if="harnessManifests.length" :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
+      </template>
+    </StatusMonitorModal>
     <ProjectSettingsDialog
       :open="!!editingProject"
       :project-id="editingProject?.projectId ?? ''"
       :worktree="editingProject?.worktree ?? ''"
+      :backend-kind="activeBackendKind"
       :name="editingProjectMeta?.name"
       :icon-color="editingProjectMeta?.icon?.color"
       :icon-override="editingProjectMeta?.icon?.override"
@@ -671,7 +698,7 @@
 </template>
 
 <script lang="ts" setup>
-import { assertLegacyEditAdmission, legacyEditingPaused, onLegacyWriterPhase, retainFrozenLegacyWrite } from './runtime/migration/writerFreeze';
+import { assertLegacyEditAdmission, legacyEditingPaused, onLegacyWriterPhase, restoreLegacyCutover, retainFrozenLegacyWrite } from './runtime/migration/writerFreeze';
 import {
   computed,
   defineAsyncComponent,
@@ -679,6 +706,8 @@ import {
   nextTick,
   onBeforeUnmount,
   onMounted,
+  onScopeDispose,
+  provide,
   reactive,
   ref,
   shallowRef,
@@ -691,8 +720,6 @@ import { codexModeColor, codexModeOptions } from './utils/codexModePresentation'
 import { isLightResolvedColor } from './utils/resolvedColor';
 import { formatProviderModelPath, preferredProviderModel, restoredReasoningEffort } from './utils/providerSelection';
 import InputPanel from './components/InputPanel.vue';
-import Dropdown from './components/Dropdown.vue';
-import DropdownItem from './components/Dropdown/Item.vue';
 import OutputPanel from './components/OutputPanel.vue';
 import ProjectPicker from './components/ProjectPicker.vue';
 import FloatingWindow from './components/FloatingWindow.vue';
@@ -703,7 +730,6 @@ import ThreadHistoryContent from './components/ThreadHistoryContent.vue';
 import SubagentContent from './components/ToolWindow/Subagent.vue';
 import WebContent from './components/ToolWindow/Web.vue';
 import SidePanel from './components/SidePanel.vue';
-import Welcome from './components/Welcome.vue';
 import TopPanel, { type TopPanelCodexSubpanel } from './components/TopPanel.vue';
 import ProviderManagerModal from './components/ProviderManagerModal.vue';
 import SettingsModal from './components/SettingsModal.vue';
@@ -765,6 +791,86 @@ import { useAcpTerminalAction } from './composables/useAcpTerminalAction';
 import { useFileTree, type FileNode } from './composables/useFileTree';
 import { useForgeAuxiliary } from './composables/useForgeAuxiliary';
 import { usePtyOneshot } from './composables/usePtyOneshot';
+import { decideWorkspaceCapability } from './composables/useWorkspaceCapability';
+import { type RuntimeClient } from './runtime/client';
+import type { RuntimeActionClient } from './composables/useRuntimeSessionActions';
+import { useRuntimeConversation } from './composables/useRuntimeConversation';
+import { useRuntimeConnection } from './composables/useRuntimeConnection';
+import { createNativeFacade } from './runtime/nativeFacade';
+import { createNativeCodexAdapter } from './runtime/nativeCodexAdapter';
+import { CodexAdapter } from './backends/codex/codexAdapter';
+import { createNativeBackendAdapter } from './runtime/nativeBackendAdapter';
+import { createWorkspacePty, type PtySocket, type WorkspacePty } from './runtime/workspacePty';
+import { createWorkspaceFiles } from './runtime/workspaceFiles';
+import { capturedBackend } from './runtime/capturedBackend';
+import { createNativeKimiProviders, createNativeKimiSessionClient } from './runtime/nativeKimiClient';
+import { createRuntimeTurnProjection } from './runtime/turnProjection';
+import { createNativeDshRpc } from './runtime/nativeDshRpc';
+import BridgeLogin from './components/runtime-shell/BridgeLogin.vue';
+import AgentInstanceSelector from './components/runtime-shell/AgentInstanceSelector.vue';
+import type { PublicConnectionReference } from '../shared/runtime/runtimeWire.js';
+import { parseSessionRef, encodeSessionKey, decodeSessionKey, decodeRepoKey, decodeWorkspaceKey } from '../shared/runtime/identity.js';
+import type { EnvironmentId, HarnessInstanceId, SessionRef } from '../shared/runtime/identity.js';
+import { managementCandidate } from './runtime/connectionProfile';
+import {
+  useRuntimeSessionTree,
+  type HarnessEntry,
+  type SessionHarness,
+  type UnifiedFlatRow,
+  type UnifiedSearchState,
+  type UnifiedSessionTree,
+} from './composables/useRuntimeSessionTree';
+import { createHostClient } from './runtime/hostClient';
+import { createHostThreadState } from './composables/useHostThread';
+import { createHostCollaborationState } from './composables/useHostCollaboration';
+import {
+  RUNTIME_COLLABORATION_STATE_KEY,
+} from './composables/useRuntimeCollaboration';
+import {
+  RUNTIME_THREAD_STATE_KEY,
+} from './composables/useRuntimeThread';
+import {
+  RUNTIME_SESSION_ACTIONS_KEY,
+  useRuntimeSessionActions,
+  type RuntimeSessionRuntime,
+  type RuntimeSendInput,
+  type RuntimeActionBinding,
+} from './composables/useRuntimeSessionActions';
+import { HARNESS_CONTROLS } from './composables/useRuntimeCapabilities';
+
+import type { HarnessKind, HarnessManifest } from '../shared/runtime/harnessContract.js';
+import { hostSessionSelection } from './runtime/hostThreadViews';
+import type { SelectionCapture, QualifiedSession } from './runtime/selectionScope';
+import { createRuntimePins } from './composables/useRuntimePins';
+import { useRuntimeMessageSend } from './composables/useRuntimeMessageSend';
+import { useRuntimeInteractions } from './composables/useRuntimeInteractions';
+import { createInteractionProjection } from './runtime/interactionProjection';
+import type { NativeInteractionView } from './runtime/nativeInteractions';
+import { useRuntimeCapabilities, type ControlScope } from './composables/useRuntimeCapabilities';
+import type { ProvenMapping } from './runtime/migration/legacyBinding';
+import { createImportCoordinator } from './runtime/migration/importCoordinator';
+import { createBrowserLegacySource } from './runtime/migration/legacyBrowserSource';
+import { createBrowserLegacySourcePort } from './runtime/migration/browserSourcePort';
+import { createClientLegacySourcePort } from './runtime/migration/clientLegacySourcePort';
+import { createDraftStoreOwner } from './runtime/draftStoreOwner';
+import { createBridgeImportService } from './runtime/migration/bridgeImportService';
+import { readBrowserInventory } from './runtime/migration/browserInventory';
+import type { BrowserInventoryEntry } from './runtime/migration/browserInventory';
+import type { LegacyExportToken } from './runtime/migration/legacyExport';
+import { DraftStore, type DraftHeader } from './runtime/draftStore';
+import RuntimeDraftEditor from './components/runtime-shell/RuntimeDraftEditor.vue';
+import { persistPendingLegacyWrite } from './runtime/migration/draftImport';
+import { createQualifiedComposerDrafts } from './runtime/qualifiedComposerDrafts';
+import { createThreadComposerContext, composerBodyKey, composerPreferenceKey } from './runtime/threadComposerContext';
+import type { ComposerTransition, ComposerReady, ThreadBodyIdentity } from './runtime/threadComposerContext';
+import type { ComposerPreferences } from './runtime/composerPreferences';
+import ConnectionManager from './components/runtime/ConnectionManager.vue';
+import { createManagedRemoteState } from './composables/useManagedRemote';
+import HarnessSettings from './components/runtime/HarnessSettings.vue';
+import MigrationWizard, { type MigrationInventory } from './components/runtime/MigrationWizard.vue';
+// The collaboration surface is its own async chunk, so the entry chunk keeps its
+// size while the Team UI stays reachable from the running app.
+const CollaborationPanel = defineAsyncComponent(() => import('./components/runtime/CollaborationPanel.vue'));
 import { useFloatingWindows, type FloatingWindowEntry } from './composables/useFloatingWindows';
 import { usePermissions, type PermissionReply, type PermissionRequest } from './composables/usePermissions';
 import { useQuestions } from './composables/useQuestions';
@@ -775,6 +881,7 @@ import { codexPlansToTodoSessions } from './utils/codexPlanTodos';
 import { createCodexSubpanelProps } from './utils/codexSubpanelProps';
 import { defaultComposerMode } from './utils/defaultComposerMode';
 import { useBackendSessionTrees } from './composables/useBackendSessionTrees';
+import type { SessionTreeData } from './types/session-tree';
 import { useBackendSessionActions } from './composables/useBackendSessionActions';
 import {
   createDynamicBackendAbortSession,
@@ -832,7 +939,6 @@ import type { WorkerToTabMessage } from './types/sse-worker';
 import type { TopPanelNotificationSession } from './types/top-panel';
 import type { ProjectState, SandboxState, SessionState } from './types/worker-state';
 import type { Terminal } from '@xterm/xterm';
-import { DEFAULT_OPENCODE_URL } from './utils/constants';
 import { resolveRestoredPtyKind } from './utils/forgePty';
 import {
   isSamePinnedSessionStore,
@@ -876,9 +982,7 @@ import {
   configureDshBackend,
   disconnectDshBackend as disconnectDshBackendAdapter,
   configureOpenCodeBackend,
-  getActiveBackendAdapter,
   getBackendAdapter,
-  setActiveBackendKind,
 } from './backends/registry';
 import { AcpAdapter } from './backends/acp/acpAdapter';
 import {
@@ -951,6 +1055,7 @@ import { resolveDshForkBoundary } from './backends/dsh/forkBoundary';
 import {
   isKimiWebPermissionMode,
   isTowerExperimentEnabled,
+  serializeKimiWebSessionModeChange,
   type KimiWebPermissionMode,
   type KimiWebSessionModeChange,
 } from './backends/kimiWeb/sessionModes';
@@ -1287,7 +1392,7 @@ type PtyInfo = {
 type ShellSession = {
   pty: PtyInfo;
   terminal: Terminal;
-  socket?: WebSocket;
+  socket?: PtySocket;
   exiting?: boolean;
   closeOnSuccess?: boolean;
   exitCode?: number;
@@ -1906,6 +2011,7 @@ const composerDraftTabId =
     ? crypto.randomUUID()
     : `tab-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const shellSessionsByPtyId = new Map<string, ShellSession>();
+const runtimePtyOwners = new Map<string, WorkspacePty>();
 const pendingShellWindowCreates = createPendingPtyCreateRegistry<void>();
 const pendingShellFits = new Set<string>();
 const shellExitWaiters = new Map<string, (exitCode: number) => void>();
@@ -1990,12 +2096,22 @@ const providersFetchCount = ref(0);
 const agentsLoading = ref(false);
 const commandsLoading = ref(false);
 const serverState = useServerState();
-const openCodeApi = useOpenCodeApi(serverState.projects, t);
+// The per-connection active backend kind. It is the single source of truth for
+// which adapter a runtime action resolves through (`getBackendAdapter(kind)`):
+// the retired module-global routing never sees a production write again.
+const activeBackendKind = ref<BackendKind>('opencode');
+const runtimeActionClient = shallowRef<RuntimeClient | null>(null);
+const runtimeTurns = createRuntimeTurnProjection();
+const runtimeIndexAvailable = ref(false);
+const runtimeNativePreferenceScope = ref('');
+const openCodeApi = useOpenCodeApi(serverState.projects, t, activeBackendKind);
 const codexApi = useCodexApi({
   onTaskCompleted: ({ sessionId, completionId }) => {
     if (activeBackendKind.value === 'codex') showBrowserNotification(CODEX_PROJECT_ID, sessionId, 'idle', completionId);
   },
 });
+const managementCodexApi = useCodexApi();
+const runtimeCodexAdapter = shallowRef<ReturnType<typeof createNativeCodexAdapter> | null>(null);
 const codexWorkspace = useCodexWorkspace(codexApi, { pinnedStore: localPinnedSessionStore });
 const bootstrapReady = serverState.bootstrapped;
 
@@ -2062,11 +2178,18 @@ const {
   selectedProjectId,
   selectedSessionId,
   projectDirectory,
-  activeDirectory,
+  activeDirectory: legacyActiveDirectory,
   switchSession: switchSessionSelectionInternal,
   ensureDirectorySession,
   initialize: initializeSessionSelection,
 } = sessionSelection;
+const runtimeSelectedDirectory = ref<string | null>(null);
+const runtimeSelectedPresentation = shallowRef<{ key: string; title: string; status: string | null; directory: string | null; archived?: boolean } | null>(null);
+const runtimeSelectionLoading = ref(false);
+const runtimeComposerReadyKey = ref<string | null>(null);
+const runtimeOnline = ref(false);
+let runtimeSelectionGeneration = 0;
+const activeDirectory = computed(() => runtimeSelectedDirectory.value ?? legacyActiveDirectory.value);
 
 const dshSelectionPersistence = createDshSelectionPersistence();
 let dshInitialSelectionConsumed = false;
@@ -2365,7 +2488,6 @@ function handleConfirmClose() {
   queueMicrotask(drainConfirmQueue);
 }
 
-import { provide } from 'vue';
 provide('showPrompt', showPrompt);
 provide('showConfirm', showConfirm);
 
@@ -2396,8 +2518,15 @@ const providerConfig = ref<ProviderConfigState | null>(null);
 const projectError = ref('');
 const worktreeError = ref('');
 const sessionError = ref('');
-const migrationStoragePaused = ref(legacyEditingPaused());
-const stopMigrationPhase = onLegacyWriterPhase(() => { migrationStoragePaused.value = legacyEditingPaused(); });
+const migrationLegacyPaused = ref(legacyEditingPaused());
+const runtimeDraftMode = ref(false);
+const runtimeDraftFailure = ref(false);
+const runtimeDraftConflict = ref(false);
+const runtimeDraftRetrying = ref(false);
+const runtimeDraftFailureMessage = computed(() => runtimeDraftConflict.value ? t('runtime.draftRecovery.conflict') : t('runtime.draftRecovery.failed'));
+const runtimeDraftPending = ref(0);
+const migrationStoragePaused = computed(() => runtimeDraftFailure.value || runtimeDraftPending.value >= 4 || (!runtimeDraftMode.value && migrationLegacyPaused.value));
+const stopMigrationPhase = onLegacyWriterPhase(() => { migrationLegacyPaused.value = legacyEditingPaused(); });
 const messageInput = ref('');
 const attachments = ref<Attachment[]>([]);
 const sendStatus = ref<LocalizedStatusState>({ mode: 'i18n', key: 'app.status.ready' });
@@ -2413,11 +2542,6 @@ const connectionState = ref<'connecting' | 'bootstrapping' | 'ready' | 'reconnec
 );
 const reconnectingMessage = ref('');
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-const loginUrl = ref(DEFAULT_OPENCODE_URL);
-const loginUsername = ref('');
-const loginPassword = ref('');
-const loginRequiresAuth = ref(false);
-const activeBackendKind = ref<BackendKind>('opencode');
 const connectedBridgeHealthUrl = computed(() => {
   if (!desktopApi || uiInitState.value !== 'ready') return '';
   return resolveDesktopBridgeHealthUrl({
@@ -2463,21 +2587,6 @@ const loginAcpAgents = ref<AcpAgentStatus[]>([]);
 let loginAcpAgentsGeneration = 0;
 let loginAcpAgentsTimer: ReturnType<typeof setTimeout> | null = null;
 
-const loginAcpAgentOptions = computed(() => {
-  const enabled = loginAcpAgents.value.filter((agent) => agent.enabled);
-  const current = loginAcpAgentId.value.trim();
-  if (current && !enabled.some((agent) => agent.id === current)) {
-    return [...enabled, { id: current, name: current }];
-  }
-  return enabled;
-});
-
-function loginAcpAgentLabel(value: unknown) {
-  const id = String(value ?? '');
-  const agent = loginAcpAgentOptions.value.find((item) => item.id === id);
-  return agent ? `${agent.name} (${agent.id})` : id;
-}
-
 async function refreshLoginAcpAgents() {
   const generation = ++loginAcpAgentsGeneration;
   const bridgeUrl = loginAcpBridgeUrl.value.trim();
@@ -2514,18 +2623,6 @@ const retryStatus = ref<{
   next: number;
   attempt: number;
 } | null>(null);
-
-const loginTitle = computed(() =>
-  loginBackendKind.value === 'codex'
-    ? t('app.login.codexTitle')
-    : loginBackendKind.value === 'acp'
-      ? t('app.login.acpTitle')
-      : loginBackendKind.value === 'kimi-web'
-        ? t('app.login.kimiWebTitle')
-        : loginBackendKind.value === 'dsh'
-          ? t('app.login.dshTitle')
-          : t('app.login.title'),
-);
 
 function setSendStatusKey(key: string, params?: Record<string, unknown>) {
   sendStatusIsError.value = false;
@@ -2636,7 +2733,7 @@ let acpGitInfoHydrationQueued = false;
 const kimiGitInfoCheckedDirectories = new Set<string>();
 let kimiGitInfoHydrationQueued = false;
 
-const { topPanelTreeData, sessionTreeData, navigableTree } = useBackendSessionTrees({
+const legacySessionTrees = useBackendSessionTrees({
   activeBackendKind,
   projects: serverState.projects,
   pinnedStore: localPinnedSessionStore,
@@ -2647,6 +2744,7 @@ const { topPanelTreeData, sessionTreeData, navigableTree } = useBackendSessionTr
   resolveProjectColor: resolveProjectColorHex,
   codexProjectId: CODEX_PROJECT_ID,
 });
+const { topPanelTreeData, navigableTree } = legacySessionTrees;
 
 const allowedSessionIds = computed(() => {
   const rootId = selectedSessionId.value;
@@ -2677,6 +2775,8 @@ const allowedRequestSessionIds = computed(() => {
   return ids;
 });
 
+const runtimeDialogOwners = new Map<string, { view: NativeInteractionView; capture: NonNullable<ReturnType<typeof runtimeSelectionCapture>>; interactionId: string }>();
+
 const {
   upsertPermissionEntry,
   removePermissionEntry,
@@ -2687,8 +2787,15 @@ const {
   fw,
   allowedSessionIds: allowedRequestSessionIds,
   activeDirectory,
+  activeBackendKind,
   ensureConnectionReady,
   sendReply: async (requestId, reply) => {
+    if (requestId.startsWith('runtime:')) {
+      const owner = runtimeDialogOwners.get(requestId);
+      if (!owner?.capture.isCurrent()) throw new Error('Interaction selection changed.');
+      await completeRuntimeMutation(runtimeInteractions.respond(owner.capture.selection.session, owner.interactionId, owner.view.answerPermission(reply as PermissionReply)));
+      runtimeDialogOwners.delete(requestId); return;
+    }
     if (activeBackendKind.value === 'codex' && requestId.startsWith('codex:')) {
       const request = codexApi.serverRequests.value.find(
         (item) => encodeCodexDialogRequestId(item.id) === requestId,
@@ -2724,7 +2831,7 @@ const {
         return;
       }
     }
-    const replyPermission = getActiveBackendAdapter().replyPermission;
+      const replyPermission = getBackendAdapter(activeBackendKind.value).replyPermission;
     if (!replyPermission) throw new Error('Active backend does not support permission replies.');
     await replyPermission(requestId, {
       directory: activeDirectory.value.trim() || undefined,
@@ -2744,9 +2851,16 @@ const {
   fw,
   allowedSessionIds: allowedRequestSessionIds,
   activeDirectory,
+  activeBackendKind,
   ensureConnectionReady,
   getTextContent: (messageId: string) => msg.getTextContent(messageId) || '',
   sendReply: async (requestId, answers) => {
+    if (requestId.startsWith('runtime:')) {
+      const owner = runtimeDialogOwners.get(requestId);
+      if (!owner?.capture.isCurrent()) throw new Error('Interaction selection changed.');
+      await completeRuntimeMutation(runtimeInteractions.respond(owner.capture.selection.session, owner.interactionId, owner.view.answerQuestion(answers)));
+      runtimeDialogOwners.delete(requestId); return;
+    }
     const toolRequest = codexApi.toolUserInputRequests.value.find(
       (request) => encodeCodexToolQuestionRequestId(request) === requestId,
     );
@@ -2778,7 +2892,7 @@ const {
         return;
       }
     }
-    const replyQuestion = getActiveBackendAdapter().replyQuestion;
+      const replyQuestion = getBackendAdapter(activeBackendKind.value).replyQuestion;
     if (!replyQuestion) throw new Error('Active backend does not support question replies.');
     await replyQuestion(requestId, {
       directory: activeDirectory.value.trim() || undefined,
@@ -2786,6 +2900,12 @@ const {
     });
   },
   sendReject: async (requestId) => {
+    if (requestId.startsWith('runtime:')) {
+      const owner = runtimeDialogOwners.get(requestId);
+      if (!owner?.capture.isCurrent()) throw new Error('Interaction selection changed.');
+      await completeRuntimeMutation(runtimeInteractions.respond(owner.capture.selection.session, owner.interactionId, owner.view.answerQuestion([], true)));
+      runtimeDialogOwners.delete(requestId); return;
+    }
     const toolRequest = codexApi.toolUserInputRequests.value.find(
       (request) => encodeCodexToolQuestionRequestId(request) === requestId,
     );
@@ -2807,7 +2927,7 @@ const {
         return;
       }
     }
-    const rejectQuestion = getActiveBackendAdapter().rejectQuestion;
+      const rejectQuestion = getBackendAdapter(activeBackendKind.value).rejectQuestion;
     if (!rejectQuestion) throw new Error('Active backend does not support question rejection.');
     await rejectQuestion(requestId, activeDirectory.value.trim() || undefined);
   },
@@ -3152,7 +3272,7 @@ const {
   todoErrorBySessionId,
   normalizeTodoItems,
   reloadTodosForAllowedSessions,
-} = useTodos({ selectedSessionId, allowedSessionIds, activeDirectory });
+} = useTodos({ selectedSessionId, allowedSessionIds, activeDirectory, activeBackendKind, backend });
 
 const {
   treeNodes,
@@ -3177,6 +3297,8 @@ const {
 } = useFileTree({
   activeDirectory,
   activeBackendKind,
+  backend,
+  runtimeWorkspace: computed(() => runtimeActionClient.value !== null),
   refreshEnabled: computed(
     () => uiInitState.value === 'ready' && connectionState.value === 'ready',
   ),
@@ -3203,7 +3325,12 @@ const treeDirectoryName = computed(() => {
   return segments.at(-1) ?? '/';
 });
 
-const { runOneShotPtyCommand } = usePtyOneshot({ activeDirectory, translate: t });
+const { runOneShotPtyCommand } = usePtyOneshot({
+  activeDirectory, activeBackendKind, translate: t,
+  runtimeCommand: (command, args) => runtimeActionClient.value
+    ? selectedWorkspacePty(activeDirectory.value).run(command, args, activeDirectory.value)
+    : undefined,
+});
 const forgeAuxiliary = useForgeAuxiliary((command, args) =>
   runOneShotPtyCommand(command, Array.from(args)),
 );
@@ -3327,6 +3454,8 @@ const canSend = computed(() =>
     uiInitState.value === 'ready' &&
     connectionState.value === 'ready' &&
     selectedSessionId.value &&
+    !runtimeSelectionLoading.value &&
+    (!runtimeActionClient.value || (runtimeOnline.value && runtimeComposerCanSend() && runtimeComposerReadyKey.value === draftKeyForSelectedContext())) &&
     !isSending.value &&
     (messageInput.value.trim().length > 0 || (attachments.value.length > 0 && canAttach.value)),
   ),
@@ -3355,7 +3484,7 @@ const visibleBusyDescendantCount = computed(() => {
   return ids.size;
 });
 
-const { isThinking } = useBackendSessionStatus({
+const { isThinking: legacyIsThinking } = useBackendSessionStatus({
   activeBackendKind,
   selectedSessionId,
   busyDescendantCount: visibleBusyDescendantCount,
@@ -3363,12 +3492,23 @@ const { isThinking } = useBackendSessionStatus({
   codexActiveTurnStatus: computed(() => codexApi.activeTurn.value?.status),
   getSessionStatus: (sessionId) => getSessionStatus(sessionId),
 });
+const runtimeComposerActivity = computed(() => {
+  const session = runtimeSelectedSessionRef.value;
+  if (!runtimeActionClient.value || !session || !runtimeOnline.value) return { busy: false, cancellable: false };
+  try {
+    const target = runtimeComposerTarget(session), key = encodeSessionKey(target);
+    const summary = unifiedSessionTree.value?.sessions.value.find(row => row.key === key) ?? (runtimeSelectedPresentation.value?.key === key ? runtimeSelectedPresentation.value : null);
+    return runtimeTurns.activity(target, summary);
+  } catch { return { busy: false, cancellable: false }; }
+});
+const isThinking = computed(() => runtimeActionClient.value ? runtimeComposerActivity.value.busy : legacyIsThinking.value);
 const canAbort = computed(() =>
   Boolean(
     uiInitState.value === 'ready' &&
     connectionState.value === 'ready' &&
     selectedSessionId.value &&
     isThinking.value &&
+    (!runtimeActionClient.value || runtimeComposerActivity.value.cancellable) &&
     !isAborting.value,
   ),
 );
@@ -3542,6 +3682,7 @@ function pickPreferredSessionId(list: SessionInfo[]) {
 }
 
 function validateSelectedSession() {
+  if (runtimeActionClient.value) return;
   const sessionId = selectedSessionId.value.trim();
   if (!sessionId) return;
 
@@ -4154,7 +4295,51 @@ function writeComposerDraftStore(store: Record<string, ComposerDraft>) {
   storageSetJSON(StorageKeys.drafts.composer, store);
 }
 
+let qualifiedComposerDrafts: ReturnType<typeof createQualifiedComposerDrafts> | null = null;
+const threadComposerContext = createThreadComposerContext();
+const runtimeComposerTransition = shallowRef<ComposerTransition | null>(null);
+const threadComposerActive = computed(() => runtimeComposerTransition.value?.body.kind === 'thread');
+let runtimeComposerReadyState: ComposerReady | null = null;
+let runtimeComposerPreferencesOwner: { key: string; sessionContext: string } | null = null;
+const runtimeDraftEditorRef = ref<InstanceType<typeof RuntimeDraftEditor> | null>(null);
+const segmentedComposerDraft = shallowRef<{ context: string; header: DraftHeader } | null>(null);
+const qualifiedDraftCache = new Map<string, ComposerDraft>();
+let qualifiedDraftWrites: Promise<void> = Promise.resolve();
+const localDraftStoreOwner = createDraftStoreOwner(() => DraftStore.open());
+let migrationAttempt: Promise<void> | undefined;
+onScopeDispose(() => {
+  void localDraftStoreOwner.close(Promise.allSettled([migrationAttempt, qualifiedDraftWrites])).catch(error => console.error('Draft storage shutdown failed', error));
+});
+function cacheQualifiedDraft(key: string, draft: ComposerDraft) {
+  qualifiedDraftCache.delete(key); qualifiedDraftCache.set(key, draft);
+  while (qualifiedDraftCache.size > 32 || [...qualifiedDraftCache.values()].reduce((bytes, entry) => bytes + JSON.stringify(entry).length * 2, 0) > 4 * 1024 * 1024) { const first = qualifiedDraftCache.keys().next(); if (!first.done) qualifiedDraftCache.delete(first.value); }
+}
+async function loadQualifiedComposerDraft(contextKey: string) {
+  if (!qualifiedComposerDrafts || !contextKey) return;
+  await qualifiedDraftWrites;
+  const header = await qualifiedComposerDrafts.open(contextKey);
+  if (draftKeyForSelectedContext() !== contextKey) return;
+  segmentedComposerDraft.value = null;
+  if (header && (header.parts.some(part => part.bytes > 256 * 1024) || !header.parts.some(part => part.name === 'raw'))) {
+    segmentedComposerDraft.value = { context: contextKey, header };
+    qualifiedDraftCache.delete(contextKey);
+    return;
+  }
+  const draft = normalizeStoredComposerDraft(header ? await qualifiedComposerDrafts.read(contextKey) : null);
+  if (draft) cacheQualifiedDraft(contextKey, draft);
+}
+async function activateQualifiedComposerDrafts() {
+  const store = await localDraftStoreOwner.get();
+  const cutover = await store.readCheckpoint('migration-active');
+  if (!cutover || typeof cutover !== 'object' || !('phase' in cutover) || cutover.phase !== 'cutover') return;
+  qualifiedComposerDrafts = createQualifiedComposerDrafts(store, `${window.location.origin}:${composerDraftTabId}`);
+  await loadQualifiedComposerDraft(draftKeyForSelectedContext());
+  restoreLegacyCutover({ clientOrigin: window.location.origin, persist: write => persistPendingLegacyWrite(store, write) });
+  runtimeDraftFailure.value = false;
+  runtimeDraftMode.value = true;
+}
 function readComposerDraft(contextKey: string) {
+  if (runtimeDraftMode.value) return qualifiedDraftCache.get(contextKey) ?? null;
   if (!contextKey) return null;
   const store = readComposerDraftStore();
   return store[contextKey] ?? null;
@@ -4169,11 +4354,42 @@ function nextComposerDraftRevision(contextKey: string, existingDraft?: ComposerD
 }
 
 function writeComposerDraft(contextKey: string, draft: ComposerDraft) {
-  if (!contextKey) return;
+  if (!contextKey || segmentedComposerDraft.value?.context === contextKey) return;
+  if (runtimeDraftMode.value && qualifiedComposerDrafts) {
+    const storage = qualifiedComposerDrafts;
+    cacheQualifiedDraft(contextKey, draft);
+    runtimeDraftPending.value += 1;
+    qualifiedDraftWrites = qualifiedDraftWrites.then(() => storage.write(contextKey, draft.rev, draft)).finally(() => { runtimeDraftPending.value -= 1; });
+    void qualifiedDraftWrites.catch(error => { runtimeDraftFailure.value = true; runtimeDraftConflict.value = error instanceof Error && 'code' in error && error.code === 'conflict'; setSendStatusText(toErrorMessage(error)); });
+    return;
+  }
   const store = readComposerDraftStore();
   store[contextKey] = draft;
   composerDraftRevisionByContext.set(contextKey, draft.rev);
   writeComposerDraftStore(store);
+}
+
+async function retryQualifiedDraftStorage() {
+  const storage = qualifiedComposerDrafts, context = runtimeComposerReadyKey.value;
+  if (!storage || !context || runtimeDraftRetrying.value) return;
+  const draft = qualifiedDraftCache.get(context);
+  runtimeDraftRetrying.value = true;
+  try {
+    await qualifiedDraftWrites.catch(() => undefined);
+    const header = await storage.retry();
+    if (segmentedComposerDraft.value?.context === context) {
+      if (header) segmentedComposerDraft.value = { context, header };
+    } else {
+      if (!draft) throw new Error(t('runtime.draftRecovery.failed'));
+      await storage.write(context, draft.rev, draft);
+    }
+    qualifiedDraftWrites = Promise.resolve();
+    runtimeDraftFailure.value = false;
+    runtimeDraftConflict.value = false;
+  } catch (error) {
+    runtimeDraftConflict.value = error instanceof Error && 'code' in error && error.code === 'conflict';
+    setSendStatusText(toErrorMessage(error));
+  } finally { runtimeDraftRetrying.value = false; }
 }
 
 function readSidePanelCollapsed() {
@@ -4189,7 +4405,7 @@ function persistSidePanelCollapsed(value: boolean) {
 function readSidePanelTab(): 'todo' | 'session' | 'tree' {
   const raw = storageGet(StorageKeys.state.sidePanelTab);
   if (raw === 'todo' || raw === 'session' || raw === 'tree') return raw;
-  return 'tree';
+  return 'session';
 }
 
 function persistSidePanelTab(value: 'todo' | 'session' | 'tree') {
@@ -4236,13 +4452,20 @@ function clearComposerInputState() {
 }
 
 function draftKeyForSelectedContext() {
-  return selectedSessionId.value;
+  const selection = unifiedSessionTree.value?.selection.value;
+  const transition = runtimeComposerTransition.value;
+  if (selection && transition?.selection.profileId === selection.selection.profileId) return transition.bodyKey;
+  return selection ? `${selection.selection.profileId}:${encodeSessionKey(selection.selection.session)}` : selectedSessionId.value;
 }
 
 function applyComposerDraftToComposerState(draft: ComposerDraft, contextKey: string) {
   composerDraftRevisionByContext.set(contextKey, draft.rev);
   messageInput.value = draft.messageInput;
   attachments.value = draft.attachments.slice();
+  applyComposerPreferencesToState(draft);
+}
+
+function applyComposerPreferencesToState(draft: Readonly<{ agent: string; model: string; variant?: string }>) {
 
   if (activeBackendKind.value === 'dsh') {
     if (dshCurrentPreset.value) selectedMode.value = dshCurrentPreset.value;
@@ -4302,7 +4525,7 @@ function restoreComposerDraftForContext(contextKey: string): boolean {
 
 function persistComposerDraftForCurrentContext() {
   composerDraftPersistence.cancel();
-  const contextKey = draftKeyForSelectedContext();
+  const contextKey = runtimeActionClient.value ? runtimeComposerReadyKey.value : draftKeyForSelectedContext();
   if (!contextKey) return;
   const existingDraft = readComposerDraft(contextKey);
   const rev = nextComposerDraftRevision(contextKey, existingDraft);
@@ -4322,9 +4545,24 @@ function persistComposerDraftForCurrentContext() {
     writerTabId: composerDraftTabId,
   };
   writeComposerDraft(contextKey, draft);
+  persistComposerPreferences({ agent: draft.agent, model: draft.model, variant: draft.variant ?? '' });
+}
+
+function persistComposerPreferences(value: ComposerPreferences, owner = runtimeComposerPreferencesOwner) {
+  if (!owner) return;
+  const storage = qualifiedComposerDrafts;
+  if (runtimeDraftMode.value && storage) {
+    qualifiedDraftWrites = qualifiedDraftWrites.then(() => storage.writePreferences(owner.key, value));
+    void qualifiedDraftWrites.catch(error => { runtimeDraftFailure.value = true; runtimeDraftConflict.value = error instanceof Error && 'code' in error && error.code === 'conflict'; setSendStatusText(toErrorMessage(error)); });
+  } else {
+    const store = readComposerDraftStore();
+    store[owner.key] = { ...value, messageInput: '', attachments: [], updatedAt: Date.now(), rev: (store[owner.key]?.rev ?? 0) + 1, writerTabId: composerDraftTabId };
+    writeComposerDraftStore(store);
+  }
 }
 
 function scheduleComposerDraftPersistence() {
+  if (runtimeSelectionLoading.value) return;
   const contextKey = draftKeyForSelectedContext();
   if (!contextKey) {
     composerDraftPersistence.schedule(() => {});
@@ -4343,6 +4581,7 @@ function scheduleComposerDraftPersistence() {
     variant: selectedThinking.value,
     updatedAt: Date.now(),
   };
+  const preferencesOwner = runtimeComposerPreferencesOwner;
   composerDraftPersistence.schedule(() => {
     const existingDraft = readComposerDraft(contextKey);
     writeComposerDraft(contextKey, {
@@ -4350,6 +4589,7 @@ function scheduleComposerDraftPersistence() {
       rev: nextComposerDraftRevision(contextKey, existingDraft),
       writerTabId: composerDraftTabId,
     });
+    persistComposerPreferences({ agent: draft.agent, model: draft.model, variant: draft.variant ?? '' }, preferencesOwner);
   });
 }
 
@@ -4365,7 +4605,8 @@ function clearComposerDraftForCurrentContext() {
 }
 
 function handleMessageInputUpdate(value: string) {
-  assertLegacyEditAdmission();
+  if (!runtimeDraftMode.value) assertLegacyEditAdmission();
+  if (runtimeDraftFailure.value) return;
   messageInput.value = value;
   scheduleComposerDraftPersistence();
 }
@@ -4449,7 +4690,7 @@ function syncAcpSelectionToSession() {
   if (activeBackendKind.value !== 'acp') return;
   const sessionId = selectedSessionId.value.trim();
   if (!sessionId) return;
-  const adapter = backend();
+  const adapter = selectedRuntimeNativeAdapter() ?? backend();
   if (!adapter.syncSessionConfig) return;
   const { modelID } = parseProviderModelKey(selectedModel.value);
   void adapter
@@ -4571,21 +4812,13 @@ function handleModelVisibilityUpdate(next: ModelVisibilityEntry[]) {
   });
 }
 
-function handleProviderConfigUpdated(next: ProviderConfigState) {
-  providerConfig.value = next ?? null;
-  ensureSelectedModelAvailable();
-}
-
-async function handleProvidersChanged() {
-  await fetchProviders(true);
-}
-
 async function fetchGlobalProviderConfig() {
   const request = providerConfigRequestFence.start();
   const activeBackend = getBackendAdapter(request.backend);
   try {
     const getGlobalConfig = requireBackendMethod(activeBackend.getGlobalConfig, 'global config');
-    const data = (await getGlobalConfig()) as ProviderConfigState;
+    const native = selectedRuntimeNativeAdapter();
+    const data = (await (native ? requireBackendMethod(native.getGlobalConfig, 'native global config')() : getGlobalConfig())) as ProviderConfigState;
     if (!providerConfigRequestFence.isCurrent(request)) return;
     providerConfig.value = data ?? null;
     if (
@@ -4626,7 +4859,9 @@ async function syncDshComposerSelection() {
   if (!sessionId || !selectedModel.value) return;
   const selection = { model: selectedModel.value, mode: selectedMode.value, thoughtLevel: selectedThinking.value };
   try {
-    await dshBackend().syncSessionConfig(sessionId, selection);
+    const captured = runtimeSelectedSessionRef.value;
+    if (captured && runtimeKindFor(captured) === 'dsh') await syncRuntimeDshSelection(captured, { model: selection.model, thinking: selection.thoughtLevel });
+    else await dshBackend().syncSessionConfig(sessionId, selection);
   } catch (error) {
     if (activeBackendKind.value === 'dsh' && selectedSessionId.value === sessionId) {
       setSendStatusKey('app.error.sendFailed', { message: toErrorMessage(error) });
@@ -5464,7 +5699,8 @@ async function fetchProviders(force = false) {
   log('providers fetch start', providersFetchCount.value);
   try {
     const listProviders = requireBackendMethod(activeBackend.listProviders, 'providers');
-    const data = (await listProviders()) as ProviderResponse;
+    const native = selectedRuntimeNativeFacade();
+    const data = (await (native ? requireBackendMethod(selectedRuntimeNativeAdapter()?.listProviders, 'native providers')() : listProviders())) as ProviderResponse;
     if (!providersRequestFence.isCurrent(request)) return;
     providerDefaults.value = data.default ?? {};
     providers.value = Array.isArray(data.all) ? data.all : [];
@@ -5543,7 +5779,8 @@ async function fetchAgents() {
   agentsLoading.value = true;
   try {
     if (activeBackendKind.value === 'dsh') {
-      const presets = await dshBackend().listAgents();
+      const native = selectedRuntimeNativeAdapter();
+      const presets = await (native ? requireBackendMethod(native.listAgents, 'native agent presets')() : dshBackend().listAgents()) as Awaited<ReturnType<DshAdapter['listAgents']>>;
       if (!agentsRequestFence.isCurrent(request)) return;
       agentOptions.value = presets.map((preset) => ({ id: preset.name, ...dshPresetPresentation(preset, locale.value) }));
       selectedMode.value = dshCurrentPreset.value ?? presets.find((preset) => preset.isDefault)?.name ?? presets[0]?.name ?? '';
@@ -5570,7 +5807,8 @@ async function fetchAgents() {
       return;
     }
     const listAgents = requireBackendMethod(backend().listAgents, 'agents');
-    const data = (await listAgents()) as AgentInfo[];
+    const native = selectedRuntimeNativeFacade();
+    const data = (await (native ? requireBackendMethod(selectedRuntimeNativeAdapter()?.listAgents, 'native agents')() : listAgents())) as AgentInfo[];
     if (!agentsRequestFence.isCurrent(request)) return;
     agents.value = Array.isArray(data) ? data : [];
     const options = agents.value
@@ -5586,7 +5824,7 @@ async function fetchAgents() {
       }));
     agentOptions.value = options;
     if (activeBackendKind.value === 'acp') {
-      hydrateAcpModeConfiguration(backend().getSessionConfigOptions?.() ?? []);
+      hydrateAcpModeConfiguration((selectedRuntimeNativeAdapter() ?? backend()).getSessionConfigOptions?.() ?? []);
       return;
     }
     if (!selectedMode.value || !options.some((option) => option.id === selectedMode.value)) {
@@ -5611,7 +5849,8 @@ async function fetchCommands(directory?: string) {
   commandsLoading.value = true;
   try {
     const listCommands = requireBackendMethod(backend().listCommands, 'commands');
-    const data = (await listCommands(activeBackendKind.value === 'dsh' ? selectedSessionId.value : directory)) as CommandInfo[];
+    const native = selectedRuntimeNativeFacade();
+    const data = (await (native ? requireBackendMethod(selectedRuntimeNativeAdapter()?.listCommands, 'native commands')() : listCommands(activeBackendKind.value === 'dsh' ? selectedSessionId.value : directory))) as CommandInfo[];
     if (!commandsRequestFence.isCurrent(request)) return;
     const list = Array.isArray(data) ? data : [];
     list.sort((a, b) => a.name.localeCompare(b.name));
@@ -5918,8 +6157,21 @@ async function createPtySession(
   command?: string,
   args?: string[],
   title = t('app.windowTitles.shell'),
+  options: Readonly<{ localOnly?: boolean }> = {},
 ) {
   const directory = activeDirectory.value || undefined;
+  if (options.localOnly) {
+    const decision = localWorkspaceDecision('localShell');
+    if (!decision.authorized) {
+      throw new Error(t('app.error.remoteWorkspaceAction', { reason: t('app.error.remoteLocalShell') }));
+    }
+  }
+  if (runtimeActionClient.value) {
+    const owner = selectedWorkspacePty(directory);
+    const result = await owner.create(command, args ?? [], directory);
+    runtimePtyOwners.set(result.ptyId, owner);
+    return { id: result.ptyId, pid: result.pid, command: command ?? '', args: args ?? [], cwd: directory ?? '', title, status: 'running' as const };
+  }
   const createPty = requireBackendMethod(backend().createPty, 'PTY creation');
   const data = await createPty({
     directory,
@@ -6125,6 +6377,10 @@ function handleFloatingWindowEdit(key: string) {
   updateFileViewerEditProps(key);
 }
 
+/**
+ * The bridge endpoint behind a backend identity. The identity is
+ * `kind:url[:agent]`; the workspace capability decision needs the URL alone.
+ */
 function currentBackendIdentity() {
   switch (activeBackendKind.value) {
     case 'codex':
@@ -6148,6 +6404,14 @@ async function handleFloatingWindowOpenLocal(key: string) {
   const content = typeof entry.props?.fileContent === 'string' ? entry.props.fileContent : null;
   const location = getFileViewerLocation(entry);
   if (content === null || !location) return;
+
+  const decision = localWorkspaceDecision('localApplication');
+  if (!decision.authorized) {
+    setSendStatusKey('app.error.fileLoadFailed', {
+      message: t('app.error.remoteWorkspaceAction', { reason: t('app.error.remoteLocalApplication') }),
+    });
+    return;
+  }
 
   await closeLocalApplicationSessionsForKey(key);
   const sessionId = crypto.randomUUID();
@@ -6335,6 +6599,11 @@ async function saveFileViewerEdit(key: string, content: string) {
 }
 
 async function updatePtySize(ptyId: string, rows: number, cols: number, directory?: string) {
+  const owner = runtimePtyOwners.get(ptyId);
+  if (owner) {
+    await owner.resize(ptyId, rows, cols);
+    return shellSessionsByPtyId.get(ptyId)?.pty ?? null;
+  }
   const updatePtySize = requireBackendMethod(backend().updatePtySize, 'PTY resizing');
   const data = await updatePtySize(ptyId, {
     directory,
@@ -6352,6 +6621,7 @@ type ShellWindowOptions = {
   minWidth?: number;
   minHeight?: number;
   onExit?: (exitCode: number) => void | Promise<void>;
+  closeOnSuccess?: boolean;
 };
 
 const ptyWindowOwner = usePtyWindowOwner({
@@ -6408,7 +6678,7 @@ const ptyWindowOwner = usePtyWindowOwner({
   closeWindow: (ptyId: string) => {
     fw.close(`shell:${ptyId}`);
   },
-  createSession: (pty: PtyInfo, terminal: Terminal): ShellSession => ({ pty, terminal }),
+  createSession: (pty: PtyInfo, terminal: Terminal, options: ShellWindowOptions): ShellSession => ({ pty, terminal, closeOnSuccess: options.closeOnSuccess }),
   connectSession: connectShellSocket,
   queueAfterRender: (callback: () => void) => {
     nextTick(callback);
@@ -6437,14 +6707,17 @@ const ptyWindowOwner = usePtyWindowOwner({
       if (options.kill) storageRemove(StorageKeys.state.forgePtyId);
     }
     shellWindowMinimums.delete(`shell:${ptyId}`);
+    shellExitWaiters.get(ptyId)?.(-1);
     shellExitWaiters.delete(ptyId);
     shellExitCallbacks.delete(ptyId);
     ptyToFileMap.delete(ptyId);
     fw.close(`shell:${ptyId}`);
     if (options.kill) {
       const directory = session.pty.cwd || activeDirectory.value || undefined;
-      const deletePty = backend().deletePty;
-      deletePty?.(ptyId, directory).catch((error) => {
+      const owner = runtimePtyOwners.get(ptyId);
+      runtimePtyOwners.delete(ptyId);
+      const removal = owner ? owner.remove(ptyId) : backend().deletePty?.(ptyId, directory);
+      removal?.catch((error) => {
         log('PTY delete failed', error);
       });
     }
@@ -6626,8 +6899,8 @@ function connectShellSocket(ptyId: string) {
   const session = shellSessionsByPtyId.get(ptyId);
   if (!session) return;
   const directory = session.pty.cwd || activeDirectory.value || undefined;
-  const url = buildPtyWsUrl(`/pty/${ptyId}/connect`, directory);
-  const socket = new WebSocket(url);
+  const owner = runtimePtyOwners.get(ptyId);
+  const socket = owner ? owner.connect(ptyId) : new WebSocket(buildPtyWsUrl(`/pty/${ptyId}/connect`, directory));
   session.socket = socket;
   const isCurrentSocket = () => isCurrentPtySocket(shellSessionsByPtyId, ptyId, session, socket);
   socket.binaryType = 'arraybuffer';
@@ -6801,16 +7074,22 @@ async function handleFloatingWindowOpen(key: string) {
   const directory = activeDirectory.value.trim();
   if (!directory) return;
 
+  const shellDecision = localWorkspaceDecision('localShell');
+  if (!shellDecision.authorized) {
+    setSendStatusKey('app.error.shellFailed', {
+      message: t('app.error.remoteWorkspaceAction', { reason: t('app.error.remoteLocalShell') }),
+    });
+    return;
+  }
+
   try {
-    const pty = await createPtySession('/bin/sh', ['-c', OPEN_IN_EDITOR_SHELL_COMMAND, 'vis-open-editor', absolutePath]);
+    const pty = await createPtySession('/bin/sh', ['-c', OPEN_IN_EDITOR_SHELL_COMMAND, 'vis-open-editor', absolutePath], t('app.windowTitles.editor'), { localOnly: true });
     if (!pty) {
       setSendStatusKey('app.error.shellFailed', { message: 'PTY creation returned no session.' });
       return;
     }
     ptyToFileMap.set(pty.id, absolutePath);
-    await ensureShellWindow(pty);
-    const session = shellSessionsByPtyId.get(pty.id);
-    if (session) session.closeOnSuccess = true;
+    await ensureShellWindow(pty, { closeOnSuccess: true });
   } catch (error) {
     setSendStatusKey('app.error.shellFailed', { message: toErrorMessage(error) });
   }
@@ -6864,6 +7143,8 @@ async function restoreShellSessions() {
   }
 }
 
+let openingInteractiveShell = false;
+
 async function openShellFromInput(input: string) {
   if (!ptySupported.value) {
     setSendStatusKey('app.error.shellFailed', {
@@ -6871,9 +7152,11 @@ async function openShellFromInput(input: string) {
     });
     return false;
   }
+  const script = input.trim();
+  const hasCommand = script.length > 0;
+  if (!hasCommand && openingInteractiveShell) return true;
+  if (!hasCommand) openingInteractiveShell = true;
   try {
-    const script = input.trim();
-    const hasCommand = script.length > 0;
     const pty = hasCommand
       ? await createPtySession('/bin/sh', ['-c', script])
       : await createPtySession();
@@ -6881,14 +7164,13 @@ async function openShellFromInput(input: string) {
       setSendStatusKey('app.error.shellFailed', { message: 'PTY creation returned no session.' });
       return false;
     }
-    ensureShellWindow(pty);
-    if (!hasCommand) return true;
-    const session = shellSessionsByPtyId.get(pty.id);
-    if (session) session.closeOnSuccess = true;
+    await ensureShellWindow(pty, { closeOnSuccess: hasCommand });
     return true;
   } catch (error) {
     setSendStatusKey('app.error.shellFailed', { message: toErrorMessage(error) });
     return false;
+  } finally {
+    if (!hasCommand) openingInteractiveShell = false;
   }
 }
 
@@ -6898,12 +7180,16 @@ async function runTreeShellCommand(command: string) {
   const commandDirectory = activeDirectory.value.trim();
   const pty = await createPtySession('/bin/sh', ['-c', script]);
   if (!pty) return;
-  ensureShellWindow(pty);
-  const session = shellSessionsByPtyId.get(pty.id);
-  if (session) session.closeOnSuccess = true;
-  const exitCode = await new Promise<number>((resolve) => {
+  const exit = new Promise<number>((resolve) => {
     shellExitWaiters.set(pty.id, resolve);
   });
+  try {
+    await ensureShellWindow(pty, { closeOnSuccess: true });
+    if (!shellSessionsByPtyId.has(pty.id)) return;
+  } finally {
+    if (!shellSessionsByPtyId.has(pty.id)) shellExitWaiters.delete(pty.id);
+  }
+  const exitCode = await exit;
   if (exitCode === 0) {
     invalidateDirectorySidebarCache(commandDirectory);
     if (activeDirectory.value.trim() !== commandDirectory) {
@@ -7556,6 +7842,7 @@ watch(
 watch(
   filteredSessions,
   () => {
+    if (runtimeActionClient.value) return;
     if (!bootstrapReady.value && !isBootstrapping.value) return;
     if (isBootstrapping.value) return;
     if (!selectedSessionId.value) {
@@ -7613,6 +7900,7 @@ function waitForPendingRenders(timeoutMs = 30000): Promise<void> {
 watch(
   selectedSessionId,
   (contextKey, previousKey) => {
+    if (uiInitState.value === 'ready' && runtimeActionClient.value) return;
     const prevContextKey = previousKey ?? '';
     if (contextKey === prevContextKey) return;
     composerDraftPersistence.flush();
@@ -7795,10 +8083,7 @@ watch(selectedModel, () => {
   }
 });
 
-watch(isProviderManagerOpen, (open) => {
-  if (!open || activeBackendKind.value !== 'codex') return;
-  void Promise.all([fetchGlobalProviderConfig(), fetchProviders(true)]);
-});
+
 
 watch(hiddenModels, (value) => {
   writeHiddenModelsToStorage(value);
@@ -8126,7 +8411,8 @@ const kimiWebTowerEnabled = ref(false);
 let detachKimiWebModeReconnect: (() => void) | undefined;
 
 async function loadKimiWebModeMeta() {
-  const meta = await kimiWebRestClient().getMeta();
+  const facade = selectedRuntimeNativeFacade();
+  const meta = await (facade?.manifest.kind === 'kimi-web' ? facade.query('kimi.meta') : kimiWebRestClient().getMeta());
   kimiWebTowerEnabled.value = isTowerExperimentEnabled(meta);
   return meta;
 }
@@ -8138,12 +8424,22 @@ async function loadKimiWebDefaultPermissionMode() {
   }
 }
 
-const kimiWebModePreferences = createKimiWebModePreferenceStore(() => credentials.kimiWebBridgeUrl.value);
+function kimiWebScopeKey() {
+  return runtimeNativePreferenceScope.value || credentials.kimiWebBridgeUrl.value;
+}
+const kimiWebModePreferences = createKimiWebModePreferenceStore(kimiWebScopeKey);
 const kimiWebSessionModes = useKimiWebSessionModes({
-  getScope: () => credentials.kimiWebBridgeUrl.value,
+  getScope: kimiWebScopeKey,
   readModes: kimiWebModePreferences.read,
   writeModePreference: kimiWebModePreferences.write,
   writeMode: async (sessionId, change) => {
+    const facade = selectedRuntimeNativeFacade();
+    if (facade?.manifest.kind === 'kimi-web') {
+      if (runtimeSelectedSessionRef.value?.nativeSessionId !== sessionId) throw new Error('Kimi session selection changed.');
+      const operation = facade.mutate('kimi.updateProfile', { body: serializeKimiWebSessionModeChange(change) });
+      await completeRuntimeMutation(operation);
+      return;
+    }
     const active = backend();
     if (!(active instanceof KimiWebAdapter)) {
       throw new Error('Kimi Web backend is not active.');
@@ -8167,7 +8463,8 @@ function refreshKimiWebModeState() {
 async function loadKimiWebSessionStatus(sessionId: string) {
   const adapter = configuredKimiWebAdapter;
   const request = kimiWebSessionModes.captureStatusRequest(sessionId);
-  const status = await kimiWebRestClient().getSessionStatus(sessionId);
+  const facade = selectedRuntimeNativeFacade();
+  const status = await (facade?.manifest.kind === 'kimi-web' ? facade.query('kimi.sessionStatus') : kimiWebRestClient().getSessionStatus(sessionId)) as Awaited<ReturnType<KimiWebAdapter['restClient']['getSessionStatus']>>;
   if (adapter === configuredKimiWebAdapter) {
     kimiWebSessionModes.applyStatus(sessionId, status, request);
     if (sessionId === selectedSessionId.value) refreshKimiWebModeState();
@@ -8400,7 +8697,11 @@ const dshPermissions = createDshPermissions({
 });
 
 const dshComposerClient = computed(() => dshMessageBridge.value ? dshBackend() : undefined);
-const dshSettingsRpcClient = computed(() => dshMessageBridge.value ? dshRpcClient() : undefined);
+
+
+const dshSettingsRpcClient = computed(() => runtimeActionClient.value
+  ? runtimeDshRpcClient.value
+  : dshMessageBridge.value ? dshRpcClient() : undefined);
 
 
 function dshRecord(value: unknown): Record<string, unknown> | undefined {
@@ -8410,7 +8711,7 @@ function dshRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function dshBackend(): DshAdapter {
-  const adapter = getActiveBackendAdapter();
+  const adapter = getBackendAdapter(activeBackendKind.value);
   if (!(adapter instanceof DshAdapter)) throw new Error('dsh backend is not configured.');
   return adapter;
 }
@@ -8698,7 +8999,7 @@ async function bootstrapDshWorkspace(isCurrent: () => boolean) {
   if (!isCurrent()) {
     // The pipeline disposed its own transport; drop the handle bookkeeping.
     if (bootstrapFollowHandle) {
-      for (const [sessionId, handle] of [...dshFollowStreams]) {
+      for (const [sessionId, handle] of dshFollowStreams) {
         if (handle !== bootstrapFollowHandle) continue;
         dshFollowStreams.delete(sessionId);
       }
@@ -8779,17 +9080,10 @@ const dshPlanGoal = useDshPlanGoal(() => {
     ? { client, sessionId, revision: state.planGoalRevision }
     : null;
 });
-const dshPermissionControls = useDshComposerPermissions({
-  client: dshComposerClient,
-  sessionId: selectedSessionId,
-  current: computed(() => dshMessageBridge.value?.sessionState(selectedSessionId.value)?.permissionPreset ?? ''),
-  preset: dshCurrentPreset,
-  disabled: computed(() => connectionState.value !== 'ready' || isThinking.value),
-  onError: setSendStatusErrorText,
-});
+
 const dshPresetLocked = computed(() => dshMessageBridge.value?.sessionState(selectedSessionId.value)?.presetLocked === true);
 const dshPresetSaving = ref(false);
-const dshPresetDisabled = computed(() => dshPresetSaving.value || dshPresetLocked.value || !selectedSessionId.value || dshMessageBridge.value?.syncState(selectedSessionId.value)?.kind !== 'live');
+const dshPresetDisabled = computed(() => dshPresetSaving.value || dshPresetLocked.value || !selectedSessionId.value || (!runtimeSelectedSessionRef.value && dshMessageBridge.value?.syncState(selectedSessionId.value)?.kind !== 'live'));
 watch(dshCurrentPreset, (preset) => {
   if (activeBackendKind.value === 'dsh' && preset) selectedMode.value = preset;
 });
@@ -8803,7 +9097,11 @@ async function selectDshPreset(value: string) {
   const sessionId = selectedSessionId.value;
   dshPresetSaving.value = true;
   try {
-    const selected = await dshBackend().updateSessionMode(sessionId, { field: 'agentPreset', value });
+    const facade = selectedRuntimeNativeFacade();
+    const selected = facade?.manifest.kind === 'dsh'
+      ? await completeRuntimeMutation(facade.mutate('dsh.agentPresets.select', { preset: value }))
+      : await dshBackend().updateSessionMode(sessionId, { field: 'agentPreset', value });
+    if (typeof selected !== 'string') throw new Error('Agent did not confirm its selected preset.');
     if (activeBackendKind.value !== 'dsh' || selectedSessionId.value !== sessionId) return;
     selectedMode.value = selected;
     persistComposerDraftForCurrentContext();
@@ -9068,6 +9366,11 @@ const dshStatusSnapshot = computed<DshStatusSnapshot | undefined>(() => {
 });
 
 function kimiWebRestClient() {
+  if (runtimeActionClient.value) {
+    const native = runtimeKimiSessionClient.value;
+    if (!native) throw new Error('runtime.kimi: no qualified Kimi session');
+    return native;
+  }
   if (!configuredKimiWebAdapter) throw new Error('Kimi Web backend is not configured.');
   return configuredKimiWebAdapter.restClient;
 }
@@ -9075,7 +9378,7 @@ function kimiWebRestClient() {
 const kimiWebGoalRevision = ref(0);
 const kimiWebComposerClient = computed(() =>
   activeBackendKind.value === 'kimi-web' && connectionState.value === 'ready'
-    ? configuredKimiWebAdapter?.restClient ?? null
+    ? runtimeActionClient.value ? runtimeKimiSessionClient.value : configuredKimiWebAdapter?.restClient ?? null
     : null,
 );
 
@@ -9369,15 +9672,15 @@ watchEffect(() => {
       : configuredBackendKind === 'acp' && !configuredAcp
         ? 'opencode'
         : configuredBackendKind;
-  activeBackendKind.value = effectiveBackendKind;
+  if (uiInitState.value === 'login') activeBackendKind.value = effectiveBackendKind;
   loginBackendKind.value = credentials.backendKind.value;
-  setActiveBackendKind(effectiveBackendKind);
   syncAcpMessageBridge(acpMessageBridge, effectiveBackendKind, configuredAcp);
 });
 
 watch(
   [activeBackendKind, connectionState, uiInitState, credentials.kimiWebBridgeUrl, credentials.kimiWebBridgeToken],
   async () => {
+    if (runtimeActionClient.value) return;
     kimiWebCapabilities.invalidate();
     const adapter = configuredKimiWebAdapter;
     if (activeBackendKind.value !== 'kimi-web' || connectionState.value !== 'ready' || uiInitState.value !== 'ready' || !adapter) return;
@@ -9389,7 +9692,7 @@ watch(
 );
 
 async function bootstrapAcpWorkspace() {
-  const adapter = getActiveBackendAdapter();
+  const adapter = getBackendAdapter(activeBackendKind.value);
   if (!(adapter instanceof AcpAdapter)) throw new Error('ACP backend is not configured.');
   acpMessageBridge.bind(adapter);
   await adapter.initialize();
@@ -9404,7 +9707,7 @@ async function bootstrapAcpWorkspace() {
 }
 
 async function bootstrapKimiWebWorkspace(isCurrent: () => boolean) {
-  const adapter = getActiveBackendAdapter();
+  const adapter = getBackendAdapter(activeBackendKind.value);
   if (!(adapter instanceof KimiWebAdapter)) throw new Error('Kimi Web backend is not configured.');
   disconnectKimiWebBackend();
   acpGitInfoByDirectory.value = {};
@@ -9470,7 +9773,7 @@ async function bootstrapKimiWebWorkspace(isCurrent: () => boolean) {
           // declaration the local set disagrees with asks the authoritative
           // lists to be re-read (it never fabricates or clears an item).
           if (activeBackendKind.value !== 'kimi-web') return;
-          if (!isCurrent() || getActiveBackendAdapter() !== adapter) return;
+          if (!isCurrent() || getBackendAdapter(activeBackendKind.value) !== adapter) return;
           applyKimiWebSessionEvent(serverState.projects, op, context.origin);
           if (op.phase === 'created') scheduleKimiTopPanelGitInfoHydration();
           if (op.sessionId !== selectedSessionId.value) return;
@@ -9513,7 +9816,604 @@ watch(selectedSessionId, () => {
 });
 
 function backend() {
-  return getActiveBackendAdapter();
+  if (runtimeActionClient.value) {
+    const native = selectedRuntimeNativeAdapter() ?? {};
+    const context = findWorkspaceContext(activeDirectory.value || undefined);
+    if (!context) return capturedBackend(activeBackendKind.value, getBackendAdapter(activeBackendKind.value).capabilities, native, {});
+    const files = createWorkspaceFiles(context.client, context.target, context.workspaceKey);
+    const selected = runtimeSelectedSessionRef.value;
+    const filePath = (directory: string, path: string) => path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
+      ? path : `${directory.replace(/[\\/]$/, '')}/${path}`;
+    return capturedBackend(activeBackendKind.value, getBackendAdapter(activeBackendKind.value).capabilities, native, {
+      getPathInfo: () => files.info(),
+      getVcsInfo: () => selected && selected.environmentId === context.target
+        ? createHostClient(context.client, context.target).read({ domain: 'thread', operation: 'repository', args: { session: selected } }, value => value)
+        : Promise.resolve(null),
+      listFiles: ({ directory, path }) => files.list(filePath(directory, path || '.')),
+      readFileContentBytes: ({ directory, path }) => files.read(filePath(directory, path)),
+      readFileContent: async ({ directory, path }) => {
+        const bytes = await files.read(filePath(directory, path));
+        return { path, content: new TextDecoder().decode(bytes), encoding: 'utf-8', type: bytes.includes(0) ? 'binary' : 'text' };
+      },
+      writeFileContent: ({ directory, path, content }) => files.write(filePath(directory, path), content),
+      runOneShotCommand: ({ command, args, directory }) => createWorkspacePty(context.client, context.target, context.workspaceKey).run(command, args, directory),
+    });
+  }
+  return getBackendAdapter(activeBackendKind.value);
+}
+
+/**
+ * The bridge endpoint the active backend is connected through. This is the
+ * target the workspace capability decision classifies: a remote bridge must
+ * never authorize a local-only workspace action. The identity is the same
+ * `currentBackendIdentity` the local-file edit path already uses, so a target
+ * switch moves the workspace boundary and the edit boundary together.
+ */
+const bridgeLoginUrl = ref(storageGet('vis.runtime.bridgeUrl') || 'ws://127.0.0.1:4096/runtime');
+const bridgeLoginToken = ref('');
+const bridgeReference = shallowRef<PublicConnectionReference | null>(null);
+const runtimePins = shallowRef<ReturnType<typeof createRuntimePins> | null>(null);
+watch(() => bridgeReference.value?.profileId, profileId => {
+  void runtimePins.value?.dispose();
+  runtimePins.value = profileId ? createRuntimePins({ profileId, clientOrigin: window.location.origin, title: selection => {
+    const key = encodeSessionKey(selection.session);
+    return unifiedSessionTree.value?.sessions.value.find(row => row.key === key)?.title ?? (runtimeSelectedPresentation.value?.key === key ? runtimeSelectedPresentation.value.title : undefined);
+  } }) : null;
+});
+onScopeDispose(() => { void runtimePins.value?.dispose(); });
+const activeBridgeUrl = computed(() => bridgeReference.value?.url ?? '');
+const activeProfileId = computed(() => {
+  const profile = bridgeReference.value?.profileId;
+  if (!profile) throw new Error('Connect to a Bridge before using a runtime profile.');
+  return profile;
+});
+const runtimeEnvironmentId = shallowRef<EnvironmentId | null>(null);
+const activeRuntimeEnvironmentId = computed(() => {
+  const environment = runtimeEnvironmentId.value;
+  if (!environment) throw new Error('Connect to a Bridge before using a runtime environment.');
+  return environment;
+});
+const activeHarnessKind = computed<HarnessKind>(() => activeBackendKind.value);
+const managementHarnessInstanceId = ref<HarnessInstanceId | null>(null);
+
+let runtimeWorkspaceKeys: readonly import('../shared/runtime/identity.js').WorkspaceKey[] = [];
+let runtimeConnectionOwner: ReturnType<typeof useRuntimeConnection> | undefined;
+let bridgeLoginGeneration = 0;
+let stopRuntimeRecovery: (() => void) | undefined;
+let pendingRuntimeSelection: Readonly<{ key: string; target: EnvironmentId }> | null = null;
+let lastRuntimeSelection: Readonly<{ key: string; target: EnvironmentId }> | null = null;
+async function connectRuntimeBridge(): Promise<void> {
+  if (runtimeDraftEditorRef.value && !await runtimeDraftEditorRef.value.flush()) return;
+  if (runtimeActionClient.value) {
+    persistComposerDraftForCurrentContext();
+    await qualifiedDraftWrites;
+    if (runtimeDraftFailure.value) return;
+  }
+  runtimeSelectionGeneration++;
+  runtimeComposerReadyKey.value = null;
+  runtimeSelectionLoading.value = false;
+  selectedSessionId.value = '';
+  stopRuntimeRecovery?.();
+  pendingRuntimeSelection = null;
+  lastRuntimeSelection = null;
+  runtimeSelectedPresentation.value = null;
+  runtimeOnline.value = false;
+  runtimeConnectionOwner?.dispose();
+  runtimeSelectedDirectory.value = null;
+  runtimePtyOwners.clear();
+  runtimeActionClient.value = null;
+  runtimeIndexAvailable.value = false;
+  runtimeEnvironmentId.value = null;
+  bridgeReference.value = null;
+  const owner = useRuntimeConnection({
+    reference: managementCandidate(bridgeLoginUrl.value),
+    resolveAuthentication: async () => bridgeLoginToken.value ? { bridgeToken: bridgeLoginToken.value } : {},
+    createWebSocket: endpoint => new WebSocket(endpoint),
+  });
+  runtimeConnectionOwner = owner;
+  const reference = await owner.connect();
+  if (runtimeConnectionOwner !== owner) return;
+  const inspection = await owner.client.inspect();
+  if (runtimeConnectionOwner !== owner) return;
+  bridgeReference.value = reference;
+  harnessManifests.value = inspection.harnesses.map(entry => entry.manifest);
+  runtimeWorkspaceKeys = inspection.targets.find(target => target.target === reference.expectedEnvironmentId)?.workspaceKeys ?? [];
+  managementHarnessInstanceId.value = inspection.harnesses.find(entry => entry.manifest.core.listSessionPage.state === 'supported')?.manifest.harnessInstanceId ?? null;
+  runtimeIndexAvailable.value = inspection.targets.find(target => target.target === reference.expectedEnvironmentId)?.capabilities.methods.includes('runtime.snapshot') ?? false;
+  runtimeActionClient.value = owner.client;
+  runtimeEnvironmentId.value = reference.expectedEnvironmentId ?? null;
+  runtimeOnline.value = true;
+  let recoveryGeneration = 0;
+  let pendingKey: string | null = null;
+  let pendingTarget: EnvironmentId | null = null;
+  stopRuntimeRecovery = watch([owner.reference, runtimeDraftFailure], async ([verified]) => {
+    const current = ++recoveryGeneration;
+    if (runtimeConnectionOwner !== owner) return;
+    if (!verified) {
+      pendingKey ??= lastRuntimeSelection?.key ?? null;
+      pendingTarget ??= lastRuntimeSelection?.target ?? runtimeEnvironmentId.value;
+      if (pendingKey && pendingTarget) pendingRuntimeSelection = { key: pendingKey, target: pendingTarget };
+      persistComposerDraftForCurrentContext();
+      runtimeOnline.value = false;
+      runtimeSelectionGeneration++;
+      runtimeSelectionLoading.value = true;
+      void runtimeConversation.dispose().catch(error => setSendStatusText(toErrorMessage(error)));
+      connectionState.value = 'reconnecting';
+      return;
+    }
+    if (runtimeOnline.value) return;
+    try {
+      if (runtimeDraftEditorRef.value && !await runtimeDraftEditorRef.value.flush()) return;
+      persistComposerDraftForCurrentContext();
+      await qualifiedDraftWrites;
+      if (runtimeDraftFailure.value || current !== recoveryGeneration || runtimeConnectionOwner !== owner) return;
+      const refreshed = await owner.client.inspect();
+      const target = pendingTarget ?? verified.expectedEnvironmentId;
+      if (!target || !refreshed.targets.some(grant => grant.target === target)) {
+        runtimeOnline.value = true;
+        isConnectionEntryOpen.value = true;
+        setSendStatusText(t('runtime.session.reconnectTarget'));
+        await managedRemote.open();
+        return;
+      }
+      try { owner.client.scope(target); } catch { await owner.client.attach(target); }
+      const targetInspection = target === verified.expectedEnvironmentId ? refreshed : await owner.client.request(target, 'runtime.inspect', {});
+      if (current !== recoveryGeneration || runtimeConnectionOwner !== owner || !owner.reference.value) return;
+      runtimeIndexAvailable.value = false;
+      harnessManifests.value = targetInspection.harnesses.map(entry => entry.manifest);
+      runtimeWorkspaceKeys = targetInspection.targets.find(grant => grant.target === target)?.workspaceKeys ?? [];
+      runtimeEnvironmentId.value = target;
+      runtimeIndexAvailable.value = targetInspection.targets.find(grant => grant.target === target)?.capabilities.methods.includes('runtime.snapshot') ?? false;
+      await runtimeTreeReady;
+      if (current !== recoveryGeneration || runtimeConnectionOwner !== owner) return;
+      runtimeOnline.value = true;
+      const threadOwner = runtimeThreadState.owner.value;
+      if (threadOwner && !threadOwner.host.isCurrent() && refreshed.targets.some(grant => grant.target === threadOwner.target)) {
+        try { owner.client.scope(threadOwner.target); } catch { await owner.client.attach(threadOwner.target); }
+        const recoveredHost = createHostClient(owner.client, threadOwner.target);
+        await runtimeThreadState.reconnectHost(recoveredHost);
+        await runtimeCollaborationState.reconnectHost(recoveredHost);
+      }
+      if (pendingKey) {
+        const membership = threadComposerActive.value ? runtimeThreadState.threadForSession(decodeSessionKey(pendingKey)) : null;
+        await handleUnifiedSelectKey(pendingKey, membership ? 'thread-target' : 'session-navigation');
+        if (membership && runtimeComposerReadyState?.sessionKey === pendingKey) runtimeThreadState.setTarget(membership.participantId);
+      }
+      else runtimeSelectionLoading.value = false;
+      if (current !== recoveryGeneration || runtimeConnectionOwner !== owner) return;
+      pendingKey = null; pendingTarget = null;
+      pendingRuntimeSelection = null;
+      connectionState.value = 'ready';
+    } catch (error) {
+      if (current === recoveryGeneration && runtimeConnectionOwner === owner) setSendStatusText(toErrorMessage(error));
+    }
+  }, { flush: 'sync' });
+  if (!storageSet('vis.runtime.bridgeUrl', reference.url)) setSendStatusText('Connected, but the Bridge address could not be saved.');
+  if (inspection.role === 'manager') {
+    isConnectionEntryOpen.value = true;
+    await managedRemote.open();
+  }
+}
+onScopeDispose(() => {
+  bridgeLoginGeneration++;
+  stopRuntimeRecovery?.();
+  runtimeConnectionOwner?.dispose();
+  runtimeConnectionOwner = undefined;
+});
+
+/** Shared empty sets so the unified sidebar props never allocate per render. */
+const EMPTY_STRING_SET: ReadonlySet<string> = new Set<string>();
+const EMPTY_HARNESS_SET: ReadonlySet<SessionHarness> = new Set<SessionHarness>();
+const EMPTY_SESSION_TREE_DATA: SessionTreeData = [];
+
+/**
+ * The unified session tree over the live `/runtime` connection (task 49).
+ *
+ * The legacy per-backend tree above stays exactly as it is — it is the
+ * read-only migration source and the fallback whenever no runtime client is
+ * attached. This tree is built ONLY once a real runtime client exists and its
+ * hello has published the bridge's own environment identity, so every row,
+ * every expand and every selection travels over real wire frames
+ * (`state.start` opens the target's single observer, `readIndex` pages the
+ * index, `select` writes the selection scope).
+ *
+ * The tree owns the task-20 bounded state layer, so it is disposed when the
+ * target changes or the app unmounts; a rebuild never leaves an observer open.
+ */
+const unifiedSessionTree = shallowRef<UnifiedSessionTree | null>(null);
+let runtimeTreeReady: Promise<void> = Promise.resolve();
+
+function disposeUnifiedSessionTree(): void {
+  const owned = unifiedSessionTree.value;
+  unifiedSessionTree.value = null;
+  if (owned !== null) void owned.dispose().catch(() => {});
+}
+
+function buildUnifiedSessionTree(): void {
+  disposeUnifiedSessionTree();
+  runtimeTurns.clear();
+  const client = runtimeActionClient.value;
+  const target = runtimeEnvironmentId.value;
+  if (client === null || target === null || !runtimeIndexAvailable.value) return;
+  const tree = useRuntimeSessionTree({
+    client,
+    profileId: activeProfileId.value,
+    target,
+    onCanonical: entity => {
+      runtimeTurns.apply(entity); runtimeInteractionProjection?.observeOperation(entity);
+      const selected = runtimeSelectedPresentation.value;
+      if (entity.collection === 'session_summaries' && entity.key === selected?.key && entity.value) {
+        const row = asRuntimeRecord(entity.value);
+        runtimeSelectedPresentation.value = { ...selected, ...(typeof row.title === 'string' ? { title: row.title } : {}), ...(typeof row.status === 'string' || row.status === null ? { status: row.status } : {}), ...(typeof row.archived === 'boolean' ? { archived: row.archived } : {}) };
+      }
+    },
+  });
+  unifiedSessionTree.value = tree;
+  runtimeTreeReady = tree.start().then(() => undefined).catch(() => {
+    // A target whose snapshot cannot be opened leaves the tree in its error
+    // state, which the sidebar renders; the legacy tree keeps running.
+  });
+}
+
+watch([runtimeActionClient, runtimeEnvironmentId, runtimeIndexAvailable], buildUnifiedSessionTree, { immediate: true, flush: 'sync' });
+onScopeDispose(disposeUnifiedSessionTree);
+
+/**
+ * The sidebar's session tree. On a live `/runtime` connection it is the unified
+ * five-source tree and the legacy per-backend shape is not read at all (the
+ * sidebar renders the unified rows and ignores this prop); without one — a bare
+ * OpenCode server is not a runtime wire endpoint — it stays the legacy tree,
+ * which is the read-only migration source the plan keeps.
+ */
+const sessionTreeData = computed<SessionTreeData>(() =>
+  runtimeActionClient.value ? EMPTY_SESSION_TREE_DATA : legacySessionTrees.sessionTreeData.value,
+);
+
+/** The unified tree's rows, or undefined so the sidebar keeps its legacy tree. */
+const unifiedTreeRows = computed<readonly UnifiedFlatRow[] | undefined>(() => unifiedSessionTree.value?.rows.value);
+const unifiedTreeSources = computed<readonly HarnessEntry[]>(() => unifiedSessionTree.value?.harnesses.value ?? []);
+const unifiedTreeRetrying = computed<ReadonlySet<string>>(() => unifiedSessionTree.value?.retrying.value ?? EMPTY_STRING_SET);
+const unifiedTreeChildScans = computed<ReadonlySet<string>>(() => unifiedSessionTree.value?.childScans.value ?? EMPTY_STRING_SET);
+const unifiedTreeStatus = computed<'loading' | 'partial' | 'complete' | 'error'>(() => unifiedSessionTree.value?.viewStatus.value ?? 'loading');
+const unifiedTreeLoaded = computed(() => unifiedSessionTree.value?.viewLoaded.value ?? 0);
+const unifiedTreeError = computed<string | null>(() => {
+  const code = unifiedSessionTree.value?.viewError.value;
+  return code === null || code === undefined ? null : String(code);
+});
+const unifiedTreeFilterKinds = computed<ReadonlySet<SessionHarness>>(() => unifiedSessionTree.value?.filterKinds.value ?? EMPTY_HARNESS_SET);
+const unifiedTreeSearch = computed<UnifiedSearchState | null>(() => unifiedSessionTree.value?.searchState.value ?? null);
+/** The unified selection's own session key, so the sidebar can mark the row. */
+const unifiedTreeSelectedKey = computed(() => unifiedSessionTree.value?.selection.value?.selection.session
+  ? encodeSessionKey(unifiedSessionTree.value.selection.value!.selection.session)
+  : '');
+
+const nativeSelectedDisplay = computed<{ branch: string; title: string; status: 'idle' | 'busy' | 'retry' | 'unknown' } | undefined>(() => {
+  const row = unifiedSessionTree.value?.sessions.value.find(entry => entry.key === unifiedTreeSelectedKey.value);
+  const current = row ?? (runtimeSelectedPresentation.value?.key === unifiedTreeSelectedKey.value ? runtimeSelectedPresentation.value : null);
+  return current ? { branch: current.directory?.split(/[\\/]/).pop() ?? '', title: current.title, status: current.status === 'running' ? 'busy' : current.status === 'busy' || current.status === 'idle' || current.status === 'retry' ? current.status : 'unknown' as const } : undefined;
+});
+
+async function handlePinnedSessionSelect(selection: QualifiedSession): Promise<void> {
+  if (selection.profileId !== bridgeReference.value?.profileId) return;
+  await handleUnifiedSelectKey(encodeSessionKey(selection.session));
+}
+
+async function handleUnifiedSelectKey(key: string, origin: 'session-navigation' | 'thread-target' | 'thread-enter' = 'session-navigation', thread?: ThreadBodyIdentity): Promise<void> {
+  const generation = ++runtimeSelectionGeneration;
+  providerConfigRequestFence.invalidate();
+  providersRequestFence.invalidate();
+  agentsRequestFence.invalidate();
+  commandsRequestFence.invalidate();
+  runtimeSelectionLoading.value = true;
+  try {
+  if (runtimeDraftEditorRef.value && !await runtimeDraftEditorRef.value.flush()) return;
+  if (generation !== runtimeSelectionGeneration) return;
+  const tree = unifiedSessionTree.value;
+  if (!tree) return;
+  persistComposerDraftForCurrentContext();
+  await qualifiedDraftWrites;
+  if (generation !== runtimeSelectionGeneration || runtimeDraftFailure.value) return;
+  const profile = bridgeReference.value?.profileId;
+  if (!profile) return;
+  const selection = { profileId: profile, session: decodeSessionKey(key) };
+  if (origin === 'thread-enter' && !thread) throw new Error('Thread context is unavailable.');
+  const transition = origin === 'thread-enter'
+    ? threadComposerContext.begin({ origin, selection, thread: thread! })
+    : threadComposerContext.begin({ origin, selection });
+  runtimeComposerTransition.value = transition;
+  runtimeComposerReadyState = null;
+  runtimeComposerPreferencesOwner = null;
+  runtimeComposerReadyKey.value = null;
+  clearComposerInputState();
+  segmentedComposerDraft.value = null;
+  selectedSessionId.value = '';
+  const selected = await tree.selectByKey(key);
+  if (!selected) return;
+  const session = tree.selection.value?.selection.session;
+  if (!session) return;
+  const client = requireRuntimeActionClient();
+  const capture = tree.selection.value;
+  await client.inspect();
+  if (generation !== runtimeSelectionGeneration || !capture?.isCurrent()) return;
+  const metadata = await createHostClient(client, session.environmentId).read({ domain: 'thread', operation: 'selection', args: { session } }, hostSessionSelection);
+  const manifest = metadata.manifest;
+  if (generation !== runtimeSelectionGeneration || !capture?.isCurrent() || runtimeActionClient.value !== client || unifiedSessionTree.value !== tree) return;
+  if (manifest.environmentId !== session.environmentId || manifest.harnessInstanceId !== session.harnessInstanceId) throw new Error('Agent instance identity changed.');
+  if (encodeSessionKey(metadata.session) !== encodeSessionKey(session)) throw new Error('Session identity changed.');
+  runtimeSelectedPresentation.value = { key: encodeSessionKey(session), title: metadata.title || session.nativeSessionId, status: metadata.status ?? null, directory: metadata.directory, archived: metadata.archived };
+  harnessManifests.value = [...harnessManifests.value.filter(entry => entry.harnessInstanceId !== manifest.harnessInstanceId || entry.environmentId !== manifest.environmentId), manifest];
+  runtimeNativePreferenceScope.value = `${session.environmentId}:${session.harnessInstanceId}`;
+  activeBackendKind.value = manifest.kind;
+  if (manifest.kind === 'codex') {
+    runtimeCodexAdapter.value = createNativeCodexAdapter(requireRuntimeActionClient(), manifest, session);
+    codexApi.attachRuntimeAdapter(runtimeCodexAdapter.value, session.nativeSessionId);
+  } else {
+    runtimeCodexAdapter.value = null;
+    codexApi.disconnectTransport();
+  }
+  runtimeSelectedDirectory.value = metadata.workspaceKey && runtimeWorkspaceKeys.includes(metadata.workspaceKey) ? metadata.directory ?? '' : '';
+  selectedSessionId.value = session.nativeSessionId;
+  await runtimeInteractionProjection?.select();
+  if (generation !== runtimeSelectionGeneration || !capture.isCurrent()) return;
+  clearComposerInputState();
+  providers.value = [];
+  modelOptions.value = [];
+  agentOptions.value = [];
+  commands.value = [];
+  const draftContext = draftKeyForSelectedContext();
+  const normalContext = composerBodyKey({ kind: 'session', selection });
+  const preferenceKey = composerPreferenceKey(selection);
+  const savedPreferences = runtimeDraftMode.value && qualifiedComposerDrafts
+    ? await qualifiedComposerDrafts.readPreferences(preferenceKey, normalContext)
+    : readComposerDraft(preferenceKey) ?? readComposerDraft(normalContext);
+  if (generation !== runtimeSelectionGeneration || !capture.isCurrent()) return;
+  await loadQualifiedComposerDraft(draftContext);
+  if (generation !== runtimeSelectionGeneration || draftKeyForSelectedContext() !== draftContext) return;
+  restoreComposerDraftForContext(draftContext);
+  lastRuntimeSelection = { key: encodeSessionKey(session), target: session.environmentId };
+  await backendSessionReload.reloadSelectedSessionState(session.nativeSessionId);
+  if (generation !== runtimeSelectionGeneration || !capture.isCurrent()) return;
+  await Promise.all([fetchProviders(true), fetchAgents(), fetchCommands()]);
+  if (generation !== runtimeSelectionGeneration || !capture.isCurrent() || draftKeyForSelectedContext() !== draftContext) return;
+  if (savedPreferences) applyComposerPreferencesToState(savedPreferences);
+  const ready = threadComposerContext.complete(transition, { bodyKey: draftContext, preferenceKey, sessionKey: encodeSessionKey(session), optionsReady: true });
+  if (!ready) return;
+  runtimeComposerReadyState = ready;
+  runtimeComposerPreferencesOwner = { key: preferenceKey, sessionContext: normalContext };
+  runtimeComposerReadyKey.value = draftContext;
+  } catch (error) {
+    if (generation === runtimeSelectionGeneration) setSendStatusText(toErrorMessage(error));
+  } finally {
+    if (generation === runtimeSelectionGeneration) runtimeSelectionLoading.value = false;
+  }
+}
+
+function handleUnifiedToggleKey(key: string): void {
+  unifiedSessionTree.value?.toggleExpand(key);
+}
+
+function handleUnifiedFilterChange(kinds: readonly SessionHarness[]): void {
+  unifiedSessionTree.value?.setFilterKinds(kinds);
+}
+
+function handleUnifiedSearch(query: string): void {
+  void unifiedSessionTree.value?.search(query).catch(() => {});
+}
+
+function handleUnifiedSearchMore(): void {
+  void unifiedSessionTree.value?.searchMore().catch(() => {});
+}
+
+function handleUnifiedRetrySource(harnessInstanceId: string): void {
+  void unifiedSessionTree.value?.retrySource(harnessInstanceId).catch(() => {});
+}
+
+function handleUnifiedLoadMoreChildren(key: string): void {
+  void unifiedSessionTree.value?.loadMoreChildren(key).catch(() => {});
+}
+
+const runtimeSelectedSessionRef = computed<SessionRef | null>(parseQualifiedSession);
+function runtimeComposerCanSend(): boolean {
+  if (runtimeSelectedArchived.value) return false;
+  if (!runtimeSelectedDirectory.value) return false;
+  const captured = runtimeSelectionCapture();
+  if (!captured?.isCurrent()) return false;
+  const session = captured.selection.session;
+  return harnessManifests.value.some(manifest => manifest.environmentId === session.environmentId && manifest.harnessInstanceId === session.harnessInstanceId && manifest.core.send.state === 'supported');
+}
+let runtimeSourceRefreshGeneration = 0;
+watch([runtimeSelectedSessionRef, runtimeComposerReadyKey, () => {
+  const session = runtimeSelectedSessionRef.value;
+  return unifiedSessionTree.value?.harnesses.value.find(entry => entry.harnessInstanceId === session?.harnessInstanceId)?.status;
+}], async ([session, ready, status]) => {
+  const generation = ++runtimeSourceRefreshGeneration;
+  const currentManifest = session ? harnessManifests.value.find(entry => entry.environmentId === session.environmentId && entry.harnessInstanceId === session.harnessInstanceId) : undefined;
+  if (!session || !ready || !runtimeOnline.value || (status !== 'complete' && status !== 'partial') || currentManifest?.core.send.state === 'supported') return;
+  const capture = runtimeSelectionCapture(), client = runtimeActionClient.value;
+  if (!capture || !client) return;
+  try {
+    await client.inspect();
+    if (generation !== runtimeSourceRefreshGeneration || !capture.isCurrent()) return;
+    const metadata = await createHostClient(client, session.environmentId).read({ domain: 'thread', operation: 'selection', args: { session } }, hostSessionSelection);
+    if (generation !== runtimeSourceRefreshGeneration || !capture.isCurrent()) return;
+    harnessManifests.value = [...harnessManifests.value.filter(manifest => manifest.environmentId !== session.environmentId || manifest.harnessInstanceId !== session.harnessInstanceId), metadata.manifest];
+    if (metadata.manifest.core.send.state === 'supported') {
+      await backendSessionReload.reloadSelectedSessionState(session.nativeSessionId);
+      if (generation === runtimeSourceRefreshGeneration && capture.isCurrent()) await Promise.all([fetchProviders(true), fetchAgents(), fetchCommands()]);
+    }
+  } catch (error) { if (generation === runtimeSourceRefreshGeneration && capture.isCurrent()) setSendStatusText(toErrorMessage(error)); }
+});
+watch([runtimeSelectedSessionRef, runtimePins], ([session, pins]) => {
+  void pins?.setSelected(session && bridgeReference.value ? { profileId: bridgeReference.value.profileId, session } : null);
+}, { immediate: true });
+const hostEnvironment = computed(() => runtimeSelectedSessionRef.value?.environmentId ?? null);
+const selectedHostClient = computed(() => {
+  if (!runtimeOnline.value) return null;
+  const client = runtimeActionClient.value;
+  const target = hostEnvironment.value;
+  return client && target ? createHostClient(client, target) : null;
+});
+const isThreadPanelOpen = ref(false);
+const runtimeThreadState = createHostThreadState(() => selectedHostClient.value);
+const runtimeThreadHarnessLabels = computed(() => Object.fromEntries(harnessManifests.value.map(manifest => [manifest.harnessInstanceId, manifest.kind])));
+const runtimeThreadAvailableSessions = computed(() => [...new Map((unifiedSessionTree.value?.sessions.value ?? []).map(row => [row.key, {
+  session: decodeSessionKey(row.key), label: row.title, harness: row.harness,
+}])).values()]);
+const runtimeHandoffEntries = computed(() => messageInput.value.trim() ? [{
+  class: 'goal', origin: { kind: 'host', commandId: `composer:${runtimeThreadState.threadId.value ?? ''}` },
+  text: messageInput.value.slice(0, 8000),
+}] : []);
+provide(RUNTIME_THREAD_STATE_KEY, { ...runtimeThreadState, composerActive: threadComposerActive, setTarget: participantId => { void selectThreadComposerTarget(participantId); } });
+
+// The session tree's current selection is the thread's current selection, so the
+// participant resolution always matches the row the user is on.
+watch(
+  () => unifiedSessionTree.value?.selection.value?.selection.session ?? null,
+  (session) => { runtimeThreadState.setSelectedSession(session); },
+  { immediate: true },
+);
+
+async function openRuntimeThreadForSelection(): Promise<void> {
+  if (runtimeThreadState.threadId.value) {
+    try {
+      const owner = runtimeThreadState.owner.value;
+      if (owner && !owner.host.isCurrent()) {
+        const recovered = createHostClient(requireRuntimeActionClient(), owner.target);
+        if (!recovered.isCurrent()) throw new Error('Connect to this Thread’s Bridge before continuing.');
+        await runtimeThreadState.reconnectHost(recovered);
+        await runtimeCollaborationState.reconnectHost(recovered);
+      }
+      await enterThreadComposer(); isThreadPanelOpen.value = true;
+    }
+    catch (error) { setSendStatusText(toErrorMessage(error)); }
+    return;
+  }
+  const session = runtimeSelectedSessionRef.value;
+  if (session === null) {
+    setSendStatusText('Select a session before opening a Host Thread.');
+    return;
+  }
+  const host = selectedHostClient.value;
+  if (!host) return;
+  try {
+    const result = await host.read({ domain: 'thread', operation: 'repository', args: { session } }, value => value);
+    if (!host.isCurrent() || !runtimeSelectedSessionRef.value || encodeSessionKey(runtimeSelectedSessionRef.value) !== encodeSessionKey(session)) return;
+    if (!result || typeof result !== 'object' || !('repoKey' in result) || typeof result.repoKey !== 'string') {
+      setSendStatusText('This session has no repository on the connected target, so no Host Thread can be opened for it.');
+      return;
+    }
+    await runtimeThreadState.openThread({ session, repo: decodeRepoKey(result.repoKey) });
+    if (!runtimeSelectedSessionRef.value || encodeSessionKey(runtimeSelectedSessionRef.value) !== encodeSessionKey(session)) return;
+    if (runtimeThreadState.threadId.value) await enterThreadComposer();
+    isThreadPanelOpen.value = runtimeThreadState.threadId.value !== null;
+  } catch (error) { if (host.isCurrent()) setSendStatusText(toErrorMessage(error)); }
+}
+
+async function enterThreadComposer(preferredParticipantId?: string): Promise<void> {
+  const selectionGeneration = runtimeSelectionGeneration;
+  const summary = runtimeThreadState.summary.value, owner = runtimeThreadState.owner.value, profile = bridgeReference.value?.profileId;
+  if (!summary || !owner?.host.isCurrent() || !profile) throw new Error('Connect to this Thread’s Bridge before continuing.');
+  const participantId = preferredParticipantId ?? runtimeThreadState.targets.value[0] ?? summary.activeParticipantId;
+  const target = participantId ? runtimeThreadState.sessionOfParticipant(participantId) : null;
+  if (!target) throw new Error('The selected Thread participant is unavailable.');
+  runtimeSelectionLoading.value = true;
+  try {
+  if (runtimeDraftEditorRef.value && !await runtimeDraftEditorRef.value.flush()) return;
+  if (selectionGeneration !== runtimeSelectionGeneration) return;
+  const sourceContext = draftKeyForSelectedContext();
+  persistComposerDraftForCurrentContext();
+  await qualifiedDraftWrites;
+  if (selectionGeneration !== runtimeSelectionGeneration || runtimeThreadState.owner.value !== owner) return;
+  const thread = { profileId: profile, environmentId: owner.target, threadId: summary.threadId };
+  const context = composerBodyKey({ ...thread, kind: 'thread' });
+  if (qualifiedComposerDrafts && runtimeDraftMode.value) {
+    const source = await qualifiedComposerDrafts.open(sourceContext);
+    await qualifiedComposerDrafts.initializeThread(context, source);
+  } else if (!readComposerDraft(context)) {
+    const source = readComposerDraft(sourceContext);
+    if (source) writeComposerDraft(context, { ...source, rev: 1, writerTabId: composerDraftTabId });
+    else writeComposerDraft(context, { messageInput: '', attachments: [], agent: '', model: '', updatedAt: Date.now(), rev: 1, writerTabId: composerDraftTabId });
+  }
+  if (selectionGeneration !== runtimeSelectionGeneration || runtimeThreadState.owner.value !== owner) return;
+  await handleUnifiedSelectKey(encodeSessionKey(target), 'thread-enter', thread);
+  if (runtimeComposerReadyState?.bodyKey === context && participantId) runtimeThreadState.setTarget(participantId);
+  } catch (error) {
+    if (qualifiedComposerDrafts?.recoveryPending) runtimeDraftFailure.value = true;
+    throw error;
+  } finally { if (selectionGeneration === runtimeSelectionGeneration) runtimeSelectionLoading.value = false; }
+}
+
+function locateHostThreadSession(session: SessionRef) {
+  const key = encodeSessionKey(session);
+  const participants = runtimeThreadState.summary.value?.participants;
+  if (!participants?.some(participant => encodeSessionKey(participant.session) === key)) return;
+  return handleUnifiedSelectKey(key);
+}
+
+async function selectThreadComposerTarget(participantId: string): Promise<void> {
+  const session = runtimeThreadState.sessionOfParticipant(participantId);
+  if (!session) return;
+  if (!threadComposerActive.value) {
+    try { await enterThreadComposer(participantId); }
+    catch (error) { setSendStatusText(toErrorMessage(error)); }
+    return;
+  }
+  await handleUnifiedSelectKey(encodeSessionKey(session), 'thread-target');
+  if (runtimeComposerReadyState?.sessionKey === encodeSessionKey(session)) runtimeThreadState.setTarget(participantId);
+}
+
+const runtimeCollaborationState = createHostCollaborationState(() => runtimeThreadState.owner.value?.host ?? selectedHostClient.value);
+provide(RUNTIME_COLLABORATION_STATE_KEY, runtimeCollaborationState);
+
+watch(() => bridgeReference.value?.profileId, () => {
+  threadComposerContext.clear();
+  runtimeComposerTransition.value = null;
+  runtimeComposerReadyState = null;
+  runtimeComposerPreferencesOwner = null;
+  runtimeThreadState.closeThread();
+  runtimeCollaborationState.closeTeam();
+});
+onScopeDispose(() => {
+  runtimeThreadState.closeThread();
+  runtimeCollaborationState.closeTeam();
+});
+const collaborationAvailableMembers = computed(() => (runtimeThreadState.summary.value?.participants ?? []).flatMap(participant => {
+  const manifest = harnessManifests.value.find(entry => entry.environmentId === participant.session.environmentId && entry.harnessInstanceId === participant.session.harnessInstanceId);
+  return manifest ? [{ participantId: participant.participantId, session: participant.session, harnessKind: manifest.kind }] : [];
+}));
+
+const isCollaborationPanelOpen = ref(false);
+
+/** Open the team under the thread the user is on; a task always carries its Thread target. */
+async function openCollaborationPanel(): Promise<void> {
+  isThreadPanelOpen.value = false;
+  const threadId = runtimeThreadState.threadId.value;
+  const summary = runtimeThreadState.summary.value;
+  const owner = summary?.participants.find(participant => participant.participantId === summary.activeParticipantId);
+  const session = owner === undefined ? null : runtimeThreadState.sessionOfParticipant(owner.participantId);
+  const repo = summary ? decodeRepoKey(summary.repoKey) : null;
+  if (threadId === null || owner === undefined || session === null || repo === null) {
+    setSendStatusText('Open a Host Thread before opening the collaboration surface.');
+    return;
+  }
+  await runtimeCollaborationState.openTeam({
+    threadId,
+    teamName: 'Vis Team',
+    environmentId: session.environmentId,
+    owner: { participantId: owner.participantId, session },
+    lease: { ownerId: owner.participantId, expiresAt: Date.now() + 24 * 60 * 60 * 1000 },
+  });
+  isCollaborationPanelOpen.value = true;
+}
+
+/**
+ * The workspace capability decision for a local-only workspace action against
+ * the currently connected bridge. A remote path is NEVER handed to the local
+ * shell or the local editor: when the bridge endpoint is remote, the decision
+ * refuses the action and carries the reason the UI renders next to the control.
+ */
+function localWorkspaceDecision(action: 'localShell' | 'localEditor' | 'localApplication') {
+  return decideWorkspaceCapability(action, activeBridgeUrl.value);
 }
 
 function parseAcpGitInfo(value: unknown): NonNullable<SessionState['gitInfo']> | undefined {
@@ -9595,9 +10495,36 @@ async function hydrateAcpTopPanelGitInfo() {
 }
 
 const ptySupported = computed(() => {
+  if (runtimeActionClient.value) return runtimeOnline.value && !!runtimeSelectedDirectory.value && runtimeWorkspaceKeys.length > 0;
   const active = backend();
   return Boolean(active.createPty && active.createPtyWebSocketUrl && active.deletePty);
 });
+
+function findWorkspaceContext(directory?: string) {
+  const client = requireRuntimeActionClient();
+  const target = runtimeSelectedSessionRef.value?.environmentId ?? runtimeEnvironmentId.value;
+  if (!target) throw new Error('runtime.workspace: no environment selected');
+  const workspaces = runtimeWorkspaceKeys.map(key => ({ key, value: decodeWorkspaceKey(key) }))
+    .filter(entry => entry.value.environmentId === target)
+    .sort((a, b) => b.value.canonicalPath.length - a.value.canonicalPath.length);
+  const normalized = directory?.replace(/\\/g, '/').replace(/\/+$/, '');
+  const selected = workspaces.find(entry => {
+    const root = entry.value.canonicalPath.replace(/\\/g, '/').replace(/\/+$/, '');
+    return normalized === root || normalized?.startsWith(`${root}/`);
+  }) ?? (!normalized && workspaces.length === 1 ? workspaces[0] : undefined);
+  return selected ? { client, target, workspaceKey: selected.key } : undefined;
+}
+
+function selectedWorkspaceContext(directory?: string) {
+  const context = findWorkspaceContext(directory);
+  if (!context) throw new Error('runtime.workspace: directory is outside authorized workspaces');
+  return context;
+}
+
+function selectedWorkspacePty(directory?: string): WorkspacePty {
+  const context = selectedWorkspaceContext(directory);
+  return createWorkspacePty(context.client, context.target, context.workspaceKey);
+}
 
 const activeBackendCapabilities = computed(
   () => getBackendAdapter(activeBackendKind.value).capabilities,
@@ -9663,6 +10590,758 @@ useCodexWorkspaceSync({
   codexPendingSessionLock,
 });
 
+// ---------------------------------------------------------------------------
+// Task 24 — the runtime session binding that activates the task-22 seam.
+//
+// The legacy `useBackend*` composables above accept an optional
+// `RuntimeSessionRuntime`; supplying it is what makes each migrated operation
+// delegate to the qualified `SessionRef` router instead of its
+// backend-specific path.
+//
+// The binding resolves the CURRENT qualified session from the live selection
+// and returns null whenever it is not a well-formed SessionRef, so the legacy
+// path keeps running unchanged until a runtime session is actually selected.
+// The qualified identity is derived from the active connection profile and the
+// selected session, which is the same identity the runtime state contract
+// freezes — the selection scope is the only source of truth for what is
+// current, and an in-flight operation is fenced by it.
+// ---------------------------------------------------------------------------
+function parseQualifiedSession(): SessionRef | null {
+  return unifiedSessionTree.value?.selection.value?.selection.session ?? null;
+}
+
+/**
+ * Whether the active bridge target has really attached a target for this
+ * session's environment. A `/runtime` client exists as soon as the active
+ * backend has a bridge URL, but it only holds a target once the bridge answers
+ * `hello`; until then every qualified operation would fail closed with
+ * `reconcile_required`, which is exactly the state the legacy fallback covers.
+ */
+function runtimeTargetAttached(session: SessionRef): boolean {
+  const client = runtimeActionClient.value;
+  if (!client) return false;
+  try {
+    client.scope(session.environmentId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function runtimeSelectionCapture(): SelectionCapture | null {
+  return unifiedSessionTree.value?.selection.value ?? null;
+}
+
+/**
+ * The runtime client the active bridge target must have attached. The legacy
+ * path keeps running while it is absent — a bare OpenCode server is not a
+ * runtime wire endpoint, so no qualified client is built for it.
+ */
+function requireRuntimeActionClient(): RuntimeClient {
+  const client = runtimeActionClient.value;
+  if (!client) {
+    throw new TypeError('runtime.client: no runtime client is attached for the active bridge target');
+  }
+  return client;
+}
+
+/**
+ * The stable client surface the qualified routers consume. The underlying
+ * runtime client is rebuilt whenever the active bridge target changes, so the
+ * routers receive a facade that resolves the CURRENT client on every call —
+ * never a computed ref object, and never a client captured at setup time.
+ */
+const runtimeActionClientSurface: RuntimeActionClient = {
+  scope(target) {
+    return requireRuntimeActionClient().scope(target);
+  },
+  mutate(target, method, params, options) {
+    return requireRuntimeActionClient().mutate(target, method, params, options);
+  },
+  request(target, method, params, options) {
+    return requireRuntimeActionClient().request(target, method, params, options);
+  },
+};
+
+function selectedRuntimeNativeFacade() {
+  const session = runtimeSelectedSessionRef.value;
+  const client = runtimeActionClient.value;
+  const manifest = harnessManifests.value.find(entry => entry.harnessInstanceId === session?.harnessInstanceId && entry.environmentId === session.environmentId);
+  return client && manifest && session ? createNativeFacade(client, manifest, session) : null;
+}
+
+const runtimeNativeBackendAdapter = computed(() => {
+  const session = runtimeSelectedSessionRef.value;
+  const client = runtimeActionClient.value;
+  const manifest = harnessManifests.value.find(entry => entry.harnessInstanceId === session?.harnessInstanceId && entry.environmentId === session.environmentId);
+  return client && manifest && session ? createNativeBackendAdapter(client, manifest, session) : null;
+});
+const runtimeKimiSessionClient = computed(() => {
+  const session = runtimeSelectedSessionRef.value;
+  const client = runtimeActionClient.value;
+  const manifest = harnessManifests.value.find(entry => entry.harnessInstanceId === session?.harnessInstanceId && entry.environmentId === session.environmentId);
+  return client && manifest?.kind === 'kimi-web' && session ? createNativeKimiSessionClient(client, manifest, session) : null;
+});
+const runtimeDshRpcClient = computed(() => {
+  const session = runtimeSelectedSessionRef.value;
+  const client = runtimeActionClient.value;
+  const manifest = harnessManifests.value.find(entry => entry.harnessInstanceId === session?.harnessInstanceId && entry.environmentId === session.environmentId);
+  return client && manifest?.kind === 'dsh' && session ? createNativeDshRpc(client, manifest, session) : undefined;
+});
+const dshComposerManagementClient = computed(() => {
+  if (!runtimeActionClient.value) return dshComposerClient.value;
+  if (activeBackendKind.value !== 'dsh') return undefined;
+  const adapter = runtimeNativeBackendAdapter.value;
+  const getPluginManagementEntries = adapter?.getPluginManagementEntries;
+  const setPluginEnabled = adapter?.setPluginEnabled;
+  return getPluginManagementEntries && setPluginEnabled ? { getPluginManagementEntries, setPluginEnabled } : undefined;
+});
+function selectedRuntimeNativeAdapter() { return runtimeNativeBackendAdapter.value; }
+const dshComposerPermissionClient = computed(() => {
+  const session = runtimeSelectedSessionRef.value;
+  if (!session || runtimeKindFor(session) !== 'dsh') return dshComposerClient.value;
+  const adapter = selectedRuntimeNativeAdapter();
+  const getPermissionPresetOptions = adapter?.getPermissionPresetOptions;
+  const selectPermissionPreset = adapter?.selectPermissionPreset;
+  return getPermissionPresetOptions && selectPermissionPreset ? { getPermissionPresetOptions, selectPermissionPreset } : undefined;
+});
+const dshPermissionControls = useDshComposerPermissions({
+  client: dshComposerPermissionClient,
+  sessionId: selectedSessionId,
+  current: computed(() => dshMessageBridge.value?.sessionState(selectedSessionId.value)?.permissionPreset ?? ''),
+  preset: dshCurrentPreset,
+  disabled: computed(() => connectionState.value !== 'ready' || isThinking.value),
+  onError: setSendStatusErrorText,
+});
+
+function runtimeKindFor(session: SessionRef): HarnessKind {
+  const manifest = harnessManifests.value.find(entry => entry.harnessInstanceId === session.harnessInstanceId && entry.environmentId === session.environmentId);
+  if (!manifest) throw new Error('Agent instance is unavailable.');
+  return manifest.kind;
+}
+
+const runtimeSessionActions = useRuntimeSessionActions({
+  client: runtimeActionClientSurface,
+  get profileId() { return activeProfileId.value; },
+  capture: runtimeSelectionCapture,
+  harnessKindFor: runtimeKindFor,
+});
+const runtimeMessageSend = useRuntimeMessageSend({
+  client: runtimeActionClientSurface,
+  get profileId() { return activeProfileId.value; },
+  capture: runtimeSelectionCapture,
+  harnessKindFor: runtimeKindFor,
+});
+const runtimeInteractions = useRuntimeInteractions({
+  client: runtimeActionClientSurface,
+  get profileId() { return activeProfileId.value; },
+  capture: runtimeSelectionCapture,
+});
+
+let runtimeInteractionProjection: ReturnType<typeof createInteractionProjection> | undefined;
+watch([runtimeActionClient, runtimeEnvironmentId], ([client, target]) => {
+  runtimeInteractionProjection?.dispose(); runtimeInteractionProjection = undefined;
+  if (!client || !target) return;
+  const projection = createInteractionProjection({
+    client, capture: runtimeSelectionCapture, kind: () => activeBackendKind.value,
+    show(view, capture, interactionId) {
+      runtimeDialogOwners.set(view.id, { view, capture, interactionId });
+      if (view.permission) upsertPermissionEntry(view.permission);
+      if (view.question) upsertQuestionEntry(view.question);
+    },
+    remove(id) { removePermissionEntry(id); removeQuestionEntry(id); runtimeDialogOwners.delete(id); },
+    error: setSendStatusText,
+  });
+  runtimeInteractionProjection = projection;
+  void projection.start(target).catch(error => setSendStatusText(toErrorMessage(error)));
+});
+onScopeDispose(() => { runtimeInteractionProjection?.dispose(); });
+
+const runtimeSendingOwners = reactive(new Set<string>());
+watch(() => [runtimeSelectedSessionRef.value, runtimeSendingOwners.size], () => {
+  if (runtimeSelectedSessionRef.value) isSending.value = runtimeSendingOwners.has(draftKeyForSelectedContext());
+});
+
+async function syncRuntimeDshSelection(session: SessionRef, input: RuntimeSendInput) {
+  if (!input.model) return;
+  const manifest = harnessManifests.value.find(entry => entry.environmentId === session.environmentId && entry.harnessInstanceId === session.harnessInstanceId);
+  if (!manifest) throw new Error('Agent instance is no longer available.');
+  const { providerID, modelID } = parseProviderModelKey(input.model);
+  if (!providerID || !modelID) throw new Error('Select a native DSH model.');
+  const facade = createNativeFacade(requireRuntimeActionClient(), manifest, session);
+  await completeRuntimeMutation(facade.mutate('dsh.models.select', { provider: providerID, model: modelID, ...(input.thinking ? { reasoningEffort: input.thinking } : {}) }));
+}
+
+function runtimeComposerTarget(fallback: SessionRef): SessionRef {
+  const thread = runtimeThreadState.summary.value;
+  if (!thread || !threadComposerActive.value) return fallback;
+  const participantId = runtimeThreadState.targets.value[0] ?? thread.activeParticipantId;
+  const target = participantId ? runtimeThreadState.sessionOfParticipant(participantId) : null;
+  if (!target) throw new Error('The selected Thread participant is unavailable.');
+  return target;
+}
+
+async function codexComposerDestination(target: SessionRef, input: RuntimeSendInput, isCurrent: () => boolean) {
+  const { providerID, modelID } = parseProviderModelKey(input.model ?? '');
+  if (!providerID || !modelID) return target;
+  const provider = providerID === CODEX_PROJECT_ID ? CODEX_OFFICIAL_MODEL_PROVIDER : providerID;
+  const client = requireRuntimeActionClient();
+  const scope = client.scope(target.environmentId);
+  const response = await client.request(target.environmentId, 'session.get', {
+    session: target, harnessInstanceId: target.harnessInstanceId, args: {},
+  }, { selectionCurrent: scope.isCurrent });
+  const currentProvider = asRuntimeRecord(response).modelProvider;
+  if (!isCurrent()) throw new Error('Codex session changed while preparing the message.');
+  if (typeof currentProvider !== 'string' || !currentProvider || currentProvider === provider) return target;
+  if (threadComposerActive.value || input.queue) throw new Error('Create a Codex session with the selected provider before sending to this target.');
+  const workspace = selectedWorkspaceContext(runtimeSelectedDirectory.value ?? undefined);
+  const created = await completeRuntimeMutation(client.mutate(target.environmentId, 'session.create', {
+    harnessInstanceId: target.harnessInstanceId,
+    workspaceKey: workspace.workspaceKey,
+    args: { native: { model: modelID, modelProvider: provider } },
+  }, { idempotencyKey: crypto.randomUUID(), selectionCurrent: scope.isCurrent }));
+  const session = readCreatedRuntimeSession(created, target);
+  await unifiedSessionTree.value?.retrySource(session.harnessInstanceId);
+  if (!isCurrent() || !scope.isCurrent()) throw new Error('Codex session changed while creating the new thread.');
+  return session;
+}
+
+async function sendRuntimeComposer(binding: RuntimeActionBinding, input: RuntimeSendInput) {
+  runtimeBoundSession(binding);
+  if (!runtimeOnline.value || !runtimeComposerCanSend() || runtimeSelectionLoading.value || runtimeComposerReadyKey.value !== draftKeyForSelectedContext()) return undefined;
+  const ready = runtimeComposerReadyState;
+  if (!ready || ready.sessionKey !== encodeSessionKey(binding.session)) return undefined;
+  const ownerKey = ready.bodyKey;
+  const sending = threadComposerContext.captureSend(ready, composerDraftRevisionByContext.get(ownerKey) ?? 0);
+  const draft = { text: messageInput.value, attachments: attachments.value };
+  runtimeSendingOwners.add(ownerKey);
+  isSending.value = true;
+  try {
+    const target = runtimeComposerTarget(binding.session);
+    if (encodeSessionKey(target) !== ready.sessionKey) throw new Error('Select the Thread participant before sending.');
+    const targetInput = input;
+    const kind = runtimeKindFor(target);
+    if (kind === 'dsh' && targetInput.model) await syncRuntimeDshSelection(target, targetInput);
+    const isCurrentDraft = () => draftKeyForSelectedContext() === ownerKey && messageInput.value === draft.text && attachments.value === draft.attachments;
+    const destination = kind === 'codex' ? await codexComposerDestination(target, targetInput, isCurrentDraft) : target;
+    const mutation = runtimeMessageSend.send(destination, targetInput);
+    void mutation.executed.catch(error => {
+      if (draftKeyForSelectedContext() === ownerKey) setSendStatusText(toErrorMessage(error));
+    });
+    const receipt = await mutation.accepted;
+    if (kind === 'codex' && !input.queue) await mutation.executed;
+    if (sending.mayClear(composerDraftRevisionByContext.get(ownerKey) ?? 0) && draftKeyForSelectedContext() === ownerKey && messageInput.value === draft.text && attachments.value === draft.attachments) {
+      clearComposerInputState();
+      persistComposerDraftForCurrentContext();
+    }
+    if (destination !== target && draftKeyForSelectedContext() === ownerKey && !messageInput.value && attachments.value.length === 0) {
+      await handleUnifiedSelectKey(encodeSessionKey(destination));
+    }
+    return receipt;
+  } catch (error) {
+    if (draftKeyForSelectedContext() === ownerKey) setSendStatusText(toErrorMessage(error));
+    return undefined;
+  } finally {
+    runtimeSendingOwners.delete(ownerKey);
+    if (draftKeyForSelectedContext() === ownerKey) isSending.value = false;
+  }
+}
+
+async function completeRuntimeMutation(mutation: { accepted: Promise<unknown>; executed: Promise<{ value: unknown }> }) {
+  void mutation.accepted.catch(() => undefined);
+  const result = await mutation.executed;
+  return result.value;
+}
+
+const threadNativeWindows = shallowRef<ReadonlyMap<string, readonly { id: string; kind: string; text: string; at: number }[]>>(new Map());
+const threadNativeErrors = shallowRef<ReadonlyMap<string, string>>(new Map());
+const threadNativeLoading = ref<string | null>(null);
+let threadNativeController: AbortController | undefined;
+let threadNativeGeneration = 0;
+function resetThreadNativeHistory() {
+  threadNativeGeneration += 1; threadNativeController?.abort(); threadNativeController = undefined;
+  threadNativeLoading.value = null; threadNativeErrors.value = new Map(); threadNativeWindows.value = new Map();
+}
+watch([runtimeThreadState.owner, runtimeThreadState.threadId], resetThreadNativeHistory);
+watch(isThreadPanelOpen, open => { if (!open) resetThreadNativeHistory(); }, { flush: 'sync' });
+onScopeDispose(resetThreadNativeHistory);
+function nativeHistoryRows(entries: unknown[]) {
+  return entries.slice(-50).flatMap(entry => {
+    if (!entry || typeof entry !== 'object' || !('info' in entry) || !('parts' in entry)) return [];
+    const info = entry.info;
+    if (!info || typeof info !== 'object' || !('id' in info) || typeof info.id !== 'string') return [];
+    const text = Array.isArray(entry.parts) ? entry.parts.flatMap(part => part && typeof part === 'object' && 'text' in part && typeof part.text === 'string' ? [part.text] : []).join('\n').slice(0, 4000) : '';
+    const time = 'time' in info && info.time && typeof info.time === 'object' && 'created' in info.time && typeof info.time.created === 'number' ? info.time.created : 0;
+    return [{ id: info.id, kind: 'role' in info && typeof info.role === 'string' ? info.role : 'native', text, at: time }];
+  });
+}
+function storeThreadNativeWindow(session: SessionRef, entries: unknown[]) {
+  const next = new Map(threadNativeWindows.value);
+  next.set(encodeSessionKey(session), nativeHistoryRows(entries));
+  while (next.size > 20) { const first = next.keys().next(); if (!first.done) next.delete(first.value); }
+  threadNativeWindows.value = next;
+}
+const runtimeThreadNativeHistory = computed(() => (runtimeThreadState.summary.value?.participants ?? []).map(participant => ({
+  participantId: participant.participantId, label: participant.session.nativeSessionId,
+  harness: harnessManifests.value.find(manifest => manifest.environmentId === participant.session.environmentId && manifest.harnessInstanceId === participant.session.harnessInstanceId)?.kind ?? 'unavailable', session: participant.session,
+  entries: threadNativeWindows.value.get(encodeSessionKey(participant.session)) ?? [],
+  loading: threadNativeLoading.value === encodeSessionKey(participant.session),
+  error: threadNativeErrors.value.get(encodeSessionKey(participant.session)),
+})));
+async function loadThreadNativeHistory(participantId: string) {
+  const session = runtimeThreadState.sessionOfParticipant(participantId);
+  if (!isThreadPanelOpen.value || !session || threadNativeLoading.value) return;
+  const key = encodeSessionKey(session), generation = threadNativeGeneration;
+  const threadId = runtimeThreadState.threadId.value;
+  const controller = new AbortController();
+  threadNativeController = controller; threadNativeLoading.value = key;
+  const previousErrors = new Map(threadNativeErrors.value); previousErrors.delete(key); threadNativeErrors.value = previousErrors;
+  let reader: ReturnType<typeof useRuntimeConversation> | undefined;
+  try {
+    const client = requireRuntimeActionClient(), scope = client.scope(session.environmentId);
+    const capture: SelectionCapture = { selection: { profileId: activeProfileId.value, session }, selectionGeneration: 0,
+      clientScope: scope, signal: controller.signal, isCurrent: () => !controller.signal.aborted && generation === threadNativeGeneration && scope.isCurrent() && runtimeThreadState.threadId.value === threadId };
+    reader = useRuntimeConversation({ publish: entries => { if (capture.isCurrent()) storeThreadNativeWindow(session, entries); } });
+    await reader.select(client, capture, runtimeKindFor(session));
+  } catch (error) {
+    if (generation === threadNativeGeneration && !controller.signal.aborted) {
+      const next = new Map(threadNativeErrors.value); next.set(key, toErrorMessage(error));
+      while (next.size > 20) { const first = next.keys().next(); if (!first.done) next.delete(first.value); }
+      threadNativeErrors.value = next;
+    }
+  } finally {
+    controller.abort();
+    try { await reader?.dispose(); }
+    catch (error) {
+      if (generation === threadNativeGeneration && !threadNativeErrors.value.has(key)) {
+        const next = new Map(threadNativeErrors.value); next.set(key, toErrorMessage(error)); threadNativeErrors.value = next;
+      }
+    } finally {
+      if (generation === threadNativeGeneration) { threadNativeLoading.value = null; threadNativeController = undefined; }
+    }
+  }
+}
+const runtimeConversation = useRuntimeConversation({ publish: entries => {
+  msg.loadHistory(entries, { replace: true, canonical: true, preserveOrder: runtimeConversationManifest.value?.kind === 'codex' });
+  const session = runtimeSelectedSessionRef.value;
+  if (session) storeThreadNativeWindow(session, entries);
+} });
+watch(runtimeConversation.loading, value => { isLoadingHistory.value = value; });
+onScopeDispose(() => {
+  void runtimeConversation.dispose().catch(error => log('Runtime history cleanup failed', error));
+});
+
+function runtimeBoundSession(binding: RuntimeActionBinding): SessionRef {
+  if (binding.profileId !== activeProfileId.value) throw new Error('Bridge connection changed.');
+  return binding.session;
+}
+const runtimeSessionRuntime: RuntimeSessionRuntime = {
+  title: session => {
+    const key = encodeSessionKey(session);
+    return unifiedSessionTree.value?.sessions.value.find(row => row.key === key)?.title ?? (runtimeSelectedPresentation.value?.key === key ? runtimeSelectedPresentation.value.title : undefined);
+  },
+  binding: () => {
+    const session = runtimeSelectedSessionRef.value;
+    if (!session) return null;
+    // The qualified router needs an ATTACHED runtime client, not merely a built
+    // one: until the active bridge target publishes its hello and the client
+    // holds a target for this session's environment, the legacy backend-specific
+    // path keeps running exactly as before.
+    if (!runtimeTargetAttached(session)) return null;
+    return { profileId: activeProfileId.value, session };
+  },
+  router: {
+    sendMessage: sendRuntimeComposer,
+    cancel: (binding) => {
+      const target = runtimeComposerTarget(runtimeBoundSession(binding));
+      return completeRuntimeMutation(runtimeMessageSend.cancelTurn(target, runtimeTurns.get(target)?.operationId));
+    },
+    fork: async (binding, payload) => {
+      runtimeBoundSession(binding);
+      const client = requireRuntimeActionClient(), capture = runtimeSelectionCapture();
+      const scope = client.scope(binding.session.environmentId);
+      const manifest = harnessManifests.value.find(entry => entry.environmentId === binding.session.environmentId && entry.harnessInstanceId === binding.session.harnessInstanceId);
+      if (!manifest) throw new Error('Selected Agent instance is unavailable.');
+      const result = manifest.kind === 'kimi-web' && typeof payload.messageId === 'string'
+        ? await createKimiWebCardActions(createNativeKimiSessionClient(client, manifest, binding.session)).forkSessionAtMessage(binding.session.nativeSessionId, payload.messageId)
+        : await completeRuntimeMutation(runtimeSessionActions.fork(binding.session, payload));
+      const row = asRuntimeRecord(result), thread = asRuntimeRecord(row.thread);
+      const id = row.id ?? row.sessionId ?? thread.id;
+      if (typeof id !== 'string' || !id) throw new Error('Bridge forked the session but did not return its native identity.');
+      const forked = parseSessionRef({ ...binding.session, nativeSessionId: id });
+      if (!scope.isCurrent() || runtimeActionClient.value !== client) return result;
+      await client.request(binding.session.environmentId, 'session.list', { harnessInstanceId: binding.session.harnessInstanceId, args: {} }, { selectionCurrent: scope.isCurrent });
+      if (!scope.isCurrent() || runtimeActionClient.value !== client) return result;
+      if (manifest.kind === 'dsh') {
+        await completeRuntimeMutation(createNativeFacade(client, manifest, forked).mutate('updateSession', { time: { archived: 0 } }));
+        await client.request(binding.session.environmentId, 'session.list', { harnessInstanceId: binding.session.harnessInstanceId, args: {} }, { selectionCurrent: scope.isCurrent });
+      }
+      if (capture?.isCurrent() && scope.isCurrent()) await handleUnifiedSelectKey(encodeSessionKey(forked));
+      return result;
+    },
+    rename: (binding, title) => completeRuntimeMutation(runtimeSessionActions.rename(runtimeBoundSession(binding), title)),
+    archive: (binding) => completeRuntimeMutation(runtimeSessionActions.archive(runtimeBoundSession(binding))),
+    unarchive: (binding) => completeRuntimeMutation(runtimeSessionActions.unarchive(runtimeBoundSession(binding))),
+    delete: (binding) => completeRuntimeMutation(runtimeSessionActions.delete(runtimeBoundSession(binding))),
+    compact: (binding) => completeRuntimeMutation(runtimeSessionActions.compact(runtimeBoundSession(binding))),
+    revert: async (binding, payload) => {
+      runtimeBoundSession(binding);
+      if (runtimeKindFor(binding.session) !== 'kimi-web' || typeof payload.messageId !== 'string') return completeRuntimeMutation(runtimeSessionActions.revert(binding.session, payload));
+      const manifest = harnessManifests.value.find(entry => entry.environmentId === binding.session.environmentId && entry.harnessInstanceId === binding.session.harnessInstanceId);
+      if (!manifest) throw new Error('Selected Agent instance is unavailable.');
+      return createKimiWebCardActions(createNativeKimiSessionClient(requireRuntimeActionClient(), manifest, binding.session)).undoSessionFromMessage(binding.session.nativeSessionId, payload.messageId);
+    },
+    todos: (binding) => runtimeSessionActions.todos(runtimeBoundSession(binding)),
+    tokenMonitor: (binding) => runtimeSessionActions.tokenMonitor(runtimeBoundSession(binding)),
+    history: async (binding) => {
+      runtimeBoundSession(binding);
+      const captured = runtimeSelectionCapture();
+      if (!captured || encodeSessionKey(captured.selection.session) !== encodeSessionKey(binding.session)) return;
+      if (!runtimeSelectedDirectory.value) {
+        await runtimeConversation.unavailable(t('runtime.session.noWorkspace'));
+        return;
+      }
+      const manifest = harnessManifests.value.find(entry => entry.harnessInstanceId === binding.session.harnessInstanceId && entry.environmentId === binding.session.environmentId);
+      if (!manifest) throw new Error('Selected Agent instance is unavailable.');
+      const prepare = manifest.kind === 'acp' ? async () => {
+        const facade = createNativeFacade(requireRuntimeActionClient(), manifest, binding.session);
+        await completeRuntimeMutation(facade.mutate('acp.loadSession'));
+      } : undefined;
+      await runtimeConversation.select(requireRuntimeActionClient(), captured, manifest.kind, prepare);
+    },
+    respond: (binding, interactionId, response) =>
+      runtimeInteractions.respond(runtimeBoundSession(binding), interactionId, response),
+  },
+};
+/** Manifests published by the connected target, refreshed after recovery. */
+const harnessManifests = ref<readonly HarnessManifest[]>([]);
+const runtimeConversationManifest = computed(() => {
+  const session = runtimeSelectedSessionRef.value;
+  return session ? harnessManifests.value.find(entry => entry.environmentId === session.environmentId && entry.harnessInstanceId === session.harnessInstanceId) : undefined;
+});
+function runtimeSupports(operation: string): boolean { return runtimeConversationManifest.value?.extensions.some(entry => entry.name === operation && entry.support.state === 'supported') === true; }
+const runtimeSessionActionCapabilities = computed(() => ({
+  rename: runtimeSupports(runtimeConversationManifest.value?.kind === 'kimi-web' ? 'kimi.updateProfile' : 'updateSession'),
+  archive: runtimeSupports(runtimeConversationManifest.value?.kind === 'kimi-web' ? 'archiveSession' : 'updateSession'),
+  unarchive: runtimeSupports(runtimeConversationManifest.value?.kind === 'kimi-web' ? 'restoreSession' : 'updateSession'),
+  delete: runtimeSupports('deleteSession'), pin: false, unpin: false,
+}));
+const runtimeSelectedArchived = computed(() => unifiedSessionTree.value?.sessions.value.find(row => row.key === unifiedTreeSelectedKey.value)?.archived ?? runtimeSelectedPresentation.value?.archived ?? false);
+function openRuntimeSessionTree() {
+  sidePanelCollapsed.value = false; sidePanelActiveTab.value = 'session';
+  void nextTick(() => { sidePanelAreaEl.value?.querySelector<HTMLInputElement>('[data-testid="unified-search"] input, input[type="search"]')?.focus(); });
+}
+
+const managementManifest = computed(() => harnessManifests.value.find(manifest => manifest.harnessInstanceId === managementHarnessInstanceId.value));
+watch([runtimeKimiSessionClient, activeBackendKind, connectionState], async ([native]) => {
+  if (!runtimeActionClient.value) return;
+  kimiWebCapabilities.invalidate();
+  if (!native || activeBackendKind.value !== 'kimi-web' || connectionState.value !== 'ready') return;
+  await kimiWebCapabilities.refreshFirstLevel();
+  if (runtimeKimiSessionClient.value !== native) return;
+  const facade = selectedRuntimeNativeFacade();
+  for (const [action, operation] of [['fork', 'forkSession'], ['compact', 'compactSession'], ['undo', 'kimi.undo'], ['btw', 'kimi.btw']] as const) {
+    if (facade?.manifest.extensions.some(entry => entry.name === operation && entry.support.state === 'supported')) {
+      await kimiWebCapabilities.probe(action, async () => undefined);
+    }
+  }
+});
+const managementNativeAdapter = computed(() => {
+  const manifest = managementManifest.value;
+  const client = runtimeActionClient.value;
+  return manifest && client ? createNativeBackendAdapter(client, manifest) : null;
+});
+const managementKimiProviders = computed(() => {
+  const manifest = managementManifest.value;
+  const client = runtimeActionClient.value;
+  return manifest?.kind === 'kimi-web' && client ? createNativeKimiProviders(client, manifest) : null;
+});
+const managementDshRpcClient = computed(() => {
+  const manifest = managementManifest.value;
+  const client = runtimeActionClient.value;
+  return manifest?.kind === 'dsh' && client ? createNativeDshRpc(client, manifest) : undefined;
+});
+const managementDshStatus = shallowRef<DshStatusSnapshot>();
+const managementDshStatusRefresh = ref(0);
+watch([managementDshRpcClient, isStatusMonitorOpen, managementDshStatusRefresh], async ([rpc, open], _previous, onCleanup) => {
+  managementDshStatus.value = undefined;
+  if (!rpc || !open) return;
+  const accountOperation = managementManifest.value?.extensions.find(entry => entry.name === 'dsh.ui.account.getState');
+  if (accountOperation?.support.state !== 'supported') return;
+  let current = true;
+  onCleanup(() => { current = false; });
+  try {
+    const result = await rpc.call('account', 'getState');
+    if (current && managementDshRpcClient.value === rpc) {
+      managementDshStatus.value = { health: 'ok', account: dshAccountSnapshot(result) };
+    }
+  } catch {
+    if (current && managementDshRpcClient.value === rpc) managementDshStatus.value = { health: 'error' };
+  }
+});
+const managementProviders = ref<ProviderInfo[]>([]);
+const managementConnectedProviders = ref<string[]>([]);
+const managementProviderConfig = ref<ProviderConfigState | null>(null);
+let managementProviderRevision = 0;
+async function refreshManagementProviders() {
+  const revision = ++managementProviderRevision;
+  const adapter = managementNativeAdapter.value;
+  managementProviders.value = [];
+  managementConnectedProviders.value = [];
+  managementProviderConfig.value = null;
+  if (!adapter) return;
+  const [providersResult, configResult] = await Promise.allSettled([
+    adapter.listProviders?.(), adapter.getGlobalConfig?.(),
+  ]);
+  if (revision !== managementProviderRevision || adapter !== managementNativeAdapter.value) return;
+  if (providersResult.status === 'fulfilled' && providersResult.value) {
+    const data = providersResult.value as ProviderResponse;
+    managementProviders.value = Array.isArray(data.all) ? data.all : [];
+    managementConnectedProviders.value = Array.isArray(data.connected) ? data.connected : [];
+  }
+  if (configResult.status === 'fulfilled' && configResult.value) managementProviderConfig.value = configResult.value as ProviderConfigState;
+}
+watch(managementNativeAdapter, adapter => {
+  managementCodexApi.disconnectTransport();
+  if (adapter instanceof CodexAdapter) managementCodexApi.attachRuntimeAdapter(adapter, '');
+  if (isProviderManagerOpen.value) void refreshManagementProviders();
+});
+watch(isProviderManagerOpen, open => { if (open) void refreshManagementProviders(); });
+
+const isConnectionEntryOpen = ref(false);
+const isMigrationWizardOpen = ref(false);
+const migrationWizardStatus = ref<'idle' | 'backing-up' | 'migrating' | 'done' | 'failed'>('idle');
+const migrationWizardError = ref('');
+const migrationWizardInventory = ref<MigrationInventory>({ revision: '', sources: [] });
+
+const managementEnvironmentId = shallowRef<EnvironmentId | null>(null);
+watch(bridgeReference, () => { managementEnvironmentId.value = null; managedRemote.close(); });
+const managementHostClient = computed(() => {
+  if (!runtimeOnline.value) return null;
+  const client = runtimeActionClient.value, target = managementEnvironmentId.value ?? bridgeReference.value?.expectedEnvironmentId;
+  return client && target ? createHostClient(client, target) : null;
+});
+const managedRemote = createManagedRemoteState({ getHost: () => managementHostClient.value, onConnected: activateRuntimeTarget });
+async function activateRuntimeTarget(target: EnvironmentId) {
+  const managerHop = managedRemote.selectedProfile.value?.role === 'manager';
+  const client = requireRuntimeActionClient();
+  await client.inspect();
+  try { client.scope(target); } catch { await client.attach(target); }
+  const inspection = await client.request(target, 'runtime.inspect', {});
+  const scope = client.scope(target);
+  if (!scope.isCurrent() || runtimeActionClient.value !== client) throw new Error('Bridge connection changed.');
+  if (managerHop || inspection.role === 'manager') {
+    managementEnvironmentId.value = target;
+    isConnectionEntryOpen.value = true;
+    await managedRemote.open();
+    return;
+  }
+  if (runtimeDraftEditorRef.value && !await runtimeDraftEditorRef.value.flush()) throw new Error(t('runtime.session.saveBeforeSwitch'));
+  persistComposerDraftForCurrentContext();
+  await qualifiedDraftWrites;
+  if (runtimeDraftFailure.value) throw new Error(t('runtime.session.saveBeforeSwitch'));
+  runtimeSelectionGeneration++;
+  runtimeComposerReadyKey.value = null;
+  runtimeSelectionLoading.value = false;
+  selectedSessionId.value = ''; runtimeSelectedDirectory.value = '';
+  harnessManifests.value = inspection.harnesses.map(entry => entry.manifest);
+  runtimeWorkspaceKeys = inspection.targets.find(entry => entry.target === target)?.workspaceKeys ?? [];
+  managementHarnessInstanceId.value = inspection.harnesses.find(entry => entry.manifest.core.listSessionPage.state === 'supported')?.manifest.harnessInstanceId ?? null;
+  runtimeIndexAvailable.value = false;
+  runtimeEnvironmentId.value = target;
+  runtimeIndexAvailable.value = inspection.targets.find(entry => entry.target === target)?.capabilities.methods.includes('runtime.snapshot') ?? false;
+  const resume = pendingRuntimeSelection;
+  if (resume?.target === target) {
+    await runtimeTreeReady;
+    await handleUnifiedSelectKey(resume.key);
+    pendingRuntimeSelection = null;
+    connectionState.value = 'ready';
+  }
+  isConnectionEntryOpen.value = false;
+}
+async function returnToInitialManager() {
+  managementEnvironmentId.value = null;
+  await managedRemote.open();
+}
+function openConnectionEntry() { isConnectionEntryOpen.value = true; void managedRemote.open(); }
+function closeConnectionManager() { isConnectionEntryOpen.value = false; managedRemote.close(); }
+onScopeDispose(() => { managedRemote.close(); });
+
+const migrationInventoryNext = shallowRef<LegacyExportToken | null>(null);
+const migrationInventoryHints = new Map<string, BrowserInventoryEntry>();
+const migrationBoundSourceKeys = computed(() => {
+  const mappings = migrationBindings.value;
+  return new Set(migrationWizardInventory.value.sources.filter(source => {
+    const hint = migrationInventoryHints.get(source.sourceKey);
+    return hint && mappings.some(mapping => mapping.scopeFingerprint === hint.scopeFingerprint && mapping.nativeSessionId === hint.nativeSessionId);
+  }).map(source => source.sourceKey));
+});
+const migrationBindingTargetLabel = computed(() => runtimeSelectedSessionRef.value ? `${activeBackendKind.value} · ${runtimeSelectedSessionRef.value.nativeSessionId}` : 'Select a native session before binding history');
+function localLegacySourcePort() {
+  const browser = createBrowserLegacySourcePort(createBrowserLegacySource({ storage: window.localStorage, indexedDB: window.indexedDB, origin: window.location.origin }));
+  return createClientLegacySourcePort(browser, window.electronAPI ? window.electronAPI.sessionDatabase ?? null : undefined);
+}
+async function loadMigrationInventory(next: boolean) {
+  migrationWizardError.value = '';
+  try {
+    const page = await readBrowserInventory(localLegacySourcePort(), next ? migrationInventoryNext.value ?? undefined : undefined);
+    migrationInventoryHints.clear();
+    for (const source of page.sources) migrationInventoryHints.set(source.sourceKey, source);
+    migrationWizardInventory.value = { revision: page.revision, sources: page.sources.map(source => ({ ...source, kind: source.kind ?? 'local' })) };
+    migrationInventoryNext.value = page.next;
+  } catch (error) { migrationWizardError.value = toErrorMessage(error); }
+}
+function openMigrationWizard() {
+  isMigrationWizardOpen.value = true;
+  void loadMigrationInventory(false);
+}
+
+function openWorkspaceMigration() {
+  openMigrationWizard();
+}
+
+const isHarnessSettingsOpen = ref(false);
+
+const harnessSettingsDialog = ref<HTMLDialogElement | null>(null);
+watch([isHarnessSettingsOpen, harnessSettingsDialog], ([open, dialog]) => {
+  if (!dialog) return;
+  if (open && !dialog.open) dialog.showModal();
+  else if (!open && dialog.open) dialog.close();
+});
+const harnessSettingsKind = computed(() => harnessManifests.value.find(entry => entry.harnessInstanceId === managementHarnessInstanceId.value)?.kind ?? activeBackendKind.value);
+
+/**
+ * Management panels use the explicit Agent selection independently of the
+ * conversation's session. The instance scope never grants session operations.
+ */
+const harnessInstanceScope = computed<ControlScope | null>(() => {
+  const manifest = managementManifest.value;
+  return manifest ? {
+    kind: 'instance',
+    environmentId: manifest.environmentId,
+    harnessInstanceId: manifest.harnessInstanceId,
+  } : null;
+});
+
+const harnessSettingsControls = computed<readonly string[]>(() => {
+  const scope = harnessInstanceScope.value;
+  if (!scope) return [];
+  return Object.keys(HARNESS_CONTROLS).filter((control) => {
+    const support = runtimeCapabilities.support({ control, scope });
+    return support.channel === 'harness' && support.state === 'supported';
+  });
+});
+
+const harnessSettingsActions = computed(() => Object.fromEntries(harnessSettingsControls.value.map(control => [control, 'Open'])));
+function handleHarnessSettingsSave(control: string) {
+  const group = HARNESS_CONTROLS[control]?.group;
+  isHarnessSettingsOpen.value = false;
+  if (group === 'model' || group === 'provider' || group === 'auth' || group === 'settings') isProviderManagerOpen.value = true;
+  else isStatusMonitorOpen.value = true;
+}
+function handleMigrationBind(value: Readonly<{ sourceKey: string; nativeSessionId?: string }>) {
+  const source = migrationInventoryHints.get(value.sourceKey), selected = runtimeSelectedSessionRef.value;
+  if (!source?.scopeFingerprint || !source.nativeSessionId || !selected || source.nativeSessionId !== selected.nativeSessionId) {
+    migrationWizardError.value = 'Select the matching native session before binding this history. Other records remain in the local backup.';
+    return;
+  }
+  migrationBindings.value = [...migrationBindings.value.filter(mapping => mapping.scopeFingerprint !== source.scopeFingerprint || mapping.nativeSessionId !== source.nativeSessionId), {
+    profileId: activeProfileId.value, environmentId: selected.environmentId, harnessInstanceId: selected.harnessInstanceId,
+    nativeSessionId: selected.nativeSessionId, scopeFingerprint: source.scopeFingerprint, evidence: 'user-confirmed',
+  }];
+  migrationWizardError.value = '';
+}
+
+const migrationBindings = shallowRef<readonly ProvenMapping[]>([]);
+
+function handleMigrationStart(): Promise<void> {
+  migrationAttempt ??= Promise.resolve().then(performMigration).finally(() => { migrationAttempt = undefined; });
+  return migrationAttempt;
+}
+
+async function performMigration() {
+  migrationWizardStatus.value = 'backing-up';
+  migrationWizardError.value = '';
+  try {
+    const client = requireRuntimeActionClient(), environmentId = activeRuntimeEnvironmentId.value;
+    const scope = client.scope(environmentId);
+    const coordinator = createImportCoordinator({
+      source: localLegacySourcePort(), local: await localDraftStoreOwner.get(),
+      target: { environmentId, service: createBridgeImportService(client, environmentId) },
+      currentEnvironment: () => runtimeActionClient.value === client && scope.isCurrent() ? runtimeEnvironmentId.value : null,
+      mappings: migrationBindings.value, clientOrigin: window.location.origin,
+    });
+    migrationWizardStatus.value = 'migrating';
+    const result = await coordinator.run();
+    await activateQualifiedComposerDrafts();
+    migrationWizardStatus.value = 'done';
+    migrationWizardResult.value = { importId: result.importId, records: result.records, chunks: result.chunks, drafts: result.drafts, boundRecords: result.boundRecords, localOnlyRecords: result.localOnlyRecords };
+  } catch (error) {
+    migrationWizardStatus.value = 'failed'; migrationWizardError.value = migrationFailureMessage(error);
+  }
+}
+
+function migrationFailureMessage(error: unknown): string {
+  const detail = typeof error === 'object' && error !== null ? error : undefined;
+  if (detail && 'name' in detail && detail.name === 'QuotaExceededError') return t('app.runtimeMigration.storageFull');
+  const code = detail && 'code' in detail ? detail.code : undefined;
+  if (code === 'unavailable' || code === 'legacy_write_failed') return t('app.runtimeMigration.storageUnavailable');
+  if (code === 'paused' || code === 'pending_budget' || code === 'editing_paused' || code === 'drain_busy') return t('app.runtimeMigration.storagePaused');
+  return toErrorMessage(error);
+}
+
+async function handleMigrationRetry() {
+  await handleMigrationStart();
+}
+
+const migrationWizardResult = ref<{
+  importId: string;
+  records: number;
+  chunks: number;
+  drafts: number;
+  boundRecords: number;
+  localOnlyRecords: number;
+} | null>(null);
+
+const migrationWizardBackup = computed(() =>
+  migrationWizardStatus.value === 'idle' ? undefined : {
+    records: migrationWizardResult.value?.records ?? 0,
+    chunks: migrationWizardResult.value?.chunks ?? 0,
+    boundRecords: migrationWizardResult.value?.boundRecords ?? 0,
+    boundChunks: migrationWizardResult.value?.chunks ?? 0,
+    done: migrationWizardStatus.value === 'done',
+  },
+);
+
+
+provide(RUNTIME_SESSION_ACTIONS_KEY, runtimeSessionRuntime);
+
+const runtimeCapabilities = useRuntimeCapabilities();
+watch(
+  harnessManifests,
+  (manifests) => { runtimeCapabilities.setManifests([...manifests]); },
+  { immediate: true },
+);
+watch(activeHarnessKind, (kind) => { runtimeCapabilities.setActiveBackendKind(kind); }, { immediate: true });
+
+/**
+ * The scope the capability-gated settings surfaces resolve backend-specific
+ * controls against.
+ *
+ * It is only ever a REAL qualified harness scope — the currently selected
+ * session on the active harness instance. A workspace scope is NEVER a harness
+ * scope: falling back to one routes provider/config controls into the
+ * workspace resolver, where every harness operation is unknown and therefore
+ * reported unavailable.
+ *
+ * It stays null until a real manifest is published AND a qualified session is
+ * selected, so the legacy adapter-shape path remains the fallback and an empty
+ * manifest list can never disable a control that used to work.
+ */
+
+
+
+
 const backendSessionActions = useBackendSessionActions({
   activeBackendKind,
   codexProjectId: CODEX_PROJECT_ID,
@@ -9705,9 +11384,53 @@ const backendSessionActions = useBackendSessionActions({
     backend().updateSession(sessionId, payload, directory),
   kimiWebApi,
   dshSessionApi,
+  runtime: runtimeSessionRuntime,
 });
 
+async function createRuntimeSession(directory?: string): Promise<BackendSessionInfo | undefined> {
+  const manifest = runtimeConversationManifest.value ?? managementManifest.value;
+  const client = runtimeActionClient.value;
+  if (!manifest || !client) throw new Error('Select a connected Agent instance.');
+  const workspaces = runtimeWorkspaceKeys.map(key => ({ key, workspace: decodeWorkspaceKey(key) })).filter(entry => entry.workspace.environmentId === manifest.environmentId);
+  let workspace = workspaces.find(entry => entry.workspace.canonicalPath === directory);
+  if (!workspace && workspaces.length === 1) workspace = workspaces[0];
+  if (!workspace) {
+    const path = await showPrompt(`Workspace (${workspaces.map(entry => entry.workspace.canonicalPath).join(', ')})`, directory ?? '');
+    if (path === null) return undefined;
+    workspace = workspaces.find(entry => entry.workspace.canonicalPath === path);
+  }
+  if (!workspace) throw new Error('Select a workspace authorized by this Bridge.');
+  const scope = client.scope(manifest.environmentId);
+  const mutation = client.mutate(manifest.environmentId, 'session.create', {
+    harnessInstanceId: manifest.harnessInstanceId,
+    workspaceKey: workspace.key,
+    args: manifest.kind === 'codex' ? { native: {} } : manifest.kind === 'dsh' ? { request: {} } : {},
+  }, { idempotencyKey: crypto.randomUUID(), selectionCurrent: scope.isCurrent });
+  void mutation.accepted.catch(() => undefined);
+  const result = (await mutation.executed).value;
+  const session = readCreatedRuntimeSession(result, manifest);
+  await unifiedSessionTree.value?.retrySource(manifest.harnessInstanceId);
+  await handleUnifiedSelectKey(encodeSessionKey(session));
+  return { id: session.nativeSessionId, projectID: '', directory: workspace.workspace.canonicalPath };
+}
+
+function readCreatedRuntimeSession(result: unknown, owner: Pick<SessionRef, 'environmentId' | 'harnessInstanceId'>): SessionRef {
+  const row = asRuntimeRecord(result);
+  const sessionRecord = asRuntimeRecord(row.session);
+  const nested = asRuntimeRecord(sessionRecord.session);
+  const candidate = typeof sessionRecord.nativeSessionId === 'string' ? sessionRecord : typeof nested.nativeSessionId === 'string' ? nested : undefined;
+  if (!candidate) throw new Error('Bridge created the session but did not return its qualified identity.');
+  const session = parseSessionRef(candidate);
+  if (session.environmentId !== owner.environmentId || session.harnessInstanceId !== owner.harnessInstanceId) throw new Error('Bridge returned a session from another Agent instance.');
+  return session;
+}
+
+function asRuntimeRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value)) : {};
+}
+
 const backendSessionLifecycle = useBackendSessionLifecycle({
+  createRuntimeSession,
   activeBackendKind,
   codexProjectId: CODEX_PROJECT_ID,
   acpProjectId: ACP_PROJECT_ID,
@@ -9772,6 +11495,7 @@ const backendSessionLifecycle = useBackendSessionLifecycle({
     });
   },
   selectDshSession: switchSessionSelection,
+  runtime: runtimeSessionRuntime,
 });
 
 // ---------------------------------------------------------------------------
@@ -9870,6 +11594,7 @@ const backendSessionReload = useBackendSessionReload({
   fetchPendingPermissions,
   fetchPendingQuestions,
   focusInput,
+  runtime: runtimeSessionRuntime,
 });
 
 useMessageCacheAuthInvalidation({
@@ -9892,7 +11617,7 @@ async function reloadSelectedSessionAndAcpOptions(newId?: string, oldId?: string
 watch(
   [projectDirectory, activeDirectory, selectedSessionId],
   ([pd, ad, sid], [prevPd, prevAd, prevSid] = ['', '', '']) => {
-    if (isBootstrapping.value) return;
+    if (isBootstrapping.value || runtimeActionClient.value) return;
 
     const pdChanged = pd !== prevPd && typeof prevPd !== 'undefined';
     const adChanged = ad !== prevAd && typeof prevAd !== 'undefined';
@@ -9927,7 +11652,9 @@ watch(
   { immediate: true },
 );
 
-watch(selectedSessionId, (newId, oldId) => reloadSelectedSessionAndAcpOptions(newId, oldId), {
+watch(selectedSessionId, (newId, oldId) => {
+  if (!runtimeActionClient.value) return reloadSelectedSessionAndAcpOptions(newId, oldId);
+}, {
   immediate: true,
 });
 
@@ -9992,7 +11719,7 @@ async function executeKimiWebSlashCommand(action: KimiWebSlashAction) {
   const sessionId = selectedSessionId.value;
   if (connectionState.value !== 'ready' || !sessionId) throw new Error(t('app.error.unavailable', { action: 'Kimi Web' }));
   const client = kimiWebRestClient();
-  const current = () => activeBackendKind.value === 'kimi-web' && selectedSessionId.value === sessionId && configuredKimiWebAdapter?.restClient === client;
+  const current = () => activeBackendKind.value === 'kimi-web' && selectedSessionId.value === sessionId && (runtimeActionClient.value ? runtimeKimiSessionClient.value : configuredKimiWebAdapter?.restClient) === client;
   if (action.kind === 'subagent') {
     openKimiSessionAgents(sessionId);
   } else if (action.kind === 'copyall') {
@@ -10158,7 +11885,7 @@ const backendMessageSend = useBackendMessageSend({
   formatCommentNote,
   resolveAgentMode: resolvePromptAgentMode,
   buildAcpMentionContextParts,
-});
+}, runtimeSessionRuntime);
 
 // dsh mirror of the `onKimiWebPromptRunning` dispatch above: the dsh send
 // path (plan Todo 25) marks the accepted prompt here so the dot turns busy
@@ -11036,7 +12763,10 @@ function handleShowSubagentHistory(payload: { sessionId: string; label: string }
   const sessionId = payload.sessionId?.trim();
   if (!sessionId) return;
   const label = payload.label?.trim() || sessionId;
-  const key = `subagent-history:${sessionId}`;
+  const runtimeParent = runtimeSelectedSessionRef.value;
+  const key = runtimeParent
+    ? `subagent-history:${activeProfileId.value}:${encodeSessionKey({ ...runtimeParent, nativeSessionId: sessionId })}`
+    : `subagent-history:${sessionId}`;
   if (fw.has(key)) {
     fw.bringToFront(key);
     return;
@@ -11046,6 +12776,29 @@ function handleShowSubagentHistory(payload: { sessionId: string; label: string }
   const winH = 520;
   const x = Math.max(0, Math.round((width - winW) / 2));
   const y = Math.max(0, Math.round((height - winH) / 2));
+  const runtimeClient = runtimeActionClient.value;
+  const observed = () => Array.from(msg.messages.value.values()).flatMap(entry => {
+    const info = entry.value.info;
+    return info?.sessionID === sessionId ? [{ info, parts: msg.getParts(info.id) }] : [];
+  });
+  const initialObserved = observed();
+  const historyReference = bridgeReference.value;
+  const historyToken = bridgeLoginToken.value;
+  const runtimeHistory = runtimeClient && runtimeParent && historyReference && activeBackendKind.value === 'opencode' ? {
+    open: async () => {
+      const owner = useRuntimeConnection({ reference: historyReference,
+        resolveAuthentication: async () => historyToken ? { bridgeToken: historyToken } : {},
+        createWebSocket: endpoint => new WebSocket(endpoint),
+      });
+      try {
+        await owner.connect();
+        try { owner.client.scope(runtimeParent.environmentId); } catch { await owner.client.attach(runtimeParent.environmentId); }
+        return { client: owner.client, dispose: owner.dispose };
+      } catch (error) { owner.dispose(); throw error; }
+    }, profileId: historyReference.profileId,
+    session: { ...runtimeParent, nativeSessionId: sessionId },
+    observed: () => runtimeActionClient.value === runtimeClient && activeProfileId.value === historyReference.profileId && runtimeSelectedSessionRef.value && encodeSessionKey(runtimeSelectedSessionRef.value) === encodeSessionKey(runtimeParent) ? observed() : initialObserved,
+  } : undefined;
   const historyBackend = backend();
   const historyDirectory = activeDirectory.value.trim();
   const readOpenCodeSubagentHistory = openCodeSubagentHistory.loader(openCodeSubagentHistoryScope(), async (childSessionId) => {
@@ -11056,7 +12809,8 @@ function handleShowSubagentHistory(payload: { sessionId: string; label: string }
     component: SubagentHistoryContent,
     props: {
       parentThreadId: sessionId,
-      loadHistory: activeBackendKind.value === 'codex' ? codexApi.readSubagentHistory
+      runtimeHistory,
+      loadHistory: runtimeHistory ? undefined : activeBackendKind.value === 'codex' ? codexApi.readSubagentHistory
         : activeBackendKind.value === 'kimi-web' ? readKimiWebSubagentHistory
           : activeBackendKind.value === 'opencode' ? readOpenCodeSubagentHistory : undefined,
       sessionLabel: label,
@@ -11568,7 +13322,7 @@ function handlePtyEvent(event: {
   }
 }
 
-const { startInitialization, abortInitialization } = useBackendActivation({
+const { abortInitialization } = useBackendActivation({
   credentials,
   codexApi,
   ge,
@@ -11595,7 +13349,11 @@ const { startInitialization, abortInitialization } = useBackendActivation({
   serverState,
   t,
   toErrorMessage,
-  setActiveBackendKind,
+  setActiveBackendKind: (kind) => {
+    // The retired registry global is unwired: activation moves the
+    // per-connection kind ref the injected composables already read.
+    activeBackendKind.value = kind;
+  },
   configureCodexBackend,
   configureAcpBackend,
   configureKimiWebBackend,
@@ -11629,54 +13387,71 @@ const handleBackendConnectionError = createBackendAuthFailureHandler({
   translate: t,
 });
 
-function handleLogin() {
-  if (loginBackendKind.value === 'codex') {
-    credentials.saveCodex(loginCodexBridgeUrl.value, loginCodexBridgeToken.value);
-    void startInitialization();
-    return;
+async function handleLogin() {
+  if (uiInitState.value === 'loading') return;
+  const generation = ++bridgeLoginGeneration;
+  uiInitState.value = 'loading';
+  connectionState.value = 'connecting';
+  initErrorMessage.value = '';
+  try {
+    await activateQualifiedComposerDrafts();
+    if (generation !== bridgeLoginGeneration) return;
+    await connectRuntimeBridge();
+    if (generation !== bridgeLoginGeneration) return;
+    sidePanelActiveTab.value = 'session';
+    connectionState.value = 'ready';
+    uiInitState.value = 'ready';
+  } catch (error) {
+    if (generation !== bridgeLoginGeneration) return;
+    runtimeConnectionOwner?.dispose();
+    runtimeConnectionOwner = undefined;
+    initErrorMessage.value = toErrorMessage(error);
+    connectionState.value = 'error';
+    uiInitState.value = 'login';
   }
-  if (loginBackendKind.value === 'acp') {
-    credentials.saveAcp(loginAcpBridgeUrl.value, loginAcpBridgeToken.value, loginAcpAgentId.value);
-    void startInitialization();
-    return;
-  }
-  if (loginBackendKind.value === 'kimi-web') {
-    // saveKimiWeb rejects an empty bridge URL (Todo 7 contract); surface it on
-    // the login form instead of letting the native click handler throw.
-    try {
-      credentials.saveKimiWeb(loginKimiWebBridgeUrl.value, loginKimiWebBridgeToken.value);
-    } catch (error) {
-      initErrorMessage.value = toErrorMessage(error);
-      return;
-    }
-    void startInitialization();
-    return;
-  }
-  if (loginBackendKind.value === 'dsh') {
-    // saveDsh rejects an empty bridge URL (same contract as kimi-web).
-    try {
-      credentials.saveDsh(loginDshBridgeUrl.value, loginDshBridgeToken.value);
-    } catch (error) {
-      initErrorMessage.value = toErrorMessage(error);
-      return;
-    }
-    void startInitialization();
-    return;
-  }
-  const u = loginRequiresAuth.value ? loginUsername.value : '';
-  const p = loginRequiresAuth.value ? loginPassword.value : '';
-  credentials.save(loginUrl.value, u, p);
-  void startInitialization();
 }
 
 function handleAbortInit() {
+  bridgeLoginGeneration++;
+  stopRuntimeRecovery?.();
+  runtimeOnline.value = false;
+  runtimeConnectionOwner?.dispose();
+  runtimeConnectionOwner = undefined;
+  uiInitState.value = 'login';
   abortInitialization();
 }
 
-function handleLogout() {
+async function handleLogout() {
+  if (runtimeDraftEditorRef.value && !await runtimeDraftEditorRef.value.flush()) return;
+  persistComposerDraftForCurrentContext();
+  await qualifiedDraftWrites;
+  if (runtimeDraftFailure.value) return;
+  const bridgeConnected = runtimeConnectionOwner !== undefined;
+  bridgeLoginGeneration++;
+  bridgeLoginToken.value = '';
+  stopRuntimeRecovery?.();
+  runtimeOnline.value = false;
+  runtimeConnectionOwner?.dispose();
+  runtimeConnectionOwner = undefined;
+  runtimeSelectedDirectory.value = null;
+  runtimePtyOwners.clear();
+  runtimeActionClient.value = null;
+  runtimeEnvironmentId.value = null;
+  bridgeReference.value = null;
+  uiInitState.value = 'login';
   abortInitialization();
   initialQuery.projectId = '';
   initialQuery.sessionId = '';
+  if (bridgeConnected) {
+    selectedSessionId.value = '';
+    selectedProjectId.value = '';
+    harnessManifests.value = [];
+    managementHarnessInstanceId.value = null;
+    disposeShellWindows();
+    initErrorMessage.value = '';
+    connectionState.value = 'connecting';
+    return;
+  }
   if (activeBackendKind.value === 'acp') {
     selectedSessionId.value = '';
     selectedProjectId.value = '';
@@ -11718,7 +13493,7 @@ onMounted(() => {
   credentials.load();
   codexApi.url.value = credentials.codexBridgeUrl.value;
   codexApi.bridgeToken.value = credentials.codexBridgeToken.value;
-  void codexApi.restoreConnection().catch(() => undefined);
+
   activeBackendKind.value = credentials.backendKind.value;
   loginBackendKind.value = credentials.backendKind.value;
   loginCodexBridgeUrl.value = credentials.codexBridgeUrl.value;
@@ -11731,20 +13506,7 @@ onMounted(() => {
   loginDshBridgeToken.value = credentials.dshBridgeToken.value;
   loginAcpAgentId.value = credentials.acpAgentId.value;
 
-  if (credentials.isConfigured.value) {
-    loginUrl.value = credentials.url.value;
-    loginUsername.value = credentials.username.value;
-    loginPassword.value = credentials.password.value;
-    loginRequiresAuth.value = !!(credentials.username.value || credentials.password.value);
-    void startInitialization();
-  } else {
-    uiInitState.value = 'login';
-    const savedError = storageGet(StorageKeys.state.lastAuthError);
-    if (savedError) {
-      initErrorMessage.value = savedError;
-      storageRemove(StorageKeys.state.lastAuthError);
-    }
-  }
+  uiInitState.value = 'login';
   window.addEventListener('pointermove', handlePointerMove);
   window.addEventListener('pointerup', handlePointerUp);
   window.addEventListener('resize', handleWindowResize);
@@ -11757,6 +13519,7 @@ onMounted(() => {
   updateFloatingExtentObserver();
   globalEventUnsubscribers.push(
     ge.on('connection.open', () => {
+      if (runtimeActionClient.value) return;
       if (connectionState.value === 'reconnecting' || connectionState.value === 'error') {
         connectionState.value = 'ready';
         reconnectingMessage.value = '';
@@ -11770,6 +13533,7 @@ onMounted(() => {
   );
   globalEventUnsubscribers.push(
     ge.on('connection.reconnected', () => {
+      if (runtimeActionClient.value) return;
       connectionState.value = 'ready';
       reconnectingMessage.value = '';
       setSendStatusKey('app.connection.connected');
@@ -12003,12 +13767,32 @@ body {
   min-height: 0;
   display: grid;
   place-items: center;
+  align-items: safe center;
+  overflow: auto;
+  padding: 16px 0;
   z-index: 0;
+}
+
+.app-loading-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  width: min(420px, 100%);
+  min-width: 0;
+}
+
+.app-loading-identity,
+.app-loading-heading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .app-loading-card {
   position: relative;
-  width: min(420px, 92vw);
+  width: 100%;
+  box-sizing: border-box;
   border: 1px solid var(--theme-login-border, var(--theme-border-default, #334155));
   background: var(--theme-login-bg, var(--theme-surface-panel-elevated, rgba(15, 23, 42, 0.92)));
   border-radius: 14px;
@@ -12274,12 +14058,76 @@ body {
   z-index: 30;
 }
 
+.app-runtime-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  padding: 4px 12px;
+  border-top: 1px solid var(--theme-border-muted);
+  background: var(--theme-surface-panel);
+  align-items: center;
+  gap: 4px;
+}
+
+.app-runtime-action {
+  appearance: none;
+  border: 1px solid var(--color-border, rgba(120, 120, 120, 0.35));
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.app-runtime-action:hover:not(:disabled) {
+  background: rgba(125, 125, 125, 0.16);
+}
+
+.app-runtime-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .app-output {
   flex: 1 1 auto;
   min-height: 0;
   position: relative;
   z-index: 10;
   isolation: isolate;
+}
+
+.runtime-draft-recovery {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--theme-border-default);
+  border-radius: var(--radius-control);
+  background: var(--theme-surface-panel);
+  color: var(--codex-status-danger, var(--theme-text-primary));
+  font-size: var(--type-sm);
+}
+.runtime-history-notice {
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--theme-border-default);
+  border-radius: var(--radius-control);
+  background: var(--theme-surface-panel);
+  color: var(--codex-status-danger, var(--theme-text-primary));
+  font-size: var(--type-sm);
+  overflow-wrap: anywhere;
+}
+.runtime-history-notice.is-unavailable { color: var(--codex-status-warning, var(--theme-text-primary)); }
+.runtime-draft-recovery button {
+  border: 1px solid var(--ui-form-button-border);
+  border-radius: var(--radius-control);
+  padding: var(--space-1) var(--space-2);
 }
 
 .app-input {
@@ -12291,6 +14139,16 @@ body {
   align-items: stretch;
   min-height: 0;
   min-height: 200px;
+}
+
+.runtime-empty-composer {
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
+  border-radius: var(--radius-control, 8px);
+  background: var(--theme-input-bg, var(--theme-surface-panel, #0f172a));
+  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
+  font-size: 12px;
 }
 
 .app-input:focus-within {
@@ -12706,4 +14564,41 @@ body {
   color: var(--theme-accent-primary, #60a5fa);
 }
 
+
+.runtime-settings-dialog {
+  width: min(640px, calc(100vw - 32px));
+  max-height: 85vh;
+  overflow: auto;
+  padding: var(--space-4);
+  border: 1px solid var(--theme-modal-border, var(--theme-border-default));
+  border-radius: 12px;
+  color: var(--theme-modal-text, var(--theme-text-primary));
+  background: var(--theme-modal-bg, var(--theme-surface-panel-elevated));
+  box-shadow: var(--theme-shadow-panel);
+}
+
+.runtime-settings-dialog::backdrop {
+  background: var(--theme-surface-overlay);
+}
+
+.runtime-settings-dialog header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.runtime-settings-dialog header h2 {
+  font-size: var(--type-heading);
+  font-weight: 600;
+}
+
+.runtime-settings-dialog header button {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
 </style>

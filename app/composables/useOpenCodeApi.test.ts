@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ref } from 'vue';
 
 import { useOpenCodeApi } from './useOpenCodeApi';
+import type { BackendKind } from '../backends/types';
 
 const { updateSessionMock, waitForStateMock, deleteWorktreeMock } = vi.hoisted(() => ({
   updateSessionMock: vi.fn(),
@@ -51,7 +53,7 @@ describe('useOpenCodeApi session and worktree operations', () => {
     updateSessionMock.mockResolvedValueOnce({ id: 's1', projectID: 'p1' });
     waitForStateMock.mockImplementation(() => new Promise(() => {}));
 
-    const api = useOpenCodeApi(createProjects());
+    const api = useOpenCodeApi(createProjects(), undefined, ref<BackendKind>('opencode'));
 
     expect(api.pending.value).toBe(false);
 
@@ -66,7 +68,7 @@ describe('useOpenCodeApi session and worktree operations', () => {
   it('pinSession forwards an explicit optimistic pinnedAt timestamp to the PATCH payload', async () => {
     updateSessionMock.mockResolvedValueOnce({ id: 's1', projectID: 'p1' });
 
-    const api = useOpenCodeApi(createProjects());
+    const api = useOpenCodeApi(createProjects(), undefined, ref<BackendKind>('opencode'));
 
     await api.pinSession({ sessionId: 's1', projectId: 'p1', directory: '/', pinnedAt: 4242 });
 
@@ -77,7 +79,7 @@ describe('useOpenCodeApi session and worktree operations', () => {
     updateSessionMock.mockResolvedValueOnce({ id: 's1', projectID: 'p1' });
     waitForStateMock.mockImplementation(() => new Promise(() => {}));
 
-    const api = useOpenCodeApi(createProjects());
+    const api = useOpenCodeApi(createProjects(), undefined, ref<BackendKind>('opencode'));
 
     const result = await api.unpinSession({ sessionId: 's1', projectId: 'p1', directory: '/' });
 
@@ -124,7 +126,7 @@ describe('useOpenCodeApi session and worktree operations', () => {
       },
     };
 
-    const api = useOpenCodeApi(projects as any);
+    const api = useOpenCodeApi(projects as any, undefined, ref<BackendKind>('opencode'));
 
     await api.deleteWorktree({
       directory: '/repo',

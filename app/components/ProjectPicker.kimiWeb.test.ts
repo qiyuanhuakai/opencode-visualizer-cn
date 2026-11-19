@@ -3,9 +3,10 @@ import { createI18n } from 'vue-i18n';
 import { afterEach, expect, it, vi } from 'vitest';
 import en from '../locales/en';
 import ProjectPicker from './ProjectPicker.vue';
+import type { BackendKind } from '../backends/types';
 
 const fake = vi.hoisted(() => {
-  let backendKind = 'kimi-web';
+  let backendKind: BackendKind = 'kimi-web';
   const entriesByPath: Record<string, Array<{ name: string; path: string; is_dir: boolean }>> = {
     '/': [{ name: 'home', path: '/home', is_dir: true }],
     '/.git': [{ name: 'objects', path: '/.git/objects', is_dir: true }],
@@ -40,14 +41,13 @@ const fake = vi.hoisted(() => {
     listFiles,
     KimiWebAdapter,
     get backendKind() { return backendKind; },
-    set backendKind(value: string) { backendKind = value; },
+    set backendKind(value: BackendKind) { backendKind = value; },
   };
 });
 
 vi.mock('../backends/kimiWeb/kimiWebAdapter', () => ({ KimiWebAdapter: fake.KimiWebAdapter }));
 vi.mock('../backends/registry', () => ({
-  getActiveBackendKind: () => fake.backendKind,
-  getActiveBackendAdapter: () => fake.backendKind === 'kimi-web'
+  getBackendAdapter: () => fake.backendKind === 'kimi-web'
     ? new fake.KimiWebAdapter()
     : { listFiles: fake.listFiles },
 }));
@@ -63,12 +63,12 @@ afterEach(() => {
   fake.backendKind = 'kimi-web';
 });
 
-it.each(['kimi-web', 'opencode', 'codex', 'dsh'])('lets %s browse below home but stops at a project with .git', async (backendKind) => {
+it.each(['kimi-web', 'opencode', 'codex', 'dsh'] as const)('lets %s browse below home but stops at a project with .git', async (backendKind) => {
   fake.backendKind = backendKind;
   const host = document.createElement('div');
   document.body.append(host);
   const open = ref(false);
-  const app = createApp({ render: () => h(ProjectPicker, { open: open.value, homePath: '/home/user' }) });
+  const app = createApp({ render: () => h(ProjectPicker, { open: open.value, homePath: '/home/user', backendKind: fake.backendKind }) });
   app.use(createI18n({ legacy: false, locale: 'en', messages: { en } }));
   app.mount(host);
   mounted = { app, host };
@@ -92,12 +92,12 @@ it.each(['kimi-web', 'opencode', 'codex', 'dsh'])('lets %s browse below home but
   expect(src?.getAttribute('aria-disabled')).toBe('true');
 });
 
-it.each(['kimi-web', 'opencode', 'codex', 'dsh'])('lets %s browse below filesystem root even when root contains .git', async (backendKind) => {
+it.each(['kimi-web', 'opencode', 'codex', 'dsh'] as const)('lets %s browse below filesystem root even when root contains .git', async (backendKind) => {
   fake.backendKind = backendKind;
   const host = document.createElement('div');
   document.body.append(host);
   const open = ref(false);
-  const app = createApp({ render: () => h(ProjectPicker, { open: open.value, homePath: '/home/user' }) });
+  const app = createApp({ render: () => h(ProjectPicker, { open: open.value, homePath: '/home/user', backendKind: fake.backendKind }) });
   app.use(createI18n({ legacy: false, locale: 'en', messages: { en } }));
   app.mount(host);
   mounted = { app, host };

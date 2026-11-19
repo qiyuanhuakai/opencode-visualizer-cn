@@ -152,6 +152,11 @@ describe('desktop update metadata pipeline', () => {
     expect(unpackagedModules).toEqual([]);
   });
 
+  it('keeps live settings reachable and packaged in the native runtime', () => {
+    expect(localModuleClosure('electron/main.js')).toContain('shared/runtime/liveSettings.js');
+    expect(packagedByBuilder('shared/runtime/liveSettings.js')).toBe(true);
+  });
+
   it('keeps the updater at runtime and pins the official GitHub provider', () => {
     expect(packageJson.dependencies?.['electron-updater']).toEqual(expect.any(String));
     expect(builder.publish).toEqual({

@@ -44,4 +44,3 @@ describe('runtime resource shutdown recovery', () => {
     expect(releases).toBe(1);
   });
 });
-

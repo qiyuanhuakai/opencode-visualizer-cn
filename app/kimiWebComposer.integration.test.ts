@@ -110,11 +110,16 @@ describe('kimi-web composer integration', () => {
 
   it('keeps permission in a scheduled Kimi draft after typing', () => {
     const writes: Array<{ agent: string }> = [];
+    const preferencesOwner = { sessionKey: 'session-a' };
+    const persistComposerPreferences = vi.fn();
     const program = ts.transpileModule(
       `${appFunctionDeclaration('scheduleComposerDraftPersistence')}\nscheduleComposerDraftPersistence();`,
       { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
     ).outputText;
     runInNewContext(program, {
+      runtimeSelectionLoading: ref(false),
+      runtimeComposerPreferencesOwner: preferencesOwner,
+      persistComposerPreferences,
       draftKeyForSelectedContext: () => 'session-a',
       messageInput: ref('Typed'), attachments: ref([]), selectedMode: ref('auto'),
       selectedModel: ref('kimi-code/k3'), selectedThinking: ref(undefined),
@@ -125,6 +130,7 @@ describe('kimi-web composer integration', () => {
       writeComposerDraft: (_key: string, draft: { agent: string }) => { writes.push(draft); },
     });
     expect(writes.at(-1)?.agent).toBe('auto');
+    expect(persistComposerPreferences).toHaveBeenCalledWith({ agent: 'auto', model: 'kimi-code/k3', variant: '' }, preferencesOwner);
   });
   it('restores the current session draft permission before the global default', () => {
     const mode = ref('yolo');
@@ -171,7 +177,8 @@ describe('kimi-web composer integration', () => {
     ).outputText;
     await runInNewContext(program, {
       selectedSessionId: ref('session-a'), connectionState: ref('ready'),
-      activeBackendKind: ref('kimi-web'), configuredKimiWebAdapter: { restClient: client },
+      activeBackendKind: ref('kimi-web'),
+      runtimeActionClient: ref({}), runtimeKimiSessionClient: { value: client },
       kimiWebRestClient: () => client,
       kimiWebSessionModes: { changeMode: vi.fn().mockResolvedValue(undefined), sessionState: () => ({}) },
       refreshKimiWebModeState: vi.fn(), rememberKimiPermissionMode: remember,
@@ -184,7 +191,7 @@ describe('kimi-web composer integration', () => {
   it('kimi mounts ready permission options with independent modes after primary selection', () => {
     expect(APP_SOURCE).toContain('kimiWebAgentModeOptions()');
     expect(APP_SOURCE).toMatch(
-      /activeBackendKind === 'kimi-web'\s*\? kimiWebAgentOptions\s*:\s*dshComposerClient\s*\? dshPermissionControls\.agentOptions\.value\s*:\s*agentOptions/,
+      /activeBackendKind === 'kimi-web'\s*\? kimiWebAgentOptions\s*:\s*dshComposerPermissionClient\s*\? dshPermissionControls\.agentOptions\.value\s*:\s*agentOptions/,
     );
     expect(APP_SOURCE).toMatch(
       /<template #after-agent>[\s\S]*<KimiWebComposerModes[\s\S]*v-if="activeBackendKind === 'kimi-web'"[\s\S]*<\/template>\s*<template #after-thinking>/,
@@ -223,7 +230,7 @@ describe('kimi-web composer integration', () => {
     const model = ref('kimi-code/k3');
     const applyVariant = vi.fn();
     const program = ts.transpileModule(
-      `${appFunctionDeclaration('applyComposerDraftToComposerState')}\napplyComposerDraftToComposerState({rev:2,messageInput:'Saved',attachments:[],agent:'auto',model:'kimi-code/k3',variant:'high'},'session-b');`,
+      `${appFunctionDeclaration('applyComposerDraftToComposerState')}\n${appFunctionDeclaration('applyComposerPreferencesToState')}\napplyComposerDraftToComposerState({rev:2,messageInput:'Saved',attachments:[],agent:'auto',model:'kimi-code/k3',variant:'high'},'session-b');`,
       { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
     ).outputText;
     runInNewContext(program, {
@@ -256,7 +263,7 @@ describe('kimi-web composer integration', () => {
       /activeBackendKind === 'codex'\s*\? codexAgentOptions\s*:\s*activeBackendKind === 'kimi-web'/,
     );
     expect(APP_SOURCE).toContain(
-      ':agent-picker-state="dshComposerClient ? (dshPermissionControls.loading.value ? \'loading\' : dshPermissionControls.agentOptions.value.length ? \'ready\' : \'unsupported\') : agentPickerState"',
+      ':agent-picker-state="dshComposerPermissionClient ? (dshPermissionControls.loading.value ? \'loading\' : dshPermissionControls.agentOptions.value.length ? \'ready\' : \'unsupported\') : agentPickerState"',
     );
   });
 

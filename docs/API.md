@@ -2,6 +2,23 @@
 
 OpenCode server REST API reference. Base URL: `http://localhost:4096` (default).
 
+## Runtime v0.9 (`/runtime` v1)
+
+v0.9.0-alpha adds a separate `/runtime` WebSocket surface served by `vis_bridge`
+(protocol generation `v090-runtime`, frame `version` = `1`). It is not the
+OpenCode REST API above and shares no frame format with it. Frame contract,
+error codes, limits, and the version-rejection rule for legacy
+`v070-legacy` bridges are specified in [runtime.md](./runtime.md) and
+[migration-v090.md](./migration-v090.md); remote SSH/Slurm behavior is in
+[remote.md](./remote.md).
+
+Registered method families (from `shared/runtime/capabilities.js` `METHODS`):
+`runtime.history.*`, `runtime.target.attach/detach`, `runtime.snapshot*`,
+`runtime.entity.resolve`, `runtime.observer.*`, `runtime.channel.*`,
+`runtime.pty.*`, `session.*`, `interaction.respond`, `harness.*`, and
+`native.extension`. Optional native capabilities are granted per source; an
+undeclared call returns the typed error `unsupported`.
+
 ## Common Conventions
 
 ### Headers

@@ -15,6 +15,12 @@ Electron 中打开「设置 → 桌面」。Web 版不显示这些原生功能�
 - 更新来自项目已公开的 GitHub Release，包含 `alpha`、`beta`、`rc` 等预发布版本，排除草稿。应用与 bridge 按 SemVer 比较版本：数字后缀按数值排序，同一版本的正式版高于预发布版，构建元数据不触发更新，不会降级。手动安装包必须具有 SHA-256 摘要，下载后和打开前分别校验；错误会显示在更新卡片中。Node 下载请求支持 `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` 环境代理。
 - Windows 发布流程上传更新清单与独立 blockmap；Linux 上传更新清单，AppImage 的 blockmap 内嵌在安装包中，DEB 无独立 blockmap。桌面端先选定公开版本，再读取该版本的 `latest*.yml` 清单，并校验清单版本和当前平台的安装包；只有包含对应元数据的新版本才能提供应用自动更新。
 
+## v0.9.0-alpha 运行时桥接与平台边界
+
+- 统一运行环境要求对端 bridge 报告协议代 `v090-runtime`。旧协议代 `v070-legacy`（如 bridge `0.7.10`）在连接前即被拒绝，更新卡片与 `/healthz` 预连接探针给出升级路径；无 bridge 主机给出安装路径。协议帧契约见 [runtime.md](runtime.md)，完整兼容说明见 [migration-v090.md](migration-v090.md)。
+- 应用内更新只适用于已取得的平台产物。本版本的限制逐字记录：没有构建也没有声称任何 Windows 或 macOS 安装包产物（RPM/NSIS/PKG 仅验证生成文本与布局）；未走真实 GitHub-release 更新下载+校验路径（只应用本地 deb）；Electron 运行时只在 Linux 实测；无物理 GPU（GRES 经 Slurm 真实 generic-GRES 记账演练）。未执行平台的能力不得声称支持。
+- 安装目录在无 `node` 的 PATH 下仍启动 store worker 与 PTY（staged Node 24 sidecar）；卸载保留数据，重装后可持续使用既有状态。
+
 ## 托盘与菜单
 
 - 「最小化到托盘」和「关闭到托盘」独立设置，默认关闭。

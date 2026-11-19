@@ -155,6 +155,7 @@ export function createAcpRpc({
     get active() {
       return active;
     },
+    setRawTap: (tap) => attachment.setRawTap(tap),
     processGeneration: attachment.processGeneration,
     pid: attachment.pid,
     close() {

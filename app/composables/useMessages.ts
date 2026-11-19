@@ -220,12 +220,12 @@ function normalizeTokens(value: unknown): MessageUsage['tokens'] | undefined {
 
 function getProviderId(info?: MessageInfo): string | undefined {
   if (!info) return undefined;
-  return info.role === 'assistant' ? asString(info.providerID) : asString(info.model.providerID);
+  return info.role === 'assistant' ? asString(info.providerID) : asString(info.model?.providerID);
 }
 
 function getModelId(info?: MessageInfo): string | undefined {
   if (!info) return undefined;
-  return info.role === 'assistant' ? asString(info.modelID) : asString(info.model.modelID);
+  return info.role === 'assistant' ? asString(info.modelID) : asString(info.model?.modelID);
 }
 
 function normalizeUsage(info?: MessageInfo): MessageUsage | undefined {
@@ -260,7 +260,10 @@ function resolveError(info?: MessageInfo): MessageError {
   return { name: info.error.name, message };
 }
 
+const nativeHistoryOrder = new WeakMap<MessageInfo, number>();
 function byTimeThenId(a: MessageInfo, b: MessageInfo): number {
+  const aOrder = nativeHistoryOrder.get(a), bOrder = nativeHistoryOrder.get(b);
+  if (aOrder !== undefined && bOrder !== undefined) return aOrder - bOrder;
   const aTime = asNumber(a.time.created) ?? 0;
   const bTime = asNumber(b.time.created) ?? 0;
   if (aTime !== bTime) return aTime - bTime;
@@ -536,15 +539,23 @@ function getFinalAnswer(rootId: string): MessageInfo | undefined {
   return assistants[assistants.length - 1];
 }
 
-function loadHistory(entries: unknown[]) {
+function loadHistory(entries: unknown[], options: { replace?: boolean; canonical?: boolean; preserveOrder?: boolean } = {}) {
   let collectionChanged = false;
+  let nativeOrder = 0;
+  if (options.replace) {
+    const retained = new Set(entries.flatMap(entry => {
+      const record = toRecord(entry);
+      return record && isMessageInfo(record.info) ? [record.info.id] : [];
+    }));
+    for (const id of messages.value.keys()) if (!retained.has(id)) removeMessage(id);
+  }
   for (const entry of entries) {
     const rec = toRecord(entry);
     if (!rec) continue;
     const info = rec.info;
     const partsList = rec.parts;
     if (!isMessageInfo(info)) continue;
-    const accumulated = acc.getMessage(info.id);
+    const accumulated = options.canonical ? undefined : acc.getMessage(info.id);
     const hasMessage = messages.value.has(info.id);
     const messageRef = ensureMessage(info.id, false);
     if (!hasMessage) collectionChanged = true;
@@ -553,8 +564,22 @@ function loadHistory(entries: unknown[]) {
       messageRef.value.info = mergedInfo;
       triggerMessageRef(messageRef);
     }
+    const retainedInfo = messageRef.value.info!;
+    const order = options.replace && options.canonical && options.preserveOrder ? nativeOrder++ : undefined;
+    if (nativeHistoryOrder.get(retainedInfo) !== order) collectionChanged = true;
+    if (order === undefined) nativeHistoryOrder.delete(retainedInfo);
+    else nativeHistoryOrder.set(retainedInfo, order);
     if (!Array.isArray(partsList)) continue;
     let addedPart = false;
+    if (options.replace) {
+      const retained = new Set(partsList.filter(isMessagePart).map(part => part.id));
+      for (const partRef of messageRef.value.parts) {
+        if (retained.has(partRef.value.id)) continue;
+        parts.delete(partLookupKey(partRef.value.messageID, partRef.value.id));
+        messageRef.value.parts.delete(partRef);
+        addedPart = true;
+      }
+    }
     for (const item of partsList) {
       if (!isMessagePart(item)) continue;
       const merged = accumulated?.parts.get(item.id) ?? item;

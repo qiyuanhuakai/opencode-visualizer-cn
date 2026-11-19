@@ -6,6 +6,7 @@ export interface CodexEvent {
   readonly processGeneration: number;
   readonly epoch: string;
   readonly payload: JsonValue;
+  readonly status?: 'running' | 'idle';
 }
 export function createCodexSubscriptions(): {
   emit(event: CodexEvent): void;

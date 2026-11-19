@@ -81,14 +81,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import CodeRenderer from '../renderers/CodeRenderer.vue';
-import CodeMirrorEditor from '../renderers/CodeMirrorEditor.vue';
-import HexRenderer from '../renderers/HexRenderer.vue';
+// The editor/hex/archive renderers pull CodeMirror, the lezer language grammars
+// and the wasm archive stack into the bundle. They only render behind a mode
+// switch inside this viewer, so load them as async chunks (defineAsyncComponent)
+// exactly like the session tree was split in SidePanel.vue — props, events and
+// every mode behave identically, but none of that weight sits in the entry chunk.
+const CodeMirrorEditor = defineAsyncComponent(() => import('../renderers/CodeMirrorEditor.vue'));
+const HexRenderer = defineAsyncComponent(() => import('../renderers/HexRenderer.vue'));
+const ArchiveRenderer = defineAsyncComponent(() => import('../renderers/ArchiveRenderer.vue'));
 import ImageRenderer from '../renderers/ImageRenderer.vue';
-import MarkdownRenderer from '../renderers/MarkdownRenderer.vue';
-import ArchiveRenderer from '../renderers/ArchiveRenderer.vue';
 import PdfRenderer from '../renderers/PdfRenderer.vue';
 import { detectFileType } from '../../utils/fileTypeDetector';
 import { useSettings } from '../../composables/useSettings';

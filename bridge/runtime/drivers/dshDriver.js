@@ -1,22 +1,28 @@
 import { randomUUID } from 'node:crypto';
 import { createDshTransport } from './dshTransport.js';
 import { createDshOperations } from './dshOperations.js';
-import { readDshHistoryPage } from './dshHistory.js';
+import { readDshHistoryPage, createDshHistory } from './dshHistory.js';
 import { createFollowState, terminalTurn } from '../../../shared/runtime/native/dsh/follow.js';
 import { record, text, integer, summaries, selectModel, approvalOutcome, fail, DshError } from '../../../shared/runtime/native/dsh/protocol.js';
 import { parseSessionRef, parseEnvironmentId, parseHarnessInstanceId } from '../../../shared/runtime/identity.js';
 import { jsonValue } from '../../../shared/runtime/capabilities.js';
+import { DSH_UI_OPERATIONS } from '../../../shared/runtime/native/dsh/uiOperations.js';
 import { CORE_OPERATIONS, unsupported } from '../../../shared/runtime/harnessContract.js';
 import { readRecord, compareRecord, fingerprint } from '../operationJournal.js';
 
 const supported = Object.freeze({ state: 'supported' });
 const SELECTED_SLOTS = 4, SNAPSHOT_SLOTS = 3, SNAPSHOT_TTL_MS = 60000, SNAPSHOT_BUDGET_BYTES = 33554432, NATIVE_EVENT_LIMIT = 256;
 const EXTENSIONS = Object.freeze({
+  forkSession: { method: 'session/fork', scope: 'session', mutation: true },
+  updateSession: { scope: 'session', mutation: true },
+  ...Object.fromEntries(Object.entries(DSH_UI_OPERATIONS).map(([method, declaration]) => [`dsh.ui.${method.replace('/', '.')}`, { method, ...declaration }])),
   'dsh.providers.list': { method: 'session/modelCatalog', scope: 'instance' },
   'dsh.models.list': { method: 'session/modelCatalog', scope: 'instance' },
   'dsh.models.select': { method: 'session/selectModel', scope: 'session', mutation: true },
   'dsh.plugins.list': { method: 'pluginInventory/list', scope: 'instance' },
+  'dsh.agentPresets.select': { method: 'agentPresets/select', scope: 'session', mutation: true },
   'dsh.agentPresets.list': { method: 'agentPresets/list', scope: 'instance' },
+  'dsh.permissions.select': { method: 'commands/execute', scope: 'session', mutation: true },
   'dsh.permissions.catalog': { method: 'permissionPresets/catalog', scope: 'instance' },
 });
 
@@ -305,6 +311,77 @@ export function createDshDriver(options) {
       return entry;
     } finally { release(); }
   }
+  /** Trusted raw HTTP `session/page` admission for the selected-history producer. No `maxMessages` is sent,
+   * so the substrate's own record/page bounds govern retention instead of a native-side truncation.
+   */
+  async function pullDshPage(session, { before, through, signal }) {
+    integer(before, 0);
+    integer(through, -1);
+    const pulled = await transport.pullRaw('session/page', { request: { address: { kind: 'session', sessionId: session.nativeSessionId }, throughSeq: through, beforeSeq: before } }, { signal });
+    return pulled;
+  }
+  function singleFrameStream(bytes) {
+    return new ReadableStream({ start(controller) { controller.enqueue(bytes); controller.close(); } });
+  }
+  /** Cold-follow snapshot admission: a dedicated raw `session/follow` stream whose first frame bytes are
+   * handed to the substrate unparsed. It is separate from the driver's operation/control monitor, so
+   * cancelling it never disturbs that monitor.
+   */
+  async function pullDshSnapshot(session, { signal }) {
+    const connection = await ensureMux();
+    const connectionGeneration = liveGeneration;
+    const lease = transport.capture();
+    return new Promise((resolve, reject) => {
+      let settled = false, handle, timer;
+      const abort = () => finish(new DshError('cancelled', 'dsh.request'));
+      const finish = (error) => {
+        if (settled) return; settled = true;
+        clearTimeout(timer); signal?.removeEventListener('abort', abort);
+        if (handle) handle.cancel();
+        if (error) reject(error);
+      };
+      signal?.addEventListener('abort', abort, { once: true });
+      try {
+        handle = connection.openRaw('session/follow', { request: { address: { kind: 'session', sessionId: session.nativeSessionId }, assistantStream: true } }, {
+          onFrame(bytes) {
+            if (settled) return;
+            if (connectionGeneration !== liveGeneration) { finish(new DshError('reconcile_required', 'dsh.follow_generation')); return; }
+            settled = true; clearTimeout(timer); signal?.removeEventListener('abort', abort); handle.cancel();
+            try { transport.assertCurrent(lease); } catch (error) { reject(error); return; }
+            resolve({ body: singleFrameStream(bytes), release() {} });
+          },
+          onEnd(error) { finish(error ?? new DshError('source_unavailable', 'dsh.follow_ended')); },
+        });
+      } catch (error) { finish(error); return; }
+      timer = setTimeout(() => finish(new DshError('timeout', 'dsh.follow_snapshot')), 15000);
+    });
+  }
+  /** Invalidation observer for one selected session, fed from the driver's own published follow events.
+   * It holds no endpoint and never cancels the operation/control monitor.
+   */
+  function historyEvents(session) {
+    const queue = [];
+    let wake, ended = false;
+    const observer = {
+      push(value) {
+        if (ended || value.type !== 'session-event' || !value.session || value.session.nativeSessionId !== session.nativeSessionId) return;
+        queue.push(value.revision ?? 0);
+        wake?.(); wake = undefined;
+      },
+      stop() { ended = true; wake?.(); wake = undefined; },
+    };
+    observers.add(observer);
+    return {
+      async next() {
+        for (;;) {
+          if (queue.length) return { value: queue.shift(), done: false };
+          if (ended) return { value: undefined, done: true };
+          await new Promise((resolve) => { wake = resolve; });
+        }
+      },
+      async return() { observer.stop(); observers.delete(observer); queue.length = 0; return { value: undefined, done: true }; },
+    };
+  }
   async function listSessionPage(input) {
     const { params } = context(input); const limit = integer(params.limit ?? 100, 1, 200);
     for (const [id, snapshot] of snapshots) if (snapshot.expiresAt <= now()) snapshots.delete(id);
@@ -340,7 +417,7 @@ export function createDshDriver(options) {
       source: 'native-summary-snapshot', total: snapshot.items.length, expiresAt: snapshot.expiresAt };
   }
   async function respondInteraction(input) {
-    const { session, params } = context(input, true), key = text(params.interactionId), outcome = approvalOutcome(params.answer);
+    const { session, params } = context(input, true), key = text(params.interactionId), outcome = approvalOutcome(typeof params.answer === 'object' && params.answer !== null ? params.answer.outcome : params.answer);
     const delivery = [...deliveries.values()].find((value) => value.key === key);
     if (!delivery || !delivery.live || fingerprint(delivery.session) !== fingerprint(session)) fail('conflict', 'interaction_stale');
     const guard = () => { leaseCurrent(delivery.generation, delivery.clientId); if (!delivery.live || deliveries.get(delivery.eventId) !== delivery) fail('conflict', 'interaction_cancelled'); };
@@ -426,6 +503,28 @@ export function createDshDriver(options) {
       try { const entry = await select(session); return await readDshHistoryPage({ transport, session, state: entry.state, beforeSeq: params.beforeSeq, throughSeq: params.throughSeq, limit: params.limit }); }
       finally { release(); }
     },
+    async openHistory(input) {
+      const { session } = context(input, true);
+      const release = retain(session, 'history');
+      try {
+        const lease = transport.capture();
+        const entry = await select(session);
+        const producer = createDshHistory({
+          session,
+          authority: Object.freeze({ generation: lease.generation }),
+          current: () => { try { const now = transport.capture(); return now.generation === lease.generation && now.origin === lease.origin; } catch { return false; } },
+          assertCurrent: async () => { transport.assertCurrent(lease); },
+          fence: () => entry.state.historyFence(),
+          pullPage: ({ before, through, signal }) => pullDshPage(session, { before, through, signal }),
+          pullSnapshot: ({ signal }) => pullDshSnapshot(session, { signal }),
+          subscribe: () => historyEvents(session),
+          randomUUID,
+        });
+        return Object.freeze({ ...producer, async close() {
+          try { await producer.close(); } finally { release(); }
+        } });
+      } catch (error) { release(); throw error; }
+    },
     async createSession(input) {
       const { params } = context(input), idempotencyKey = text(params.idempotencyKey);
       const request = record(params.request);
@@ -455,6 +554,73 @@ export function createDshDriver(options) {
   };
   const native = Object.fromEntries(Object.entries(EXTENSIONS).map(([name, declaration]) => [name, async (input) => {
     const { session, params } = context(input, declaration.scope === 'session');
+    if (name === 'forkSession') {
+      const raw = params.atSeq ?? params.messageId;
+      let atSeq = raw === undefined || raw === '' ? undefined : Number(raw);
+      let entry, historyFence;
+      const capturedScope = operations.capture(session);
+      if (params.atSeq === undefined && typeof params.messageId === 'string' && params.messageId && !Number.isFinite(atSeq)) {
+        entry = await select(session); historyFence = entry.state.historyFence();
+        let beforeSeq = historyFence.cursor + 1, promptSeq;
+        for (let pageIndex = 0; pageIndex < 100 && beforeSeq > 0; pageIndex++) {
+          const page = await readDshHistoryPage({ transport, session, state: entry.state, beforeSeq, throughSeq: historyFence.cursor, limit: 200 });
+          entry.state.assertHistory(historyFence);
+          const matches = page.records.filter(({ event }) => event.type === 'user/message' && event.data?.id === params.messageId ||
+            event.type === 'agent/inbox/spliced' && Array.isArray(event.data?.inserted) && event.data.inserted.some(item => item?.id === params.messageId));
+          if (matches.length) {
+            const lowest = Math.min(...matches.map(({ event }) => event.seq));
+            promptSeq = promptSeq === undefined ? lowest : Math.min(promptSeq, lowest);
+            if (matches.some(({ event }) => event.type === 'agent/inbox/spliced')) break;
+          }
+          if (page.cursor === null) break;
+          beforeSeq = page.cursor;
+        }
+        if (promptSeq === undefined || promptSeq <= 0) fail('invalid_request', 'fork_sequence');
+        atSeq = promptSeq - 1;
+      }
+      if (atSeq !== undefined && (!Number.isSafeInteger(atSeq) || atSeq < 0)) fail('invalid_request', 'fork_sequence');
+      if (entry) entry.state.assertHistory(historyFence);
+      const result = await operations.sessionMutation({ session, capturedScope, idempotencyKey: text(params.idempotencyKey), method: declaration.method,
+        args: { request: { sessionId: session.nativeSessionId, ...(atSeq === undefined ? {} : { atSeq }) } } });
+      text(record(result.result).sessionId);
+      snapshots.clear(); known.add(result.result.sessionId);
+      return result;
+    }
+    if (name === 'updateSession') {
+      let method, value;
+      if (params.title !== undefined) {
+        const title = text(params.title).trim();
+        if (!title) fail('invalid_request', 'session_title');
+        method = 'session/rename'; value = { title };
+      } else {
+        const time = record(params.time);
+        const fields = ['archived', 'pinned'].filter(field => time[field] !== undefined);
+        if (fields.length !== 1) fail('invalid_request', 'session_update');
+        const field = fields[0], timestamp = time[field];
+        if (!Number.isSafeInteger(timestamp) || timestamp < 0) fail('invalid_request', 'session_update_time');
+        method = `workspace/${timestamp > 0 ? '' : 'un'}${field === 'archived' ? 'archive' : 'pin'}Session`; value = {};
+      }
+      const result = await operations.sessionMutation({ session, idempotencyKey: text(params.idempotencyKey), method,
+        args: { request: { ...value, sessionId: session.nativeSessionId } } });
+      snapshots.clear();
+      publish({ type: 'native-emit', event: 'session.updated', args: { sessionId: session.nativeSessionId } });
+      return result;
+    }
+    if (name.startsWith('dsh.ui.')) {
+      const args = { ...record(params.request ?? {}) };
+      if (declaration.identity === 'agentId') args.agentId = session.nativeSessionId;
+      if (declaration.identity === 'request.sessionId') args.request = { ...record(args.request ?? {}), sessionId: session.nativeSessionId };
+      if (!declaration.mutation) return transport.call(declaration.method, args);
+      if (declaration.scope === 'session') return operations.sessionMutation({ session, idempotencyKey: text(params.idempotencyKey), method: declaration.method, args });
+      return operations.durable({ idempotencyKey: text(params.idempotencyKey), method: declaration.method, args });
+    }
+    if (name === 'dsh.permissions.select') {
+      const capturedScope = operations.capture(session), preset = text(params.preset);
+      const [catalog, commands] = await Promise.all([transport.call('permissionPresets/catalog', {}), transport.call('commands/list', { agentId: session.nativeSessionId })]);
+      if (!/^[a-zA-Z0-9_-]+$/.test(preset) || !Array.isArray(commands) || !commands.some(command => record(command).name === 'permission') || !Array.isArray(record(catalog).options) || !catalog.options.some(option => record(option).value === preset)) fail('unsupported', 'permission_preset');
+      return operations.sessionMutation({ session, capturedScope, idempotencyKey: text(params.idempotencyKey), method: declaration.method, args: { agentId: session.nativeSessionId, line: `/permission ${preset}`, submittedAttachments: [] } });
+    }
+    if (name === 'dsh.agentPresets.select') return operations.sessionMutation({ session, idempotencyKey: text(params.idempotencyKey), method: declaration.method, args: { agentId: session.nativeSessionId, agentPreset: text(params.preset) } });
     if (name === 'dsh.models.select') {
       const capturedScope = operations.capture(session);
       const catalog = await transport.call('session/modelCatalog', {});

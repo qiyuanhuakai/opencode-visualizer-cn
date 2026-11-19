@@ -29,6 +29,23 @@ if [ "${1:-}" = '--container' ]; then
   mkdir -p "$qa_root/dist-bridge" "$qa_root/node_modules"
   cp /usr/bin/vis_bridge "$qa_root/dist-bridge/vis_bridge"
   cp -a /usr/lib/vis_bridge/node_modules/node-pty "$qa_root/node_modules/node-pty"
+  # Reconstruct the source-shaped tree from the installed package. SSH and
+  # Slurm entry points keep their source paths, while the staged store worker
+  # lives under runtime/ rather than storage/.
+  mkdir -p "$qa_root/bridge" "$qa_root/shared/runtime"
+  cp -a /usr/lib/vis_bridge/bridge/. "$qa_root/bridge/"
+  mkdir -p "$qa_root/bridge/runtime/storage"
+  for staged in "$qa_root"/bridge/runtime/runtime/*; do
+    case "${staged##*/}" in
+      vis_bridge_node|vis_bridge_node.exe) continue ;;
+    esac
+    mv "$staged" "$qa_root/bridge/runtime/storage/"
+  done
+  cp -a /usr/lib/vis_bridge/shared/runtime/. "$qa_root/shared/runtime/"
+  if [ ! -f "$qa_root/bridge/runtime/storage/runtimeDatabaseWorker.mjs" ]; then
+    printf 'the installed bridge shipped no runtime store worker closure\n' >&2
+    exit 1
+  fi
   upgrade_rpm="$(
     node --input-type=module - "$qa_root" <<'NODE'
 import { packageVisBridgeInstaller } from '/workspace/scripts/package-vis-bridge-installer.mjs';

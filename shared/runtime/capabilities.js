@@ -2,7 +2,18 @@ import { parseHarnessInstanceId } from './identity.js';
 
 export const ERROR_CODES = Object.freeze(['invalid_request', 'unsupported', 'version_mismatch', 'unauthorized', 'conflict', 'cancelled', 'timeout', 'source_unavailable', 'reconcile_required', 'replay_required']);
 export const METHODS = Object.freeze({
-  'runtime.inspect': 'read', 'runtime.snapshot': 'read', 'runtime.replay': 'read',
+  'runtime.interaction.read': 'read',
+  'runtime.workspace.info': 'read', 'runtime.workspace.list': 'read', 'runtime.workspace.read': 'read',
+  'runtime.history.open': 'control', 'runtime.history.page': 'read', 'runtime.history.chunk': 'read', 'runtime.history.read': 'read', 'runtime.history.close': 'control',
+  'runtime.target.attach': 'control', 'runtime.target.detach': 'control',
+  'runtime.snapshot.chunk': 'read', 'runtime.snapshot.release': 'control', 'runtime.entity.resolve': 'read',
+  'runtime.observer.open': 'control', 'runtime.observer.read': 'control',
+  'runtime.observer.resume': 'control', 'runtime.observer.close': 'control',
+  'runtime.channel.open': 'control', 'runtime.channel.ack': 'control',
+  'runtime.channel.finish': 'control', 'runtime.channel.cancel': 'control',
+  'runtime.pty.create': 'control', 'runtime.pty.read': 'control', 'runtime.pty.write': 'control',
+  'runtime.pty.resize': 'control', 'runtime.pty.detach': 'control', 'runtime.pty.remove': 'control',
+  'runtime.host.read': 'read', 'runtime.host.mutate': 'mutation', 'runtime.inspect': 'read', 'runtime.snapshot': 'read', 'runtime.replay': 'read',
   'session.list': 'read', 'session.get': 'read', 'session.history': 'read',
   'session.create': 'mutation', 'session.send': 'mutation', 'session.cancel': 'mutation',
   'interaction.respond': 'mutation', 'session.subscribe': 'read', 'session.close': 'mutation',
@@ -10,7 +21,7 @@ export const METHODS = Object.freeze({
   'session.fork': 'mutation', 'session.revert': 'mutation', 'session.compact': 'mutation',
   'harness.models': 'read', 'harness.providers': 'read', 'harness.auth': 'mutation',
   'harness.settings': 'mutation', 'harness.skills': 'read', 'harness.mcp': 'read',
-  'harness.commands': 'read', 'harness.usage': 'read', 'native.extension': 'mutation',
+  'harness.commands': 'read', 'harness.usage': 'read', 'native.query': 'read', 'native.extension': 'mutation',
 });
 export class ProtocolError extends TypeError {
   constructor(code, field) {

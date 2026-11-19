@@ -110,18 +110,18 @@ export function createAcpExtensions({
     typeof createAuthTerminal === 'function' &&
       capabilities.authMethods.some((method) => method.type === 'terminal'),
   );
-  declare('getSessionConfigOptions', 'instance', (input) => current(input).configOptions ?? []);
-  declare('listProviders', 'instance', (input) => ({
+  declare('getSessionConfigOptions', 'session', (input) => current(input).configOptions ?? []);
+  declare('listProviders', 'session', (input) => ({
     models: current(input).models ?? null,
     configOptions: current(input).configOptions ?? [],
     status: 'partial',
   }));
-  declare('listAgents', 'instance', (input) => ({
+  declare('listAgents', 'session', (input) => ({
     modes: current(input).modes ?? null,
     configOptions: current(input).configOptions ?? [],
     status: 'partial',
   }));
-  declare('listCommands', 'instance', (input) => current(input).availableCommands ?? []);
+  declare('listCommands', 'session', (input) => current(input).availableCommands ?? []);
   declare('sendCommand', 'session', (input) => {
     const command = text(input.command);
     if (!current(input).availableCommands?.some((item) => item.name === command))

@@ -57,7 +57,7 @@ it('places DSH permissions before input controls and management after thinking',
   const source = readFileSync(join(process.cwd(), 'app', 'App.vue'), 'utf8');
   expect(source).toMatch(/<template #after-agent>[\s\S]*DshComposerMode/);
   expect(source).not.toContain('<DshComposerPermissions');
-  expect(source).toContain(':selected-mode="dshComposerClient ? dshPermissionControls.selected.value : selectedMode"');
+  expect(source).toContain(':selected-mode="dshComposerPermissionClient ? dshPermissionControls.selected.value : selectedMode"');
   expect(source).toMatch(/<template #after-thinking>[\s\S]*KimiWebComposerActions[\s\S]*DshComposerActions/);
   expect(source).not.toContain('dsh-composer-preset-badge');
 });

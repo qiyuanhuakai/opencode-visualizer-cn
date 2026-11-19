@@ -4,6 +4,7 @@
       <header class="provider-manager-header">
         <div class="provider-manager-title-wrap">
           <div class="provider-manager-title">{{ $t('providerManager.title') }}</div>
+          <slot name="agent-selector" />
         </div>
         <button
           type="button"
@@ -340,10 +341,21 @@
                       type="button"
                       class="ghost-action danger"
                       :disabled="!canDisconnectProvider(provider) || busyProviderId === provider.id"
+                      :title="
+                        canDisconnectProvider(provider)
+                          ? undefined
+                          : providerControlSourceLine(disconnectProviderControl(provider))
+                      "
                       @click="disconnectProvider(provider)"
                     >
                       {{ $t('providerManager.actions.disconnect') }}
                     </button>
+                    <span
+                      v-if="providerControlUnavailable(disconnectProviderControl(provider))"
+                      class="provider-control-source"
+                      data-testid="provider-control-source"
+                      >{{ providerControlSourceLine(disconnectProviderControl(provider)) }}</span
+                    >
                   </div>
                 </article>
               </div>
@@ -424,11 +436,18 @@
                         v-if="isProviderDisconnected(provider)"
                         type="button"
                         class="ghost-action provider-mini-row-action"
-                        :disabled="busyProviderId === provider.id"
+                        :disabled="busyProviderId === provider.id || !canConnectProvider(provider)"
+                        :title="canConnectProvider(provider) ? undefined : providerControlSourceLine('setProviderAuth')"
                         @click="connectProvider(provider)"
                       >
                         {{ $t('providerManager.actions.connect') }}
                       </button>
+                      <span
+                        v-if="isProviderDisconnected(provider) && providerControlUnavailable('setProviderAuth')"
+                        class="provider-control-source"
+                        data-testid="provider-control-source"
+                        >{{ providerControlSourceLine('setProviderAuth') }}</span
+                      >
                     </div>
                   </article>
                 </ProviderDiscoveryList>
@@ -565,7 +584,7 @@
 import { computed, defineAsyncComponent, inject, ref, shallowRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
-import { getActiveBackendAdapter } from '../backends/registry';
+import { getBackendAdapter } from '../backends/registry';
 import { KimiWebAdapter } from '../backends/kimiWeb/kimiWebAdapter';
 import {
   createKimiWebProvidersClient,
@@ -576,7 +595,10 @@ const DshProviderManager = defineAsyncComponent(() => import('./dsh/DshProviderM
 import type { DshRpcClient } from '../utils/dshRpc';
 import type { DshProviderConfiguration } from '../backends/dsh/dshProviderConfig';
 import ProviderDiscoveryList from './ProviderDiscoveryList.vue';
-import type { BackendKind } from '../backends/types';
+import type { BackendAdapter, BackendKind } from '../backends/types';
+import type { HarnessManifest } from '../../shared/runtime/harnessContract.js';
+import { describeControlSupport, resolveControlSupport } from '../composables/useRuntimeCapabilities';
+import type { ControlScope, ControlSupport } from '../composables/useRuntimeCapabilities';
 import {
   buildProviderDisabledPatch,
   normalizeProviderIds,
@@ -659,7 +681,7 @@ type CustomProviderModelRow = {
 };
 
 function backend() {
-  return getActiveBackendAdapter();
+  return props.nativeAdapter ?? getBackendAdapter(props.backendKind);
 }
 
 function requireBackendMethod<T>(method: T | undefined, name: string): T {
@@ -724,13 +746,24 @@ type ModelVisibilityEntry = {
 
 const props = defineProps<{
   open: boolean;
+  nativeAdapter?: Partial<BackendAdapter>;
+  nativeKimiProvidersClient?: KimiWebProvidersClient;
   providers: ProviderInfo[];
   connectedProviderIds: string[];
   selectedModel: string;
   hiddenModels: string[];
   providerConfig: ProviderConfigState | null;
-  backendKind?: BackendKind;
+  backendKind: BackendKind;
   dshRpcClient?: DshRpcClient;
+  /**
+   * Task 23: the scope every backend-specific provider control is entered for —
+   * the CURRENT SESSION or an explicit Harness instance. The kind is always
+   * supplied by the connection entry, so the adapter resolves explicitly and
+   * the retired global-adapter lookup is never consulted (task 48).
+   */
+  harnessScope?: ControlScope;
+  /** The harness manifests visible to this modal; only the target instance resolves. */
+  harnessManifests?: readonly HarnessManifest[];
 }>();
 
 const emit = defineEmits<{
@@ -794,10 +827,14 @@ const availableProviders = computed<ProviderInfo[]>(() => {
 const kimiWebProvidersClient = ref<KimiWebProvidersClient | null>(null);
 
 watch(
-  () => props.open,
-  (open) => {
+  () => [props.open, props.nativeKimiProvidersClient] as const,
+  ([open, nativeClient]) => {
     if (!open) {
       kimiWebProvidersClient.value = null;
+      return;
+    }
+    if (nativeClient) {
+      kimiWebProvidersClient.value = nativeClient;
       return;
     }
     // Rebuilt on every open so a reconfigured bridge is always picked up.
@@ -907,6 +944,15 @@ watch(
   },
 );
 
+watch(() => props.nativeAdapter, () => {
+  authMethods.value = {};
+  busyProviderId.value = '';
+  feedbackMessage.value = '';
+  closeCustomProviderForm();
+  resetCustomProviderForm();
+  if (props.open) void fetchAuthMethods();
+});
+
 function setFeedback(message: string, tone: 'info' | 'success' | 'error' = 'info') {
   feedbackMessage.value = message;
   feedbackTone.value = tone;
@@ -966,15 +1012,22 @@ function removeCustomHeader(index: number) {
 }
 
 async function fetchAuthMethods() {
+  const target = backend();
   try {
-    const listProviderAuthMethods = backend().listProviderAuthMethods;
+    if (!providerControlAvailable('listProviderAuthMethods')) {
+      authMethods.value = {};
+      return;
+    }
+    const listProviderAuthMethods = target.listProviderAuthMethods;
     if (!listProviderAuthMethods) {
       authMethods.value = {};
       return;
     }
     const data = (await listProviderAuthMethods()) as Record<string, ProviderAuthMethod[]>;
+    if (backend() !== target) return;
     authMethods.value = data && typeof data === 'object' ? data : {};
   } catch (error) {
+    if (backend() !== target) return;
     setFeedback(error instanceof Error ? error.message : String(error), 'error');
   }
 }
@@ -1016,20 +1069,92 @@ function isBackendManagedProvider(provider: ProviderInfo) {
   return props.backendKind === 'dsh' || provider.source === 'codex-app-server';
 }
 
+/**
+ * Task 23: resolve one backend-specific provider control against the harness
+ * manifest of the current scope. Returns `null` when no scope was supplied, so
+ * the legacy global-adapter path stays the fallback until App.vue binds one.
+ */
+function providerControlSupport(control: string): ControlSupport | null {
+  if (!props.harnessScope || !props.harnessManifests) return null;
+  return resolveControlSupport({
+    control,
+    scope: props.harnessScope,
+    manifests: props.harnessManifests,
+    activeBackendKind: props.backendKind,
+  });
+}
+
+/** Source information line for an unsupported control (which source, what is missing). */
+function providerControlSourceLine(control: string): string {
+  const support = providerControlSupport(control);
+  if (!support || support.state !== 'unsupported') return '';
+  return describeControlSupport(support);
+}
+
+/** Whether a provider control is available. Never true when unsupported or unknown. */
+function providerControlAvailable(control: string): boolean {
+  const support = providerControlSupport(control);
+  return support === null ? legacyProviderControlAvailable(control) : support.state === 'supported';
+}
+
+function legacyProviderControlAvailable(control: string): boolean {
+  const active = backend();
+  switch (control) {
+    case 'listProviderAuthMethods':
+      return Boolean(active.listProviderAuthMethods);
+    case 'setProviderAuth':
+      return Boolean(active.setProviderAuth);
+    case 'deleteProviderAuth':
+      return Boolean(active.deleteProviderAuth);
+    case 'updateGlobalConfig':
+      return Boolean(active.updateGlobalConfig);
+    default:
+      return false;
+  }
+}
+
+/** Whether a provider control shows its source-information line. */
+function providerControlUnavailable(control: string): boolean {
+  const support = providerControlSupport(control);
+  return support !== null && support.state === 'unsupported';
+}
+
+function canConnectProvider(provider: ProviderInfo) {
+  if (!isProviderDisconnected(provider)) return false;
+  // Backend-managed providers (DSH, codex-app-server) route to their own
+  // settings surface instead of the generic auth write, so the generic
+  // capability gate must not disable that route.
+  if (isBackendManagedProvider(provider)) return true;
+  if (!providerControlAvailable('setProviderAuth')) return false;
+  return true;
+}
+
+function canDisconnectProvider(provider: ProviderInfo) {
+  if (isProviderDisconnected(provider)) return false;
+  if (provider.source === 'env') return false;
+  if (isBackendManagedProvider(provider)) return false;
+  // Judge the control by the SAME execution branch `disconnectProvider` uses:
+  // a config-backed provider is disconnected through the config branch
+  // (`updateGlobalConfig`, credential deletion optional), a credential-backed
+  // one through `deleteProviderAuth`. The real Codex adapter has no
+  // `deleteProviderAuth` yet emits `source=config` providers, so gating every
+  // provider on it wrongly disabled their Disconnect.
+  if (isConfigBackedProvider(provider)) return providerControlAvailable('updateGlobalConfig');
+  return providerControlAvailable('deleteProviderAuth');
+}
+
+/** The control the provider's disconnect branch actually executes, for source lines. */
+function disconnectProviderControl(provider: ProviderInfo): string {
+  return isConfigBackedProvider(provider) ? 'updateGlobalConfig' : 'deleteProviderAuth';
+}
+
 function supportsProviderConfigUpdates() {
+  if (!providerControlAvailable('updateGlobalConfig')) return false;
   const active = backend();
   if (active.kind === 'codex') return Boolean(active.updateGlobalConfig);
   // Kimi Web providers (managed:kimi-code) are owned by kimi itself, not editable here.
   if (active.kind === 'kimi-web') return false;
   return Boolean(active.updateGlobalConfig && active.setProviderAuth);
-}
-
-function canDisconnectProvider(provider: ProviderInfo) {
-  return (
-    !isProviderDisconnected(provider) &&
-    provider.source !== 'env' &&
-    !isBackendManagedProvider(provider)
-  );
 }
 
 function isConfigBackedProvider(provider: ProviderInfo) {
@@ -1188,6 +1313,7 @@ function validateCustomProvider() {
 }
 
 async function submitCustomProvider() {
+  const target = backend();
   const result = validateCustomProvider();
   if (!result) {
     customProviderErrors.value = {
@@ -1213,7 +1339,7 @@ async function submitCustomProvider() {
   busyProviderId.value = CUSTOM_PROVIDER_BUSY_ID;
   try {
     const updateGlobalConfig = requireBackendMethod(
-      backend().updateGlobalConfig,
+      target.updateGlobalConfig,
       'global config updates',
     );
     const providerEnablePatch = buildProviderDisabledPatch(
@@ -1221,7 +1347,7 @@ async function submitCustomProvider() {
       result.providerID,
       true,
     );
-    if (backend().kind === 'codex') {
+    if (target.kind === 'codex') {
       const codexConfig = result.config as CodexCustomProviderConfig;
       const modelMetadata = codexConfig.models ?? {};
       const nextConfig = (await updateGlobalConfig({
@@ -1229,6 +1355,7 @@ async function submitCustomProvider() {
         [`vis.model_providers.${result.providerID}`]: { models: modelMetadata },
         ...providerEnablePatch,
       })) as ProviderConfigState;
+      if (backend() !== target) return;
       emit('config-updated', nextConfig ?? {});
       emit('providers-changed');
       setFeedback(t('providerManager.messages.connected', { name: result.name }), 'success');
@@ -1237,9 +1364,10 @@ async function submitCustomProvider() {
       return;
     }
     if (result.key) {
-      const setProviderAuth = requireBackendMethod(backend().setProviderAuth, 'provider auth');
+      const setProviderAuth = requireBackendMethod(target.setProviderAuth, 'provider auth');
       await setProviderAuth(result.providerID, { type: 'api', key: result.key });
     }
+    if (backend() !== target) return;
     const nextConfig = (await updateGlobalConfig({
       provider: {
         ...props.providerConfig?.provider,
@@ -1247,15 +1375,16 @@ async function submitCustomProvider() {
       },
       ...providerEnablePatch,
     })) as ProviderConfigState;
+    if (backend() !== target) return;
     emit('config-updated', nextConfig ?? {});
     emit('providers-changed');
     setFeedback(t('providerManager.messages.connected', { name: result.name }), 'success');
     closeCustomProviderForm();
     resetCustomProviderForm();
   } catch (error) {
-    setFeedback(error instanceof Error ? error.message : String(error), 'error');
+    if (backend() === target) setFeedback(error instanceof Error ? error.message : String(error), 'error');
   } finally {
-    busyProviderId.value = '';
+    if (backend() === target) busyProviderId.value = '';
   }
 }
 
@@ -1325,6 +1454,7 @@ async function collectAuthPromptInputs(provider: ProviderInfo, method: ProviderA
 }
 
 async function toggleProvider(providerId: string, nextEnabled: boolean) {
+  const target = backend();
   const provider = props.providers.find((item) => item.id === providerId);
   if (provider && isBackendManagedProvider(provider)) {
     setFeedback(t('providerManager.messages.backendManagedProvider'), 'info');
@@ -1333,12 +1463,13 @@ async function toggleProvider(providerId: string, nextEnabled: boolean) {
   busyProviderId.value = providerId;
   try {
     const updateGlobalConfig = requireBackendMethod(
-      backend().updateGlobalConfig,
+      target.updateGlobalConfig,
       'global config updates',
     );
     const result = (await updateGlobalConfig(
       buildProviderDisabledPatch(props.providerConfig, providerId, nextEnabled),
     )) as ProviderConfigState;
+    if (backend() !== target) return;
     emit('config-updated', result ?? {});
     setFeedback(
       nextEnabled
@@ -1347,9 +1478,9 @@ async function toggleProvider(providerId: string, nextEnabled: boolean) {
       'success',
     );
   } catch (error) {
-    setFeedback(error instanceof Error ? error.message : String(error), 'error');
+    if (backend() === target) setFeedback(error instanceof Error ? error.message : String(error), 'error');
   } finally {
-    busyProviderId.value = '';
+    if (backend() === target) busyProviderId.value = '';
   }
 }
 
@@ -1383,13 +1514,14 @@ function toggleModel(modelKey: string, nextEnabled: boolean) {
 }
 
 async function connectProvider(provider: ProviderInfo) {
+  const target = backend();
   if (isDshBackend.value && props.dshRpcClient) { dshProviderManager.value?.openSettings(provider.id); return; }
   if (isBackendManagedProvider(provider)) {
     setFeedback(t('providerManager.messages.backendManagedProvider'), 'info');
     return;
   }
   const picked = await pickAuthMethod(provider.id);
-  if (!picked) return;
+  if (!picked || backend() !== target) return;
   busyProviderId.value = provider.id;
   try {
     if (picked.method.type === 'api') {
@@ -1400,25 +1532,27 @@ async function connectProvider(provider: ProviderInfo) {
             }),
           )
         : null;
-      if (!key) return;
+      if (!key || backend() !== target) return;
       const trimmedKey = key.trim();
-      const setProviderAuth = requireBackendMethod(backend().setProviderAuth, 'provider auth');
+      const setProviderAuth = requireBackendMethod(target.setProviderAuth, 'provider auth');
       await setProviderAuth(provider.id, { type: 'api', key: trimmedKey });
+      if (backend() !== target) return;
       emit('providers-changed');
       setFeedback(t('providerManager.messages.connected', { name: provider.id }), 'success');
       return;
     }
 
     const inputs = await collectAuthPromptInputs(provider, picked.method);
-    if (!inputs) return;
+    if (!inputs || backend() !== target) return;
     const authorizeProviderOAuth = requireBackendMethod(
-      backend().authorizeProviderOAuth,
+      target.authorizeProviderOAuth,
       'provider OAuth authorization',
     );
     const authorization = (await authorizeProviderOAuth(provider.id, {
       method: picked.index,
       inputs,
     })) as ProviderAuthAuthorization;
+    if (backend() !== target) return;
     if (authorization?.url) {
       window.open(authorization.url, '_blank', 'noopener,noreferrer');
     }
@@ -1429,9 +1563,9 @@ async function connectProvider(provider: ProviderInfo) {
               t('providerManager.prompts.pasteAuthCode', { providerId: provider.id }),
           )
         : null;
-      if (!code) return;
+      if (!code || backend() !== target) return;
       const completeProviderOAuth = requireBackendMethod(
-        backend().completeProviderOAuth,
+        target.completeProviderOAuth,
         'provider OAuth completion',
       );
       await completeProviderOAuth(provider.id, {
@@ -1445,25 +1579,27 @@ async function connectProvider(provider: ProviderInfo) {
               t('providerManager.prompts.completeOAuth', { providerId: provider.id }),
           )
         : true;
-      if (!confirmed) return;
+      if (!confirmed || backend() !== target) return;
       const completeProviderOAuth = requireBackendMethod(
-        backend().completeProviderOAuth,
+        target.completeProviderOAuth,
         'provider OAuth completion',
       );
       await completeProviderOAuth(provider.id, {
         method: picked.index,
       });
     }
+    if (backend() !== target) return;
     emit('providers-changed');
     setFeedback(t('providerManager.messages.connected', { name: provider.id }), 'success');
   } catch (error) {
-    setFeedback(error instanceof Error ? error.message : String(error), 'error');
+    if (backend() === target) setFeedback(error instanceof Error ? error.message : String(error), 'error');
   } finally {
-    busyProviderId.value = '';
+    if (backend() === target) busyProviderId.value = '';
   }
 }
 
 async function disconnectProvider(provider: ProviderInfo) {
+  const target = backend();
   if (isBackendManagedProvider(provider)) {
     setFeedback(t('providerManager.messages.backendManagedProvider'), 'info');
     return;
@@ -1473,33 +1609,36 @@ async function disconnectProvider(provider: ProviderInfo) {
   const confirmed = showConfirm
     ? await showConfirm(t('providerManager.confirm.disconnect', { providerId }))
     : true;
-  if (!confirmed) return;
+  if (!confirmed || backend() !== target) return;
   busyProviderId.value = providerId;
   try {
     if (isConfigBackedProvider(provider)) {
       const updateGlobalConfig = requireBackendMethod(
-        backend().updateGlobalConfig,
+        target.updateGlobalConfig,
         'global config updates',
       );
-      const deleteProviderAuth = backend().deleteProviderAuth;
+      const deleteProviderAuth = target.deleteProviderAuth;
       if (deleteProviderAuth) await deleteProviderAuth(providerId).catch(() => undefined);
+      if (backend() !== target) return;
       const result = (await updateGlobalConfig(
         buildProviderDisabledPatch(props.providerConfig, providerId, false),
       )) as ProviderConfigState;
+      if (backend() !== target) return;
       emit('config-updated', result ?? {});
     } else {
       const deleteProviderAuth = requireBackendMethod(
-        backend().deleteProviderAuth,
+        target.deleteProviderAuth,
         'provider auth deletion',
       );
       await deleteProviderAuth(providerId);
     }
+    if (backend() !== target) return;
     emit('providers-changed');
     setFeedback(t('providerManager.messages.disconnected', { providerId }), 'success');
   } catch (error) {
-    setFeedback(error instanceof Error ? error.message : String(error), 'error');
+    if (backend() === target) setFeedback(error instanceof Error ? error.message : String(error), 'error');
   } finally {
-    busyProviderId.value = '';
+    if (backend() === target) busyProviderId.value = '';
   }
 }
 </script>
@@ -1556,6 +1695,7 @@ async function disconnectProvider(provider: ProviderInfo) {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex-wrap: wrap;
 }
 
 .provider-manager-title {
@@ -1645,6 +1785,15 @@ async function disconnectProvider(provider: ProviderInfo) {
   border-radius: 10px;
   font-size: 12px;
   border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
+}
+
+.provider-control-source {
+  display: block;
+  flex-basis: 100%;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--theme-status-warning, #fcd34d);
+  word-break: break-word;
 }
 
 .provider-manager-feedback.is-info {

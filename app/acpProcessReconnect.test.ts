@@ -149,4 +149,34 @@ describe('AcpProcessManager reconnect transport', () => {
       }),
     );
   });
+
+  it('delivers the same native frame to the runtime client and the raw history tap', async () => {
+    const script = [
+      "const readline=require('node:readline')",
+      "readline.createInterface({input:process.stdin}).on('line',(line)=>{",
+      'JSON.parse(line)',
+      "process.stdout.write(JSON.stringify({jsonrpc:'2.0',method:'session/update',params:{sessionId:'s1',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'added'}}}})+'\\n')",
+      '})',
+    ].join(';');
+    manager = createAcpProcessManager();
+    await manager.reconcile([
+      {
+        id: 'frame',
+        name: 'Frame ACP',
+        command: process.execPath,
+        args: ['-e', script],
+        enabled: true,
+      },
+    ]);
+    const client = new MockClient();
+    const attachment = manager.attach('frame', client, { runtime: true });
+    const tapped: string[] = [];
+    attachment.setRawTap((chunk) => tapped.push(Buffer.from(chunk).toString('utf8')));
+
+    client.emit('message', JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping', params: {} }));
+
+    await vi.waitFor(() => expect(client.sent).toHaveLength(1));
+    expect(tapped.join('')).toContain('"text":"added"');
+    expect(JSON.parse(client.sent[0] ?? '{}')).toMatchObject({ method: 'session/update' });
+  });
 });

@@ -1,5 +1,6 @@
-import { IdentityError, decodeRepoKey, decodeSessionKey, decodeWorkspaceKey, parseEnvironmentId, parseInstanceId } from './identity.js';
+import { IdentityError, decodeRepoKey, decodeSessionKey, decodeWorkspaceKey, parseEnvironmentId, parseInstanceId, parseHarnessInstanceId, parseSessionRef } from './identity.js';
 import { ERROR_CODES, METHODS, ProtocolError, requireValue, objectFields, textValue, integerValue, jsonValue, parseCapabilities } from './capabilities.js';
+import { scanRawFrame } from './rawFrame.js';
 export { ProtocolError, ERROR_CODES } from './capabilities.js';
 export { createProtocolState } from './protocolState.js';
 export const PROTOCOL_VERSION = 1;
@@ -48,9 +49,16 @@ export function validateFrame(input) {
       if (METHODS[value.method] === 'mutation') textValue(value.idempotencyKey, 'idempotencyKey');
       else if (value.idempotencyKey !== undefined) textValue(value.idempotencyKey, 'idempotencyKey');
       requireValue(value.params !== null && typeof value.params === 'object' && !Array.isArray(value.params), 'params');
-      if (value.method === 'native.extension') {
-        objectFields(value.params, ['owner', 'name', 'payload']);
-        parseCapabilities({ methods: [], extensions: [{ owner: value.params.owner, name: value.params.name, permission: 'required', schemaVersion: 1, metadata: null }] });
+      if (value.method === 'native.extension' || value.method === 'native.query') {
+        if (Object.hasOwn(value.params, 'owner')) {
+          requireValue(value.method === 'native.extension', 'extension.legacy');
+          objectFields(value.params, ['owner', 'name', 'payload']);
+          parseCapabilities({ methods: [], extensions: [{ owner: value.params.owner, name: value.params.name, permission: 'required', schemaVersion: 1, metadata: null }] });
+        } else {
+          objectFields(value.params, ['harnessInstanceId', 'operation', 'args'], ['session', 'workspaceKey']);
+          parseHarnessInstanceId(value.params.harnessInstanceId); textValue(value.params.operation, 'extension.operation');
+          if (value.params.session !== undefined) requireValue(parseSessionRef(value.params.session).harnessInstanceId === value.params.harnessInstanceId, 'extension.session', 'unauthorized');
+        }
       }
       break;
     case 'result':
@@ -74,7 +82,11 @@ export function validateFrame(input) {
       integerValue(value.seq, 'seq');
       requireValue(value.seq > 0, 'seq');
       integerValue(value.entityRevision, 'entityRevision');
-      entityKeyValue(value.scope, 'scope');
+      // Durable store patches identify their entity with an opaque SHA-256 scope.
+      // Other event types carry a qualified workspace, repository or session key.
+      if (value.type !== 'entity.patch' || typeof value.scope !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(value.scope)) {
+        entityKeyValue(value.scope, 'scope');
+      }
       textValue(value.type, 'type');
       break;
     case 'snapshot':
@@ -105,12 +117,17 @@ export function validateFrame(input) {
   return value;
 }
 export function encodeFrame(value) { return JSON.stringify(validateFrame(value)); }
-export function decodeFrame(text) {
+export function decodeFrame(text, preflight) {
   // UTF-8 uses at least one byte per UTF-16 code unit. Reject an impossible
   // frame before allocating its encoded copy; the byte check still handles
   // multibyte input whose code-unit length fits the limit.
   requireValue(typeof text === 'string' && text.length <= LIMITS.jsonBytes
     && encoder.encode(text).byteLength <= LIMITS.jsonBytes, 'json.size');
+  if (preflight !== undefined) {
+    const summary = scanRawFrame(text);
+    if (summary.duplicateKeys) throw new ProtocolError('invalid_request', 'frame');
+    if (preflight(summary) === 'drop') return undefined;
+  }
   let value;
   try { value = JSON.parse(text); }
   catch (error) { if (error instanceof SyntaxError) throw new ProtocolError('invalid_request', 'json'); throw error; }

@@ -425,7 +425,8 @@ describe('bootstrapDshWorkspace (Todo 33 dsh bridge construction)', () => {
         createDshPermissions,
         upsertPermissionEntry,
         removePermissionEntry,
-        getActiveBackendAdapter: () => adapter,
+        getBackendAdapter: () => adapter,
+        activeBackendKind: box('dsh'),
         DshAdapter: DshAdapterDouble,
         configureDshBackend: vi.fn(() => adapter),
         createDshMuxClient: vi.fn(() => {
@@ -643,8 +644,8 @@ function registryDouble(order: string[], DshAdapter: new () => unknown) {
   return {
     built,
     configureDshBackend,
-    getActiveBackendAdapter: vi.fn((): AdapterDouble => {
-      if (!current) throw new Error('Backend adapter is not registered: dsh');
+    getBackendAdapter: vi.fn((kind: string): AdapterDouble => {
+      if (kind !== 'dsh' || !current) throw new Error(`Backend adapter is not registered: ${kind}`);
       return current;
     }),
     disconnectDshBackend: vi.fn(() => {
@@ -698,7 +699,8 @@ describe('bootstrapDshWorkspace — adapter identity across the disposal (defect
         createDshPermissions,
         upsertPermissionEntry: vi.fn(),
         removePermissionEntry: vi.fn(),
-        getActiveBackendAdapter: registry.getActiveBackendAdapter,
+        getBackendAdapter: registry.getBackendAdapter,
+        activeBackendKind: box('dsh'),
         DshAdapter: DshAdapterDouble,
         configureDshBackend: registry.configureDshBackend,
         createDshMuxClient: vi.fn(() => {
@@ -837,7 +839,8 @@ describe('dshSendApi (Todo 25 send routing)', () => {
       transpile(`${DECLARATIONS}\n;({ dshSendApi, dshMessageBridge, dshMuxClient });`),
       {
         shallowRef: shallowRefDouble(),
-        getActiveBackendAdapter: () => adapter,
+        getBackendAdapter: () => adapter,
+        activeBackendKind: box('dsh'),
         DshAdapter: DshAdapterDouble,
         createDshRpcClient,
         deriveDshBridgeHttpUrl,
@@ -985,7 +988,8 @@ describe('dshSessionApi (Todo 27 session action routing)', () => {
         createDshPermissions,
         upsertPermissionEntry: vi.fn(),
         removePermissionEntry: vi.fn(),
-        getActiveBackendAdapter: () => adapter,
+        getBackendAdapter: () => adapter,
+        activeBackendKind: box('dsh'),
         DshAdapter: DshAdapterDouble,
         createDshRpcClient: vi.fn(() => ({ call: vi.fn(async () => ({})) })),
         deriveDshBridgeHttpUrl,
@@ -1084,59 +1088,77 @@ describe('dshSessionApi (Todo 27 session action routing)', () => {
 // ---------------------------------------------------------------------------
 
 describe('dsh lifecycle wiring (Todo 33)', () => {
-  const LOGIN_BOXES = {
-    loginCodexBridgeUrl: box(''),
-    loginCodexBridgeToken: box(''),
-    loginAcpBridgeUrl: box(''),
-    loginAcpBridgeToken: box(''),
-    loginAcpAgentId: box(''),
-    loginKimiWebBridgeUrl: box(''),
-    loginKimiWebBridgeToken: box(''),
-    loginDshBridgeUrl: box('ws://localhost:23004/dsh/ws'),
-    loginDshBridgeToken: box('dsh-bridge-token'),
-    loginRequiresAuth: box(false),
-    loginUsername: box(''),
-    loginPassword: box(''),
-    loginUrl: box(''),
-  };
-
-  function runHandleLogin(input: { dshBridgeUrl?: string; saveDsh?: () => void } = {}) {
-    const program = transpile(`${appFunctionDeclaration('handleLogin')};handleLogin();`);
-    const credentials = credentialsDouble();
-    if (input.saveDsh) credentials.saveDsh.mockImplementation(input.saveDsh);
-    const startInitialization = vi.fn();
+  function bridgeLoginFixture(
+    connectRuntimeBridge = vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    activateQualifiedComposerDrafts = vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  ) {
+    const program = transpile(`${appFunctionDeclaration('handleLogin')};${appFunctionDeclaration('handleAbortInit')};({ login: handleLogin, abort: handleAbortInit });`);
+    const uiInitState = box('login');
+    const connectionState = box('idle');
     const initErrorMessage = box('');
-    runInNewContext(program, {
-      ...LOGIN_BOXES,
-      loginBackendKind: box('dsh'),
-      loginDshBridgeUrl: box(input.dshBridgeUrl ?? 'ws://localhost:23004/dsh/ws'),
-      credentials,
-      startInitialization,
+    const sidePanelActiveTab = box('project');
+    const { login, abort } = runInNewContext(program, {
+      activateQualifiedComposerDrafts,
+      connectRuntimeBridge,
+      bridgeLoginGeneration: 0,
+      runtimeConnectionOwner: undefined,
+      stopRuntimeRecovery: undefined,
+      runtimeOnline: box(false),
+      abortInitialization: vi.fn(),
+      uiInitState,
+      connectionState,
       initErrorMessage,
-      toErrorMessage: (error: unknown) =>
-        error instanceof Error ? error.message : String(error),
-    });
-    return { credentials, startInitialization, initErrorMessage };
+      sidePanelActiveTab,
+      toErrorMessage: String,
+    }) as { login: () => Promise<void>; abort: () => void };
+    return { login, abort, activateQualifiedComposerDrafts, connectRuntimeBridge, uiInitState, connectionState, initErrorMessage, sidePanelActiveTab };
   }
 
-  it('saves dsh credentials and starts initialization from the login form', () => {
-    const { credentials, startInitialization } = runHandleLogin();
-    expect(credentials.saveDsh).toHaveBeenCalledWith(
-      'ws://localhost:23004/dsh/ws',
-      'dsh-bridge-token',
-    );
-    expect(startInitialization).toHaveBeenCalledTimes(1);
+  it('activates qualified drafts and connects the Bridge before entering the session view', async () => {
+    const login = bridgeLoginFixture();
+    await login.login();
+    expect(login.activateQualifiedComposerDrafts).toHaveBeenCalledExactlyOnceWith();
+    expect(login.connectRuntimeBridge).toHaveBeenCalledExactlyOnceWith();
+    expect(login.activateQualifiedComposerDrafts).toHaveBeenCalledBefore(login.connectRuntimeBridge);
+    expect(login.uiInitState.value).toBe('ready');
+    expect(login.connectionState.value).toBe('ready');
+    expect(login.sidePanelActiveTab.value).toBe('session');
   });
 
-  it('surfaces a rejected empty dsh bridge URL instead of starting', () => {
-    const { startInitialization, initErrorMessage } = runHandleLogin({
-      dshBridgeUrl: '  ',
-      saveDsh: () => {
-        throw new Error('dsh bridge URL is required.');
-      },
-    });
-    expect(startInitialization).not.toHaveBeenCalled();
-    expect(initErrorMessage.value).toBe('dsh bridge URL is required.');
+  it('shows a rejected Bridge connection and keeps the login form available to retry', async () => {
+    const connect = vi.fn<() => Promise<void>>().mockRejectedValue(new Error('Bridge unavailable'));
+    const login = bridgeLoginFixture(connect);
+    await login.login();
+    expect(login.uiInitState.value).toBe('login');
+    expect(login.connectionState.value).toBe('error');
+    expect(login.initErrorMessage.value).toContain('Bridge unavailable');
+    expect(login.sidePanelActiveTab.value).toBe('project');
+  });
+
+  it('does not open a Bridge after aborting while draft activation is pending', async () => {
+    const drafts = Promise.withResolvers<void>();
+    const login = bridgeLoginFixture(undefined, vi.fn(() => drafts.promise));
+    const pending = login.login();
+    login.abort();
+    drafts.resolve();
+    await pending;
+    expect(login.connectRuntimeBridge).not.toHaveBeenCalled();
+    expect(login.uiInitState.value).toBe('login');
+  });
+
+  it('keeps a successful retry when an aborted connection rejects later', async () => {
+    const first = Promise.withResolvers<void>();
+    const connect = vi.fn<() => Promise<void>>().mockReturnValueOnce(first.promise).mockResolvedValue(undefined);
+    const login = bridgeLoginFixture(connect);
+    const pending = login.login();
+    await vi.waitFor(() => expect(connect).toHaveBeenCalledTimes(1));
+    login.abort();
+    await login.login();
+    first.reject(new Error('Aborted connection'));
+    await pending;
+    expect(login.uiInitState.value).toBe('ready');
+    expect(login.connectionState.value).toBe('ready');
+    expect(login.initErrorMessage.value).toBe('');
   });
 
   it('passes the four dsh activation hooks to useBackendActivation', () => {
@@ -1168,7 +1190,7 @@ describe('dsh lifecycle wiring (Todo 33)', () => {
       parseKimiWebApprovalRequestId,
       replyKimiWebApproval: vi.fn(),
       dshPermissions,
-      getActiveBackendAdapter: () => ({ replyPermission: undefined }),
+      getBackendAdapter: () => ({ replyPermission: undefined }),
       activeDirectory: box('/repo'),
       codexApi: { serverRequests: { value: [] }, replyPermissionRequest: vi.fn() },
       encodeCodexDialogRequestId: (id: string) => id,

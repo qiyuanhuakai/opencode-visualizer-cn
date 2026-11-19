@@ -1,7 +1,10 @@
-import { ref, computed } from 'vue';
+import { ref, computed, getCurrentScope, onScopeDispose } from 'vue';
+import { normalizeSettingsChange } from '../../shared/runtime/liveSettings.js';
+import { managementCandidate } from '../runtime/connectionUrl';
 import {
   StorageKeys,
   storageGet,
+  storageRead,
   storageKey,
   storageRemove,
   storageSet,
@@ -18,6 +21,7 @@ import {
 import { normalizeAcpBridgeUrl } from '../backends/acp/bridgeUrl';
 import {
   migrateLegacyCredentials,
+  LEGACY_CREDENTIALS_STORAGE_KEY,
   parseStoredCredentials,
   type StoredCredentials,
 } from './credentialStorage';
@@ -45,7 +49,23 @@ function applyCredentials(next: Credentials) {
   password.value = next.password;
 }
 
+export function getRuntimeConnectionCandidate() {
+  function candidate(bridgeUrl: string, bridgeToken: string) {
+    return { reference: managementCandidate(bridgeUrl), resolveAuthentication: async () => ({ bridgeToken }) };
+  }
+  switch (backendKind.value) {
+    case 'opencode': return null;
+    case 'codex': return candidate(codexBridgeUrl.value, codexBridgeToken.value);
+    case 'acp': return acpAgentId.value.trim() ? candidate(acpBridgeUrl.value, acpBridgeToken.value) : null;
+    case 'kimi-web': return candidate(kimiWebBridgeUrl.value, kimiWebBridgeToken.value);
+    case 'dsh': return dshAutoConnect.value ? candidate(dshBridgeUrl.value, dshBridgeToken.value) : null;
+    default: { const unreachable: never = backendKind.value; return unreachable; }
+  }
+}
+
 export function useCredentials() {
+  let dispose = () => {};
+
   const authHeader = computed(() => {
     const u = username.value.trim();
     const p = password.value.trim();
@@ -224,6 +244,7 @@ export function useCredentials() {
         storageRemove(StorageKeys.auth.serverUrl);
       }
       storageRemove(StorageKeys.auth.credentials);
+      storageRemove(LEGACY_CREDENTIALS_STORAGE_KEY);
       if (preservedBackendKind === 'codex') {
         storageSet(StorageKeys.auth.codexBridgeUrl, preservedCodexUrl);
         storageRemove(StorageKeys.auth.codexBridgeToken);
@@ -249,7 +270,10 @@ export function useCredentials() {
   }
 
   if (typeof window !== 'undefined') {
-    window.addEventListener('storage', (event) => {
+    const storageWindow = window;
+    const storageListener = (storageEvent: StorageEvent) => {
+      const event = normalizeSettingsChange(storageEvent, storageRead);
+      if (!event) return;
       if (event.key === storageKey(StorageKeys.auth.backendKind)) {
         backendKind.value =
           event.newValue === 'codex' ||
@@ -331,8 +355,11 @@ export function useCredentials() {
       const next = parseStoredCredentials(event.newValue);
       if (!next) return;
       applyCredentials(next);
-    });
+    };
+    storageWindow.addEventListener('storage', storageListener);
+    dispose = () => storageWindow.removeEventListener('storage', storageListener);
   }
+  if (getCurrentScope()) onScopeDispose(dispose);
 
   return {
     url,
@@ -359,5 +386,6 @@ export function useCredentials() {
     saveDsh,
     load,
     clear,
+    dispose,
   };
 }

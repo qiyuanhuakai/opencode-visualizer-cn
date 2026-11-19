@@ -1,7 +1,8 @@
 import { useI18n } from 'vue-i18n';
 import type { ComputedRef, Ref } from 'vue';
 import PermissionContent from '../components/ToolWindow/Permission.vue';
-import { getActiveBackendAdapter } from '../backends/registry';
+import { getBackendAdapter } from '../backends/registry';
+import type { BackendKind } from '../backends/types';
 import type { useFloatingWindows } from './useFloatingWindows';
 import { useDialogHandler } from './useDialogHandler';
 
@@ -27,6 +28,7 @@ export function usePermissions(options: {
   fw: ReturnType<typeof useFloatingWindows>;
   allowedSessionIds: ComputedRef<Set<string>>;
   activeDirectory: Ref<string>;
+  activeBackendKind: Ref<BackendKind>;
   ensureConnectionReady: (action: string) => boolean;
   sendReply?: (requestId: string, reply: PermissionReply) => Promise<void>;
   onReplied?: (requestId: string) => void;
@@ -48,7 +50,7 @@ export function usePermissions(options: {
         options.onReplied?.(requestId);
         return;
       }
-      const replyPermission = getActiveBackendAdapter().replyPermission;
+      const replyPermission = getBackendAdapter(options.activeBackendKind.value).replyPermission;
       if (!replyPermission) throw new Error('Active backend does not support permission replies.');
       await replyPermission(requestId, {
         directory: options.activeDirectory.value.trim() || undefined,
@@ -151,7 +153,7 @@ export function usePermissions(options: {
 
   async function fetchPendingPermissions(directory?: string) {
     try {
-      const listPendingPermissions = getActiveBackendAdapter().listPendingPermissions;
+      const listPendingPermissions = getBackendAdapter(options.activeBackendKind.value).listPendingPermissions;
       if (!listPendingPermissions) return;
       const data = await listPendingPermissions(directory);
       if (!Array.isArray(data)) return;

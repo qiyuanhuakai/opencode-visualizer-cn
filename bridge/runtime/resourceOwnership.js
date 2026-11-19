@@ -28,9 +28,8 @@ export function createResourceOwnership() {
           }
           if (failures.length) throw new AggregateError(failures, 'Runtime resource release failed.');
         })();
-        // The cache assignment only lands after the attempt's synchronous part has already
-        // run, so an attempt that fails before its first await would otherwise leave a
-        // rejected promise cached and replay it forever instead of retrying the release.
+        // Retain failed resources for a later attempt, including a synchronous
+        // throw before the first await. Admission remains permanently closed.
         attempt.catch(() => {
           if (releasePromise === attempt) releasePromise = undefined;
         });

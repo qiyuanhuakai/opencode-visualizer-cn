@@ -99,19 +99,6 @@ let adapters: Record<BackendKind, BackendAdapter | undefined> = {
 // Registered after `adapters` exists (TDZ) so the seam reset can write the slot.
 registerDshAdapterFactory((options) => createDshAdapter(options));
 
-let activeBackendKind: BackendKind = 'opencode';
-
-export function getActiveBackendKind() {
-  return activeBackendKind;
-}
-
-export function setActiveBackendKind(kind: BackendKind) {
-  if (!adapters[kind]) {
-    throw new Error(`Backend adapter is not registered: ${kind}`);
-  }
-  activeBackendKind = kind;
-}
-
 export function configureOpenCodeBackend(options: { baseUrl?: string; authorization?: string }) {
   getBackendAdapter('opencode').configure?.(options);
 }
@@ -212,8 +199,4 @@ export function getBackendAdapter(kind: BackendKind) {
     throw new Error(`Backend adapter is not registered: ${kind}`);
   }
   return adapter;
-}
-
-export function getActiveBackendAdapter() {
-  return getBackendAdapter(activeBackendKind);
 }

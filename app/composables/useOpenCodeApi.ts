@@ -1,5 +1,6 @@
 import { computed, isRef, ref, type Ref } from 'vue';
-import { getActiveBackendAdapter } from '../backends/registry';
+import { getBackendAdapter } from '../backends/registry';
+import type { BackendKind } from '../backends/types';
 import { waitForState } from '../utils/waitForState';
 import type { ProjectState, SessionState } from '../types/worker-state';
 
@@ -74,11 +75,15 @@ function hasSandbox(project: ProjectState | undefined, directory: string): boole
   return Boolean(project.sandboxes[directory]);
 }
 
-export function useOpenCodeApi(projects: ProjectsMap | Ref<ProjectsMap>, translate?: TranslateFn) {
+export function useOpenCodeApi(
+  projects: ProjectsMap | Ref<ProjectsMap>,
+  translate: TranslateFn | undefined,
+  activeBackendKind: Ref<BackendKind>,
+) {
   const t = translate ?? ((key: string) => key);
   const pendingCount = ref(0);
   const pending = computed(() => pendingCount.value > 0);
-  const getBackend = () => getActiveBackendAdapter();
+  const getBackend = () => getBackendAdapter(activeBackendKind.value);
 
   const getProjects = (): ProjectsMap => (isRef(projects) ? projects.value : projects);
 

@@ -18,11 +18,12 @@ import { createI18n } from 'vue-i18n';
  *      `v-else` of `!serverHealth`, so a failed bridge-health fetch hides them.
  *
  * METHODOLOGY: unlike `StatusMonitorModal.kimiWebStatus.test.ts` — which mocks
- * `getActiveBackendAdapter` to THROW and asserts it is never called — this file
- * registers a REAL kimi adapter through `configureKimiWebBackend` +
- * `setActiveBackendKind('kimi-web')` and mounts the real component against it.
- * The registry module is NOT mocked, so `KIMI_WEB_CAPABILITIES` is the real
- * static object and the early-return branch is exercised for real.
+ * the adapter lookup to THROW and asserts it is never called — this file
+ * registers a REAL kimi adapter through `configureKimiWebBackend` and mounts
+ * the real component against it (task 48: resolution is the explicit-kind
+ * `getBackendAdapter('kimi-web')`; the component reads its `activeBackendKind`
+ * prop). The registry module is NOT mocked, so `KIMI_WEB_CAPABILITIES` is the
+ * real static object and the early-return branch is exercised for real.
  *
  * Orchestrator decisions (do not re-litigate):
  *   D3 — the Version row must show kimi `meta.server_version`.
@@ -177,7 +178,7 @@ const fetchMock = vi.fn<
 vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 // NOTE: `../backends/registry` is deliberately NOT mocked — this file must
 // exercise the real registry so `configureKimiWebBackend` /
-// `setActiveBackendKind` / `getActiveBackendAdapter` and the real static
+// `getBackendAdapter('kimi-web')` and the real static
 // `KIMI_WEB_CAPABILITIES` are the production ones.
 // NOTE: `../composables/useDesktopBridgeVersion` is deliberately NOT mocked —
 // the real `resolveDesktopBridgeHealthUrl` derives the bridge `/healthz` URL
@@ -215,8 +216,7 @@ import en from '../locales/en';
 import { useCodexApi } from '../composables/useCodexApi';
 import {
   configureKimiWebBackend,
-  getActiveBackendAdapter,
-  setActiveBackendKind,
+  getBackendAdapter,
 } from '../backends/registry';
 import type { KimiWebBridgeSessionState } from '../composables/kimiWebMessageBridgeTypes';
 import { StorageKeys, storageKey } from '../utils/storageKeys';
@@ -311,7 +311,6 @@ beforeEach(() => {
   // captures the global `fetch` at construction time.
   vi.stubGlobal('fetch', fetchMock);
   configureKimiWebBackend({ bridgeUrl: BRIDGE_URL, bridgeToken: BRIDGE_TOKEN });
-  setActiveBackendKind('kimi-web');
 });
 
 afterEach(() => {
@@ -323,11 +322,13 @@ afterEach(() => {
 
 describe('R5 real kimi-web adapter registration', () => {
   it('registers a real kimi-web adapter (not the throwing placeholder stub)', async () => {
-    // The old test file mocks `getActiveBackendAdapter` to throw; this file
-    // must prove the production registration path is live.
-    let adapter: ReturnType<typeof getActiveBackendAdapter> | undefined;
+    // The old test file mocks the adapter lookup to throw; this file
+    // must prove the production registration path is live. Task 48: the
+    // lookup is the explicit-kind accessor — the component resolves through
+    // its `activeBackendKind` prop, never the retired global.
+    let adapter: ReturnType<typeof getBackendAdapter> | undefined;
     expect(() => {
-      adapter = getActiveBackendAdapter();
+      adapter = getBackendAdapter('kimi-web');
     }).not.toThrow();
     if (!adapter) throw new Error('kimi-web adapter must be registered');
     expect(adapter.kind).toBe('kimi-web');

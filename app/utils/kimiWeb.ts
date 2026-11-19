@@ -31,6 +31,7 @@ export type KimiWebClientOptions = {
   getToken?: KimiWebTokenProvider;
   /** Injectable fetch for tests. Defaults to the global fetch. */
   fetcher?: typeof fetch;
+  requestJson?: (spec: RequestSpec) => Promise<unknown>;
 };
 
 /** Business error carrying the kimi envelope `code`/`msg`. */
@@ -128,7 +129,7 @@ export type KimiWebTranscriptFrame =
   | { kind: 'tool'; name: string; state: string; input?: unknown; output?: unknown; error?: string; frameId: string; toolCallId?: string }
   | { kind: 'notice'; message: string; level: string; frameId: string };
 export type KimiWebTranscriptTurn = {
-  kind: 'turn'; turnId: string; ordinal: number; state: string; prompt?: string; error?: string; startedAt?: string; endedAt?: string;
+  kind: 'turn'; turnId: string; ordinal: number; state: string; triggerPromptId?: string; prompt?: string; error?: string; startedAt?: string; endedAt?: string;
   steps: Array<{ stepId: string; frames: KimiWebTranscriptFrame[]; usage?: KimiWebStepUsage }>;
 };
 export type KimiWebAgentTranscript = {
@@ -506,7 +507,7 @@ export type KimiWebUploadFileInput = {
   expires_in_sec?: number;
 };
 
-type RequestSpec = {
+export type RequestSpec = {
   method: HttpMethod;
   path: string;
   query?: Record<string, QueryValue>;
@@ -574,6 +575,7 @@ export function createKimiWebClient(options: KimiWebClientOptions) {
   const fetcher = options.fetcher ?? fetch;
 
   async function send(spec: RequestSpec): Promise<Response> {
+    if (options.requestJson) throw new Error('Runtime Kimi transport requires a declared JSON operation.');
     const headers: Record<string, string> = {};
     const token = (await getToken?.())?.trim();
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -612,6 +614,7 @@ export function createKimiWebClient(options: KimiWebClientOptions) {
 
   /** Status-first: 204 is empty success, 206/304 return bytes, 200/201 unwrap. */
   async function requestJson<T>(spec: RequestSpec): Promise<T> {
+    if (options.requestJson) return await options.requestJson(spec) as T;
     const response = await send(spec);
     const { status } = response;
     if (status === 204) return undefined as unknown as T;
@@ -764,6 +767,9 @@ export function createKimiWebClient(options: KimiWebClientOptions) {
         path: `${sessionPath(sessionId)}/profile`,
         body: input,
       }),
+    updateGoalObjective: (sessionId: string, objective: string) => requestJson<unknown>({
+      method: 'PATCH', path: `${sessionPath(sessionId)}/goal`, body: { objective },
+    }),
     getGoal: async (sessionId: string) => parseKimiWebGoal(await requestJson<unknown>({
       method: 'GET', path: `${sessionPath(sessionId)}/goal`,
     })),

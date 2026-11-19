@@ -14,6 +14,7 @@ type TestTerminal = {
 };
 
 type TestSession = {
+  closeOnSuccess?: boolean;
   readonly terminal: TestTerminal;
 };
 
@@ -27,6 +28,7 @@ function deferred<T>() {
 
 function createFixture() {
   const sessions = new Map<string, TestSession>();
+  const onConnect = vi.fn((id: string) => sessions.get(id)?.closeOnSuccess);
   const windows = new Set<string>();
   const pendingCreates = createPendingPtyCreateRegistry<void>();
   const preparedPtys: string[] = [];
@@ -54,7 +56,7 @@ function createFixture() {
     TestTerminal,
     TestSession,
     { readonly id: number },
-    void,
+    void | { closeOnSuccess: boolean },
     object
   >({
     sessions,
@@ -64,8 +66,8 @@ function createFixture() {
     prepareWindow: (pty) => preparedPtys.push(pty.id),
     openWindow: (pty) => windows.add(pty.id),
     closeWindow: (ptyId) => windows.delete(ptyId),
-    createSession: (_pty, terminal) => ({ terminal }),
-    connectSession: () => undefined,
+    createSession: (_pty, terminal, options) => ({ terminal, closeOnSuccess: options?.closeOnSuccess }),
+    connectSession: onConnect,
     queueAfterRender: (callback) => callback(),
     waitForFontsReady: () => {
       const gate = deferred<void>();
@@ -90,6 +92,7 @@ function createFixture() {
     importGate,
     loadTerminal,
     owner,
+    onConnect,
     preparedPtys,
     sessions,
     terminals,
@@ -109,6 +112,15 @@ describe('usePtyWindowOwner', () => {
     expect(fixture.loadTerminal).toHaveBeenCalledTimes(1);
     expect(fixture.terminals).toHaveLength(1);
     expect(fixture.windows).toEqual(new Set(['pty-1']));
+  });
+
+  it('sets the close policy before connecting, so immediate PTY exit sees it', async () => {
+    const fixture = createFixture();
+    const opening = fixture.owner.ensureWindow({ id: 'fast-command' }, { closeOnSuccess: true });
+    fixture.importGate.resolve();
+    await opening;
+    expect(fixture.onConnect).toHaveBeenCalledExactlyOnceWith('fast-command');
+    expect(fixture.onConnect).toHaveReturnedWith(true);
   });
 
   it('Given a pending import, When its PTY is removed, Then the old window is never created', async () => {

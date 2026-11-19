@@ -1,4 +1,5 @@
 import { ref, watch, type Ref } from 'vue';
+import { normalizeSettingsChange, type SettingsChange } from '../../shared/runtime/liveSettings.js';
 import {
   StorageKeys,
   storageGet,
@@ -637,7 +638,7 @@ watch(
   { deep: true, flush: 'sync' },
 );
 
-type SettingsStorageEventHandler = (event: StorageEvent) => void;
+type SettingsStorageEventHandler = (event: SettingsChange) => void;
 
 const settingsStorageHandlers = new Map<string, SettingsStorageEventHandler>([
   [
@@ -847,7 +848,15 @@ const settingsStorageHandlers = new Map<string, SettingsStorageEventHandler>([
 
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (event) => {
-    settingsStorageHandlers.get(event.key ?? '')?.(event);
+    const change = normalizeSettingsChange(event, (key) => {
+      const result = storageRead(key);
+      if (result.kind === 'error' && key === StorageKeys.settings.textTransformers) {
+        textTransformerStorageRecoveryPending.value = true;
+        textTransformerPersistenceErrorRevision.value += 1;
+      }
+      return result;
+    });
+    if (change) settingsStorageHandlers.get(change.key ?? '')?.(change);
   });
 }
 

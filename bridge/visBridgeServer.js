@@ -15,11 +15,16 @@ import {
 } from './bridgeHttp.js';
 import {
   handleFsHttpRequest,
+  handleProfileHttpRequest,
   handlePtyHttpRequest,
   handleSupervisorHttpRequest,
   jsonBodyErrorStatus,
   readJsonBody,
 } from './bridgeHttpRoutes.js';
+import { defaultBridgeConfigPath, resolveBridgeProfilePath } from './bridgeConfig.js';
+import { createConnectionManager } from './runtime/transports/connectionManager.js';
+import { createProfileStore } from './runtime/transports/profileStore.js';
+import { createRemoteServices } from './runtime/remoteServices.js';
 import { proxyWebSocket } from './codexWebSocketProxy.js';
 import { proxyDshHttp } from './dshHttpProxy.js';
 import { handleDshUpgrade } from './dshWsProxy.js';
@@ -95,6 +100,20 @@ export function createVisBridgeServer(options) {
   };
   const fsManager = createWorkspaceFsManager();
   const commandRunner = createWorkspaceCommandRunner();
+  // Profile management is a server-scoped resource: one durable profile store and
+  // one connection manager per bridge process. The profile document is derived from
+  // the same config location the bridge already uses, so Browser and Electron read
+  // and write one canonical `profiles.json` through the `/api/v1/profiles` surface.
+  const profilePath =
+    options.profilePath ??
+    resolveBridgeProfilePath(bridgeOptions.configPath ?? defaultBridgeConfigPath());
+  const profileStore = options.profileStore ?? createProfileStore({ profilePath });
+  const remoteServices = options.remoteServices ?? options.runtime?.remoteServices ?? createRemoteServices(options.remote);
+  const profileManager =
+    options.profileManager ??
+    (options.openProfileTransport
+      ? createConnectionManager({ store: profileStore, openTransport: options.openProfileTransport })
+      : remoteServices.configureProfiles(profileStore));
   const server = createServer((request, response) => {
     const requestUrl = new URL(request.url ?? '/', 'http://localhost');
 
@@ -127,7 +146,15 @@ export function createVisBridgeServer(options) {
             connection.disconnect();
           }
         })
-        .catch(() => writeJsonHttpResponse(response, 503, { error: 'Runtime unavailable.' }));
+        .catch((error) => {
+          // The runtime host is created lazily, so a broken install (e.g. a
+          // missing staged store sidecar) surfaces here first. Log the located
+          // diagnosis to the daemon log instead of swallowing it — a
+          // superficially healthy bridge with an unusable runtime is exactly
+          // what the daemon contract forbids.
+          console.error(`runtime host unavailable: ${error instanceof Error ? error.message : String(error)}`);
+          writeJsonHttpResponse(response, 503, { error: 'Runtime unavailable.' });
+        });
       return;
     }
 
@@ -223,6 +250,18 @@ export function createVisBridgeServer(options) {
         return;
       }
       if (!authorizeHttpRequest(request, response, bridgeOptions.bridgeToken)) return;
+      if (requestUrl.pathname.startsWith('/api/v1/profiles')) {
+        void handleProfileHttpRequest(request, response, requestUrl, profileManager)
+          .then((handled) => {
+            if (!handled) writeJsonHttpResponse(response, 404, { error: 'Not found' });
+          })
+          .catch((error) => {
+            writeJsonHttpResponse(response, jsonBodyErrorStatus(error, 400), {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        return;
+      }
       if (!bridgeOptions.runtime) {
         writeJsonHttpResponse(response, 503, { error: 'Bridge supervisor is unavailable.' });
         return;
@@ -266,12 +305,14 @@ export function createVisBridgeServer(options) {
   });
 
   server.on('close', () => {
+    void remoteServices.close().catch(error => server.emit('runtimeError', error));
     ptyManager.disposeAll();
     void commandRunner.close();
     void bridgeOptions.runtime?.stop().catch((error) => server.emit('runtimeError', error));
   });
 
   server.stopOwnedProcesses = () => commandRunner.close();
+  server.remoteServices = remoteServices;
 
   return server;
 }

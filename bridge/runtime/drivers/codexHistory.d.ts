@@ -2,6 +2,8 @@ import type { SessionRef } from '../../../shared/runtime/identity.js';
 import type { AppServerClient } from '../../../shared/runtime/native/codex/appServerClient.js';
 import type { CanonicalEntry } from '../../../shared/runtime/native/codex/normalize.js';
 import type { JsonValue } from '../../../shared/runtime/capabilities.js';
+import type { InternalNativeHistoryHandle } from '../historyService.js';
+import type { CodexEvent } from '../../../shared/runtime/native/codex/subscriptions.js';
 export interface CodexHistoryPage {
   readonly items: readonly {
     readonly turnId: string;
@@ -31,3 +33,15 @@ export function createCodexHistory(options: {
   readonly cursor?: string | null;
   readonly limit?: number;
 }) => Promise<CodexHistoryPage>;
+
+export function createCodexHistoryStream(options: {
+  readonly session: SessionRef;
+  readonly subscribe?: () => AsyncIterableIterator<CodexEvent>;
+  readonly request: AppServerClient['request'];
+  readonly requestHistory: AppServerClient['requestHistory'];
+  readonly processGeneration: number;
+  readonly epoch: string;
+  readonly assertCurrent: () => void;
+  readonly randomUUID: () => string;
+  readonly secrets?: readonly string[];
+}): InternalNativeHistoryHandle;

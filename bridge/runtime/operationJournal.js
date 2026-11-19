@@ -124,7 +124,7 @@ export async function compareRecord(
     changes: [{ collection, key, expectedRevision: prior?.revision ?? 0, value }, ...extra],
   };
   const ack = await (reserved ? store.mutateControl(mutation) : store.mutate(mutation));
-  return { revision: ack.revision - extra.length, value };
+  return { revision: ack.revision - extra.filter(change => change.checkOnly !== true).length, value };
 }
 export function isRevisionConflict(error) {
   return error instanceof StoreError && error.reason === 'entity_revision';

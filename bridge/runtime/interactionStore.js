@@ -105,8 +105,14 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
     }
     throw new StoreError('conflict', 'concurrent_update');
   }
-  async function pending({ scope: input, nativeRequestId, payload }) {
+  async function readParent(value) {
+    if (value.parentOperationId === undefined) return undefined;
+    const parent = await readRecord(store, 'operations', value.parentOperationId);
+    return parent?.value && ['sent', 'observed', 'reconciling'].includes(parent.value.phase) && fingerprint(parent.value.scope) === fingerprint(value.scope) ? parent : null;
+  }
+  async function pending({ scope: input, nativeRequestId, payload, parentOperationId }) {
     const scope = parseOperationScope(input);
+    if (parentOperationId !== undefined && (typeof parentOperationId !== 'string' || !parentOperationId || parentOperationId.length > 512)) throw new StoreError('invalid_request', 'interaction_parent');
     if (
       !(
         typeof nativeRequestId === 'string' &&
@@ -120,13 +126,14 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
     const key = keyFor(scope, nativeRequestId);
     const prepared = preparePayload(clean, `payload:${key}:${fingerprint(clean)}`);
     return admission.run({ size: prepared.ref.bytes }, async (signal) => {
-      const { token } = await authority(scope, false);
+      const { token, record } = await authority(scope, false);
       const value = {
         kind: 'interaction',
         scope,
         nativeRequestId,
         payloadRef: prepared.ref,
-        digest: fingerprint(clean),
+        digest: fingerprint(parentOperationId === undefined ? clean : { payload: clean, parentOperationId }),
+        ...(parentOperationId === undefined ? {} : { parentOperationId }),
         phase: 'pending',
       };
       const prior = await readRecord(store, 'interactions', key, false);
@@ -137,13 +144,31 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
         return key;
       }
       await writePayload(store, 'interactions', prepared, false, signal);
+      const parent = await readParent(value);
+      if (parent === null) throw new StoreError('conflict', 'interaction_parent_ended');
       if (!token.active || signal.aborted)
         throw new StoreError('reconcile_required', 'stale_generation');
       // The process row is a read-only authority precondition: including it in this
       // mutation would expire the revision unrelated concurrent requests validated
       // against, making distinct permission requests fail on each other's commit.
       try {
-        await compareRecord(store, 'interactions', key, null, value, [], false);
+        await compareRecord(
+          store,
+          'interactions',
+          key,
+          null,
+          value,
+          [
+            {
+              collection: 'operations',
+              key: processKey(scope),
+              expectedRevision: record.revision,
+              checkOnly: true,
+            },
+            ...(parent ? [{ collection: 'operations', key: parentOperationId, expectedRevision: parent.revision, checkOnly: true }] : []),
+          ],
+          false,
+        );
       } catch (error) {
         if (!isRevisionConflict(error)) throw error;
         const duplicate = await readRecord(store, 'interactions', key);
@@ -187,13 +212,14 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
     await assertStoreScope(scope);
     const token = live.get(processKey(scope));
     const process = await readRecord(store, 'operations', processKey(scope), false);
+    const parent = await readParent(record.value);
     const valid =
       token?.active &&
       token.scope.processGeneration === scope.processGeneration &&
       token.scope.epoch === scope.epoch &&
       process?.value.alive &&
       process.value.generation === scope.processGeneration &&
-      process.value.epoch === scope.epoch;
+      process.value.epoch === scope.epoch && parent !== null;
     return admission.run({ size: record.value.payloadRef.bytes }, async () => {
       const payload = await readPayload(store, 'interactions', record.value.payloadRef);
       return (!valid || !token?.active) && record.value.phase !== 'replied'
@@ -221,30 +247,38 @@ export function createInteractionStore({ store, admission = createAdmissionQueue
     let claimedByThisCall = false;
     return admission
       .run({ reserved: true, deadlineMs, size: prepared.ref.bytes }, async (signal) => {
-        const { token } = await authority(scope);
+        const { token, record: process } = await authority(scope);
         const prior = await readRecord(store, 'interactions', key);
         if (!prior || fingerprint(prior.value.scope) !== fingerprint(scope))
           throw new StoreError('conflict', 'scope_fence');
         if (prior.value.phase !== 'pending')
           throw new StoreError('conflict', 'interaction_claimed');
+        const parent = await readParent(prior.value);
+        if (parent === null) throw new StoreError('conflict', 'interaction_parent_ended');
         if (!token.active || signal.aborted)
           throw new StoreError('reconcile_required', 'stale_generation');
         await writePayload(store, 'interactions', prepared, true, signal);
         if (!token.active || signal.aborted)
           throw new StoreError('reconcile_required', 'stale_generation');
-        // The process row is a read-only authority precondition: including it in this
-        // mutation would expire the revision unrelated concurrent replies validated
-        // against, so only one of two distinct permission requests would be submitted.
         let claimed;
         try {
-          claimed = await compareRecord(store, 'interactions', key, prior, {
-            ...prior.value,
-            phase: 'replying',
-            answerRef: prepared.ref,
-          });
+          claimed = await compareRecord(
+            store,
+            'interactions',
+            key,
+            prior,
+            { ...prior.value, phase: 'replying', answerRef: prepared.ref },
+            [
+              {
+                collection: 'operations',
+                key: processKey(scope),
+                expectedRevision: process.revision,
+                checkOnly: true,
+              },
+              ...(parent ? [{ collection: 'operations', key: prior.value.parentOperationId, expectedRevision: parent.revision, checkOnly: true }] : []),
+            ],
+          );
         } catch (error) {
-          // This interaction row is the only change in the mutation, so a revision
-          // conflict can only mean another window claimed this same request.
           if (!isRevisionConflict(error)) throw error;
           throw new StoreError('conflict', 'interaction_claimed');
         }

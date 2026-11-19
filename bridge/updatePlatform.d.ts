@@ -9,6 +9,13 @@ export interface LinuxPackageProbeResult {
 }
 
 export declare function managedBridgePath(platform: string, env?: NodeJS.ProcessEnv): string;
+export declare function hostInstallPath(
+  host: { readonly platform?: string },
+  env?: NodeJS.ProcessEnv,
+): string;
+export declare function assertLocalInstallerLocation(location: string): string;
+export declare const SUPPORTED_HOST_PLATFORMS: readonly string[];
+export { UPDATE_LOCATIONS } from './runtime/transports/remoteBootstrap.js';
 export declare function assertManagedInstallation(
   execPath: string,
   platform: string,

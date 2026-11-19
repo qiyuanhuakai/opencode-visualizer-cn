@@ -66,7 +66,8 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
-import { getActiveBackendAdapter, getActiveBackendKind } from '../backends/registry';
+import { getBackendAdapter } from '../backends/registry';
+import type { BackendKind } from '../backends/types';
 import { KimiWebAdapter } from '../backends/kimiWeb/kimiWebAdapter';
 import { splitFileContentDirectoryAndPath } from '../utils/path';
 
@@ -87,6 +88,7 @@ type DropdownHandle = {
 const props = defineProps<{
   open: boolean;
   homePath?: string;
+  backendKind: BackendKind;
 }>();
 
 const emit = defineEmits<{
@@ -249,9 +251,9 @@ async function fetchDirectory(dir: string) {
       gitEntries = [];
     }
     let hasGitEntry = data.some((entry) => entry.name === '.git');
-    if (!hasGitEntry && gitEntries.length === 0 && (getActiveBackendKind() === 'kimi-web' || getActiveBackendKind() === 'dsh')) {
+    if (!hasGitEntry && gitEntries.length === 0 && (props.backendKind === 'kimi-web' || props.backendKind === 'dsh')) {
       try {
-        const files = await getActiveBackendAdapter().listFiles?.(
+        const files = await getBackendAdapter(props.backendKind).listFiles?.(
           { directory: cleanDir, path: '.' },
           { signal: controller.signal },
         );
@@ -278,8 +280,8 @@ async function fetchDirectory(dir: string) {
 
 async function listDirectory(dir: string, signal: AbortSignal) {
   const cleanDir = cleanDirectoryPath(dir);
-  if (getActiveBackendKind() === 'kimi-web') {
-    const adapter = getActiveBackendAdapter();
+  if (props.backendKind === 'kimi-web') {
+    const adapter = getBackendAdapter(props.backendKind);
     if (!(adapter instanceof KimiWebAdapter)) throw new Error('Kimi Web backend is unavailable.');
     const page = await adapter.restClient.browseDirectories(cleanDir, signal);
     return page.entries.map((entry) => ({
@@ -290,10 +292,10 @@ async function listDirectory(dir: string, signal: AbortSignal) {
       ignored: false,
     }));
   }
-  const { directory, path } = getActiveBackendKind() === 'codex' || getActiveBackendKind() === 'dsh'
+  const { directory, path } = props.backendKind === 'codex' || props.backendKind === 'dsh'
     ? { directory: cleanDir, path: '.' }
     : splitFileContentDirectoryAndPath(cleanDir, null);
-  const listFiles = getActiveBackendAdapter().listFiles;
+  const listFiles = getBackendAdapter(props.backendKind).listFiles;
   if (!listFiles) throw new Error('Active backend does not support file listing.');
   const data = (await listFiles(
     {

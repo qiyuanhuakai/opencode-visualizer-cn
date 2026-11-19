@@ -9,6 +9,12 @@ const databases = [['opencode.codexAuxiliaryHistory', 'snapshots'], ['opencode.b
 const backendHistoryKey = /^(?:opencode\.)?state\.backendHistory\.v1\.([a-f0-9]{32})\./u;
 const backendHistoryPrefix = /^(?:opencode\.)?state\.backendHistory\.v1\./u;
 function namespaceFor(key: string): string {
+  // The localStorage copy of a backend-history key carries the `opencode.` prefix
+  // `storageKey` adds; the IndexedDB row stores the tuple [rawKey, entryId], whose
+  // first element is that same key WITHOUT the prefix. Both forms name the same
+  // scope, so the namespace derivation accepts either — rejecting the raw form
+  // detached every IndexedDB history record from its target while still reporting
+  // a successful cutover.
   const match = backendHistoryKey.exec(key);
   if (backendHistoryPrefix.test(key) && !match) throw new LegacyExportError('unknown_namespace');
   return match ? `backend-history-v1:${match[1]}` : 'unattached-legacy-local';

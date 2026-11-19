@@ -161,7 +161,7 @@ describe('runtime operation failure boundaries', () => {
   it('blocks an old RPC when process exit races the committed reply claim', () =>
     withStore(async (store) => {
       // Given the real worker and an exit arriving immediately after durable claim.
-      const hasPhase = (value: Json, phase: string) =>
+      const hasPhase = (value: Json | undefined, phase: string) =>
         value !== null &&
         typeof value === 'object' &&
         !Array.isArray(value) &&

@@ -12,7 +12,7 @@ const registryMock = vi.hoisted(() => ({
 }));
 
 vi.mock('../backends/registry', () => ({
-  getActiveBackendAdapter: () => registryMock.getAdapter(),
+  getBackendAdapter: () => registryMock.getAdapter(),
 }));
 
 type ProviderModel = {
@@ -205,10 +205,12 @@ export function conditionalAuthMethods() {
 }
 
 export function codexBackend() {
+  // The real Codex adapter exposes config updates but NOT deleteProviderAuth:
+  // it emits source=config providers and disables them through the config
+  // branch. Keeping the fake faithful lets these tests cover that route.
   return {
     kind: 'codex',
     updateGlobalConfig: vi.fn(async (payload: Record<string, unknown>) => payload),
-    deleteProviderAuth: vi.fn(async () => undefined),
     listProviderAuthMethods: vi.fn(async () => ({})),
   };
 }

@@ -79,6 +79,8 @@ export type DshNormalizeStats = {
 };
 
 export type DshNormalizerOptions = {
+  /** History projection already owns a bounded archive; avoid retaining raw replay records twice. */
+  retainRecords?: boolean;
   /** Subagent child-session address when the caller pages a child (`session/page`). */
   address?: DshSessionAddress;
   now?: () => number;
