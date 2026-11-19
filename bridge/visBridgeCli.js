@@ -490,6 +490,13 @@ export async function runControlStoreCommand(options, dependencies = {}) {
   );
   role.liveness = createLivenessToken();
 
+  // Announce ownership only after the signal handlers are armed: a caller that treats this line
+  // as the ready signal may deliver SIGINT immediately, and before this point Node's default
+  // handler would terminate the process with the signal instead of releasing the fence.
+  console.log(
+    `vis_bridge control-store owns environment ${status.environmentId} at ${status.root} (epoch ${status.epoch}).`,
+  );
+
   return {
     store,
     /**
