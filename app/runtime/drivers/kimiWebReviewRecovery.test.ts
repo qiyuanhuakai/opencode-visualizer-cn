@@ -600,3 +600,38 @@ it('preserves a replied/answered old interaction and recovers a following pendin
     expect(f.state.prompts).toBe(0);
   } finally { await f.close(); }
 });
+
+it('does not restore a terminal task from a delayed busy-send read', async () => {
+  const f = await fixture(false);
+  const readEntered = Promise.withResolvers<void>();
+  const releaseRead = Promise.withResolvers<void>();
+  try {
+    const core = f.driver.registration.driver.core;
+    const observation = await core.subscribe!(context) as { return(): Promise<unknown> };
+    const content = [{ type: 'text', text: 'Task' }];
+    const sent = await core.send!({ ...context, params: { content, idempotencyKey: 'monitor-first' } }) as { operationId: string };
+    await f.driver.flush();
+    const get = f.store.get.bind(f.store);
+    let delayed = false;
+    f.store.get = async input => {
+      const result = await get(input);
+      if (!delayed && input.collection === 'operations' && input.key === sent.operationId) {
+        delayed = true;
+        readEntered.resolve();
+        await releaseRead.promise;
+      }
+      return result;
+    };
+    const rejected = core.send!({ ...context, params: { content, idempotencyKey: 'monitor-busy' } }).catch((error: unknown) => error);
+    expect(await Promise.race([readEntered.promise, rejected])).toBeUndefined();
+    f.state.turn = { ...f.state.turn, state: 'completed' };
+    f.send({ type: 'transcript.ops', session_id: session.nativeSessionId, payload: { agent_id: 'main', seq: ++f.state.seq, ops: [{ op: 'turn.upsert', turn: f.state.turn }] } });
+    await expect.poll(async () => await get({ collection: 'operations', key: sent.operationId })).toMatchObject({ value: { phase: 'terminal' } });
+    await f.driver.flush();
+    releaseRead.resolve();
+    expect(await rejected).toMatchObject({ field: 'runtime.store.session_busy' });
+    await observation.return();
+    expect(f.state.prompts).toBe(1);
+    expect(f.driver.diagnostics()).toMatchObject({ observers: 0, selected: 0, historySessions: 0 });
+  } finally { releaseRead.resolve(); await f.close(); }
+});

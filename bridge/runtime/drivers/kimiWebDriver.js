@@ -180,11 +180,11 @@ export async function createKimiWebDriver(options) {
     // liveTask looks the lease up through the session key, so the re-read has to carry the full
     // OperationScope of the session being verified: a flat identifier has no scope.session and
     // fails identity parsing before any durable read, which would strand the session forever.
-    try { live = await operations.liveTask(capture({ ...scope, session: { ...scope, nativeSessionId: sessionId } })); }
+    try { live = await restoreTaskMonitor(capture({ ...scope, session: { ...scope, nativeSessionId: sessionId } })); }
     catch { scheduleRecheck(sessionId); return; }
     forgetRecheck(sessionId);
     uncertain.delete(sessionId);
-    if (live) { registerTask(sessionId, live); return; }
+    if (live) return;
     reclaim(sessionId);
   }
   function detachNative(sessionId, agents) {
@@ -529,8 +529,7 @@ export async function createKimiWebDriver(options) {
       } catch (error) {
         // A task that provably reached the send boundary, or whose acknowledgement cannot be accounted for, stays monitored for reconciliation; one that never entered it is reclaimed by the release below.
         try {
-          const live = await operations.liveTask(captured);
-          if (live) registerTask(captured.session.nativeSessionId, live);
+          await restoreTaskMonitor(captured);
         } catch {
           // The durable state could not be read, which is not evidence that no task is
           // running: keep the session monitored until a reliable read or terminal decides.
