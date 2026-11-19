@@ -32,3 +32,5 @@ export interface RuntimeStore {
 }
 export function createRuntimeStore(options: StoreOptions): RuntimeStore;
 export function resolveStoreWorker(installRoot?: string): { readonly workerPath: string; readonly execPath: string };
+export function installedStoreRootCandidates(execPath?: string, platform?: string): readonly string[];
+export function resolveInstalledStoreRoot(execPath?: string, platform?: string): string | null;

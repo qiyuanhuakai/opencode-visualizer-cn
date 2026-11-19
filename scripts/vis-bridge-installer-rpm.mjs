@@ -80,6 +80,8 @@ export function createLinuxRpmSpec({ version, architecture, payloadPath }) {
     '%defattr(-,root,root,-)',
     '%attr(0755,root,root) /usr/bin/vis_bridge',
     '/usr/lib/vis_bridge/node_modules/node-pty',
+    '/usr/lib/vis_bridge/bridge/runtime/runtime',
+    '/usr/lib/vis_bridge/shared/runtime',
     '',
   ].join('\n');
 }

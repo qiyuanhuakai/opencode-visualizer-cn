@@ -46,6 +46,28 @@ jobs:
       - name: Run tests
         run: pnpm test
 
+      # The QA drivers load the browser kernel delivered under
+      # scripts/qa/vendor/omowright; this smoke proves it loads from an
+      # arbitrary checkout path and that no driver hardcodes a personal
+      # absolute path, instead of discovering that at browser-leg runtime.
+      - name: Browser kernel clean-checkout smoke
+        run: node --test scripts/qa/runtime-v090-browser-kernel.test.mjs
+
+      # The Windows installer QA helper's native calls must each be checked: without this,
+      # a failing assert-pty followed by successful lifecycle steps reported the packaged
+      # acceptance lane green (the pwsh wrapper propagates only the final exit code).
+      - name: Windows installer QA failure-propagation smoke
+        run: node --test scripts/qa/vis-bridge-installer-windows.test.mjs
+
+      # The Slurm lab's readiness must be THIS startup's completion, not the host's. The
+      # native runtime reuses the isolated runner, so a fixed /run/lab-setup-complete let a
+      # previous startup's marker answer "ready" while this startup's setup had barely begun.
+      # The marker path is per-startup, it is written after the version record it certifies,
+      # and teardown removes it — a privileged native restart is not available here, so this
+      # smoke asserts the structure and drives the readiness decision with a stubbed probe.
+      - name: Slurm lab per-startup readiness smoke
+        run: node --test scripts/qa/runtime-v090-slurm-lab.test.mjs
+
       - name: Build web app
         run: pnpm build
 
@@ -624,10 +646,137 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  # Packaged Bridge live QA, downstream of the producer IN THE SAME RUN.
+  # actions/download-artifact only sees the CURRENT run's artifacts unless a
+  # producing run is named explicitly, so the consumer must sit in the producing
+  # job's dependency chain: this job `needs: [bridge-installers]`, the job that
+  # uploads bridge-<platform>-<arch>-artifacts above. The graded surface is the
+  # REAL packaged binary from this same run — never a dev-mode process.
+  packaged-bridge-qa:
+    name: Packaged Bridge QA on ${{ matrix.os }}
+    needs: [bridge-installers]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            os: macOS x64
+            platform: macos
+            arch: x64
+          - runner: macos-latest
+            os: macOS arm64
+            platform: macos
+            arch: arm64
+          - runner: windows-2022
+            os: Windows x64
+            platform: windows
+            arch: x64
+          - runner: windows-11-arm
+            os: Windows arm64
+            platform: windows
+            arch: arm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The artifact this run's bridge-installers job uploaded for this exact
+      # platform/arch: bridge-<platform>-<arch>-artifacts. Downloaded to the
+      # layout the producer's own lanes use, so the platform installer QA below
+      # finds it where it expects.
+      - name: Download packaged Bridge artifacts (same run as the producer)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bridge-${{ matrix.platform }}-${{ matrix.arch }}-artifacts
+          path: dist-bridge/installers
+          merge-multiple: true
+
+      - name: Locate the packaged Bridge installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate=""
+          for path in dist-bridge/installers/*; do
+            [ -f "$path" ] || continue
+            candidate="$path"
+            break
+          done
+          if [ -z "$candidate" ]; then
+            echo "::error::bridge-installers produced no packaged Bridge artifact for ${{ matrix.platform }}-${{ matrix.arch }} in this run"
+            exit 1
+          fi
+          echo "VIS_PACKAGED_BRIDGE=$candidate" >> "$GITHUB_ENV"
+          echo "packaged Bridge installer: $candidate"
+
+      - name: Real SSH client version on this platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .omo/evidence/vis-v090/task-46
+          if command -v ssh >/dev/null 2>&1; then
+            ssh -V 2>&1 | tee .omo/evidence/vis-v090/task-46/ssh-version.txt || true
+          else
+            echo "no system ssh on this runner" | tee .omo/evidence/vis-v090/task-46/ssh-version.txt
+          fi
+          node -e "console.log('node ' + process.version + ' on ' + process.platform + ' ' + process.arch)" \
+            | tee .omo/evidence/vis-v090/task-46/platform.txt
+
+      # The shipped artifact is an INSTALLER, so the start test installs it and
+      # runs the installed binary: the graded surface is the packaged product the
+      # release actually ships, never a dev-mode process.
+      - name: Install the packaged Bridge and prove it starts (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .omo/evidence/vis-v090/task-46
+          sudo installer -pkg "$VIS_PACKAGED_BRIDGE" -target /
+          test -x /usr/local/bin/vis_bridge
+          /usr/local/bin/vis_bridge --version 2>&1 | tee .omo/evidence/vis-v090/task-46/bridge-version.txt
+          grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+' .omo/evidence/vis-v090/task-46/bridge-version.txt
+
+      - name: Install the packaged Bridge and prove it starts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/qa/vis-bridge-installer-windows.ps1
+
+      # The Windows lifecycle receipts the helper writes live in RUNNER_TEMP, outside the
+      # evidence tree the artifact below collects, so the install/reinstall/uninstall proof
+      # was being discarded. Stage them into the evidence tree before the upload.
+      - name: Stage the Windows lifecycle receipts into the evidence tree
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .omo/evidence/vis-v090/task-46 | Out-Null
+          Get-ChildItem $env:RUNNER_TEMP -Filter 'bridge-*lifecycle.json' -File -ErrorAction SilentlyContinue |
+            Copy-Item -Destination .omo/evidence/vis-v090/task-46/ -Force
+
+      - name: Upload packaged Bridge QA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-v090-packaged-qa-${{ matrix.os }}
+          path: .omo/evidence/vis-v090/task-46/
+          retention-days: 30
+          if-no-files-found: warn
+
   complete-ci:
     name: Complete CI
     if: always()
-    needs: [validate, build-macos-x64, build-macos-arm64, build-windows-x64, build-windows-arm64, build-linux-x64, bridge-installers]
+    needs: [validate, build-macos-x64, build-macos-arm64, build-windows-x64, build-windows-arm64, build-linux-x64, bridge-installers, packaged-bridge-qa]
     runs-on: ubuntu-latest
     steps:
       - name: Require every CI job and lane to pass
@@ -639,13 +788,15 @@ jobs:
           LANE_BUILD_WINDOWS_ARM64: ${{ needs.build-windows-arm64.result }}
           LANE_BUILD_LINUX_X64: ${{ needs.build-linux-x64.result }}
           BRIDGE_INSTALLERS_RESULT: ${{ needs.bridge-installers.result }}
+          PACKAGED_BRIDGE_QA_RESULT: ${{ needs.packaged-bridge-qa.result }}
         run: |
           for result in \
             "$VALIDATE_RESULT" \
             "$LANE_BUILD_MACOS_X64" "$LANE_BUILD_MACOS_ARM64" \
             "$LANE_BUILD_WINDOWS_X64" "$LANE_BUILD_WINDOWS_ARM64" \
             "$LANE_BUILD_LINUX_X64" \
-            "$BRIDGE_INSTALLERS_RESULT"; do
+            "$BRIDGE_INSTALLERS_RESULT" \
+            "$PACKAGED_BRIDGE_QA_RESULT"; do
             if [ "$result" != 'success' ]; then
               echo "job result '$result' is not success"
               exit 1

@@ -3,6 +3,12 @@ export type VisBridgeInstallerTarget = {
   readonly platform: NodeJS.Platform;
   readonly arch: NodeJS.Architecture;
   readonly format?: 'deb' | 'rpm';
+  /**
+   * Overrides the interpreter staged as the store worker sidecar. Packaging
+   * lanes leave it unset (the build interpreter is staged); packaging tests
+   * supply a controllable marker so the fixture never carries a real binary.
+   */
+  readonly sidecarSource?: string;
 };
 
 export type LinuxRpmSpecOptions = {

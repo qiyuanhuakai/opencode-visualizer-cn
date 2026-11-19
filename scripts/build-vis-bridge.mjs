@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { build } from 'esbuild';
 import { inject } from 'postject';
 import { stageNodePtyRuntime } from './vis-bridge-node-pty.mjs';
+import { stageRuntimeWorkerSidecar } from './vis-bridge-runtime-staging.mjs';
 
 const execFileAsync = promisify(execFile);
 const SEA_SENTINEL_FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
@@ -79,6 +80,9 @@ export async function buildVisBridgeBinary(rootDirectory) {
     process.platform,
     process.arch,
   );
+  await stageRuntimeWorkerSidecar(rootDirectory, paths.outputDirectory, {
+    platform: process.platform,
+  });
   return paths.binaryPath;
 }
 

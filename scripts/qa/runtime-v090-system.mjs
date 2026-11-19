@@ -48,9 +48,9 @@ import vue from '@vitejs/plugin-vue';
 import { chromium } from 'playwright';
 import { createServer as createViteServer } from 'vite';
 import { artifact, sourceSnapshot, writeJson } from './runtime-v090-evidence.mjs';
+import { loadBrowserKernel } from './runtime-v090-browser-kernel.mjs';
 import { OLD_FEATURE_MAPPING, assertMappingComplete } from '../../app/dev/runtime-v090/system43-mapping.mjs';
 
-const browserSkill = '/home/qiyuaner/.codex/plugins/cache/sisyphuslabs/omo/5.1.27/skills/browser/scripts/omowright.mjs';
 const T0 = 1791158400000;
 const ENV_A = '11111111-1111-4111-8111-111111111111';
 const ENV_B = '22222222-2222-4222-8222-222222222222';
@@ -164,7 +164,7 @@ export async function runSystem(context) {
   // cannot be `import`ed by a plain Node worker, so they are loaded through the case-owned Vite
   // server's SSR transform — the SAME files the browser realm loads, transformed once and run in
   // this worker. No copy is made and no algorithm is re-implemented here.
-  const { omowright } = await (await import(browserSkill)).loadOmowright();
+  const { omowright } = await loadBrowserKernel();
   const shimPath = path.join(context.root, 'app/dev/runtime-v090/task-35-browser-shim.mjs');
   ledger.resources.push({ kind: 'Vite-planned', host: '127.0.0.1', teardown: 'server.close then an exclusive port rebind' });
   persistLedger();

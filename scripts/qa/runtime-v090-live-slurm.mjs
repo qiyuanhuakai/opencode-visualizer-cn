@@ -62,7 +62,11 @@ export async function runLiveSlurm(options) {
     check(scenarios, 'precondition: real slurmctld binary present', await versionOf(lab, 'slurmctld --version'), true, 'slurmctld --version');
     check(scenarios, 'precondition: real slurmd binary present', await versionOf(lab, 'slurmd --version'), true, 'slurmd --version');
     check(scenarios, 'precondition: real munged running', await versionOf(lab, 'munge --version'), true, 'munge --version');
-    check(scenarios, 'precondition: real sshd running', await versionOf(lab, '/usr/sbin/sshd -V'), true, 'sshd -V');
+    // A version string proves the BINARY exists, not that the daemon is reachable: the lane
+    // immediately opens a store login against the login namespace's sshd, so the
+    // precondition must observe the actual listener. `sshd -V` alone let the lane report
+    // "real sshd running" while nothing was listening on :22 yet.
+    check(scenarios, 'precondition: real sshd listening on the login namespace', await listeningOn(lab, 'login', 22), true, 'a real listener on port 22 in the login namespace');
     check(scenarios, 'precondition: four real network namespaces', await netnsCount(lab), 4, 'ctrl + login + cn1 + cn2');
 
     const cliDaemonVersions = {
@@ -125,6 +129,11 @@ async function netnsCount(lab) {
   const receipt = await execLab(lab, ['bash', '-c', 'ip netns list | awk \'{print $1}\' | grep -c .']);
   return Number(receipt.stdout.trim());
 }
+/** A real listener on `port` inside `namespace`, observed with ss — not inferred from a binary or a version. */
+async function listeningOn(lab, namespace, port) {
+  const receipt = await execLab(lab, ['bash', '-c', `nsenter --net=/var/run/netns/${namespace} ss -lnt 2>/dev/null | grep -c ':${port} '`]);
+  return receipt.exitCode === 0 && Number(receipt.stdout.trim()) >= 1;
+}
 async function firstLine(lab, command) {
   const receipt = await execLab(lab, ['bash', '-c', command]);
   return receipt.stdout.split('\n').map((line) => line.trim()).find(Boolean) ?? '';
@@ -149,7 +158,10 @@ async function establishStoreLogin(lab) {
   return {
     established: receipt.exitCode === 0 && Boolean(match) && /Master running/.test(receipt.stdout),
     sessionId: match ? match[1].trim() : '',
-    detail: receipt.stdout.trim() || receipt.stderr.trim(),
+    // Both streams: with `set -e` the echoes stop at the failing command, so stdout alone
+    // showed the key/permission lines and nothing else, and the real SSH diagnosis (which
+    // ssh writes to stderr) was discarded. A failed login must name why it failed.
+    detail: [receipt.stdout.trim(), receipt.stderr.trim()].filter(Boolean).join('\n') || `exit ${receipt.exitCode}`,
     receipt,
   };
 }
@@ -164,7 +176,7 @@ async function observeStoreLogin(lab) {
   return {
     alive: receipt.exitCode === 0 && Boolean(match) && /Master running/.test(receipt.stdout) && match[1].trim().length > 0,
     sessionId: match ? match[1].trim() : '',
-    detail: receipt.stdout.trim() || receipt.stderr.trim(),
+    detail: [receipt.stdout.trim(), receipt.stderr.trim()].filter(Boolean).join('\n') || `exit ${receipt.exitCode}`,
     receipt,
   };
 }

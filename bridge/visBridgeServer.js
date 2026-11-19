@@ -142,7 +142,15 @@ export function createVisBridgeServer(options) {
             connection.disconnect();
           }
         })
-        .catch(() => writeJsonHttpResponse(response, 503, { error: 'Runtime unavailable.' }));
+        .catch((error) => {
+          // The runtime host is created lazily, so a broken install (e.g. a
+          // missing staged store sidecar) surfaces here first. Log the located
+          // diagnosis to the daemon log instead of swallowing it — a
+          // superficially healthy bridge with an unusable runtime is exactly
+          // what the daemon contract forbids.
+          console.error(`runtime host unavailable: ${error instanceof Error ? error.message : String(error)}`);
+          writeJsonHttpResponse(response, 503, { error: 'Runtime unavailable.' });
+        });
       return;
     }
 

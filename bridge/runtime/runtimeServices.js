@@ -63,6 +63,45 @@ export async function createRuntimeServices(options) {
         if (options.role === 'manager') return;
         for (const manifest of drivers.registry.list()) await store.mutate({ intentId: randomUUID(), changes: [{ collection: 'harnesses', key: manifest.harnessInstanceId, value: { environmentId: manifest.environmentId, harnessInstanceId: manifest.harnessInstanceId, kind: manifest.kind, manifest } }] });
         for (const root of workspace.workspaces) await store.mutate({ intentId: randomUUID(), changes: [{ collection: 'workspaces', key: root.key, value: { kind: 'workspace', workspace: decodeWorkspaceKey(root.key), sources: [], orphan: false } }] });
+        // A catalog entry is only useful once it carries the repository identity
+        // its consumers gate on: `repoForSession` (App.vue) resolves a Host
+        // Thread only from `workspace.repoKey`, and `threadService` refuses
+        // without one. `probeWorkspace` was declared on the session index but
+        // never invoked, so no workspace ever received `gitKind`/`repoKey` and
+        // every Host Thread refused for every target. Probing HERE — where the
+        // catalog is seeded from the granted roots — is what makes the fix
+        // complete: `authorizeDirectory` resolves every discovered session
+        // directory to the granted root containing it, so every workspace key
+        // that can ever exist is one of these root keys, and `catalog.register`
+        // spreads the existing record (preserving both fields). The demand is
+        // explicit (`visible`), which is the gate `catalog.probe` requires.
+        //
+        // A probe that THROWS is a genuine startup failure, not a per-root
+        // condition to swallow: `repository()` already answers `non-git` for a
+        // root that is simply not a repository, so a rejection means the root
+        // could not be authorized, the repository is corrupt, or the catalog
+        // contended eight times — in each of which the runtime would be
+        // describing workspaces it cannot serve. Failing fast matches
+        // `inspect()`'s own fail-fast composition.
+        //
+        // The ONE exception is a capability limit: a workspace grant may
+        // legitimately carry `permissions: ['read']`, and the probe chain
+        // authorizes with the default `command` permission, so such a root is
+        // refused with `unauthorized: git.permission` BEFORE any git command
+        // runs. That is not a broken repository or a startup failure — it is
+        // the grant saying the runtime may not run git there. Failing the
+        // whole startup for it would block every other root and every driver
+        // behind one normal capability limit, so the root is recorded as an
+        // explicit unknown (no repoKey) and the startup continues. Permissions
+        // are never elevated to make the probe pass.
+        for (const root of workspace.workspaces) {
+          try {
+            await index.probeWorkspace(root.key, { visible: true });
+          } catch (error) {
+            if (error?.code !== 'unauthorized' || error?.field !== 'git.permission') throw error;
+            await catalog.recordUnknown(root.key);
+          }
+        }
         await drivers.start(index);
         for (const manifest of drivers.registry.list()) {
           for (let attempt = 0; attempt < 4; attempt++) {
