@@ -404,19 +404,42 @@ async function failureLane(lab, scenarios, record, context) {
   ].join('\n')]));
   check(scenarios, 'failure manager-kill: controller diagnosed and restored', /MANAGER_RESTORED=Slurmctld\(primary\).*UP/.test(manager.receipt.stdout), true, manager.diagnosis);
 
-  // 5. job expire / requeue — a job is cancelled and requeued; both states are diagnosed.
-  const expire = await induce('job-expire-requeue', () => execLab(lab, ['bash', '-c', [
-    'set +e',
-    'srun --nodelist=cn1 -N1 -n1 -c1 --mem=128M --overcommit sleep 300 & J=$!',
-    'sleep 6',
-    'echo "EXPIRE_RUNNING=$(squeue -h -o \'%i %T\' | tr \'\\n\' \';\')"',
-    'scancel $J 2>/dev/null',
-    'sleep 4',
-    'echo "EXPIRE_AFTER_CANCEL=$(squeue -h -o \'%i %T\' | tr \'\\n\' \';\')"',
-    'squeue -h -o \'%i %T\' -t REQUEUED 2>/dev/null | head -1',
-    'echo "EXPIRE_NODE=$(scontrol show node cn1 | grep -oE \'State=[A-Z+]*\' | head -1)"',
-  ].join('\n')]));
-  check(scenarios, 'failure job-expire-requeue: running then cancelled state located', /EXPIRE_RUNNING=.*RUNNING/.test(expire.receipt.stdout), true, expire.diagnosis);
+  // Observe the same scheduler-owned job through running, requeue and cancellation.
+  const expire = await induce('job-expire-requeue', () => execLab(lab, ['bash', '-c', String.raw`
+set -euo pipefail
+submitted=$(sbatch --parsable --requeue --nodelist=cn1 -N1 -n1 -c1 --mem=128M --output=/dev/null --wrap='sleep 300')
+IFS=';' read -r job cluster <<< "$submitted"
+[[ "$job" =~ ^[1-9][0-9]*$ ]]
+trap 'scancel "$job" >/dev/null 2>&1 || true' EXIT
+
+wait_for_state() {
+  local expected="$1" current=''
+  for ((attempt=0; attempt<60; attempt++)); do
+    current=$(scontrol -o show job "$job") || return 1
+    if [[ " $current " == *" JobState=$expected "* ]]; then
+      printf '%s\n' "$current"
+      return
+    fi
+    sleep 0.5
+  done
+  printf 'Job %s did not reach %s: %s\n' "$job" "$expected" "$current" >&2
+  return 1
+}
+
+wait_for_state RUNNING >/dev/null
+printf 'EXPIRE_RUNNING=%s RUNNING\n' "$job"
+scontrol requeuehold "$job"
+wait_for_state PENDING >/dev/null
+printf 'EXPIRE_REQUEUED=%s PENDING\n' "$job"
+scontrol release "$job"
+wait_for_state RUNNING >/dev/null
+scancel "$job"
+wait_for_state CANCELLED >/dev/null
+printf 'EXPIRE_AFTER_CANCEL=%s CANCELLED\n' "$job"
+trap - EXIT
+`]));
+  const lifecycle = /^EXPIRE_RUNNING=([1-9][0-9]*) RUNNING\nEXPIRE_REQUEUED=\1 PENDING\nEXPIRE_AFTER_CANCEL=\1 CANCELLED$/m;
+  check(scenarios, 'failure job-expire-requeue: same job ran, requeued and cancelled', expire.receipt.exitCode === 0 && lifecycle.test(expire.receipt.stdout), true, expire.diagnosis);
 
   // 6. store fail — the store login connection breaks and must be diagnosed.
   const store = await induce('store-fail', () => execLab(lab, ['bash', '-c', [
