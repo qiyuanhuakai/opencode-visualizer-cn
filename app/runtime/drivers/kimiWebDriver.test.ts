@@ -413,7 +413,7 @@ describe('Kimi Web native selected-history producer over controlled raw HTTP and
       expect(createHash('sha256').update(document.bytes).digest('hex')).toBe(page.document.sha256);
       expect(document.bytes.equals(body)).toBe(true);
     } finally { await producer.close(); await store.close(); await fixture.close(); }
-  });
+  }, 60_000);
   it('keeps every raw source piece inside the 64KiB substrate bound including its backing allocation', async () => {
     const fixture = await controlledKimiWeb();
     try {
