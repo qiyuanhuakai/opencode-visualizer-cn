@@ -448,7 +448,8 @@ export async function runSystem(context) {
     const observer = createEventObserver({ binding: { target: ENV_A, epoch: 'epoch', generation: 1 }, after: 0, isCurrent: () => true, onClose: () => {} });
     let peakNormal = 0; let peakBytes = 0;
     for (let seq = 1; seq <= OBSERVER_LIMITS.normalFrames + 64; seq += 1) {
-      observer.push({ version: 1, kind: 'event', target: ENV_A, epoch: 'epoch', generation: 1, seq, entityRevision: seq, scope: `session:${seq}`, type: 'entity.patch', payload: { collection: 'session_summaries', key: `session:${seq}`, revision: seq } });
+      const key = encodeSessionKey({ environmentId: ENV_A, harnessInstanceId: HARNESS_INSTANCE.opencode, nativeSessionId: `session:${seq}` });
+      observer.push({ version: 1, kind: 'event', target: ENV_A, epoch: 'epoch', generation: 1, seq, entityRevision: seq, scope: key, type: 'entity.patch', payload: { collection: 'session_summaries', key, deleted: false } });
       peakNormal = Math.max(peakNormal, observer.state.normal);
       peakBytes = Math.max(peakBytes, observer.state.bytes);
     }
