@@ -9859,6 +9859,7 @@ const managementHarnessInstanceId = ref<HarnessInstanceId | null>(null);
 
 let runtimeWorkspaceKeys: readonly import('../shared/runtime/identity.js').WorkspaceKey[] = [];
 let runtimeConnectionOwner: ReturnType<typeof useRuntimeConnection> | undefined;
+let bridgeLoginGeneration = 0;
 let stopRuntimeRecovery: (() => void) | undefined;
 let pendingRuntimeSelection: Readonly<{ key: string; target: EnvironmentId }> | null = null;
 let lastRuntimeSelection: Readonly<{ key: string; target: EnvironmentId }> | null = null;
@@ -9894,6 +9895,7 @@ async function connectRuntimeBridge(): Promise<void> {
   const reference = await owner.connect();
   if (runtimeConnectionOwner !== owner) return;
   const inspection = await owner.client.inspect();
+  if (runtimeConnectionOwner !== owner) return;
   bridgeReference.value = reference;
   harnessManifests.value = inspection.harnesses.map(entry => entry.manifest);
   runtimeWorkspaceKeys = inspection.targets.find(target => target.target === reference.expectedEnvironmentId)?.workspaceKeys ?? [];
@@ -9973,7 +9975,12 @@ async function connectRuntimeBridge(): Promise<void> {
     await managedRemote.open();
   }
 }
-onScopeDispose(() => { stopRuntimeRecovery?.(); runtimeConnectionOwner?.dispose(); });
+onScopeDispose(() => {
+  bridgeLoginGeneration++;
+  stopRuntimeRecovery?.();
+  runtimeConnectionOwner?.dispose();
+  runtimeConnectionOwner = undefined;
+});
 
 /** Shared empty sets so the unified sidebar props never allocate per render. */
 const EMPTY_STRING_SET: ReadonlySet<string> = new Set<string>();
@@ -13290,16 +13297,23 @@ const handleBackendConnectionError = createBackendAuthFailureHandler({
 });
 
 async function handleLogin() {
+  if (uiInitState.value === 'loading') return;
+  const generation = ++bridgeLoginGeneration;
   uiInitState.value = 'loading';
   connectionState.value = 'connecting';
   initErrorMessage.value = '';
   try {
     await activateQualifiedComposerDrafts();
+    if (generation !== bridgeLoginGeneration) return;
     await connectRuntimeBridge();
+    if (generation !== bridgeLoginGeneration) return;
     sidePanelActiveTab.value = 'session';
     connectionState.value = 'ready';
     uiInitState.value = 'ready';
   } catch (error) {
+    if (generation !== bridgeLoginGeneration) return;
+    runtimeConnectionOwner?.dispose();
+    runtimeConnectionOwner = undefined;
     initErrorMessage.value = toErrorMessage(error);
     connectionState.value = 'error';
     uiInitState.value = 'login';
@@ -13307,9 +13321,11 @@ async function handleLogin() {
 }
 
 function handleAbortInit() {
+  bridgeLoginGeneration++;
   stopRuntimeRecovery?.();
   runtimeOnline.value = false;
   runtimeConnectionOwner?.dispose();
+  runtimeConnectionOwner = undefined;
   uiInitState.value = 'login';
   abortInitialization();
 }

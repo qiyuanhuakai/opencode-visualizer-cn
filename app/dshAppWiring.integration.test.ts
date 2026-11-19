@@ -1088,27 +1088,35 @@ describe('dshSessionApi (Todo 27 session action routing)', () => {
 // ---------------------------------------------------------------------------
 
 describe('dsh lifecycle wiring (Todo 33)', () => {
-  async function runBridgeLogin(connectRuntimeBridge = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)) {
-    const program = transpile(`${appFunctionDeclaration('handleLogin')};handleLogin();`);
-    const activateQualifiedComposerDrafts = vi.fn(async () => {});
+  function bridgeLoginFixture(
+    connectRuntimeBridge = vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    activateQualifiedComposerDrafts = vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  ) {
+    const program = transpile(`${appFunctionDeclaration('handleLogin')};${appFunctionDeclaration('handleAbortInit')};({ login: handleLogin, abort: handleAbortInit });`);
     const uiInitState = box('login');
     const connectionState = box('idle');
     const initErrorMessage = box('');
     const sidePanelActiveTab = box('project');
-    await runInNewContext(program, {
+    const { login, abort } = runInNewContext(program, {
       activateQualifiedComposerDrafts,
       connectRuntimeBridge,
+      bridgeLoginGeneration: 0,
+      runtimeConnectionOwner: undefined,
+      stopRuntimeRecovery: undefined,
+      runtimeOnline: box(false),
+      abortInitialization: vi.fn(),
       uiInitState,
       connectionState,
       initErrorMessage,
       sidePanelActiveTab,
       toErrorMessage: String,
-    });
-    return { activateQualifiedComposerDrafts, connectRuntimeBridge, uiInitState, connectionState, initErrorMessage, sidePanelActiveTab };
+    }) as { login: () => Promise<void>; abort: () => void };
+    return { login, abort, activateQualifiedComposerDrafts, connectRuntimeBridge, uiInitState, connectionState, initErrorMessage, sidePanelActiveTab };
   }
 
   it('activates qualified drafts and connects the Bridge before entering the session view', async () => {
-    const login = await runBridgeLogin();
+    const login = bridgeLoginFixture();
+    await login.login();
     expect(login.activateQualifiedComposerDrafts).toHaveBeenCalledExactlyOnceWith();
     expect(login.connectRuntimeBridge).toHaveBeenCalledExactlyOnceWith();
     expect(login.activateQualifiedComposerDrafts).toHaveBeenCalledBefore(login.connectRuntimeBridge);
@@ -1119,11 +1127,38 @@ describe('dsh lifecycle wiring (Todo 33)', () => {
 
   it('shows a rejected Bridge connection and keeps the login form available to retry', async () => {
     const connect = vi.fn<() => Promise<void>>().mockRejectedValue(new Error('Bridge unavailable'));
-    const login = await runBridgeLogin(connect);
+    const login = bridgeLoginFixture(connect);
+    await login.login();
     expect(login.uiInitState.value).toBe('login');
     expect(login.connectionState.value).toBe('error');
     expect(login.initErrorMessage.value).toContain('Bridge unavailable');
     expect(login.sidePanelActiveTab.value).toBe('project');
+  });
+
+  it('does not open a Bridge after aborting while draft activation is pending', async () => {
+    const drafts = Promise.withResolvers<void>();
+    const login = bridgeLoginFixture(undefined, vi.fn(() => drafts.promise));
+    const pending = login.login();
+    login.abort();
+    drafts.resolve();
+    await pending;
+    expect(login.connectRuntimeBridge).not.toHaveBeenCalled();
+    expect(login.uiInitState.value).toBe('login');
+  });
+
+  it('keeps a successful retry when an aborted connection rejects later', async () => {
+    const first = Promise.withResolvers<void>();
+    const connect = vi.fn<() => Promise<void>>().mockReturnValueOnce(first.promise).mockResolvedValue(undefined);
+    const login = bridgeLoginFixture(connect);
+    const pending = login.login();
+    await vi.waitFor(() => expect(connect).toHaveBeenCalledTimes(1));
+    login.abort();
+    await login.login();
+    first.reject(new Error('Aborted connection'));
+    await pending;
+    expect(login.uiInitState.value).toBe('ready');
+    expect(login.connectionState.value).toBe('ready');
+    expect(login.initErrorMessage.value).toBe('');
   });
 
   it('passes the four dsh activation hooks to useBackendActivation', () => {
