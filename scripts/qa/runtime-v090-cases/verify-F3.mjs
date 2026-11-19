@@ -137,6 +137,29 @@ export async function run(context) {
   check('the real Slurm lab descriptor is the real four-namespace cluster: one controller, one login and two compute nodes, each compute node with its full 4 CPU / 512 MiB / gpu:2 budget', { runtime: lab.runtime, roles: labNodes.map((node) => node.role).sort(), computeNodes: labNodes.filter((node) => node.role === 'compute').map((node) => ({ host: node.host, cpus: node.cpus, memoryMiB: node.memoryMiB, gres: node.gres })) }, { runtime: 'docker', roles: ['compute', 'compute', 'controller', 'login'], computeNodes: [{ host: 'vislab-cn1', cpus: 4, memoryMiB: 512, gres: 2 }, { host: 'vislab-cn2', cpus: 4, memoryMiB: 512, gres: 2 }] }, 'the real lab descriptor the F3 lane produced from the privileged ubuntu:24.04 container');
 
   // ── the packaged Electron binary's REGISTERED CDP address and the packaged bridge ───────────
+  const desktopBuildPath = path.join(finalDir, 'F3-electron-build.json');
+  const desktopReceiptPath = path.join(finalDir, 'F3-electron-smoke.json');
+  const desktopCapturePath = path.join(finalDir, 'F3-electron-smoke.png');
+  const desktopBuild = readJson(desktopBuildPath);
+  const desktopReceipt = readJson(desktopReceiptPath);
+  const capture = desktopReceipt.packagedCapture;
+  check('the Windows x64 smoke screenshot and loaded application bind the candidate build identity', {
+    buildRevision: desktopBuild.revision, buildTree: desktopBuild.tree,
+    smokeRevision: capture.revision, smokeTree: capture.tree,
+    buildSha256: capture.buildIdentitySha256, screenshotSha256: capture.screenshotSha256,
+    executableSha256: capture.executableSha256, appAsarSha256: capture.appAsarSha256,
+    platform: desktopReceipt.platform.platform, arch: desktopReceipt.platform.arch,
+    processMatched: capture.main.pid === capture.launchedPid,
+    passed: desktopReceipt.pass,
+  }, {
+    buildRevision: revision, buildTree: tree, smokeRevision: revision, smokeTree: tree,
+    buildSha256: sha256(desktopBuildPath), screenshotSha256: sha256(desktopCapturePath),
+    executableSha256: desktopBuild.executableSha256, appAsarSha256: desktopBuild.appAsarSha256,
+    platform: 'win32', arch: 'x64', processMatched: true, passed: true,
+  }, desktopReceiptPath);
+  for (const file of [desktopBuildPath, desktopReceiptPath, desktopCapturePath]) {
+    artifacts.push(artifact(file, 'f3-windows-desktop-ci-evidence'));
+  }
   const electron = manual.electron;
   assert(path.isAbsolute(electron.binaryPath), 'record the absolute path of the captured Electron executable');
   const electronBinary = artifact(electron.binaryPath, 'f3-electron-executable');
