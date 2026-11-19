@@ -130,8 +130,9 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
           nativeQueries.push({ operation, ...(input.session ? { session: input.session } : {}) });
           if (operation === 'getGlobalConfig') return config;
           if (operation === 'updateGlobalConfig' && editableConfig) {
-            const patch = input.params.body;
-            const idempotencyKey = input.params.idempotencyKey;
+            const params = input.params;
+            if (!params || typeof params !== 'object' || Array.isArray(params)) throw new Error('Fixture config parameters required');
+            const { body: patch, idempotencyKey } = params as Readonly<Record<string, JsonValue>>;
             if (!patch || typeof patch !== 'object' || Array.isArray(patch) || typeof idempotencyKey !== 'string') {
               throw new Error('Fixture config patch and idempotency key required');
             }
