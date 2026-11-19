@@ -1273,7 +1273,7 @@ export async function run(context) {
         historyGroups: [['opencode', 4], ['codex', 3]],
         historyEntryIds: [[T1 + ':1', T1 + ':3', T1 + ':5', T1 + ':7'], [T1 + ':2', T1 + ':4', T1 + ':6']],
         historyEntryCount: 7,
-        gaps: [],
+        gaps: [2, 3, 4, 5, 6],
         frozen: {
           page: true, pageEntries: true, entries: [true, true, true],
           entrySources: [true, true, true], entryPayloads: [true, true, true],
@@ -1281,6 +1281,34 @@ export async function run(context) {
           gaps: true, turns: true, turnViews: [true],
         },
         state: { turns: 1, entries: 7, duplicates: 0, superseded: 0, late: 0, closed: false },
+      });
+
+      // ── H8: one native source's missing epoch is never closed by another source's same-numbered
+      // ── event — the seq space is PER SOURCE, so gaps() is computed per source and unioned ──
+      const h8 = createTurnService();
+      h8.open({ turnId: T1, causedBy: 'cmd-1', attempt: 1 });
+      h8.event({ turnId: T1, source: nativeSource(HARNESS_CODEX, 'cx-1'), kind: 'message', at: 1, seq: 1, payload: {} });
+      h8.event({ turnId: T1, source: nativeSource(HARNESS_CODEX, 'cx-2'), kind: 'message', at: 2, seq: 3, payload: {} });
+      const h8BeforeForeign = [...h8.gaps(T1)];
+      h8.event({ turnId: T1, source: nativeSource('dsh', 'dsh-1'), kind: 'message', at: 3, seq: 2, payload: {} });
+      const h8AfterForeign = [...h8.gaps(T1)];
+      h8.event({ turnId: T1, source: nativeSource(HARNESS_CODEX, 'cx-3'), kind: 'message', at: 4, seq: 2, payload: {} });
+      const h8AfterOwn = [...h8.gaps(T1)];
+      const h8Unsafe = captureSync(() => h8.event({ turnId: T1, source: nativeSource(HARNESS_CODEX, 'cx-4'), kind: 'message', at: 5, seq: 2 ** 53, payload: {} }));
+      check('each native source keeps its own seq space: codex 1,3 reports the missing 2; a dsh event carrying seq 2 does NOT close that codex gap; only a codex event carrying seq 2 closes it; and an unsafe integer seq is refused at the entry so gaps() can never be asked to enumerate it', {
+        beforeForeign: h8BeforeForeign,
+        afterForeign: h8AfterForeign,
+        afterOwn: h8AfterOwn,
+        entryCount: h8.turn(T1).entryCount,
+        unsafe: h8Unsafe,
+        gapsFrozen: Object.isFrozen(h8.gaps(T1)),
+      }, {
+        beforeForeign: [2],
+        afterForeign: [2],
+        afterOwn: [],
+        entryCount: 4,
+        unsafe: { code: 'invalid_request', field: 'timeline_seq' },
+        gapsFrozen: true,
       });
 
       // ── H7: the exported pure parsers and the fixed tables, observed directly ──
