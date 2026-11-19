@@ -428,6 +428,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     collections: Collection | readonly Collection[],
     options: RequestOptions & { readonly onPage: (collection: Collection, page: Snapshot) => void | Promise<void>; readonly fresh?: boolean; readonly onWaiting?: (waitMs: number) => void },
   ) {
+    if (options.signal?.aborted) throw new ProtocolError('cancelled', 'readIndex.slot');
     const attached = getTarget(target);
     const names = typeof collections === 'string' ? [collections] : collections;
     requireValue(names.length > 0 && names.length <= 5 && new Set(names).size === names.length, 'snapshot.collections');

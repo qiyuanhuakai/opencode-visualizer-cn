@@ -9,7 +9,7 @@ import { createRuntimeClient } from './client';
 import { createRuntimeConnection } from './connection';
 import { decodeFrame, encodeFrame } from '../../shared/runtime/protocol.js';
 import type { Hello, Request, RuntimeEvent } from '../../shared/runtime/protocol.js';
-import { parseEnvironmentId, parseHarnessInstanceId, parseInstanceId } from '../../shared/runtime/identity.js';
+import { encodeSessionKey, parseEnvironmentId, parseHarnessInstanceId, parseInstanceId } from '../../shared/runtime/identity.js';
 import { parseCapabilities, ProtocolError } from '../../shared/runtime/capabilities.js';
 import { RUNTIME_WIRE_METHODS } from '../../shared/runtime/runtimeWire.js';
 
@@ -71,7 +71,8 @@ async function fixture(renewSocket = false) {
   return { socket, sockets, connection, client };
 }
 function event(seq: number): RuntimeEvent {
-  return { version: 1, kind: 'event', target, epoch: 'epoch', generation: 1, seq, entityRevision: seq + 10, scope: `row-${seq}`, type: 'entity.patch', payload: { collection: 'session_summaries', key: String(seq), deleted: false } };
+  const key = encodeSessionKey({ environmentId: target, harnessInstanceId: harness, nativeSessionId: `row-${seq}` });
+  return { version: 1, kind: 'event', target, epoch: 'epoch', generation: 1, seq, entityRevision: seq + 10, scope: key, type: 'entity.patch', payload: { collection: 'session_summaries', key, deleted: false } };
 }
 
 describe('RuntimeClient production connection with fault-injected wire', () => {
@@ -533,7 +534,7 @@ class StoreSocket extends EventTarget {
   readonly storeErrors: string[] = [];
   private queued: Request[] = [];
   private waiter: ((request: Request) => void) | undefined;
-  constructor(private readonly snapshots: { page(input: Record<string, unknown>): Promise<unknown> }) { super(); }
+  constructor(private readonly snapshots: { page(input: Record<string, unknown>): Promise<unknown>; release(input: { token: string }): Promise<unknown> }) { super(); }
   close() { this.readyState = 3; }
   send(data: string | Uint8Array) {
     if (typeof data !== 'string') return;
@@ -547,6 +548,13 @@ class StoreSocket extends EventTarget {
           this.storeErrors.push(`${error instanceof ProtocolError ? error.code : 'source_unavailable'}:${(error as { reason?: string }).reason ?? 'unknown'}`);
           this.error(frame, error instanceof ProtocolError ? error.code : 'source_unavailable');
         },
+      );
+      return;
+    }
+    if (frame.method === 'runtime.snapshot.release') {
+      void this.snapshots.release(frame.params as { token: string }).then(
+        result => this.reply(frame, result),
+        error => this.error(frame, error instanceof ProtocolError ? error.code : 'source_unavailable'),
       );
       return;
     }
@@ -590,6 +598,7 @@ async function storeFixture(options?: { readonly viewTtlMs?: number }) {
   const viewTtlMs = options?.viewTtlMs;
   const database = viewTtlMs === undefined ? undefined : new DatabaseSync(path.join(directory, 'runtime/runtime.db'));
   const served = viewTtlMs === undefined || database === undefined ? window : {
+    release: window.release,
     page: async (input: Record<string, unknown>) => {
       const page = await window.page(input) as Record<string, unknown>;
       if (typeof page.token === 'string') {
@@ -680,10 +689,7 @@ describe('RuntimeClient index views under the real store quota (review P2-3)', (
     }
   }, 60000);
 
-  it('waits for a live-view slot and mints a fresh view instead of answering a fresh read from the stale view', async () => {
-    // The bridge cannot release a view early, so once the environment's live-view budget is spent a
-    // fresh read must not silently reuse the cached view: an explicit search/refresh would then
-    // read rows that predate the user's request for up to the whole view TTL.
+  it('releases its stale view before minting a fresh view under the store quota', async () => {
     const fixture = await storeFixture({ viewTtlMs: 3000 });
     try {
       await fixture.store.snapshot({ collection: 'workspaces' });
@@ -692,17 +698,17 @@ describe('RuntimeClient index views under the real store quota (review P2-3)', (
       await fixture.store.mutate({ intentId: 'late', changes: [{ collection: 'session_summaries', key: 'session-late', value: { title: 'late' } }] });
 
       const seen: string[] = [];
-      const waited: number[] = [];
+      const beforeRefresh = fixture.socket.sent.length;
       const view = await fixture.client.readIndex(fixture.target, 'session_summaries', {
         fresh: true,
-        onWaiting: (waitMs) => { waited.push(waitMs); },
         onPage: (_collection, page) => { seen.push(...indexKeys(page.items)); },
       });
 
       expect(seen).toContain('session-late');
       expect(view.token).not.toBe(second.token);
       expect(view.token).not.toBe(first.token);
-      expect(waited.length).toBeGreaterThan(0);
+      expect(fixture.socket.sent.slice(beforeRefresh).map(({ method }) => method))
+        .toEqual(['runtime.snapshot.release', 'runtime.snapshot']);
       expect(fixture.socket.storeErrors).toEqual([]);
     } finally {
       await fixture.close();
@@ -745,13 +751,14 @@ describe('RuntimeClient index views under the real store quota (review P2-3)', (
       await fixture.client.readIndex(fixture.target, 'session_summaries', { fresh: true, onPage: () => {} });
       const controller = new AbortController();
       controller.abort();
+      const beforeAbort = fixture.socket.sent.length;
       const started = Date.now();
       await expect(fixture.client.readIndex(fixture.target, 'session_summaries', {
         fresh: true,
         signal: controller.signal,
         onPage: () => {},
       })).rejects.toMatchObject({ code: 'cancelled', field: 'readIndex.slot' });
-      // The slot wait was never entered: the rejection is immediate, not bounded by the TTL.
+      expect(fixture.socket.sent).toHaveLength(beforeAbort);
       expect(Date.now() - started).toBeLessThan(1000);
       expect(fixture.socket.storeErrors).toEqual([]);
     } finally {
