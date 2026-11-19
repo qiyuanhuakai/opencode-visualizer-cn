@@ -356,7 +356,10 @@ function audit({ root, evidenceRoot, planPath }) {
       add('DOWNSTREAM-MISSING', 'blocking', 'task 48 Happy QA', `downstream rerun report ${file} missing`);
       continue;
     }
-    if (report.status !== 'passed') add('DOWNSTREAM-STATUS', 'blocking', 'task 48 Happy QA', `${file} did not pass`);
+    // Task 45's raw recorder is deliberately verdict-free. Its wrapper regrades
+    // the assertions and artifacts, then binds this exact manifest by SHA-256.
+    const expectedStatus = artifactKind === 'packaged-driver-manifest' ? 'recorded' : 'passed';
+    if (report.status !== expectedStatus) add('DOWNSTREAM-STATUS', 'blocking', 'task 48 Happy QA', `${file} has status ${report.status}; expected ${expectedStatus}`);
     if (row.scenarios !== scenarios) add('DOWNSTREAM-COUNT', 'blocking', 'task 48 Happy QA', `${file} scenarios ${row.scenarios} != manifest ${scenarios}`);
     const receiptName = artifactKind ? `task-${task}-${lane}.json` : file;
     const receipt = artifactKind ? readJson(path.join(downstreamDir, receiptName)) : report;
