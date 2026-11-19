@@ -37,63 +37,6 @@ async function enterAndSend(host: HTMLElement, text: string) {
 }
 
 describe('App provider model and ACP archive binding', () => {
-  it('Given a real App with a slash-containing Codex model, When provider manager opens and hides it, Then App refreshes providers and stores the full model key without changing selection', async () => {
-    const fixture = await mountHistoryApp([]);
-    mountedApps.push(fixture);
-    fixture.listProviders.mockResolvedValue({
-      all: [
-        {
-          id: 'custom-provider',
-          name: 'Custom Provider',
-          source: 'config',
-          models: {
-            'org/model/v1': {
-              id: 'org/model/v1',
-              name: 'Slash Model',
-              providerID: 'custom-provider',
-            },
-          },
-        },
-      ],
-      connected: ['custom-provider'],
-      default: {},
-    });
-    fixture.setStoredBackendKind('codex');
-    await vi.waitFor(() => expect(fixture.readSetupBinding('activeBackendKind')).toBe('codex'));
-    await vi.waitFor(() => expect(fixture.readSetupBinding('providersLoaded')).toBe(true));
-    fixture.listProviders.mockClear();
-    fixture.getGlobalConfig.mockClear();
-    const selectedBefore = fixture.readSetupBinding('selectedModel');
-    const fetchCountBeforeOpen = fixture.readSetupBinding('providersFetchCount');
-
-    const open = fixture.host.querySelector<HTMLButtonElement>('.provider-manager-button');
-    expect(open).toBeInstanceOf(HTMLButtonElement);
-    open?.click();
-    await vi.waitFor(() =>
-      expect(fixture.readSetupBinding('providersFetchCount')).toBe(
-        Number(fetchCountBeforeOpen) + 1,
-      ),
-    );
-    await vi.waitFor(() => expect(fixture.listProviders).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(fixture.getGlobalConfig).toHaveBeenCalled());
-    const modelsTab = Array.from(
-      fixture.host.querySelectorAll<HTMLButtonElement>('.provider-manager-tab'),
-    ).find((button) => button.getAttribute('aria-selected') === 'false');
-    expect(modelsTab).toBeInstanceOf(HTMLButtonElement);
-    modelsTab?.click();
-    await nextTick();
-    const toggle = fixture.host.querySelector<HTMLInputElement>('.model-row .toggle-input');
-    expect(toggle).toBeInstanceOf(HTMLInputElement);
-    if (toggle) {
-      toggle.checked = false;
-      toggle.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-    await nextTick();
-
-    expect(fixture.readSetupBinding('hiddenModels')).toEqual(['custom-provider/org/model/v1']);
-    expect(fixture.readSetupBinding('selectedModel')).toBe(selectedBefore);
-  });
-
   it('Given a ready real App, When ACP publishes an archived session, Then App projects the archived time into its live session state', async () => {
     const fixture = await mountHistoryApp([]);
     mountedApps.push(fixture);

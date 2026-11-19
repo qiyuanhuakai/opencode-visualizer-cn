@@ -39,7 +39,7 @@ vi.mock('../composables/useGlobalEvents', () => ({ useGlobalEvents: () => ({
 type NativeHistory = Readonly<{ info: Readonly<Record<string, JsonValue>>; parts: readonly JsonValue[] }>;
 
 /** Real App + TCP/WebSocket + production Runtime/SQLite, controlled native harness boundary. */
-export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; bridgeToken?: string; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
+export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; bridgeToken?: string; additionalModelId?: string; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
   // Load the Node worker owner without Vite's browser asset URL rewriting.
   // The worker itself still runs the production module in a real subprocess.
   const requireNodeModule = createRequire(path.resolve(process.cwd(), 'package.json'));
@@ -77,8 +77,13 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
       const identity = { environmentId: parseEnvironmentId(context.environmentId), harnessInstanceId: parseHarnessInstanceId(context.harnessInstanceId), kind: 'opencode' as const };
       const empty = unavailableRegistration(identity, 'starting');
       const session = (id: string) => ({ environmentId: identity.environmentId, harnessInstanceId: identity.harnessInstanceId, nativeSessionId: id });
+      const modelId = options.additionalModelId;
+      const models: Record<string, JsonValue> = {
+        'model-a': { id: 'model-a', name: 'QA model', limit: { context: 32000, output: 4000 } },
+      };
+      if (modelId) models[modelId] = { id: modelId, name: 'Slash Model' };
       const queries: Record<string, JsonValue> = {
-        listProviders: { all: [{ id: 'provider-a', name: 'QA provider', models: { 'model-a': { id: 'model-a', name: 'QA model', limit: { context: 32000, output: 4000 } } } }], connected: ['provider-a'], default: { 'provider-a': 'model-a' } },
+        listProviders: { all: [{ id: 'provider-a', name: 'QA provider', models }], connected: ['provider-a'], default: { 'provider-a': 'model-a' } },
         getGlobalConfig: { model: 'provider-a/model-a' },
         listAgents: [{ name: 'build', mode: 'primary' }], listCommands: [], getSessionTodos: [],
         listPendingPermissions: [], listPendingQuestions: [],

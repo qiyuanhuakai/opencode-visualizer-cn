@@ -102,3 +102,34 @@ it('loads DSH account status from the management instance while OpenCode owns th
   ]);
   expect(fixture.historyOpens.map(session => session.nativeSessionId)).toEqual(['session-a']);
 }, 30000);
+
+it('hides a slash-containing model from Bridge providers without changing the active conversation', async () => {
+  const fixture = await mountRuntimeApp([], { additionalModelId: 'org/model/v1' });
+  await fixture.connect();
+  await fixture.select('Session A');
+  await vi.waitFor(() => expect(fixture.historyOpens.at(-1)?.nativeSessionId).toBe('session-a'));
+  const historyCount = fixture.historyOpens.length;
+  const providerQueries = fixture.nativeQueries.filter(query => query.operation === 'listProviders').length;
+
+  fixture.element.querySelector<HTMLButtonElement>('.provider-manager-button')!.click();
+  const models = await vi.waitFor(() => {
+    const tab = [...fixture.element.querySelectorAll<HTMLButtonElement>('.provider-manager-tab')].find(item => item.textContent?.trim() === 'Model management');
+    expect(tab).toBeTruthy();
+    return tab!;
+  });
+  models.click();
+  const toggle = await vi.waitFor(() => {
+    const row = [...fixture.element.querySelectorAll('.model-row')].find(item => item.textContent?.includes('Slash Model'));
+    const input = row?.querySelector<HTMLInputElement>('.toggle-input');
+    expect(input?.checked).toBe(true);
+    return input!;
+  });
+  toggle.checked = false;
+  toggle.dispatchEvent(new Event('change', { bubbles: true }));
+  await vi.waitFor(() => {
+    const value = JSON.parse(localStorage.getItem('opencode.global.dat:model') ?? '{}');
+    expect(value.user).toContainEqual({ providerID: 'provider-a', modelID: 'org/model/v1', visibility: 'hide' });
+  });
+  expect(fixture.nativeQueries.filter(query => query.operation === 'listProviders').length).toBeGreaterThan(providerQueries);
+  expect(fixture.historyOpens).toHaveLength(historyCount);
+}, 15000);
