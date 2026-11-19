@@ -52,6 +52,7 @@ it('opens a Host Thread, refreshes a participant’s own history, and locates th
   const pausedRead = Promise.withResolvers<void>();
   const releaseRead = Promise.withResolvers<void>();
   const fixture = await mountRuntimeApp([], {
+    secondWorktree: true,
     readHistory: async session => {
       if (session.nativeSessionId !== 'session-b') return [];
       if (pauseRead) {
@@ -65,12 +66,14 @@ it('opens a Host Thread, refreshes a participant’s own history, and locates th
     },
   });
   await fixture.connect();
-  // Connecting discovers Git identity without requiring a session selection.
+  // Both granted worktrees resolve to the same real Git repository.
   await vi.waitFor(async () => {
-    const topology = await fixture.workspaceTopology();
-    expect(topology.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({ value: expect.objectContaining({ gitKind: 'git', repoKey: expect.any(String) }) }),
-    ]));
+    const { items } = await fixture.workspaceTopology();
+    const entries = items.map(item => item.value as { gitKind: string; repoKey: string | null; workspace: { canonicalPath: string } });
+    expect(entries).toHaveLength(2);
+    expect(entries.map(entry => entry.workspace.canonicalPath)).toContain(fixture.secondDirectory);
+    expect(entries.every(entry => entry.gitKind === 'git' && entry.repoKey !== null)).toBe(true);
+    expect(new Set(entries.map(entry => entry.repoKey)).size).toBe(1);
   });
   await fixture.select('Session A');
   const opener = await vi.waitFor(() => {

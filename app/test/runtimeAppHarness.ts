@@ -39,7 +39,7 @@ vi.mock('../composables/useGlobalEvents', () => ({ useGlobalEvents: () => ({
 type NativeHistory = Readonly<{ info: Readonly<Record<string, JsonValue>>; parts: readonly JsonValue[] }>;
 
 /** Real App + TCP/WebSocket + production Runtime/SQLite, controlled native harness boundary. */
-export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; bridgeToken?: string; additionalModelId?: string; archivedAcpSession?: boolean; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
+export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; bridgeToken?: string; additionalModelId?: string; archivedAcpSession?: boolean; secondWorktree?: boolean; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
   // Load the Node worker owner without Vite's browser asset URL rewriting.
   // The worker itself still runs the production module in a real subprocess.
   const requireNodeModule = createRequire(path.resolve(process.cwd(), 'package.json'));
@@ -62,6 +62,9 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
   await mkdir(directory);
   execFileSync('git', ['init', '--quiet'], { cwd: directory });
   execFileSync('git', ['-c', 'user.name=QA', '-c', 'user.email=qa@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'base'], { cwd: directory });
+  const secondDirectory = options.secondWorktree ? path.join(root, 'second-worktree') : directory;
+  if (options.secondWorktree) execFileSync('git', ['worktree', 'add', '--quiet', '--detach', secondDirectory], { cwd: directory });
+  const sessionDirectory = (id: string) => id === 'session-b' ? secondDirectory : directory;
   const historyOpens: SessionRef[] = [];
   const historyCloses: SessionRef[] = [];
   const historyPages: Array<{ session: SessionRef; cursor: string | null }> = [];
@@ -70,7 +73,7 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
   const acp = { reconcile: async () => [], stopAll: async () => {}, getStatus: () => [], attach() { throw new Error('ACP disabled'); } };
   const services = await createRuntimeServices({
     environmentId: randomUUID(), stateRoot: path.join(root, 'state'), role: 'local',
-    roots: [{ root: directory, permissions: ['read', 'write', 'command', 'pty'] }],
+    roots: [...new Set([directory, secondDirectory])].map(root => ({ root, permissions: ['read', 'write', 'command', 'pty'] })),
     config: { version: 1, nativeServices: { opencode: true, codex: false, 'kimi-web': false, dsh: options.dshAccount !== undefined }, acpAgents: options.archivedAcpSession ? [{ id: 'fixture-acp', name: 'Fixture ACP', enabled: true, command: process.execPath, args: [], env: {} }] : [] },
     nativeSupervisor: supervisor, acpManager: acp, runtime: { mutate: action => action() },
     factories: { opencode: async context => {
@@ -95,8 +98,8 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
         },
         driver: { core: {
           inspect: () => ({ state: 'ready', protocolVersion: 1 }),
-          listSessionPage: () => ({ items: ['session-a', 'session-b', ...(options.childSessions ?? [])].map((id, index) => ({ session: session(id), summary: { id, directory, title: index < 2 ? `Session ${index ? 'B' : 'A'}` : id, ...(index < 2 ? {} : { parentID: 'session-a' }), time: { created: 1, updated: 1 } }, revision: 1 })), cursor: null, completeness: 'complete' }),
-          getSession: input => ({ id: input.session!.nativeSessionId, directory, title: input.session!.nativeSessionId === 'session-a' ? 'Session A' : 'Session B', time: { created: 1, updated: 1 } }),
+          listSessionPage: () => ({ items: ['session-a', 'session-b', ...(options.childSessions ?? [])].map((id, index) => ({ session: session(id), summary: { id, directory: sessionDirectory(id), title: index < 2 ? `Session ${index ? 'B' : 'A'}` : id, ...(index < 2 ? {} : { parentID: 'session-a' }), time: { created: 1, updated: 1 } }, revision: 1 })), cursor: null, completeness: 'complete' }),
+          getSession: input => ({ id: input.session!.nativeSessionId, directory: sessionDirectory(input.session!.nativeSessionId), title: input.session!.nativeSessionId === 'session-a' ? 'Session A' : 'Session B', time: { created: 1, updated: 1 } }),
           openHistory: input => {
             const selected = input.session!;
             return {
@@ -215,7 +218,7 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
       result.click();
     }, { timeout: 10000 });
   }
-  return { element, endpoint, directory, workspaceTopology: () => services.index.topology({ collection: 'workspaces' }), environmentId: services.target, historyOpens, historyCloses, historyPages, nativeQueries, frames: transport.frames, submitBridgeLogin, connect, select, unmountRenderer, unmount };
+  return { element, endpoint, directory, secondDirectory, workspaceTopology: () => services.index.topology({ collection: 'workspaces' }), environmentId: services.target, historyOpens, historyCloses, historyPages, nativeQueries, frames: transport.frames, submitBridgeLogin, connect, select, unmountRenderer, unmount };
 }
 
 function expectLogin(element: HTMLElement) {
