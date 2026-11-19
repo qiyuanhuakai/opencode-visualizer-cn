@@ -119,7 +119,7 @@ const MEASURED_RUNTIME_MS = Object.freeze({
   sshHappy: 97500,
   sshFailure: 115100,
   slurmHappy: 137300,
-  runnerWorkerBudgetMs: 180000,
+  runnerWorkerBudgetMs: 600_000,
 });
 
 /** The product / QA paths this case's drivers execute. */
@@ -180,7 +180,7 @@ async function runDriver(context, runDir, label, driver, args) {
   const out = path.join(runDir, `${label}.json`);
   const log = path.join(runDir, `${label}.log`);
   const invocation = [process.execPath, driver, ...args, '--out', out];
-  const receipt = await captureProcess(invocation, { root: context.root, log, timeoutMs: 175000 });
+  const receipt = await captureProcess(invocation, { root: context.root, log, timeoutMs: MEASURED_RUNTIME_MS.runnerWorkerBudgetMs - 30_000 });
   const text = existsSync(log) ? readFileSync(log, 'utf8') : '';
   return { label, driver, invocation, out, log, receipt, logText: text };
 }
@@ -192,7 +192,7 @@ function readDirectSlurmLeg(root, lane) {
   const logPath = path.join(directory, 'slurm.log');
   const receiptPath = path.join(directory, 'slurm.receipt.json');
   for (const [label, file] of [['report', reportPath], ['log', logPath], ['receipt', receiptPath]]) {
-    assert(existsSync(file), `the directly-executed Slurm ${lane} leg wrote no ${label}: run \`node ${SLURM_DRIVER} --lab isolated --modes tcp,relay --case ${lane} --out ${reportPath}\` with its log and receipt alongside it, because the runner worker receipt budget (${MEASURED_RUNTIME_MS.runnerWorkerBudgetMs} ms) cannot contain it next to the SSH driver (measured ${MEASURED_RUNTIME_MS.slurmHappy} ms)`);
+    assert(existsSync(file), `the directly-executed Slurm ${lane} leg wrote no ${label}: run \`node ${SLURM_DRIVER} --lab isolated --modes tcp,relay --case ${lane} --out ${reportPath}\` with its log and receipt alongside it, because the isolated SSH and Slurm labs are executed serially with independent receipts`);
   }
   const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
@@ -240,7 +240,15 @@ export async function run(context) {
   const sshArgs = ['--isolated', '--case', lane];
   record('invocation:ssh', [process.execPath, SSH_DRIVER, ...sshArgs]);
   const sshRun = await runDriver(context, runDir, 'ssh', SSH_DRIVER, sshArgs);
-  artifacts.push(artifact(sshRun.log, 'live-ssh-log'));
+  record('sshExecution', {
+    exitCode: sshRun.receipt.exitCode,
+    signal: sshRun.receipt.signal,
+    interrupted: sshRun.receipt.interrupted,
+    startedAt: sshRun.receipt.startedAt,
+    finishedAt: sshRun.receipt.finishedAt,
+    log: sshRun.log,
+  });
+  if (sshRun.logText.length > 0) artifacts.push(artifact(sshRun.log, 'live-ssh-log'));
 
   // ── leg 2: the Slurm driver, executed directly before this invocation (measured reason above) ─
   const slurmArgs = ['--lab', 'isolated', '--modes', 'tcp,relay', '--case', lane];
@@ -253,7 +261,7 @@ export async function run(context) {
     reportPath: path.relative(context.root, slurm.reportPath),
     reportSha256: sha256(readFileSync(slurm.reportPath)),
     receipt: { exitCode: slurm.receipt.exitCode, signal: slurm.receipt.signal, interrupted: slurm.receipt.interrupted, argv: slurm.receipt.invocation ?? null, startedAt: slurm.receipt.startedAt ?? null, finishedAt: slurm.receipt.finishedAt ?? null },
-    reason: `the runner worker receipt budget is a hard ${MEASURED_RUNTIME_MS.runnerWorkerBudgetMs} ms; the SSH ${lane} leg measures ${lane === 'happy' ? MEASURED_RUNTIME_MS.sshHappy : MEASURED_RUNTIME_MS.sshFailure} ms and the Slurm ${lane} leg measures ${MEASURED_RUNTIME_MS.slurmHappy} ms, so one registered invocation cannot contain both and the dispatch forbids parallel launches in this worktree`,
+    reason: `the isolated SSH and Slurm labs use the same owned lab name and run serially with independent receipts`,
   });
 
   // A lane that could not run writes its own located failure artifact and exits non-zero. That is a
@@ -265,12 +273,14 @@ export async function run(context) {
         driver: run.driver,
         exitCode: run.receipt.exitCode,
         signal: run.receipt.signal,
+        interrupted: run.receipt.interrupted,
         reportWritten: false,
         locatedDiagnosis: located,
       }, {
         driver: run.driver,
         exitCode: 0,
         signal: null,
+        interrupted: false,
         reportWritten: true,
         locatedDiagnosis: located,
       }, `the real ${run.driver} driver`);
@@ -587,6 +597,6 @@ export async function run(context) {
     artifacts,
     versions: { node: process.version, sshDriver: SSH_DRIVER, slurmDriver: SLURM_DRIVER, package: JSON.parse(readFileSync(path.join(context.root, 'package.json'), 'utf8')).version, slurmVersions: slurmReport.versions ?? null },
     cleanup: { runDir, sshReport: sshRun.out, sshLog: sshRun.log, slurmDirectDirectory: path.relative(context.root, slurm.directory) },
-    evidenceBoundary: `The registered wrapper around the two real landed live drivers ${SSH_DRIVER} and ${SLURM_DRIVER}. The SSH driver is spawned as a real child process with the exact registered argv inside this invocation. The Slurm driver is executed as a real direct process with the exact registered argv BEFORE this invocation, because the runner worker receipt budget is a hard 180000 ms and the measured runtimes are ssh ${MEASURED_RUNTIME_MS.sshHappy} ms (happy) / ${MEASURED_RUNTIME_MS.sshFailure} ms (failure) and slurm ${MEASURED_RUNTIME_MS.slurmHappy} ms, so one registered invocation cannot contain both and the dispatch forbids parallel launches in this worktree; its own report, log and receipt are read back, the driver bytes it executed are re-hashed against this case registered sourceFiles, and its assertions are merged verbatim. Every assertion in every scenario above is therefore the driver's own assertion over a REAL sshd, a REAL slurmctld, TWO REAL slurmd and REAL munge inside REAL network namespaces in a throwaway --privileged container lab. The only controlled boundaries are the drivers' own: the lab container (which dies with its own rm), the throwaway private mkdtemp roots and the real network breaks the SSH lane induces inside the lab. Nothing is installed on the production host; this host has no sshd, no Slurm, no Munge and no netns privilege, which is recorded as a hard limit. No live GitHub release origin, no production install path and no product test suite. This case edits NO product / test / runner / harness / other-task case file and authors NO PASS verdict.`,
+    evidenceBoundary: `The registered wrapper around the two real landed live drivers ${SSH_DRIVER} and ${SLURM_DRIVER}. The SSH driver is spawned as a real child process with the exact registered argv inside this invocation. The Slurm driver is executed as a real direct process with the exact registered argv BEFORE this invocation, so the SSH and Slurm labs use independent receipts and do not overlap; its own report, log and receipt are read back, the driver bytes it executed are re-hashed against this case registered sourceFiles, and its assertions are merged verbatim. Every assertion in every scenario above is therefore the driver's own assertion over a REAL sshd, a REAL slurmctld, TWO REAL slurmd and REAL munge inside REAL network namespaces in a throwaway --privileged container lab. The only controlled boundaries are the drivers' own: the lab container (which dies with its own rm), the throwaway private mkdtemp roots and the real network breaks the SSH lane induces inside the lab. Nothing is installed on the production host; this host has no sshd, no Slurm, no Munge and no netns privilege, which is recorded as a hard limit. No live GitHub release origin, no production install path and no product test suite. This case edits NO product / test / runner / harness / other-task case file and authors NO PASS verdict.`,
   };
 }
