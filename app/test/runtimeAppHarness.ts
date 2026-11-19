@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { createRuntimeHost } from '../../bridge/runtime/runtimeHost.js';
+import type { RuntimeDriverFactory } from '../../bridge/runtime/runtimeDriverFactories.js';
 import { unavailableRegistration } from '../../bridge/runtime/runtimeDriverFactories.js';
 import { createBridgeRuntime } from '../../bridge/bridgeRuntime.js';
 import { createVisBridgeServer } from '../../vis_bridge.js';
@@ -39,7 +40,7 @@ vi.mock('../composables/useGlobalEvents', () => ({ useGlobalEvents: () => ({
 type NativeHistory = Readonly<{ info: Readonly<Record<string, JsonValue>>; parts: readonly JsonValue[] }>;
 
 /** Real App + TCP/WebSocket + production Runtime/SQLite, controlled native harness boundary. */
-export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; bridgeToken?: string; additionalModelId?: string; archivedAcpSession?: boolean; secondWorktree?: boolean; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
+export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; bridgeToken?: string; additionalModelId?: string; archivedAcpSession?: boolean; secondWorktree?: boolean; codexFactory?: RuntimeDriverFactory; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
   // Load the Node worker owner without Vite's browser asset URL rewriting.
   // The worker itself still runs the production module in a real subprocess.
   const requireNodeModule = createRequire(path.resolve(process.cwd(), 'package.json'));
@@ -74,9 +75,9 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
   const services = await createRuntimeServices({
     environmentId: randomUUID(), stateRoot: path.join(root, 'state'), role: 'local',
     roots: [...new Set([directory, secondDirectory])].map(root => ({ root, permissions: ['read', 'write', 'command', 'pty'] })),
-    config: { version: 1, nativeServices: { opencode: true, codex: false, 'kimi-web': false, dsh: options.dshAccount !== undefined }, acpAgents: options.archivedAcpSession ? [{ id: 'fixture-acp', name: 'Fixture ACP', enabled: true, command: process.execPath, args: [], env: {} }] : [] },
+    config: { version: 1, nativeServices: { opencode: true, codex: Boolean(options.codexFactory), 'kimi-web': false, dsh: options.dshAccount !== undefined }, acpAgents: options.archivedAcpSession ? [{ id: 'fixture-acp', name: 'Fixture ACP', enabled: true, command: process.execPath, args: [], env: {} }] : [] },
     nativeSupervisor: supervisor, acpManager: acp, runtime: { mutate: action => action() },
-    factories: { opencode: async context => {
+    factories: { ...(options.codexFactory ? { codex: options.codexFactory } : {}), opencode: async context => {
       const identity = { environmentId: parseEnvironmentId(context.environmentId), harnessInstanceId: parseHarnessInstanceId(context.harnessInstanceId), kind: 'opencode' as const };
       const empty = unavailableRegistration(identity, 'starting');
       const session = (id: string) => ({ environmentId: identity.environmentId, harnessInstanceId: identity.harnessInstanceId, nativeSessionId: id });

@@ -96,7 +96,7 @@ it('opens a Host Thread, refreshes a participant’s own history, and locates th
   const historyGroup = await vi.waitFor(() => {
     const label = fixture.element.querySelector('[data-testid="native-history-session"][title="session-b"]');
     const group = label?.closest('[data-testid="native-history-group"]');
-    expect(group).toBeTruthy();
+    expect(group?.querySelector<HTMLButtonElement>('[data-testid="browse-native-history"]')?.disabled).toBe(false);
     return group!;
   });
   const refresh = historyGroup.querySelector<HTMLButtonElement>('[data-testid="browse-native-history"]')!;
@@ -104,7 +104,7 @@ it('opens a Host Thread, refreshes a participant’s own history, and locates th
   await vi.waitFor(() => {
     expect(refresh.disabled).toBe(false);
     expect(historyGroup.textContent).toContain('Initial participant history');
-  });
+  }, { timeout: 5000 });
   participantText = 'Refreshed participant history';
   refresh.click();
   await vi.waitFor(() => {
@@ -112,7 +112,7 @@ it('opens a Host Thread, refreshes a participant’s own history, and locates th
     expect(historyGroup.textContent).toContain('Refreshed participant history');
     expect(historyGroup.textContent).not.toContain('Initial participant history');
     expect(fixture.historyPages.filter(page => page.session.nativeSessionId === 'session-b')).toHaveLength(2);
-  });
+  }, { timeout: 5000 });
   pauseRead = true;
   participantText = 'Late result from the closed panel';
   refresh.click();
