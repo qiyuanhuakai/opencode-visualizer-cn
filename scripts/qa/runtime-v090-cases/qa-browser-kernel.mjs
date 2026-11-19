@@ -1,4 +1,5 @@
 import { pathToFileURL } from 'node:url';
+import { loadBrowserKernel as loadPinnedBrowserKernel } from '../runtime-v090-browser-kernel.mjs';
 
 // The QA browser kernel (omowright) is the operator's browser-automation
 // script, not a repository dependency: it is not in package.json and not
@@ -16,6 +17,7 @@ export function browserKernelSpecifier(env = process.env) {
   return specifier;
 }
 export async function loadBrowserKernel(env = process.env) {
+  if (!env[KERNEL_VARIABLE]) return (await loadPinnedBrowserKernel(env)).omowright;
   const specifier = browserKernelSpecifier(env);
   const loaded = await import(pathToFileURL(specifier).href);
   if (typeof loaded.loadOmowright !== 'function') throw new Error(`${specifier} does not export loadOmowright`);
