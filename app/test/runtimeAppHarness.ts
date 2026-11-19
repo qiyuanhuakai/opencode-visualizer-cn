@@ -6,6 +6,8 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fingerprint } from '../../bridge/runtime/operationJournal.js';
+import { createInstanceOperations } from '../../shared/runtime/native/opencode/instanceOperations.js';
 import { createRuntimeHost } from '../../bridge/runtime/runtimeHost.js';
 import type { RuntimeDriverFactory } from '../../bridge/runtime/runtimeDriverFactories.js';
 import { unavailableRegistration } from '../../bridge/runtime/runtimeDriverFactories.js';
@@ -40,7 +42,7 @@ vi.mock('../composables/useGlobalEvents', () => ({ useGlobalEvents: () => ({
 type NativeHistory = Readonly<{ info: Readonly<Record<string, JsonValue>>; parts: readonly JsonValue[] }>;
 
 /** Real App + TCP/WebSocket + production Runtime/SQLite, controlled native harness boundary. */
-export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; bridgeToken?: string; additionalModelId?: string; archivedAcpSession?: boolean; secondWorktree?: boolean; codexFactory?: RuntimeDriverFactory; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
+export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; bridgeToken?: string; additionalModelId?: string; editableProvider?: boolean; archivedAcpSession?: boolean; secondWorktree?: boolean; codexFactory?: RuntimeDriverFactory; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
   // Load the Node worker owner without Vite's browser asset URL rewriting.
   // The worker itself still runs the production module in a real subprocess.
   const requireNodeModule = createRequire(path.resolve(process.cwd(), 'package.json'));
@@ -86,9 +88,19 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
         'model-a': { id: 'model-a', name: 'QA model', limit: { context: 32000, output: 4000 } },
       };
       if (modelId) models[modelId] = { id: modelId, name: 'Slash Model' };
+      const editableConfig = options.editableProvider ? createInstanceOperations({
+        store: context.store,
+        scope: { environmentId: identity.environmentId, harnessInstanceId: identity.harnessInstanceId, ...context.authority() },
+        current: context.authority, fingerprint, randomUUID,
+      }) : undefined;
+      let config: Record<string, JsonValue> = {
+        model: 'provider-a/model-a',
+        ...(options.editableProvider ? { disabled_providers: ['provider-a'] } : {}),
+      };
       const queries: Record<string, JsonValue> = {
-        listProviders: { all: [{ id: 'provider-a', name: 'QA provider', models }], connected: ['provider-a'], default: { 'provider-a': 'model-a' } },
-        getGlobalConfig: { model: 'provider-a/model-a' },
+        listProviders: { all: [{ id: 'provider-a', name: 'QA provider', models, ...(options.editableProvider ? { source: 'config' } : {}) }], connected: ['provider-a'], default: { 'provider-a': 'model-a' } },
+        getGlobalConfig: config,
+        ...(options.editableProvider ? { updateGlobalConfig: null } : {}),
         listAgents: [{ name: 'build', mode: 'primary' }], listCommands: [], getSessionTodos: [],
         listPendingPermissions: [], listPendingQuestions: [],
       };
@@ -117,8 +129,26 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
               read: async () => { throw new Error('No fixture live history'); }, close: async () => { historyCloses.push(selected); },
             };
           },
-        }, native: Object.fromEntries(Object.entries(queries).map(([operation, value]) => [operation, input => { nativeQueries.push({ operation, ...(input.session ? { session: input.session } : {}) }); return value; }])) },
-      }, close: async () => {} };
+        }, native: Object.fromEntries(Object.entries(queries).map(([operation, value]) => [operation, async input => {
+          nativeQueries.push({ operation, ...(input.session ? { session: input.session } : {}) });
+          if (operation === 'getGlobalConfig') return config;
+          if (operation === 'updateGlobalConfig' && editableConfig) {
+            const params = input.params;
+            if (!params || typeof params !== 'object' || Array.isArray(params)) throw new Error('Fixture config parameters required');
+            const { body: patch, idempotencyKey } = params as Readonly<Record<string, JsonValue>>;
+            if (!patch || typeof patch !== 'object' || Array.isArray(patch) || typeof idempotencyKey !== 'string') {
+              throw new Error('Fixture config patch and idempotency key required');
+            }
+            const changes = patch as Readonly<Record<string, JsonValue>>;
+            const accepted = await editableConfig.accept({ idempotencyKey, method: operation, payload: changes });
+            return editableConfig.execute(accepted.operationId, async () => {
+              config = { ...config, ...changes };
+              return config;
+            });
+          }
+          return value;
+        }])) },
+      }, close: async () => { await editableConfig?.close(); } };
     }, acp: async context => {
       const identity = { environmentId: parseEnvironmentId(context.environmentId), harnessInstanceId: parseHarnessInstanceId(context.harnessInstanceId), kind: 'acp' as const };
       const empty = unavailableRegistration(identity, 'starting');

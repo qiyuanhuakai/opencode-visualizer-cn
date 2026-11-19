@@ -144,21 +144,6 @@ function runTool(args, options = {}) {
 }
 
 const countMatches = (text, pattern) => (text.match(pattern) ?? []).length;
-const parseVitest = (output) => {
-  const filesGreen = /Test Files\s+(\d+) passed \((\d+)\)/.exec(output);
-  const filesRed = /Test Files\s+(\d+) failed \((\d+)\)/.exec(output);
-  const filesMixed = /Test Files\s+(\d+) failed \| (\d+) passed \((\d+)\)/.exec(output);
-  const testsGreen = /Tests\s+(\d+) passed \((\d+)\)/.exec(output);
-  const testsRed = /Tests\s+(\d+) failed \| (\d+) passed \((\d+)\)/.exec(output);
-  return {
-    testFilesPassed: filesGreen ? Number(filesGreen[1]) : filesRed ? 0 : filesMixed ? Number(filesMixed[2]) : null,
-    testFilesFailed: filesRed ? Number(filesRed[1]) : filesMixed ? Number(filesMixed[1]) : 0,
-    testFilesTotal: filesGreen ? Number(filesGreen[2]) : filesRed ? Number(filesRed[2]) : filesMixed ? Number(filesMixed[3]) : null,
-    testsPassed: testsGreen ? Number(testsGreen[1]) : testsRed ? Number(testsRed[2]) : null,
-    testsFailed: testsRed ? Number(testsRed[1]) : 0,
-    testsTotal: testsGreen ? Number(testsGreen[2]) : testsRed ? Number(testsRed[3]) : null,
-  };
-};
 
 export async function run(context) {
   assert(context.verify === 'F2', 'this module is the F2 verifier registration');
@@ -238,10 +223,21 @@ export async function run(context) {
 
   const regressionFiles = [...new Set(FAULTS.map((fault) => fault.regression))];
   const runRegression = (files, label) => {
-    const run = runTool(['vitest', 'run', ...files], { cwd: sandbox });
-    const output = `${run.stdout}${run.stderr}`;
-    writeFileSync(path.join(detailDir, `${label}.log`), output);
-    return { exitCode: run.exitCode, ...parseVitest(output) };
+    const reportPath = path.join(detailDir, `${label}.json`);
+    rmSync(reportPath, { force: true });
+    const run = runTool(['vitest', 'run', '--reporter=default', '--reporter=json', '--outputFile', reportPath, ...files], { cwd: sandbox });
+    writeFileSync(path.join(detailDir, `${label}.log`), `${run.stdout}${run.stderr}`);
+    const report = JSON.parse(readFileSync(reportPath, 'utf8'));
+    const names = new Set(report.testResults.map(result => path.relative(sandbox, result.name).split(path.sep).join('/')));
+    const failing = report.testResults.flatMap(result => result.assertionResults.filter(test => test.status === 'failed'));
+    assert(files.every(file => names.has(file) && report.testResults.some(result => path.resolve(sandbox, file) === result.name && result.assertionResults.length > 0)),
+      `${label} did not execute every requested regression suite`);
+    artifacts.push(artifact(reportPath, `f2-${label}-json`));
+    return {
+      exitCode: run.exitCode, success: report.success, testsTotal: report.numTotalTests,
+      testsPassed: report.numPassedTests, testsFailed: failing.length,
+      failedAssertions: failing.map(test => `${test.fullName}\n${test.failureMessages.join('\n')}`),
+    };
   };
 
   // The pristine bytes of every mutation target, captured before any injection.
@@ -257,33 +253,34 @@ export async function run(context) {
 
   // 1 — baseline: the copy reproduces a green run, so a later red is attributable to the fault.
   const baseline = runRegression(regressionFiles, 'baseline');
-  check('the temporary copy faithfully reproduces the green baseline before any fault is injected, so a later non-zero exit is attributable to the injected fault and not to a broken copy', baseline, { exitCode: 0, testFilesPassed: 2, testFilesFailed: 0, testFilesTotal: 2, testsPassed: 42, testsFailed: 0, testsTotal: 42 }, 'npx vitest run over the two real regression files inside the sandbox copy');
+  check('the sandbox baseline runs the selected suites and every observed test passes', {
+    exitCode: baseline.exitCode, success: baseline.success, passedAll: baseline.testsPassed === baseline.testsTotal,
+    nonEmpty: baseline.testsTotal > 0, failed: baseline.testsFailed,
+  }, { exitCode: 0, success: true, passedAll: true, nonEmpty: true, failed: 0 }, 'Vitest JSON in the unmodified sandbox');
 
-  // 2 — each fault alone, then both together: each must make the real regression non-zero.
-  const injections = [];
+  function rejected(run, fault) {
+    return run.exitCode === 1 && run.success === false && run.testsFailed > 0
+      && run.failedAssertions.some(message => new RegExp(fault.expectedFailureMarker).test(message));
+  }
   for (const fault of FAULTS) {
     applyFault(fault);
     const run = runRegression([fault.regression], fault.id);
     restoreFault(fault);
-    assert(run.exitCode !== 0, `fault ${fault.id} did NOT make the real regression fail — the injection is vacuous`);
-    assert(run.testsFailed > 0, `fault ${fault.id} exited non-zero without a failed test`);
-    assert(new RegExp(fault.expectedFailureMarker).test(readFileSync(path.join(detailDir, `${fault.id}.log`), 'utf8')), `fault ${fault.id} log does not contain the expected failure marker ${fault.expectedFailureMarker}`);
-    injections.push({ id: fault.id, file: fault.file, exitCode: run.exitCode, testsFailed: run.testsFailed, testsPassed: run.testsPassed, testsTotal: run.testsTotal });
+    check(`${fault.id} fails its registered regression with the expected assertion`, rejected(run, fault), true, fault.regression);
   }
-  check('fault A (cross-target routing) makes the real regression non-zero: with the login-fallback guard removed from relayHandshake.js the regression that proves every FS/Git/PTY/driver operation targets the compute node and rejects a login fallback fails', injections[0], { id: 'faultA-cross-target-routing', file: 'bridge/runtime/transports/relayHandshake.js', exitCode: 1, testsFailed: 2, testsPassed: 29, testsTotal: 31 }, 'the injected fault plus the real app/runtime/slurmTransport.test.ts inside the copy');
-  check('fault B (ignored dirty target) makes the real regression non-zero: with the target-clean re-check disabled in integrationService.js the regression that proves a dirty target fails the integration and preserves the artifact fails', injections[1], { id: 'faultB-ignored-dirty-target', file: 'bridge/runtime/collaboration/integrationService.js', exitCode: 1, testsFailed: 3, testsPassed: 8, testsTotal: 11 }, 'the injected fault plus the real app/runtime/artifactIntegration.test.ts inside the copy');
 
   for (const fault of FAULTS) applyFault(fault);
   const both = runRegression(regressionFiles, 'both-faults');
   for (const fault of FAULTS) restoreFault(fault);
-  assert(both.exitCode !== 0 && both.testsFailed === 5, 'both faults together did not reproduce the recorded red');
-  check('both faults together keep the combined regression non-zero', both, { exitCode: 1, testFilesPassed: 0, testFilesFailed: 2, testFilesTotal: 2, testsPassed: 37, testsFailed: 5, testsTotal: 42 }, 'both injected faults plus both real regression files inside the copy');
+  check('both faults fail their registered assertions in the combined run', FAULTS.map(fault => rejected(both, fault)),
+    FAULTS.map(() => true), 'failed assertions from the combined Vitest JSON report');
 
-  // 3 — restore and prove GREEN again, with a sha256 proof of byte-identical restoration.
+  // The post-restore run must recover the pristine baseline and file bytes.
   const restored = runRegression(regressionFiles, 'post-restore');
   const restoredHashes = Object.fromEntries(FAULTS.map((fault) => [fault.file, { copy: sha256(path.join(sandbox, fault.file)), worktree: sha256(path.join(root, fault.file)) }]));
   const byteIdentical = FAULTS.every((fault) => restoredHashes[fault.file].copy === restoredHashes[fault.file].worktree);
-  check('after restoring the pristine bytes the regression is GREEN again and every mutated file is byte-identical to the worktree (RED proven, then GREEN restored — the failure case genuinely fails when the fault is present)', { ...restored, byteIdentical, restoredHashes }, { exitCode: 0, testFilesPassed: 2, testFilesFailed: 0, testFilesTotal: 2, testsPassed: 42, testsFailed: 0, testsTotal: 42, byteIdentical: true, restoredHashes }, 'the restored copy plus the real regression files, and a sha256 comparison of the two mutation targets against the pristine worktree bytes');
+  check('restoring the exact bytes restores the green baseline', { ...restored, byteIdentical },
+    { ...baseline, byteIdentical: true }, 'restored Vitest JSON and SHA-256 of both mutation targets');
 
   artifacts.push(artifact(path.join(detailDir, 'baseline.log'), 'f2-baseline-log'), artifact(path.join(detailDir, 'faultA-cross-target-routing.log'), 'f2-faultA-log'), artifact(path.join(detailDir, 'faultB-ignored-dirty-target.log'), 'f2-faultB-log'), artifact(path.join(detailDir, 'both-faults.log'), 'f2-both-faults-log'), artifact(path.join(detailDir, 'post-restore.log'), 'f2-post-restore-log'));
   rmSync(scratch, { recursive: true, force: true });
