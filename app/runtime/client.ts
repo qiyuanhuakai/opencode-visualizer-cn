@@ -29,6 +29,26 @@ function reserved(method: RuntimeMethod) {
   return method === 'runtime.history.close' || method === 'session.cancel' || method === 'interaction.respond' || method === 'runtime.channel.ack' || method === 'runtime.channel.cancel' || method === 'runtime.observer.resume' || method === 'runtime.observer.close' || method === 'runtime.target.detach';
 }
 
+async function decodeStartupPages(compressed: { readonly data: string; readonly bytes: number }) {
+  const compressedBytes = Uint8Array.from(atob(compressed.data), byte => byte.charCodeAt(0));
+  const reader = new Blob([compressedBytes]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+  const output = new Uint8Array(compressed.bytes);
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      requireValue(size + value.length <= output.length, 'snapshot.bootstrap_size');
+      output.set(value, size);
+      size += value.length;
+    }
+    requireValue(size === output.length, 'snapshot.bootstrap_size');
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(output));
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
+
 export class RuntimeRequestError extends ProtocolError {
   constructor(code: ErrorCode, readonly requestId: string, readonly uncertain: boolean, readonly receipt?: string, readonly serverMessage?: string) {
     const prefix = `${code}: `;
@@ -281,12 +301,21 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     const target = managementTarget();
     const attached = getTarget(target);
     bootstrapTree &&= attached.hello.capabilities.methods.includes('runtime.snapshot');
-    const result = await request(target, 'runtime.inspect', bootstrapTree ? { bootstrapTree: true } : {}).catch(error => {
+    const result = await request(target, 'runtime.inspect', bootstrapTree ? { bootstrapTree: true, ...(typeof DecompressionStream === 'function' ? { bootstrapEncoding: 'gzip' } : {}) } : {}).catch(error => {
       if (!bootstrapTree || !(error instanceof RuntimeRequestError) || error.code !== 'invalid_request' || error.field !== 'fields') throw error;
       return request(target, 'runtime.inspect', {});
     });
-    const { treeBootstrap, ...inspection } = result;
-    if (treeBootstrap) bootstrapPages.set(attached, treeBootstrap);
+    const { treeBootstrap, treeBootstrapGzip, ...inspection } = result;
+    let pages = treeBootstrap;
+    if (treeBootstrapGzip) {
+      try {
+        const decoded = await decodeStartupPages(treeBootstrapGzip);
+        pages = parseRuntimeResult('runtime.inspect', { ...inspection, treeBootstrap: decoded }).treeBootstrap;
+      } catch {
+        // The independently validated inspection can still establish a connection.
+      }
+    }
+    if (pages) bootstrapPages.set(attached, pages);
     grants.clear();
     for (const grant of inspection.targets) grants.set(grant.target, grant);
     return inspection;

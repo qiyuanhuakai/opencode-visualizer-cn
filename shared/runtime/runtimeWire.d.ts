@@ -15,6 +15,7 @@ export type RuntimeInspection = {
   readonly topology: readonly JsonValue[]; readonly sources: readonly { readonly id: string; readonly state: string }[];
   readonly connectionProfileId: ConnectionProfileId; readonly targets: readonly TargetGrant[];
   readonly treeBootstrap?: readonly Snapshot[];
+  readonly treeBootstrapGzip?: { readonly data: string; readonly bytes: number };
   readonly harnesses: readonly HarnessInspection[]; readonly transports: { readonly direct: boolean; readonly ssh: boolean; readonly slurm: boolean };
 };
 export type NativeCall = { readonly harnessInstanceId: HarnessInstanceId; readonly session?: SessionRef; readonly workspaceKey?: WorkspaceKey; readonly args: JsonObject };
@@ -42,7 +43,7 @@ export interface RuntimeParams {
   readonly 'runtime.history.chunk': HistoryChunkParams;
   readonly 'runtime.history.read': HistoryReadParams;
   readonly 'runtime.history.close': HistoryCloseParams;
-  readonly 'runtime.inspect': { readonly bootstrapTree?: true };
+  readonly 'runtime.inspect': { readonly bootstrapTree?: true; readonly bootstrapEncoding?: 'gzip' };
   readonly 'runtime.target.attach': { readonly target: EnvironmentId };
   readonly 'runtime.target.detach': { readonly target: EnvironmentId };
   readonly 'runtime.snapshot': { readonly collection: IndexCollection; readonly token?: string; readonly cursor?: string | null; readonly limit?: number };

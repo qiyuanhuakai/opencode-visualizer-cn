@@ -1,5 +1,6 @@
 import { readRecord, readPayload } from './operationJournal.js';
 import { authorizeNativeCall } from './nativeWirePolicy.js';
+import { gzipSync } from 'node:zlib';
 import { randomUUID } from 'node:crypto';
 import { ProtocolError, requireValue } from '../../shared/runtime/capabilities.js';
 import { validateFrame, decodeBinary, encodeBinary, LIMITS } from '../../shared/runtime/protocol.js';
@@ -166,6 +167,7 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
         requireValue(channel?.entry === entry, 'runtime.remote_channel', 'unauthorized');
         remoteParams = { ...params, channelId: channel.remoteId };
       }
+      if (frame.method === 'runtime.inspect' && params.bootstrapEncoding) remoteParams = { bootstrapTree: true };
       const result = await graph.remote.request({ ...frame, params: remoteParams }, accepted);
       const rebind = nested => {
         const source = graph.remote.hello;
@@ -254,7 +256,12 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
           const pages = await optionalPages;
           entry.current();
           if (!pages || signal.aborted) return base;
-          const result = { ...base, treeBootstrap: pages };
+          const result = { ...base };
+          if (params.bootstrapEncoding === 'gzip') {
+            const raw = Buffer.from(JSON.stringify(pages));
+            if (raw.length > LIMITS.jsonBytes) return base;
+            result.treeBootstrapGzip = { bytes: raw.length, data: gzipSync(raw, { level: 1 }).toString('base64') };
+          } else result.treeBootstrap = pages;
           if (Buffer.byteLength(JSON.stringify(result)) > LIMITS.jsonBytes - 4096) return base;
           keep = true;
           return result;
