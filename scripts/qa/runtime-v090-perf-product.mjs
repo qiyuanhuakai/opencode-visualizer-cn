@@ -7,13 +7,14 @@ import { productionSource, sourceSnapshot, validateSources, writeJson } from './
 import { buildApp, serveApp } from './runtime-v090-perf-app.mjs';
 import { connectApp, measureInteractions, measureTree, openBrowser } from './runtime-v090-perf-browser.mjs';
 import { indexInventory, prepareFixture, repository, startBridge, startNative } from './runtime-v090-perf-harness.mjs';
+import { summaryAt } from '../../app/dev/runtime-v090/fixtures/inventory.mjs';
 import { shapeRuntimeNetwork } from './runtime-v090-perf-network.mjs';
 
 const { values } = parseArgs({ options: { count: { type: 'string' }, out: { type: 'string' }, rtt: { type: 'string', default: '0' } } });
 const count = Number(values.count);
 const rttMs = Number(values.rtt);
-if (!Number.isInteger(count) || count < 1 || count > 100000 || !values.out || ![0, 100].includes(rttMs)) {
-  throw new Error('Use --count 1..100000 --out <new evidence directory> [--rtt 0|100]');
+if (!Number.isInteger(count) || count < 6 || count > 100000 || !values.out || ![0, 100].includes(rttMs)) {
+  throw new Error('Use --count 6..100000 --out <new evidence directory> [--rtt 0|100]');
 }
 const output = path.resolve(values.out);
 await mkdir(output);
@@ -51,9 +52,8 @@ try {
   const monitor = setInterval(() => rss.push(bridge.rss().rssBytes), 1000);
   try {
     const connected = await connectApp(browser.page, web.origin, network.port);
-    const { selected, ...tree } = await measureTree(browser.page, connected);
-    report.tree = tree;
-    report.interactions = await measureInteractions(browser.page, selected);
+    report.tree = await measureTree(browser.page, connected);
+    report.interactions = await measureInteractions(browser.page, summaryAt(5));
     report.index = await bridge.indexed();
     report.inventory = indexInventory(state, count);
     report.renderer = await browser.heap();
