@@ -3,6 +3,9 @@ import net from 'node:net';
 export async function shapeRuntimeNetwork(upstreamPort, rttMs = 0) {
   const sockets = new Set();
   const rate = 20_000_000 / 8;
+  // The FIFO retains bytes during the propagation delay as well as rate
+  // shaping. Leave room for the bandwidth-delay product in each direction.
+  const queueHighWater = 262144 + Math.ceil(rate * rttMs / 2000);
   const stats = { rttMs, megabitsPerSecond: rttMs ? 20 : null, uploadBytes: 0, downloadBytes: 0, queuedPeakBytes: 0 };
   const server = net.createServer({ allowHalfOpen: true }, (downstream) => {
     const upstream = net.connect({ port: upstreamPort, host: '127.0.0.1', allowHalfOpen: true });
@@ -40,20 +43,20 @@ export async function shapeRuntimeNetwork(upstreamPort, rttMs = 0) {
             source.pause();
             destination.once('drain', () => {
               blocked = false;
-              if (queued < 262144) source.resume();
+              if (queued < queueHighWater) source.resume();
               schedule();
             });
             break;
           }
         }
-        if (!blocked && queued < 262144) source.resume();
+        if (!blocked && queued < queueHighWater) source.resume();
         schedule();
       }
       source.on('data', bytes => {
         stats[direction] += bytes.length;
         queued += bytes.length;
         stats.queuedPeakBytes = Math.max(stats.queuedPeakBytes, queued);
-        if (queued >= 262144) source.pause();
+        if (queued >= queueHighWater) source.pause();
         available = Math.max(available, performance.now() + rttMs / 2) + (rttMs ? bytes.length / rate * 1000 : 0);
         chunks.push({ bytes, due: available });
         schedule();

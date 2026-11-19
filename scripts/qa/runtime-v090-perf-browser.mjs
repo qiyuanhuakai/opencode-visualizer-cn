@@ -92,23 +92,26 @@ export async function connectApp(page, origin, port) {
   await page.locator('#bridge-url').fill(`ws://127.0.0.1:${port}/runtime`);
   const start = await page.evaluate(() => {
     const start = performance.now();
-    const times = { topology: null, selectable: null };
-    const visible = selector => {
-      const element = document.querySelector(selector);
-      return element instanceof HTMLElement && element.getClientRects().length > 0;
+    const times = { topology: null, selectable: null, firstExpansion: null };
+    const canHit = element => {
+      if (!(element instanceof HTMLElement) || element.closest('[inert], [aria-disabled="true"]')) return false;
+      const row = element.getBoundingClientRect();
+      const tree = element.closest('[role="tree"]')?.getBoundingClientRect();
+      if (!tree) return false;
+      const left = Math.max(row.left, tree.left, 0), top = Math.max(row.top, tree.top, 0);
+      const right = Math.min(row.right, tree.right, innerWidth), bottom = Math.min(row.bottom, tree.bottom, innerHeight);
+      if (right <= left || bottom <= top) return false;
+      const hit = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
+      return hit !== null && element.contains(hit);
     };
-    const observer = new MutationObserver(() => {
-      const time = performance.now();
-      if (times.topology === null && visible('[data-tree-row]')) times.topology = time;
-      if (times.selectable === null && visible('[data-row-kind="session"]')) times.selectable = time;
-      if (times.topology !== null && times.selectable !== null) {
-        clearTimeout(timeout);
-        observer.disconnect();
-      }
-    });
-    const timeout = setTimeout(() => observer.disconnect(), 180000);
-    window.__visMeasuredTree = times;
-    observer.observe(document.body, { subtree: true, childList: true, attributes: true });
+    const anyHit = selector => Array.from(document.querySelectorAll(selector)).some(canHit);
+    function measureFrame(time) {
+      if (times.topology === null && anyHit('[data-tree-row]')) times.topology = time;
+      if (times.selectable === null && anyHit('[data-tree-row][data-row-kind="session"]')) times.selectable = time;
+      if ((times.topology === null || times.selectable === null) && time - start < 180000) requestAnimationFrame(measureFrame);
+    }
+    window.__visMeasuredTree = { times, canHit };
+    requestAnimationFrame(measureFrame);
     document.querySelector('[data-testid="bridge-login"] button[type="submit"]').click();
     return start;
   });
@@ -117,27 +120,31 @@ export async function connectApp(page, origin, port) {
 }
 
 export async function measureTree(page, connected) {
-  await page.locator('[data-tree-row]').first().waitFor({ timeout: 30000 });
-  const topologyMs = await page.evaluate(start => window.__visMeasuredTree.topology - start, connected.start);
-  if (topologyMs < 0) throw new Error('The first topology DOM update was not recorded');
+  await page.waitForFunction(() => window.__visMeasuredTree.times.topology !== null, undefined, { timeout: 30000 });
   const expanded = new Set();
   await until(async () => {
-    const visible = page.locator('[data-row-kind="session"]');
-    if (await visible.count()) return visible.first();
-    const rows = await page.locator('[data-tree-row]').evaluateAll((elements) => elements.map((element) => ({
-      key: element.getAttribute('data-row-key'), kind: element.getAttribute('data-row-kind'), expandable: Boolean(element.querySelector('[data-testid="row-toggle"]:not(.is-leaf)')),
-    })));
-    const candidate = rows.find((row) => row.expandable && !expanded.has(row.key));
-    if (candidate) {
-      expanded.add(candidate.key);
-      await page.locator(`[data-row-key=${JSON.stringify(candidate.key)}]`).click();
+    const ready = await page.evaluate(() => window.__visMeasuredTree.times.selectable !== null);
+    if (ready) return true;
+    const entered = await page.locator('[data-tree-row][aria-expanded="false"]').evaluateAll((elements, attempted) => {
+      const candidate = elements.find(element => window.__visMeasuredTree.canHit(element) && !attempted.includes(element.getAttribute('data-row-key')));
+      return candidate?.getAttribute('data-row-key') ?? null;
+    }, [...expanded]);
+    if (entered !== null) {
+      expanded.add(entered);
+      const group = page.locator(`[data-row-key=${JSON.stringify(entered)}]`);
+      await group.evaluate(element => element.addEventListener('click', () => {
+        window.__visMeasuredTree.times.firstExpansion ??= performance.now();
+      }, { once: true, capture: true }));
+      await group.click();
     }
     return false;
-  }, 'actual tree first selectable session');
-  const firstSelectableMs = await page.evaluate(start => window.__visMeasuredTree.selectable - start, connected.start);
-  if (firstSelectableMs < topologyMs) throw new Error('The first selectable session DOM update was not recorded');
+  }, 'actual tree first selectable session', 30000);
+  const times = await page.evaluate(() => window.__visMeasuredTree.times);
+  const topologyMs = times.topology - connected.start;
+  const firstSelectableMs = times.selectable - connected.start;
+  const appearance = times.firstExpansion === null || times.selectable < times.firstExpansion ? 'automatic' : 'after-expansion';
   const renderedRows = await page.locator('[data-tree-row]').count();
-  return { topologyMs, firstSelectableMs, renderedRows };
+  return { topologyMs, firstSelectableMs, appearance, expansionActions: expanded.size, renderedRows };
 }
 
 export async function measureInteractions(page, target) {
