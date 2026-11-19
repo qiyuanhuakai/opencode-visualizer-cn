@@ -4,32 +4,69 @@ export async function shapeRuntimeNetwork(upstreamPort, rttMs = 0) {
   const sockets = new Set();
   const rate = 20_000_000 / 8;
   const stats = { rttMs, megabitsPerSecond: rttMs ? 20 : null, uploadBytes: 0, downloadBytes: 0, queuedPeakBytes: 0 };
-  const server = net.createServer((downstream) => {
-    const upstream = net.connect(upstreamPort, '127.0.0.1');
+  const server = net.createServer({ allowHalfOpen: true }, (downstream) => {
+    const upstream = net.connect({ port: upstreamPort, host: '127.0.0.1', allowHalfOpen: true });
     sockets.add(upstream); sockets.add(downstream);
     for (const socket of [upstream, downstream]) {
       socket.once('close', () => sockets.delete(socket));
       socket.on('error', () => { upstream.destroy(); downstream.destroy(); });
     }
     function pipe(source, destination, direction) {
-      let available = performance.now(), queued = 0;
-      const timers = new Set();
-      source.on('data', (bytes) => {
+      let available = performance.now();
+      let queued = 0;
+      let ended = false;
+      let blocked = false;
+      let timer;
+      const chunks = [];
+      function schedule() {
+        if (timer !== undefined || blocked || destination.destroyed) return;
+        const next = chunks[0];
+        if (!next) {
+          if (ended) destination.end();
+          return;
+        }
+        timer = setTimeout(flush, Math.max(0, next.due - performance.now()));
+      }
+      function flush() {
+        timer = undefined;
+        if (destination.destroyed) return;
+        // One queue preserves TCP byte order even when timer deadlines round
+        // into different Node timer buckets under CPU load.
+        while (chunks.length && chunks[0].due <= performance.now()) {
+          const { bytes } = chunks.shift();
+          queued -= bytes.length;
+          if (!destination.write(bytes)) {
+            blocked = true;
+            source.pause();
+            destination.once('drain', () => {
+              blocked = false;
+              if (queued < 262144) source.resume();
+              schedule();
+            });
+            break;
+          }
+        }
+        if (!blocked && queued < 262144) source.resume();
+        schedule();
+      }
+      source.on('data', bytes => {
         stats[direction] += bytes.length;
         queued += bytes.length;
         stats.queuedPeakBytes = Math.max(stats.queuedPeakBytes, queued);
         if (queued >= 262144) source.pause();
         available = Math.max(available, performance.now() + rttMs / 2) + (rttMs ? bytes.length / rate * 1000 : 0);
-        const timer = setTimeout(() => {
-          timers.delete(timer);
-          queued -= bytes.length;
-          if (!destination.destroyed && !destination.write(bytes)) destination.once('drain', () => { if (queued < 262144) source.resume(); });
-          else if (queued < 262144) source.resume();
-        }, Math.max(0, available - performance.now()));
-        timers.add(timer);
+        chunks.push({ bytes, due: available });
+        schedule();
       });
-      source.on('end', () => setTimeout(() => destination.end(), Math.max(0, available - performance.now())));
-      source.on('close', () => { for (const timer of timers) clearTimeout(timer); destination.destroy(); });
+      source.on('end', () => { ended = true; schedule(); });
+      source.on('close', () => {
+        if (!ended) destination.destroy();
+      });
+      destination.once('close', () => {
+        clearTimeout(timer);
+        chunks.length = 0;
+        if (!ended && !source.destroyed) source.destroy();
+      });
     }
     pipe(downstream, upstream, 'uploadBytes');
     pipe(upstream, downstream, 'downloadBytes');
