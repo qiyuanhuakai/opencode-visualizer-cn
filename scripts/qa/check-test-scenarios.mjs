@@ -125,6 +125,22 @@ try {
   const listedRows = addOccurrences(root, readList());
   const listedTests = new Set(listedRows.map(testKey));
 
+  for (const [id, proof] of Object.entries(map.evidenceCatalog ?? {})) {
+    if (proof.sourceFiles === undefined) continue;
+    try {
+      if (!Array.isArray(proof.sourceFiles) || proof.sourceFiles.length === 0
+        || new Set(proof.sourceFiles).size !== proof.sourceFiles.length
+        || proof.sourceFiles.some(file => !/^app\/[\w./-]+\.test\.ts$/.test(file)
+          || file.split('/').some(segment => segment === '.' || segment === '..'))) {
+        throw new Error('invalid test source list');
+      }
+      const sources = proof.sourceFiles.map(file => [file, sha256(readFileSync(resolve(root, file)))]);
+      if (sha256(JSON.stringify(sources)) !== proof.sourceSha256) throw new Error('test source digest mismatch');
+    } catch (error) {
+      errors.push(`invalid lineage source evidence for ${id}: ${error.message}`);
+    }
+  }
+
   const assignedIds = new Set();
   const coveredTests = new Set();
   const allowedDispositions = new Set(['retain', 'migrate', 'merge', 'replace']);
@@ -192,13 +208,17 @@ try {
         assertionRows.push({
           file,
           name: [...assertion.ancestorTitles, assertion.title].join(' > '),
+          status: assertion.status,
         });
         if (assertion.status === 'failed') failed += 1;
       }
     }
-    const runTests = new Set(addOccurrences(root, assertionRows).map(testKey));
-    for (const key of currentTests)
+    const runTests = new Map(addOccurrences(root, assertionRows).map((row, index) => [testKey(row), assertionRows[index].status]));
+    for (const key of currentTests) {
       if (!runTests.has(key)) errors.push(`Vitest run is missing tracked test: ${key}`);
+      else if (runnableTests.has(key) && runTests.get(key) !== 'passed')
+        errors.push(`Vitest run did not pass tracked runnable test: ${key}`);
+    }
     if (
       run.success !== true ||
       failed ||

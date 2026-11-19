@@ -222,6 +222,29 @@ it('hides a slash-containing model from Bridge providers without changing the ac
   expect(fixture.historyOpens).toHaveLength(historyCount);
 }, 15000);
 
+it('publishes returned config in the Bridge provider panel without changing the active conversation', async () => {
+  const fixture = await mountRuntimeApp([], { editableProvider: true });
+  await fixture.connect();
+  await fixture.select('Session A');
+  await vi.waitFor(() => expect(fixture.historyOpens.at(-1)?.nativeSessionId).toBe('session-a'));
+  fixture.element.querySelector<HTMLButtonElement>('.provider-manager-button')!.click();
+  const toggle = await vi.waitFor(() => {
+    const input = fixture.element.querySelector<HTMLInputElement>('.provider-list-row .toggle-input');
+    expect(input?.checked).toBe(true);
+    return input!;
+  });
+  toggle.checked = false;
+  toggle.dispatchEvent(new Event('change', { bubbles: true }));
+  toggle.checked = true;
+  await vi.waitFor(() => {
+    expect(fixture.nativeQueries.some(query => query.operation === 'updateGlobalConfig')).toBe(true);
+    const current = fixture.element.querySelector<HTMLInputElement>('.provider-list-row .toggle-input');
+    expect(current?.checked, fixture.element.querySelector('.provider-manager-feedback')?.textContent ?? '').toBe(false);
+  });
+  expect(fixture.element.querySelector('.selected-title')?.textContent).toBe('Session A');
+  expect(fixture.historyOpens.at(-1)?.nativeSessionId).toBe('session-a');
+}, 15000);
+
 it('places archived ACP protocol sessions in the unified archived section', async () => {
   const fixture = await mountRuntimeApp([], { archivedAcpSession: true });
   await fixture.connect();
