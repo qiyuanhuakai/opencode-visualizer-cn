@@ -165,6 +165,8 @@ type ControlledDsh = {
   readonly holdPage: () => void;
   readonly releasePage: () => void;
   readonly heldPageCount: () => number;
+  readonly approval: (nativeSessionId: string, eventId: string) => void;
+  readonly cancelApproval: (eventId: string) => void;
   readonly disconnect: () => void;
   readonly close: () => Promise<void>;
 };
@@ -256,6 +258,8 @@ async function createControlledDsh(summaries: Array<Record<string, unknown>>): P
     holdPage() { pageGate = new Promise<void>((resolve) => { releasePageGate = resolve; }); },
     releasePage() { const release = releasePageGate; pageGate = undefined; releasePageGate = undefined; release?.(); },
     heldPageCount: () => heldPages,
+    approval(nativeSessionId, eventId) { for (const entry of streams) if (entry.endpoint === '$events') entry.send({ type: 'waterfall', event: 'approval/request', eventId, agentId: nativeSessionId, request: { toolName: 'owned-capacity-probe', args: {} } }); },
+    cancelApproval(eventId) { for (const entry of streams) if (entry.endpoint === '$events') entry.send({ type: 'cancel', eventId }); },
     disconnect() { for (const socket of sockets) socket.destroy(); },
     async close() { for (const socket of sockets) socket.destroy(); await new Promise<void>((resolve) => server.close(() => resolve())); },
   };
@@ -587,3 +591,97 @@ describe('DSH driver operation lease reconciliation', () => {
   });
 });
 
+
+it.each([33, 65])('closes %s pending interactions without overflowing the real reserved store queue', async count => {
+  await withDshDriver([summaryOf('capacity')], async ({ driver, controlled, store, events }) => {
+    await listPage(driver, {});
+    const subscription = await subscribeSession(driver, sessionRef('capacity')); await subscription.ready;
+    for (let index = 0; index < count; index++) {
+      controlled.approval('capacity', `capacity-${index}`);
+      const deadline = Date.now() + 3000;
+      while (events.filter(event => event.type === 'interaction-pending').length <= index && Date.now() < deadline) await sleep(5);
+      expect(events.filter(event => event.type === 'interaction-pending')).toHaveLength(index + 1);
+    }
+    const closed = await driver.close().then(() => ({ error: undefined }), error => ({ error }));
+    try {
+      expect(closed.error).toBeUndefined();
+      const page = await store.page({ collection: 'interactions', limit: 200 });
+      const rows = page.items.filter(item => isRecord(item.value) && item.value.kind === 'interaction');
+      expect(rows).toHaveLength(count);
+      expect(rows.every(item => isRecord(item.value) && item.value.phase === 'invalidated')).toBe(true);
+    } finally { for (let attempt = 0; attempt < 16; attempt++) { try { await driver.close(); break; } catch { /* drain the RED control without orphaning its worker */ } } }
+  });
+}, 30000);
+it.each([33, 65])('cleans %s disconnected interactions before the first replacement native connection', async count => {
+  await withDshDriver([summaryOf('capacity')], async ({ driver, controlled, store, events }) => {
+    await listPage(driver, {});
+    const subscription = await subscribeSession(driver, sessionRef('capacity')); await subscription.ready;
+    for (let index = 0; index < count; index++) {
+      controlled.approval('capacity', `capacity-${index}`);
+      const deadline = Date.now() + 3000;
+      while (events.filter(event => event.type === 'interaction-pending').length <= index && Date.now() < deadline) await sleep(5);
+      expect(events.filter(event => event.type === 'interaction-pending')).toHaveLength(index + 1);
+    }
+    controlled.disconnect();
+    const deadline = Date.now() + 3000;
+    while (!events.some(event => event.type === 'source-disconnected') && Date.now() < deadline) await sleep(5);
+    try {
+      await expect(getSession(driver, sessionRef('capacity'))).resolves.toBeUndefined();
+      const page = await store.page({ collection: 'interactions', limit: 200 });
+      const rows = page.items.filter(item => isRecord(item.value) && item.value.kind === 'interaction');
+      expect(rows).toHaveLength(count);
+      expect(rows.every(item => isRecord(item.value) && item.value.phase === 'invalidated')).toBe(true);
+      expect(events.some(event => event.type === 'source-error')).toBe(false);
+    } finally { for (let attempt = 0; attempt < 16; attempt++) { try { await driver.close(); break; } catch { /* drain the RED control without orphaning its worker */ } } }
+  });
+}, 30000);
+
+async function capacityApprovals(harness: DshHarness, count: number) {
+  await listPage(harness.driver, {});
+  const subscription = await subscribeSession(harness.driver, sessionRef('capacity')); await subscription.ready;
+  for (let index = 0; index < count; index++) {
+    harness.controlled.approval('capacity', `capacity-${index}`);
+    const deadline = Date.now() + 3000;
+    while (harness.events.filter(event => event.type === 'interaction-pending').length <= index && Date.now() < deadline) await sleep(5);
+    expect(harness.events.filter(event => event.type === 'interaction-pending')).toHaveLength(index + 1);
+  }
+}
+it.each([33, 65])('serializes %s native cancellation invalidations while keeping the source usable', async count => {
+  await withDshDriver([summaryOf('capacity')], async harness => {
+    await capacityApprovals(harness, count);
+    for (let index = 0; index < count; index++) harness.controlled.cancelApproval(`capacity-${index}`);
+    const deadline = Date.now() + 5000;
+    while (harness.events.filter(event => event.type === 'interaction-invalidated').length < count && Date.now() < deadline) await sleep(5);
+    expect(harness.events.filter(event => event.type === 'interaction-invalidated')).toHaveLength(count);
+    const page = await harness.store.page({ collection: 'interactions', limit: 200 });
+    const rows = page.items.filter(item => isRecord(item.value) && item.value.kind === 'interaction');
+    expect(rows).toHaveLength(count);
+    expect(rows.every(item => isRecord(item.value) && item.value.phase === 'invalidated')).toBe(true);
+    expect(harness.events.some(event => event.type === 'source-error')).toBe(false);
+    await expect(getSession(harness.driver, sessionRef('capacity'))).resolves.toBeUndefined();
+  });
+}, 30000);
+it('preserves an actual cleanup failure for retry while draining the other 32 interactions', async () => {
+  let failRead = false;
+  let blockedKey: string | undefined;
+  await withDshDriver([summaryOf('capacity')], async harness => {
+    await capacityApprovals(harness, 33);
+    failRead = true;
+    try {
+      await expect(harness.driver.close()).rejects.toThrow('DSH interaction cleanup failed');
+      const page = await harness.store.page({ collection: 'interactions', limit: 200 });
+      const rows = page.items.filter(item => isRecord(item.value) && item.value.kind === 'interaction');
+      expect(rows.filter(item => isRecord(item.value) && item.value.phase === 'pending')).toHaveLength(1);
+      expect(rows.filter(item => isRecord(item.value) && item.value.phase === 'invalidated')).toHaveLength(32);
+      expect(harness.events.some(event => event.type === 'source-closed')).toBe(false);
+      failRead = false;
+      await expect(harness.driver.close()).resolves.toBeUndefined();
+      const retried = await harness.store.page({ collection: 'interactions', limit: 200 });
+      expect(retried.items.filter(item => isRecord(item.value) && item.value.kind === 'interaction').every(item => isRecord(item.value) && item.value.phase === 'invalidated')).toBe(true);
+      expect(harness.events.filter(event => event.type === 'source-closed')).toHaveLength(1);
+    } finally { failRead = false; await harness.driver.close(); }
+  }, store => ({ ...store, async getControl(input) {
+    if (failRead && input.collection === 'interactions') { blockedKey ??= input.key; if (input.key === blockedKey) throw new Error('owned durable cleanup failure'); }
+    return store.getControl(input);
+  } }));
+}, 30000);

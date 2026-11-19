@@ -28,6 +28,8 @@ export function createDshDriver(options) {
   let mux, connecting, clientId, liveGeneration = 0, closed = false, reconnectTimer, reconnectAttempt = 0, retryBlocked = false;
   let closing;
   const invalidations = new Set();
+  const invalidationWork = new Map();
+  let invalidationSerial = Promise.resolve();
   const receiving = new Set();
   let invalidationDrain;
   const pendingWork = new Set();
@@ -95,9 +97,20 @@ export function createDshDriver(options) {
   function leaseCurrent(generation, boundClient) {
     if (closed || generation !== liveGeneration || boundClient !== clientId || !mux) fail('reconcile_required', 'stale_client');
   }
-  async function invalidate(delivery) {
-    invalidations.add(delivery);
+  function invalidate(delivery) {
     delivery.live = false;
+    const existing = invalidationWork.get(delivery);
+    if (existing) return existing;
+    invalidations.add(delivery);
+    // Every entry point shares one reserved-store lane, including disconnect and native cancel.
+    // A failed delivery remains in invalidations for retry without preventing later items from draining.
+    const work = invalidationSerial.then(() => invalidateDelivery(delivery));
+    invalidationWork.set(delivery, work);
+    invalidationSerial = work.catch(() => {});
+    void work.then(() => invalidationWork.delete(delivery), () => invalidationWork.delete(delivery));
+    return work;
+  }
+  async function invalidateDelivery(delivery) {
     try {
       if (delivery.key) {
         const prior = await readRecord(options.store, 'interactions', delivery.key);
