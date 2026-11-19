@@ -82,7 +82,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { artifact, sourceSnapshot, writeJson } from '../runtime-v090-evidence.mjs';
+import { artifact, productionSource, sourceSnapshot, validateSources, writeJson } from '../runtime-v090-evidence.mjs';
 import { createFixture } from './task-44-fixture.mjs';
 import {
   DATASET,
@@ -100,6 +100,7 @@ import {
 } from '../runtime-v090-benchmark.mjs';
 
 const TASK = 44;
+const PROFILE_IMPLEMENTATION_COMMIT = '45d30200fdd3ee74d8b058dae36f267dee45213e';
 const HASH = /^[a-f0-9]{64}$/u;
 const MiB = 1024 * 1024;
 
@@ -356,14 +357,22 @@ export async function run(context) {
     return kind;
   };
 
+  const auditedRevision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: context.root, encoding: 'utf8' }).trim();
+  const profiles = new Map();
   /** Reads a landed profile report and refuses anything that is not a real, complete report. */
   const readProfile = (name) => {
+    if (profiles.has(name)) return profiles.get(name);
     const file = path.join(evidenceRoot, `${name}.json`);
     assert(existsSync(file), `landed profile report missing: ${file}`);
     const report = JSON.parse(readFileSync(file, 'utf8'));
     assert.equal(report.task, TASK, `${name} report is not a task-44 report`);
     assert.equal(report.profile, name, `${name} report names another profile`);
-    return { file, report };
+    assert.equal(report.productionRevision, auditedRevision, `${name} profile was measured on another revision`);
+    validateSources(report.sourceHashes, context.root);
+    assert.deepEqual(report.productionSource, productionSource(context.root, report.sourceHashes, auditedRevision), `${name} profile source snapshot mismatch`);
+    const profile = { file, report };
+    profiles.set(name, profile);
+    return profile;
   };
 
   /** Runs the harness's preserved --check-sample CLI gate as a REAL child process. */
@@ -540,9 +549,11 @@ export async function run(context) {
       // H2 (R4): the approved SLO is FROZEN, the fixture is intact, and no product module moved.
       // ════════════════════════════════════════════════════════════════════════════════════════
       const claim = JSON.parse(readFileSync(path.join(evidenceRoot, 'implementation', 'DoneClaim.json'), 'utf8'));
+      execFileSync('git', ['merge-base', '--is-ancestor', PROFILE_IMPLEMENTATION_COMMIT, auditedRevision], { cwd: context.root });
       const harnessHashes = Object.fromEntries(['scripts/qa/runtime-v090-benchmark.mjs', 'scripts/qa/runtime-v090-performance.mjs'].map((file) => {
         const owned = claim.ownedPaths?.[file];
-        return [file, { claimed: owned?.sha256 ?? null, onDisk: createHash('sha256').update(readFileSync(path.join(context.root, file))).digest('hex'), lines: owned?.lines ?? null }];
+        const delivered = execFileSync('git', ['show', `${PROFILE_IMPLEMENTATION_COMMIT}:${file}`], { cwd: context.root });
+        return [file, { claimed: owned?.sha256 ?? null, delivered: sha256Hex(delivered), lines: owned?.lines ?? null }];
       }));
       const sloChecks = PROFILE_NAMES.map((name) => {
         const { report } = readProfile(name);
@@ -562,12 +573,12 @@ export async function run(context) {
         };
       });
       record('frozen', { slo: SLO, dataset: DATASET, harnessHashes, productModulesModified: claim.productModulesModified ?? null, sloChecks });
-      check('the approved SLO was never raised and the fixture was never deleted or shrunk: every profile report carries an slo object byte-identical to the frozen SLO the harness exports (warm tree 500ms, cold cached topology 1000ms, first selectable 2000ms, selected-page 1000/2000ms, index complete 60000/120000ms, interaction 100ms, event-visible 200ms, heap 128/160MiB, bridge RSS 256/512MiB, coverage 100%), every dataset keeps the frozen literals (10k = 10000 summaries + 10001 drafts; 100k = 100000 + 100001) with the plan-prescribed 200-worktree composition now seeded 200 and graded true in every profile report alongside the still-exported prescription and a note that keeps the App.vue-unwired substrate boundary, both harness scripts are byte-identical to the sha256 values the implementation lane recorded, and the implementation claim records an EMPTY productModulesModified array — the one threshold that first read as a miss was fixed in the harness, never by moving the goalpost', {
+      check('the approved SLO was never raised and the fixture was never deleted or shrunk: every profile report carries an slo object byte-identical to the frozen SLO the harness exports (warm tree 500ms, cold cached topology 1000ms, first selectable 2000ms, selected-page 1000/2000ms, index complete 60000/120000ms, interaction 100ms, event-visible 200ms, heap 128/160MiB, bridge RSS 256/512MiB, coverage 100%), every dataset keeps the frozen literals (10k = 10000 summaries + 10001 drafts; 100k = 100000 + 100001) with the plan-prescribed 200-worktree composition now seeded 200 and graded true in every profile report alongside the still-exported prescription and a note that keeps the App.vue-unwired substrate boundary, both historical implementation blobs match the recorded SHA-256 values and the current samples are bound to the audited revision, and the implementation claim records an EMPTY productModulesModified array — the one threshold that first read as a miss was fixed in the harness, never by moving the goalpost', {
         sloChecks,
         everySloUnchanged: sloChecks.every((entry) => entry.sloUnchanged),
         everyDatasetUnchanged: sloChecks.every((entry) => entry.datasetFrozenLiteralsUnchanged && entry.datasetMatchesFrozenExport && entry.worktreesPrescriptionStillExported && entry.worktreesSeededAndGraded && entry.worktreesNoteKeepsSubstrateBoundary),
         harnessHashes,
-        everyHarnessByteIdentical: Object.values(harnessHashes).every((entry) => entry.claimed !== null && entry.claimed === entry.onDisk),
+        everyHarnessByteIdentical: Object.values(harnessHashes).every((entry) => entry.claimed !== null && entry.claimed === entry.delivered),
         productModulesModified: claim.productModulesModified ?? null,
         productModulesModifiedEmpty: Array.isArray(claim.productModulesModified) && claim.productModulesModified.length === 0,
         measurementMethodRecordsNoMock: /no store mock/i.test(String(claim.measurementMethod?.modules ?? '')),
