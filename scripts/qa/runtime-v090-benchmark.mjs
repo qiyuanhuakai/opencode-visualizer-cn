@@ -655,10 +655,13 @@ export async function createStack({ out, log = () => {} }) {
 
   let vite; let httpServer; let server; let browser; let context; let page; let cdp;
   async function closeVite() {
-    if (httpServer?.listening) {
-      await new Promise((resolve, reject) => httpServer.close(error => error ? reject(error) : resolve()));
+    try {
+      if (httpServer?.listening) {
+        await new Promise((resolve, reject) => httpServer.close(error => error ? reject(error) : resolve()));
+      }
+    } finally {
+      await vite?.close();
     }
-    await vite?.close();
   }
   try {
     vite = await createServer({ configFile: false, appType: 'custom', root, logLevel: 'error', server: { middlewareMode: true, hmr: false } });
