@@ -501,8 +501,9 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   }
   async function start(): Promise<void> {
     unsubscribe = state.subscribe(() => { if (!disposed) refreshFromState(); });
+    // The state snapshot already applies every harness and workspace page
+    // through onCanonical, before the session rows from the same revision.
     await state.start(target, { collection: 'session_summaries', visible: true });
-    await serialize(() => readTopology(false));
     if (disposed) return;
     started.value = true;
     refreshFromState();
