@@ -68,6 +68,20 @@ it('opens the selected session as a Host Thread through the Bridge', async () =>
     expect(view?.querySelector('[data-testid="thread-meta"]')).toBeTruthy();
     expect(view?.querySelector('[data-testid="thread-error"]')).toBeNull();
   }, { timeout: 10000 });
+  const add = await vi.waitFor(() => {
+    const button = fixture.element.querySelector<HTMLButtonElement>('[data-testid="add-source"][data-native-session-id="session-b"]');
+    expect(button?.disabled).toBe(false);
+    return button!;
+  });
+  add.click();
+  const locate = await vi.waitFor(() => {
+    const row = fixture.element.querySelector('[data-testid="participant-session"][title="session-b"]')?.closest('[data-testid="participant-row"]');
+    const button = row?.querySelector<HTMLButtonElement>('[data-testid="locate-session"]');
+    expect(button?.disabled).toBe(false);
+    return button!;
+  });
+  locate.click();
+  await vi.waitFor(() => expect(fixture.historyOpens.at(-1)?.nativeSessionId).toBe('session-b'));
 }, 30000);
 
 it('loads DSH account status from the management instance while OpenCode owns the conversation', async () => {

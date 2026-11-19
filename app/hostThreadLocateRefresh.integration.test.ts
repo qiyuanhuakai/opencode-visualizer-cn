@@ -296,30 +296,6 @@ describe('App drives the real session tree from Locate, and back', () => {
     return threadState;
   }
 
-  it('Locate moves the REAL session tree selection, not only a local ref', async () => {
-    // The composable wrote selectedSession and nothing consumed it, so clicking Locate left
-    // the real tree, the output session and the composer exactly where they were.
-    const fixture = await mountHistoryApp([historyEntry('message-1', 'first-read-entry')]);
-    mountedApps.push(fixture);
-    await selectSessionA(fixture);
-    const threadState = await openThreadWithTwoParticipants(fixture);
-
-    const located = Array.from(
-      fixture.host.querySelectorAll<HTMLElement>('[data-testid="locate-session"]'),
-    ).find((button) => button.getAttribute('data-participant-id') !== threadState.summary.value?.participants[0]?.participantId);
-    expect(located).toBeDefined();
-    located?.click();
-
-    // The real App's selection moves to the located participant's own native session.
-    await vi.waitFor(() => {
-      expect(fixture.readSetupBinding('selectedSessionId')).toBe('session-b');
-    });
-    // And the thread surface's locate state agrees with the tree.
-    await vi.waitFor(() => {
-      expect(threadState.selectedSession.value?.nativeSessionId).toBe('session-b');
-    });
-  });
-
   it('the real tree selection drives the thread locate state back', async () => {
     // Reverse sync: selecting a participant's session in the tree writes the thread's located
     // session, so the surface follows the tree exactly as the tree follows Locate.

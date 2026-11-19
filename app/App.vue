@@ -182,7 +182,7 @@
                     class="output-panel"
                     :thread-panel-open="isThreadPanelOpen"
                     @close-thread-panel="isThreadPanelOpen = false"
-                    @locate-thread-session="handleUnifiedSelectKey(encodeSessionKey($event))"
+                    @locate-thread-session="locateHostThreadSession"
                     :thread-draft-text="messageInput"
                     :thread-handoff-entries="runtimeHandoffEntries"
                     :thread-native-history="runtimeThreadNativeHistory"
@@ -10341,6 +10341,13 @@ async function enterThreadComposer(preferredParticipantId?: string): Promise<voi
     if (qualifiedComposerDrafts?.recoveryPending) runtimeDraftFailure.value = true;
     throw error;
   } finally { if (selectionGeneration === runtimeSelectionGeneration) runtimeSelectionLoading.value = false; }
+}
+
+function locateHostThreadSession(session: SessionRef) {
+  const key = encodeSessionKey(session);
+  const participants = runtimeThreadState.summary.value?.participants;
+  if (!participants?.some(participant => encodeSessionKey(participant.session) === key)) return;
+  return handleUnifiedSelectKey(key);
 }
 
 async function selectThreadComposerTarget(participantId: string): Promise<void> {
