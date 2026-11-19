@@ -54,6 +54,14 @@
           {{ $t('runtime.sessionTree.rowsLoaded', 'Loaded') }} {{ props.viewLoaded ?? 0 }} · {{ $t('runtime.sessionTree.rowsShown', 'rows') }} {{ (props.treeRows ?? []).length }}
         </span>
         <span
+          v-if="waitingForIndexView"
+          class="unified-meta-loading"
+          data-testid="index-view-waiting"
+        >
+          <Icon class="unified-spin" icon="lucide:loader-2" :width="12" :height="12" />
+          {{ $t('runtime.sessionTree.waitingIndexView', 'Waiting for an index view…') }}
+        </span>
+        <span
           v-if="searchState && searchState.status === 'complete'"
           class="unified-meta-search"
           data-testid="search-summary"
@@ -341,6 +349,7 @@ const props = withDefaults(
     viewError?: string | null;
     filterKinds?: ReadonlySet<SessionHarness>;
     searchState?: UnifiedSearchState | null;
+    indexWaiting?: boolean;
   }>(),
   {
     treeRows: undefined,
@@ -353,6 +362,7 @@ const props = withDefaults(
     viewError: null,
     filterKinds: () => new Set<SessionHarness>([...HARNESS_KINDS, 'unknown']),
     searchState: null,
+    indexWaiting: false,
   },
 );
 
@@ -375,6 +385,7 @@ const emit = defineEmits<{
 }>();
 
 const unified = computed(() => props.treeRows !== undefined);
+const waitingForIndexView = computed(() => props.indexWaiting || (props.searchState?.status === 'searching' && props.searchState.waiting === true));
 const searchQuery = ref('');
 const scrollRef = ref<HTMLElement | null>(null);
 const scrollTop = ref(0);

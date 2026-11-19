@@ -5,8 +5,10 @@ import { ProtocolError, requireValue } from '../../../shared/runtime/capabilitie
 const RAW_HIGH_WATER = 1024 * 1024;
 const RAW_LOW_WATER = 128 * 1024;
 const RAW_PREFIX_BYTES = 64;
+const DRAIN_TAIL_BYTES = 4096;
 const rawIdFirst = /^\s*\{\s*"id"\s*:\s*(-?\d+)/u;
 const rawResultFirst = /^\s*\{\s*"(?:result|error)"/u;
+const rawTailId = /"id"\s*:\s*(-?\d+)\s*\}/u;
 
 function parseEnvelopeId(frame) {
   let parsed;
@@ -31,8 +33,10 @@ function parseEnvelopeId(frame) {
  * its id is known, then routed to the live sink, to the abandoned discard, or to the ordinary parser.
  * A bound-buffered frame that outgrows the ordinary bound BEFORE its id is known cannot be attributed
  * at all, so it is drained to its newline and published to no sink: guessing would route one request's
- * bytes into another's sink. If a later frame proves the drained bytes belonged to the pending read,
- * that read fails instead of parking forever.
+ * bytes into another's sink. The drain keeps a bounded tail window, and the trailing envelope id found
+ * there retires the candidate that owned the frame, so an abandoned id never outlives its own frame
+ * and force a later pending read's response into the same drain. If a later frame proves the drained
+ * bytes belonged to the pending read, that read fails instead of parking forever.
  */
 export function createCodexProcess({
   executable = 'codex',
@@ -59,7 +63,8 @@ export function createCodexProcess({
     pendingRawId = null,
     rawSink = null,
     abandonedRawId = null,
-    drainedUnattributed = false;
+    drainedUnattributed = false,
+    drainTail = null;
   const exited = new Promise((resolve) =>
     child.once('close', (code, signal) => resolve({ code, signal, pid: child.pid })),
   );
@@ -168,6 +173,27 @@ export function createCodexProcess({
     sink.fail(new ProtocolError('reconcile_required', 'codex.raw_frame'));
     if (child.stdout.isPaused()) child.stdout.resume();
   }
+  /** A drained frame is consumed to its newline and published to no sink, so its trailing envelope
+   * id — read from a bounded tail window, since the frame itself may far exceed the bound — is the
+   * only way to learn which request owned it. Retiring the matching candidate is what keeps an
+   * abandoned id from outliving its own frame: a stale `abandonedRawId` keeps forcing later
+   * result-first frames into the deferred path, where an oversized one is drained again and the
+   * pending read's only response disappears with no data and no error. An id matching no candidate
+   * retires nothing, so an unattributable drain still arms the second-drain failure. */
+  function retireDrainedFrame() {
+    const tail = drainTail;
+    drainTail = null;
+    if (tail === null || tail.length === 0) return;
+    const match = rawTailId.exec(tail.toString('latin1'));
+    const id = match === null ? null : Number(match[1]);
+    if (id === null || !Number.isSafeInteger(id)) return;
+    if (id === abandonedRawId) {
+      abandonedRawId = null;
+      drainedUnattributed = false;
+      return;
+    }
+    if (id === pendingRawId) failDrainedRaw();
+  }
   function pushToRaw(bytes) {
     if (!rawSink) return;
     rawSink.push(bytes);
@@ -209,6 +235,9 @@ export function createCodexProcess({
         if (drainedUnattributed) failDrainedRaw();
         else drainedUnattributed = true;
       }
+      // The frame's id is only knowable at its newline, so the discard that follows keeps a bounded
+      // tail window and retires whichever candidate that trailing id names.
+      drainTail = Buffer.alloc(0);
       mode = newline >= 0 ? 'ordinary' : 'discard';
       return next;
     }
@@ -238,6 +267,7 @@ export function createCodexProcess({
   function fail() {
     if (failed) return;
     failed = true;
+    drainTail = null;
     const error = new Error('codex.process');
     rawSink?.fail(error);
     for (const callback of endings) callback();
@@ -246,6 +276,7 @@ export function createCodexProcess({
   function close() {
     if (!cleanup) {
       closed = true;
+      drainTail = null;
       buffer = Buffer.alloc(0);
       prefix = Buffer.alloc(0);
       rawSink?.fail(new Error('codex.process'));
@@ -281,10 +312,17 @@ export function createCodexProcess({
       const end = newline < 0 ? chunk.length : newline;
       const segment = chunk.subarray(start, end);
       if (mode === 'discard') {
+        if (drainTail !== null) {
+          const combined = drainTail.length ? Buffer.concat([drainTail, segment]) : segment;
+          drainTail = combined.length <= DRAIN_TAIL_BYTES
+            ? combined
+            : Buffer.from(combined.subarray(combined.length - DRAIN_TAIL_BYTES));
+        }
         if (newline < 0) {
           start = end;
           continue;
         }
+        if (drainTail !== null) retireDrainedFrame();
         mode = 'ordinary';
         start = end + 1;
         continue;

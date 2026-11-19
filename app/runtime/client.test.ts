@@ -1,10 +1,16 @@
+// @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { createRuntimeClient } from './client';
 import { createRuntimeConnection } from './connection';
 import { decodeFrame, encodeFrame } from '../../shared/runtime/protocol.js';
 import type { Hello, Request, RuntimeEvent } from '../../shared/runtime/protocol.js';
 import { parseEnvironmentId, parseHarnessInstanceId, parseInstanceId } from '../../shared/runtime/identity.js';
-import { parseCapabilities } from '../../shared/runtime/capabilities.js';
+import { parseCapabilities, ProtocolError } from '../../shared/runtime/capabilities.js';
 import { RUNTIME_WIRE_METHODS } from '../../shared/runtime/runtimeWire.js';
 
 const target = parseEnvironmentId('11111111-1111-4111-8111-111111111111');
@@ -455,4 +461,261 @@ describe('RuntimeClient pre-decode history memory guard', () => {
     await expect(pending).rejects.toMatchObject({ code: 'reconcile_required' });
     expect(connection.status.state).toBe('error');
   });
+});
+
+/** The reviewer's P2-3 path: the REAL client over a REAL connection whose `runtime.snapshot`
+ * requests are served by the REAL `createRuntimeSnapshots` over the REAL store (in-memory SQLite),
+ * so the live-view quota that rejects a mint is the store's own `LIMITS.snapshotTokens`. */
+class StoreSocket extends EventTarget {
+  binaryType: BinaryType = 'arraybuffer';
+  readyState: 0 | 1 | 2 | 3 = 1;
+  bufferedAmount = 0;
+  readonly sent: Request[] = [];
+  /** Every rejection the REAL store produced, so a quota failure is visible by its own reason. */
+  readonly storeErrors: string[] = [];
+  private queued: Request[] = [];
+  private waiter: ((request: Request) => void) | undefined;
+  constructor(private readonly snapshots: { page(input: Record<string, unknown>): Promise<unknown> }) { super(); }
+  close() { this.readyState = 3; }
+  send(data: string | Uint8Array) {
+    if (typeof data !== 'string') return;
+    const frame = decodeFrame(data);
+    if (frame.kind !== 'request') throw new TypeError('Expected request');
+    this.sent.push(frame);
+    if (frame.method === 'runtime.snapshot') {
+      void this.snapshots.page(frame.params as Record<string, unknown>).then(
+        (page) => this.reply(frame, page),
+        (error: unknown) => {
+          this.storeErrors.push(`${error instanceof ProtocolError ? error.code : 'source_unavailable'}:${(error as { reason?: string }).reason ?? 'unknown'}`);
+          this.error(frame, error instanceof ProtocolError ? error.code : 'source_unavailable');
+        },
+      );
+      return;
+    }
+    if (this.waiter) { const waiter = this.waiter; this.waiter = undefined; waiter(frame); }
+    else this.queued.push(frame);
+  }
+  next(): Promise<Request> {
+    const request = this.queued.shift();
+    return request ? Promise.resolve(request) : new Promise(resolve => { this.waiter = resolve; });
+  }
+  frame(value: unknown) { this.dispatchEvent(new MessageEvent('message', { data: encodeFrame(value) })); }
+  reply(request: Request, result: unknown, phase = 'read') {
+    this.frame({ version: 1, kind: 'result', target: request.target, epoch: request.epoch, generation: request.generation, id: request.id, ok: true, phase, result });
+  }
+  error(request: Request, code = 'replay_required') {
+    this.frame({ version: 1, kind: 'result', target: request.target, epoch: request.epoch, generation: request.generation, id: request.id, ok: false, typedError: { code, message: 'bounded failure' } });
+  }
+}
+
+async function storeFixture(options?: { readonly viewTtlMs?: number }) {
+  const { createRuntimeStore } = await import('../../bridge/runtime/storage/runtimeStore.js');
+  const { createRuntimeSnapshots } = await import('../../bridge/runtime/snapshots.js');
+  // The hello already registers the management target, so the store's environment is the OTHER
+  // target: that is the one this fixture attaches and reads the index from.
+  const epoch = randomUUID();
+  const storeHello: Hello = { ...hello, target: other, epoch };
+  const directory = await mkdtemp(path.join(tmpdir(), 'vis-client-index-'));
+  const store = createRuntimeStore({ stateDirectory: directory, environmentId: other, ownerId: randomUUID(), epoch });
+  await store.ready;
+  await store.mutate({ intentId: 'seed', changes: [
+    { collection: 'session_summaries', key: 'session-a', value: { title: 'a' } },
+    { collection: 'harnesses', key: 'harness-a', value: { kind: 'codex' } },
+    { collection: 'workspaces', key: 'workspace-a', value: { path: directory } },
+  ] });
+  const snapshots = createRuntimeSnapshots({ store });
+  const window = await snapshots.connect({ target: other, epoch, generation: 1 }, () => true);
+  // Optional controlled view TTL: exercising "the live-view budget is spent" without waiting the
+  // real 60s needs both clocks shortened in step. The store row is made to lapse shortly BEFORE the
+  // client-visible expiry so a wait-for-slot read finds the slot free exactly when this client stops
+  // counting the view; token-reusing requests keep the store's own expiry.
+  const viewTtlMs = options?.viewTtlMs;
+  const database = viewTtlMs === undefined ? undefined : new DatabaseSync(path.join(directory, 'runtime/runtime.db'));
+  const served = viewTtlMs === undefined || database === undefined ? window : {
+    page: async (input: Record<string, unknown>) => {
+      const page = await window.page(input) as Record<string, unknown>;
+      if (typeof page.token === 'string') {
+        database.prepare('UPDATE runtime_snapshots SET expires=? WHERE token=?').run(Math.max(1, Date.now() + viewTtlMs - 200), page.token);
+        return { ...page, expiresAt: Date.now() + viewTtlMs };
+      }
+      return page;
+    },
+  };
+  const socket = new StoreSocket(served);
+  const created = Promise.withResolvers<void>();
+  const connection = createRuntimeConnection({ reference: { url: 'ws://127.0.0.1:43210/runtime' }, resolveAuthentication: async () => ({}), createWebSocket: () => { created.resolve(); return socket; } });
+  const client = createRuntimeClient({ connection });
+  const connected = connection.connect();
+  await created.promise;
+  socket.frame(hello);
+  await connected;
+  const inspected = client.inspect();
+  socket.reply(await socket.next(), inspection);
+  await inspected;
+  const attaching = client.attach(other);
+  socket.reply(await socket.next(), { hello: storeHello, grant: grant(other) });
+  await attaching;
+  return {
+    client, socket, store, directory, target: other,
+    close: async () => {
+      database?.close();
+      await window.close();
+      client.dispose();
+      connection.disconnect();
+      await store.close();
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+/** The store keys of one snapshot page's items, for assertions about which rows a view materialized. */
+function indexKeys(items: readonly unknown[]): string[] {
+  return items.map((item) => String((item as { key?: unknown } | null)?.key ?? ''));
+}
+
+describe('RuntimeClient index views under the real store quota (review P2-3)', () => {
+  it('keeps repeated fresh index reads inside the live-view budget and still observes index updates', async () => {
+    // The bridge bounds live views per environment and cannot release one early, so a fresh read
+    // that minted on EVERY call exhausted the budget and the store rejected the next one with
+    // `snapshot_limit` before the old tokens expired. Staying inside the budget must not cost
+    // freshness: every fresh read observes the index as of its own request, so a session inserted
+    // between two reads is visible to the later one — a read that answers from a view materialized
+    // before the insert is a stale read, whatever its exit status.
+    const fixture = await storeFixture({ viewTtlMs: 300 });
+    try {
+      // The state layer's view already occupies one of the environment's live views.
+      await fixture.store.snapshot({ collection: 'workspaces' });
+      const perRead: string[][] = [];
+      const pages: number[] = [];
+      const failures: string[] = [];
+      const minted: string[] = [];
+      for (let index = 0; index < 6; index++) {
+        const keys: string[] = [];
+        try {
+          if (index === 3) await fixture.store.mutate({ intentId: 'mid-run', changes: [{ collection: 'session_summaries', key: 'session-mid', value: { title: 'mid' } }] });
+          const view = await fixture.client.readIndex(fixture.target, 'session_summaries', {
+            fresh: true,
+            onPage: (_collection, page) => { pages.push(page.items.length); keys.push(...indexKeys(page.items)); },
+          });
+          minted.push(view.token);
+          expect(view.token).toBeTypeOf('string');
+        } catch (error) {
+          failures.push(error instanceof Error ? error.message : String(error));
+        }
+        perRead.push(keys);
+      }
+      // The real store never refused a mint, so the environment's live-view budget was respected.
+      expect(fixture.socket.storeErrors).toEqual([]);
+      expect(failures).toEqual([]);
+      expect(pages).toHaveLength(6);
+      expect(pages.every((count) => count > 0)).toBe(true);
+      // Every fresh read minted its OWN view: six reads, six distinct tokens.
+      expect(new Set(minted).size).toBe(6);
+      // The session inserted before read 4 is invisible to reads 1-3 and visible from read 4 on,
+      // so no read answered from a view that predates its own request.
+      expect(perRead[0]).not.toContain('session-mid');
+      expect(perRead[2]).not.toContain('session-mid');
+      expect(perRead[3]).toContain('session-mid');
+      expect(perRead[5]).toContain('session-mid');
+    } finally {
+      await fixture.close();
+    }
+  }, 60000);
+
+  it('waits for a live-view slot and mints a fresh view instead of answering a fresh read from the stale view', async () => {
+    // The bridge cannot release a view early, so once the environment's live-view budget is spent a
+    // fresh read must not silently reuse the cached view: an explicit search/refresh would then
+    // read rows that predate the user's request for up to the whole view TTL.
+    const fixture = await storeFixture({ viewTtlMs: 3000 });
+    try {
+      await fixture.store.snapshot({ collection: 'workspaces' });
+      const first = await fixture.client.readIndex(fixture.target, 'session_summaries', { fresh: true, onPage: () => {} });
+      const second = await fixture.client.readIndex(fixture.target, 'session_summaries', { fresh: true, onPage: () => {} });
+      await fixture.store.mutate({ intentId: 'late', changes: [{ collection: 'session_summaries', key: 'session-late', value: { title: 'late' } }] });
+
+      const seen: string[] = [];
+      const waited: number[] = [];
+      const view = await fixture.client.readIndex(fixture.target, 'session_summaries', {
+        fresh: true,
+        onWaiting: (waitMs) => { waited.push(waitMs); },
+        onPage: (_collection, page) => { seen.push(...indexKeys(page.items)); },
+      });
+
+      expect(seen).toContain('session-late');
+      expect(view.token).not.toBe(second.token);
+      expect(view.token).not.toBe(first.token);
+      expect(waited.length).toBeGreaterThan(0);
+      expect(fixture.socket.storeErrors).toEqual([]);
+    } finally {
+      await fixture.close();
+    }
+  }, 60000);
+
+  it('reuses a near-expiry view while the live-view budget is spent instead of minting into snapshot_limit', async () => {
+    // The bridge deletes only truly expired tokens, so a view this client tracks as "near expiry"
+    // is still live server-side. Minting a replacement past the spent budget is rejected by the
+    // store with `snapshot_limit`; the cached token stays usable until the bridge really drops it,
+    // and a view that lapses mid-pagination still surfaces as `replay_required`.
+    const fixture = await storeFixture({ viewTtlMs: 1000 });
+    try {
+      await fixture.store.snapshot({ collection: 'workspaces' });
+      await fixture.client.readIndex(fixture.target, 'session_summaries', { fresh: true, onPage: () => {} });
+      await fixture.client.readIndex(fixture.target, 'session_summaries', { fresh: true, onPage: () => {} });
+      const seen: string[] = [];
+      const view = await fixture.client.readIndex(fixture.target, 'session_summaries', {
+        fresh: true,
+        onPage: (_collection, page) => { seen.push(...indexKeys(page.items)); },
+      });
+      expect(seen).toContain('session-a');
+      expect(view.token).toBeTypeOf('string');
+      expect(fixture.socket.storeErrors).toEqual([]);
+    } finally {
+      await fixture.close();
+    }
+  }, 60000);
+
+  it('rejects a fresh read whose signal is already aborted instead of waiting out the slot TTL', async () => {
+    // A superseded search is cancelled BEFORE its queued turn starts, so acquireIndexSlot runs
+    // with an already-aborted signal. AbortSignal never replays a past abort to a listener
+    // registered afterwards, so the wait loop has to check the flag itself: waiting the full
+    // remaining TTL would hold the caller's shared serial queue behind a read nobody wants,
+    // blocking operations the valid cache could answer immediately.
+    const fixture = await storeFixture({ viewTtlMs: 3000 });
+    try {
+      await fixture.store.snapshot({ collection: 'workspaces' });
+      await fixture.client.readIndex(fixture.target, 'session_summaries', { fresh: true, onPage: () => {} });
+      await fixture.client.readIndex(fixture.target, 'session_summaries', { fresh: true, onPage: () => {} });
+      const controller = new AbortController();
+      controller.abort();
+      const started = Date.now();
+      await expect(fixture.client.readIndex(fixture.target, 'session_summaries', {
+        fresh: true,
+        signal: controller.signal,
+        onPage: () => {},
+      })).rejects.toMatchObject({ code: 'cancelled', field: 'readIndex.slot' });
+      // The slot wait was never entered: the rejection is immediate, not bounded by the TTL.
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(fixture.socket.storeErrors).toEqual([]);
+    } finally {
+      await fixture.close();
+    }
+  }, 60000);
+
+  it('pages several collections from ONE fresh index view', async () => {
+    const fixture = await storeFixture();
+    try {
+      const collections: string[] = [];
+      const view = await fixture.client.readIndex(fixture.target, ['harnesses', 'workspaces'], {
+        fresh: true,
+        onPage: (collection) => { collections.push(collection); },
+      });
+      expect(collections).toEqual(['harnesses', 'workspaces']);
+      expect(view.token).toBeTypeOf('string');
+      // Exactly one request minted a view; every later page reused that token.
+      const minted = fixture.socket.sent.filter((frame) => frame.method === 'runtime.snapshot' && !('token' in (frame.params as Record<string, unknown>)));
+      expect(minted).toHaveLength(1);
+    } finally {
+      await fixture.close();
+    }
+  }, 60000);
 });

@@ -1,9 +1,8 @@
 import type { LegacyExportChunk, LegacyExportPage, LegacyExportToken, LegacyPageRequest } from './legacyExport';
 import { openLegacyExport, readLegacyExportPage, resolveLegacyLocalBinding } from './legacyExport';
 import type { LegacySource } from './legacyExport';
-import { legacyDigest } from './legacyExport';
 import type { LegacySourcePort } from './sourceArchive';
-import type { LocalBindingHint } from './legacyBinding';
+import { describeLocalBinding, type LocalBindingHint } from './legacyBinding';
 
 /**
  * Task 24 — adapt a browser `LegacySource` (an async iterable of pieces) onto
@@ -56,17 +55,13 @@ export function createBrowserLegacySourcePort(source: LegacySource): LegacySourc
       };
     },
     async binding(sourceKey: string): Promise<LocalBindingHint> {
+      // `resolveLegacyLocalBinding` yields exactly the `{ key, namespace }` shape
+      // `describeLocalBinding` consumes, so the port classifies a legacy key with
+      // the SAME describer the rest of the pipeline uses. `bindLegacySource`
+      // matches a proven mapping on `scopeFingerprint` AND `nativeSessionId`, so
+      // dropping either silently detaches every history record from its target.
       const resolved = await resolveLegacyLocalBinding(source, sourceKey);
-      return describeBinding(resolved, sourceKey);
+      return describeLocalBinding(resolved, sourceKey);
     },
-  };
-}
-
-async function describeBinding(local: Readonly<{ key: string; source: string; namespace: string }>, sourceKey: string): Promise<LocalBindingHint> {
-  return {
-    sourceKey,
-    ...(local.namespace.startsWith('backend-history-v1:')
-      ? { kind: 'history' as const, scopeFingerprint: await legacyDigest(local.namespace) }
-      : { kind: 'local' as const }),
   };
 }
