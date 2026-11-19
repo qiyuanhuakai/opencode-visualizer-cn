@@ -126,7 +126,7 @@ export async function run(context) {
   // ── the landed screenshots: proven real by an independent PNG decode ────────────────────────
   const decoded = SCREENSHOTS.map((shot) => ({ ...shot, ...pngShape(path.join(finalDir, shot.file)) }));
   const distinctHashes = new Set(decoded.map((shot) => shot.sha256)).size;
-  check('the nine F3 screenshots are real images: each decodes as a PNG whose IHDR dimensions match the captured viewport exactly (3 themes x desktop 1440 / mobile 390, the packaged Electron CDP window, the five-source tree and the thread handoff)', decoded.map((shot) => ({ file: shot.file, viewport: shot.viewport, theme: shot.theme, width: shot.width, height: shot.height })), SCREENSHOTS.map((shot) => ({ file: shot.file, viewport: shot.viewport, theme: shot.theme, width: shot.width, height: shot.height })), 'independent PNG IHDR decode of the nine landed screenshots against the frozen dimensions the F3 lane recorded');
+  check('the nine F3 screenshot files have PNG headers whose IHDR dimensions match the captured viewport exactly (3 themes x desktop 1440 / mobile 390, the packaged Electron CDP window, the five-source tree and the thread handoff)', decoded.map((shot) => ({ file: shot.file, viewport: shot.viewport, theme: shot.theme, width: shot.width, height: shot.height })), SCREENSHOTS.map((shot) => ({ file: shot.file, viewport: shot.viewport, theme: shot.theme, width: shot.width, height: shot.height })), 'independent PNG IHDR decode of the nine landed screenshots against the frozen dimensions the F3 lane recorded');
   check('every screenshot is a distinct, non-trivial capture', { distinctHashes, everyShotAtLeast20KiB: decoded.every((shot) => shot.bytes >= 20 * 1024) }, { distinctHashes: 9, everyShotAtLeast20KiB: true }, 'sha256 distinctness and a 20KiB size floor over the nine decoded screenshots');
 
   // ── the live SSH / Slurm legs, the lab and the runner-bound task-43 manifests ───────────────
@@ -172,7 +172,7 @@ export async function run(context) {
       verdict: 'PASS (the fixture leg re-executed at this head; the other legs audited from the F3 lane\'s independent observed evidence)',
       controlledServer,
       whatWasReExecuted: ['the real task-43 system harness over the real five-source unified tree, thread handoff and team/artifact review in a real headless Chromium'],
-      whatWasAudited: ['nine screenshots proven real by PNG decode', 'real SSH happy/failure and real Slurm happy/failure at their frozen scenario counts', 'the real four-namespace Slurm lab descriptor', 'the packaged Electron binary\'s registered CDP address', 'the packaged vis_bridge on a node-free PATH', 'current Task 23 native controls'],
+      whatWasAudited: ['nine screenshot files checked by PNG header and hash', 'real SSH happy/failure and real Slurm happy/failure at their frozen scenario counts', 'the real four-namespace Slurm lab descriptor', 'the packaged Electron binary\'s registered CDP address', 'the packaged vis_bridge on a node-free PATH', 'current Task 23 native controls'],
       scenarios,
       artifacts,
       versions: { node: process.version },
