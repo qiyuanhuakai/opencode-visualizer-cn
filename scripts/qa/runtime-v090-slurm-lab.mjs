@@ -117,8 +117,8 @@ rm -f /run/lab-setup-complete /run/lab-setup-complete-* || true
 # Every install lands inside this container/runner only. The user's production host is
 # never touched: docker discards the image layer on rm, and native runs on the
 # disposable GitHub-hosted isolated runner.
-apt-get update -qq >/dev/null 2>&1 || fail "apt-get update failed (no network to archive.ubuntu.com)"
-apt-get install -y -qq ${APT_PACKAGES} >/dev/null 2>&1 || fail "apt-get install failed for: ${APT_PACKAGES}"
+apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=15 update --error-on=any || fail "apt-get update failed"
+apt-get install -y -o Acquire::Retries=2 -o Acquire::http::Timeout=15 ${APT_PACKAGES} || fail "apt-get install failed for: ${APT_PACKAGES}"
 
 # ---------------------------------------------------------------- 2. munge (real auth)
 install -d -m 0700 -o munge -g munge /etc/munge /var/lib/munge /var/log/munge

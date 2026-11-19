@@ -74,14 +74,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker info --format 'docker daemon reachable: {{.ServerVersion}}'
-          # The lab's privileged init installs iproute2 and creates a real network
-          # namespace inside the container; prove BOTH before any lane, so a
-          # missing capability fails here instead of being mistaken for a
-          # dependency problem mid-lane.
-          docker run --rm --privileged ubuntu:24.04 bash -c \
-            "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq iproute2 >/dev/null 2>&1 && ip netns add vislab-preflight"
-          echo "privileged container installed packages and created a real network namespace"
+          {
+            docker info --format 'docker daemon reachable: {{.ServerVersion}}'
+            docker run --rm --privileged ubuntu:24.04 bash -e -c '
+              apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=15 update --error-on=any
+              apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=15 install -y iproute2
+              ip netns add vislab-preflight
+            '
+            echo "privileged container installed packages and created a real network namespace"
+          } 2>&1 | tee "$RUNNER_TEMP/vis-live-preflight.log"
 
       - name: Live Slurm happy lane (real srun, real slurmctld, two real slurmd)
         run: |
@@ -112,7 +113,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: runtime-v090-live-slurm
-          path: .omo/evidence/vis-v090/task-46/
+          path: |
+            .omo/evidence/vis-v090/task-46/
+            ${{ runner.temp }}/vis-live-preflight.log
           retention-days: 30
           if-no-files-found: error
 
@@ -144,14 +147,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker info --format 'docker daemon reachable: {{.ServerVersion}}'
-          # The lab's privileged init installs iproute2 and creates a real network
-          # namespace inside the container; prove BOTH before any lane, so a
-          # missing capability fails here instead of being mistaken for a
-          # dependency problem mid-lane.
-          docker run --rm --privileged ubuntu:24.04 bash -c \
-            "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq iproute2 >/dev/null 2>&1 && ip netns add vislab-preflight"
-          echo "privileged container installed packages and created a real network namespace"
+          {
+            docker info --format 'docker daemon reachable: {{.ServerVersion}}'
+            docker run --rm --privileged ubuntu:24.04 bash -e -c '
+              apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=15 update --error-on=any
+              apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=15 install -y iproute2
+              ip netns add vislab-preflight
+            '
+            echo "privileged container installed packages and created a real network namespace"
+          } 2>&1 | tee "$RUNNER_TEMP/vis-live-preflight.log"
 
       - name: Live SSH happy lane
         run: |
@@ -178,7 +182,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: runtime-v090-live-ssh
-          path: .omo/evidence/vis-v090/task-46/
+          path: |
+            .omo/evidence/vis-v090/task-46/
+            ${{ runner.temp }}/vis-live-preflight.log
           retention-days: 30
           if-no-files-found: error
 
