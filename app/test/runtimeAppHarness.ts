@@ -39,7 +39,7 @@ vi.mock('../composables/useGlobalEvents', () => ({ useGlobalEvents: () => ({
 type NativeHistory = Readonly<{ info: Readonly<Record<string, JsonValue>>; parts: readonly JsonValue[] }>;
 
 /** Real App + TCP/WebSocket + production Runtime/SQLite, controlled native harness boundary. */
-export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
+export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
   // Load the Node worker owner without Vite's browser asset URL rewriting.
   // The worker itself still runs the production module in a real subprocess.
   const requireNodeModule = createRequire(path.resolve(process.cwd(), 'package.json'));
@@ -71,7 +71,7 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
   const services = await createRuntimeServices({
     environmentId: randomUUID(), stateRoot: path.join(root, 'state'), role: 'local',
     roots: [{ root: directory, permissions: ['read', 'write', 'command', 'pty'] }],
-    config: { version: 1, nativeServices: { opencode: true, codex: false, 'kimi-web': false, dsh: false }, acpAgents: [] },
+    config: { version: 1, nativeServices: { opencode: true, codex: false, 'kimi-web': false, dsh: options.dshAccount !== undefined }, acpAgents: [] },
     nativeSupervisor: supervisor, acpManager: acp, runtime: { mutate: action => action() },
     factories: { opencode: async context => {
       const identity = { environmentId: parseEnvironmentId(context.environmentId), harnessInstanceId: parseHarnessInstanceId(context.harnessInstanceId), kind: 'opencode' as const };
@@ -109,6 +109,22 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
             };
           },
         }, native: Object.fromEntries(Object.entries(queries).map(([operation, value]) => [operation, input => { nativeQueries.push({ operation, ...(input.session ? { session: input.session } : {}) }); return value; }])) },
+      }, close: async () => {} };
+    }, dsh: async context => {
+      const identity = { environmentId: parseEnvironmentId(context.environmentId), harnessInstanceId: parseHarnessInstanceId(context.harnessInstanceId), kind: 'dsh' as const };
+      const empty = unavailableRegistration(identity, 'starting');
+      const operation = 'dsh.ui.account.getState';
+      return { registration: {
+        manifest: { ...empty.manifest,
+          core: { ...empty.manifest.core, inspect: { state: 'supported' } },
+          extensions: [{ name: operation, owner: identity.harnessInstanceId, scope: 'instance', permission: 'harness.read', schemaVersion: 1, support: { state: 'supported' } }],
+        },
+        driver: { core: { inspect: () => ({ state: 'ready', protocolVersion: 1 }) }, native: {
+          [operation]: input => {
+            nativeQueries.push({ operation, ...(input.session ? { session: input.session } : {}) });
+            return options.dshAccount ?? null;
+          },
+        } },
       }, close: async () => {} };
     } },
   });

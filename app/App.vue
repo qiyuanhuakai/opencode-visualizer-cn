@@ -610,7 +610,7 @@
       :native-adapter="managementNativeAdapter ?? undefined"
       :magic-context-workers="magicContextWorkers"
       :kimi-web-bridge="kimiWebMessageBridge"
-      :dsh-status="dshStatusSnapshot"
+      :dsh-status="runtimeActionClient ? managementDshStatus : dshStatusSnapshot"
       :harness-scope="harnessInstanceScope ?? undefined"
       :harness-manifests="harnessManifests"
       @close="isStatusMonitorOpen = false"
@@ -11009,6 +11009,23 @@ const managementDshRpcClient = computed(() => {
   const client = runtimeActionClient.value;
   return manifest?.kind === 'dsh' && client ? createNativeDshRpc(client, manifest) : undefined;
 });
+const managementDshStatus = shallowRef<DshStatusSnapshot>();
+watch([managementDshRpcClient, isStatusMonitorOpen], async ([rpc, open], _previous, onCleanup) => {
+  managementDshStatus.value = undefined;
+  if (!rpc || !open) return;
+  const accountOperation = managementManifest.value?.extensions.find(entry => entry.name === 'dsh.ui.account.getState');
+  if (accountOperation?.support.state !== 'supported') return;
+  let current = true;
+  onCleanup(() => { current = false; });
+  try {
+    const result = await rpc.call('account', 'getState');
+    if (current && managementDshRpcClient.value === rpc) {
+      managementDshStatus.value = { health: 'ok', account: dshAccountSnapshot(result) };
+    }
+  } catch {
+    if (current && managementDshRpcClient.value === rpc) managementDshStatus.value = { health: 'error' };
+  }
+});
 const managementProviders = ref<ProviderInfo[]>([]);
 const managementConnectedProviders = ref<string[]>([]);
 const managementProviderConfig = ref<ProviderConfigState | null>(null);
@@ -11144,9 +11161,14 @@ const harnessSettingsKind = computed(() => harnessManifests.value.find(entry => 
  * Management panels use the explicit Agent selection independently of the
  * conversation's session. The instance scope never grants session operations.
  */
-const harnessInstanceScope = computed<ControlScope | null>(() => runtimeEnvironmentId.value && managementHarnessInstanceId.value ? ({
-  kind: 'instance', environmentId: runtimeEnvironmentId.value, harnessInstanceId: managementHarnessInstanceId.value,
-}) : null);
+const harnessInstanceScope = computed<ControlScope | null>(() => {
+  const manifest = managementManifest.value;
+  return manifest ? {
+    kind: 'instance',
+    environmentId: manifest.environmentId,
+    harnessInstanceId: manifest.harnessInstanceId,
+  } : null;
+});
 
 const harnessSettingsControls = computed<readonly string[]>(() => {
   const scope = harnessInstanceScope.value;
