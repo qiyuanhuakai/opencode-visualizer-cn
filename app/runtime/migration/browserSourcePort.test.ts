@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest';
 import type { LegacyPiece } from '../../../shared/runtime/migration/legacyExport.js';
-import type { DraftHeader, DraftIdentity, DraftPart, DraftStore } from '../draftStore';
+import { DraftDigest, DraftStorageError } from './draftChunks';
+import type { DraftHeader, DraftIdentity, DraftPart, DraftStore, InlineDraft } from '../draftStore';
 
 // Task 24 fix (PR #182 round e0f83b871 item 4):
 // `createBrowserLegacySourcePort` reassembled legacy chunks but emitted

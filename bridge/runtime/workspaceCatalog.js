@@ -48,11 +48,11 @@ export function createWorkspaceCatalog({ store, git }) {
         limit: Math.min(options.limit ?? 100, 200),
       });
     },
-    async probe(key, { selected = false, visible = false } = {}) {
+    async probe(key, { selected = false, visible = false, identityOnly = false } = {}) {
       requireValue(selected || visible, 'git.probe_visibility');
       const prior = await store.get({ collection: 'workspaces', key });
       requireValue(prior?.value?.workspace, 'git.workspace');
-      const info = await git.probe(prior.value.workspace);
+      const info = await (identityOnly ? git.repository(prior.value.workspace) : git.probe(prior.value.workspace));
       for (let attempt = 0; attempt < 8; attempt++) {
         const latest = await store.get({ collection: 'workspaces', key });
         const value = {

@@ -37,6 +37,12 @@ describe('the seeded workspace catalog carries the repo identity the Host Thread
   it('probes every granted root at catalog-seed time, so a real repository resolves and a non-repository answers non-git', async () => {
     // Given: one granted root that IS a real git repository and one that is not.
     const { repo, plain } = await fixture();
+    const restricted = path.join(plain, 'restricted');
+    execFileSync('git', ['init', '--quiet'], { cwd: plain });
+    await mkdir(restricted);
+    // Authorize only the nested directory, not its repository metadata.
+    const outsideGit = path.join(path.dirname(repo), 'non-git');
+    await mkdir(outsideGit);
     const stateRoot = path.join(await mkdtemp(path.join(tmpdir(), 'runtime-workspace-probe-state-')), 'state');
     await mkdir(stateRoot, { recursive: true });
     cleanups.push(() => rm(path.dirname(stateRoot), { recursive: true, force: true }));
@@ -46,7 +52,8 @@ describe('the seeded workspace catalog carries the repo identity the Host Thread
       role: 'local',
       roots: [
         { root: repo, permissions: ['read', 'write', 'command', 'pty', 'reverse'] },
-        { root: plain, permissions: ['read', 'write', 'command', 'pty', 'reverse'] },
+        { root: restricted, permissions: ['read', 'write', 'command', 'pty', 'reverse'] },
+        { root: outsideGit, permissions: ['read', 'command'] },
       ],
       config: { version: 1, nativeServices: { opencode: false, codex: false, 'kimi-web': false, dsh: false }, acpAgents: [] },
       nativeSupervisor: supervisor,
@@ -79,7 +86,8 @@ describe('the seeded workspace catalog carries the repo identity the Host Thread
 
     // And: a granted root that is not a repository is probed honestly as
     // non-git with no repoKey, rather than being left undescribed.
-    const plainEntry = byPath.get(await realpath(plain));
+    expect(byPath.get(await realpath(restricted))).toMatchObject({ gitKind: 'unknown', repoKey: null });
+    const plainEntry = byPath.get(await realpath(outsideGit));
     expect(plainEntry).toBeDefined();
     expect(plainEntry!.gitKind).toBe('non-git');
     expect(plainEntry!.repoKey ?? null).toBeNull();
