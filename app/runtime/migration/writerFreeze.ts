@@ -76,3 +76,7 @@ export async function retryFrozenLegacyWrites(): Promise<void> {
 export async function completeLegacyCutover(): Promise<void> {
   await flushFrozenLegacyWrites(); change('cutover');
 }
+
+export function restoreLegacyCutover(options: Readonly<{ clientOrigin: string; persist: (write: PendingLegacyWrite) => Promise<void> }>): void {
+  origin = options.clientOrigin; sink = options.persist; sourceFrozen = true; change('cutover');
+}

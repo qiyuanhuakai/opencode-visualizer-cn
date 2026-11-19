@@ -23,6 +23,66 @@ async function setup(wrap: (store: RuntimeStore) => RuntimeStore = store => stor
   return { store, acceptance, scope, journal };
 }
 describe('runtime acceptance observes existing durable native journals', () => {
+  it('accepts independent permissions on one parent without mutating the shared process or parent fences', async () => {
+    const { store, journal, scope, acceptance } = await setup();
+    const interactions = createInteractionStore({ store: acceptance.store });
+    await interactions.bindProcess(scope);
+    const parent = await journal.accept({ scope, idempotencyKey: 'concurrent-parent', method: 'send', payload: {} });
+    await journal.execute(parent.operationId, scope, () => null);
+    const before = await store.getControl({ collection: 'operations', key: parent.operationId });
+    const keys = await Promise.all(['first', 'second'].map(nativeRequestId => interactions.pending({ scope, nativeRequestId, parentOperationId: parent.operationId, payload: {} })));
+    let accepted = 0, native = 0;
+    await Promise.all(keys.map(interactionId => acceptance.run({ scope, method: 'interaction.respond', idempotencyKey: randomUUID(), interactionId, onAccepted: () => { accepted++; } }, () => interactions.reply(interactionId, scope, { allow: true }, () => { native++; }))));
+    expect([accepted, native]).toEqual([2, 2]);
+    expect(await store.getControl({ collection: 'operations', key: parent.operationId })).toEqual(before);
+    await journal.terminal(parent.operationId, scope, 'completed');
+  });
+  for (const phase of ['pending', 'replying'] as const) for (const boundary of ['parent', 'process'] as const) {
+    it(`rejects ${phase} atomically if its ${boundary} ends immediately before the claim transaction`, async () => {
+      let armed = false, trigger: () => Promise<unknown> = async () => {};
+      const { store, journal, scope, acceptance } = await setup(raw => {
+        const write = (method: 'mutate' | 'mutateControl') => async (input: Parameters<RuntimeStore['mutate']>[0]) => {
+          const claiming = input.changes.some(change => change.collection === 'interactions' && change.value !== null && typeof change.value === 'object' && 'phase' in change.value && change.value.phase === phase);
+          if (armed && claiming) { armed = false; await trigger(); }
+          return raw[method](input);
+        };
+        return { ...raw, mutate: write('mutate'), mutateControl: write('mutateControl') };
+      });
+      const interactions = createInteractionStore({ store: acceptance.store });
+      await interactions.bindProcess(scope);
+      const parent = await journal.accept({ scope, idempotencyKey: 'raced-parent', method: 'send', payload: {} });
+      await journal.execute(parent.operationId, scope, () => null);
+      const key = phase === 'replying' ? await interactions.pending({ scope, nativeRequestId: 'raced', parentOperationId: parent.operationId, payload: {} }) : null;
+      trigger = boundary === 'parent' ? () => journal.terminal(parent.operationId, scope, 'completed') : () => interactions.processExited(scope);
+      armed = true;
+      let native = 0;
+      const action = key ? interactions.reply(key, scope, { allow: true }, () => { native++; }) : interactions.pending({ scope, nativeRequestId: 'raced', parentOperationId: parent.operationId, payload: {} });
+      await expect(action).rejects.toMatchObject({ code: 'conflict', reason: 'entity_precondition' });
+      expect(armed).toBe(false);
+      expect(native).toBe(0);
+      if (key) expect((await store.getControl({ collection: 'interactions', key }))?.value).toMatchObject({ phase: 'pending' });
+      else expect((await store.page({ collection: 'interactions' })).items.filter(item => item.value !== null && typeof item.value === 'object' && 'kind' in item.value && item.value.kind === 'interaction')).toHaveLength(0);
+    });
+  }
+  it('invalidates permission ownership when its exact parent turn ends and preserves a later turn', async () => {
+    const { store, journal, scope } = await setup();
+    const interactions = createInteractionStore({ store });
+    await interactions.bindProcess(scope);
+    const first = await journal.accept({ scope, idempotencyKey: 'first', method: 'send', payload: {} });
+    await journal.execute(first.operationId, scope, async () => ({ running: true }));
+    const old = await interactions.pending({ scope, nativeRequestId: 'old-approval', parentOperationId: first.operationId, payload: { permission: 'read' } });
+    expect((await interactions.get(old)).phase).toBe('pending');
+    await journal.terminal(first.operationId, scope, 'cancelled');
+    expect((await interactions.get(old)).phase).toBe('invalidated');
+    let submits = 0;
+    await expect(interactions.reply(old, scope, {}, () => { submits++; })).rejects.toThrow('interaction_parent_ended');
+    expect(submits).toBe(0);
+    const next = await journal.accept({ scope, idempotencyKey: 'second', method: 'send', payload: {} });
+    await journal.execute(next.operationId, scope, async () => ({ running: true }));
+    const current = await interactions.pending({ scope, nativeRequestId: 'next-approval', parentOperationId: next.operationId, payload: { permission: 'read' } });
+    expect((await interactions.get(current)).phase).toBe('pending');
+    expect((await interactions.get(old)).phase).toBe('invalidated');
+  });
   it('waits for the exact accepted-transition child ACK before accepted notification or native submission', async () => {
     const ack = gate(), written = gate(); const order: string[] = [];
     const context = await setup(store => ({ ...store, async mutate(input) { const result = await store.mutate(input); if (input.changes.some(change => (change.value as { phase?: string })?.phase === 'accepted')) { order.push('persisted'); written.resolve(); await ack.promise; order.push('ack'); } return result; } }));
@@ -30,6 +90,15 @@ describe('runtime acceptance observes existing durable native journals', () => {
     const result = acceptance.run({ scope, method: 'session.send', idempotencyKey: 'send', onAccepted: () => order.push('accepted') }, async () => { const accepted = await journal.accept({ scope, method: 'send', idempotencyKey: 'send', payload: { text: 'hello' } }); return journal.execute(accepted.operationId, scope, () => { order.push('native'); return { sent: true }; }); });
     await written.promise; expect(order).toEqual(['persisted']); ack.resolve();
     expect(await result).toMatchObject({ value: { sent: true } }); expect(order).toEqual(['persisted', 'ack', 'accepted', 'native']);
+  });
+  it('preserves qualified created session alongside a native result', async () => {
+    const { acceptance, journal, scope } = await setup();
+    const result = await acceptance.run({ scope, method: 'session.create', idempotencyKey: 'create', onAccepted() {} }, async () => {
+      const accepted = await journal.accept({ scope, method: 'createSession', idempotencyKey: 'create', payload: {} });
+      const executed = await journal.execute(accepted.operationId, scope, () => ({ sessionId: scope.session.nativeSessionId }));
+      return { ...executed, session: scope.session };
+    });
+    expect(result.value).toEqual({ session: scope.session, nativeResult: { sessionId: scope.session.nativeSessionId } });
   });
   it('does not mistake intent rows, unchanged accepted guards or wrong-scope operations for acceptance', async () => {
     const { store, acceptance, scope } = await setup(); let accepted = 0;

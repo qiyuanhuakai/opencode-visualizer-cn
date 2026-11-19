@@ -49,7 +49,8 @@ function mutate(params) {
     let { revision, seq } = queries.meta();
     for (const change of params.changes) {
       const current = db.prepare(`SELECT revision FROM ${change.collection} WHERE environment=? AND key=?`).get(environment, change.key);
-      if (change.expectedRevision !== undefined && change.expectedRevision !== (current?.revision ?? 0)) throw new StoreError('conflict', 'entity_revision');
+      if (change.expectedRevision !== undefined && change.expectedRevision !== (current?.revision ?? 0)) throw new StoreError('conflict', change.checkOnly === true ? 'entity_precondition' : 'entity_revision');
+      if (change.checkOnly === true) continue;
       revision++; seq++;
       db.prepare(`INSERT INTO ${change.collection} VALUES(?,?,?,?) ON CONFLICT(environment,key) DO UPDATE SET revision=excluded.revision,value=excluded.value`).run(environment, change.key, revision, change.value === null ? null : JSON.stringify(change.value));
       if (change.value === null) db.prepare('INSERT INTO tombstones VALUES(?,?,?,?) ON CONFLICT(environment,key) DO UPDATE SET revision=excluded.revision,value=excluded.value').run(environment, JSON.stringify([change.collection, change.key]), revision, JSON.stringify({ collection: change.collection, key: change.key }));

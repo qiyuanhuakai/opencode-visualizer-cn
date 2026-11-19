@@ -201,7 +201,7 @@ export function createDshHistory(options) {
     requireValue(opened, 'dsh.history_open', 'replay_required');
     integerValue(after, 'dsh.history_after');
     for (;;) {
-      if (failure) return { through, changed: false, status: failure.code === 'replay_required' ? 'replay_required' : 'source_unavailable' };
+      if (failure) return { through, changed: through > after, status: failure.code === 'replay_required' ? 'replay_required' : 'source_unavailable' };
       if (through > after) return { through, changed: true, status: 'current' };
       if (closed || signal?.aborted) throw new ProtocolError('cancelled', 'dsh.history_read');
       await awaitChange(signal);

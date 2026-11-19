@@ -84,6 +84,9 @@ export async function createCodexDriver(options) {
   };
   function emit(event) {
     subscriptions.emit({ ...event, epoch, processGeneration, payload: privacy(event.payload) });
+    const status = event.type === 'turn/started' ? 'running'
+      : event.type === 'turn/completed' || event.type === 'error' && event.payload?.willRetry === false && typeof event.payload?.turnId === 'string' ? 'idle' : null;
+    if (status && event.session) subscriptions.emit({ type: 'session.activity', session: event.session, status, epoch, processGeneration, payload: {} });
   }
   const client = createAppServerClient({
     transport,
@@ -121,6 +124,11 @@ export async function createCodexDriver(options) {
           (!path.relative(entry.root, canonical).startsWith('..') &&
             !path.isAbsolute(path.relative(entry.root, canonical)))),
     );
+    if (!root && options.authorizeDirectory) {
+      const granted = await options.authorizeDirectory(canonical);
+      requireValue(options.workspace.workspaces.some(entry => options.allowedWorkspaces.includes(entry.key) && (!workspaceKey || workspaceKey === entry.key) && entry.root === granted?.canonicalPath), 'codex.writer_workspace', 'unauthorized');
+      assertCurrent(); return canonical;
+    }
     requireValue(root, 'codex.workspace', 'unauthorized');
     await workspace.list({
       workspaceKey: root.key,
@@ -284,6 +292,7 @@ export async function createCodexDriver(options) {
       assertCurrent();
       return createCodexHistoryStream({
         session: context.session,
+        subscribe: () => subscriptions.subscribe(context.session),
         request,
         requestHistory: (method, params) => {
           assertCurrent();
@@ -298,10 +307,10 @@ export async function createCodexDriver(options) {
     },
     async createSession(context) {
       validateContext(context);
-      const params = fields(context.params, ['workspaceKey', 'idempotencyKey', 'native']);
+      const params = fields(context.params, ['workspaceKey', 'idempotencyKey', 'native', 'directory']);
       const root = options.workspace.workspaces.find((entry) => entry.key === params.workspaceKey);
       requireValue(root, 'codex.workspace', 'unauthorized');
-      const cwd = await authorizeCwd(root.root, params.workspaceKey);
+      const cwd = await authorizeCwd(params.directory ?? root.root, params.workspaceKey);
       const payload = nativeArguments(params.native, [
         'model',
         'modelProvider',
@@ -342,6 +351,7 @@ export async function createCodexDriver(options) {
         'serviceTierForTurn',
         'clientUserMessageId',
         'outputSchema',
+        'collaborationMode',
       ]);
       requireValue(Array.isArray(payload.input), 'codex.send.input');
       const cwd = await authorizeSession(context.session);

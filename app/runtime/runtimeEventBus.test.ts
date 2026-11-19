@@ -22,6 +22,26 @@ async function fixture(run: (store: ReturnType<typeof createRuntimeStore>, bus: 
 }
 
 describe('durable runtime event bus', () => {
+  it('preserves writes arriving during replay without rejecting a completed replay watermark', async () => {
+    await fixture(async (store, bus) => {
+      const observer = await bus.connect(binding, { after: 0, isCurrent: () => true });
+      for (let index = 1; index <= 2; index++) {
+        await store.mutate({ intentId: `before-replay-${index}`, changes: [{ collection: 'session_summaries', key: 'same-session', value: { title: String(index) } }] });
+        await bus.nudge();
+      }
+      expect(observer.read()).toMatchObject({ kind: 'replay_required', after: 0, through: 2 });
+      const replay = await bus.log.frame(binding, { after: 0 });
+      await store.mutate({ intentId: 'during-replay', changes: [{ collection: 'session_summaries', key: 'same-session', value: { title: 'new during replay' } }] });
+      await bus.nudge();
+      observer.resume(replay.through);
+      expect(observer.read()).toMatchObject({ kind: 'replay_required', after: 2, through: 3 });
+      const next = await bus.log.frame(binding, { after: replay.through });
+      expect(next.events.map(event => event.seq)).toEqual([3]);
+      observer.resume(next.through);
+      expect(observer.read()).toBeNull();
+      expect(() => observer.resume(2)).toThrow();
+    });
+  });
   it('caps simultaneous observer admissions at64 and rejects ahead-of-store cursors', async () => {
     await fixture(async (_store, bus) => {
       await expect(bus.connect(binding, { after: 1, isCurrent: () => true })).rejects.toMatchObject({ code: 'replay_required' });
@@ -119,7 +139,9 @@ describe('durable runtime event bus', () => {
       for (let seq = 1; seq <= 257; seq++) observer.push({ kind: 'event', version: 1, ...binding, seq, entityRevision: seq, scope: String(seq), type: 'entity.patch', payload: { collection: 'session_summaries', key: String(seq), deleted: false } });
       expect(observer.read()).toMatchObject({ kind: 'replay_required', after: 0, through: 257, reason: 'observer_overflow' });
       expect(observer.state.bytes).toBe(0);
-      expect(() => observer.resume(256)).toThrow();
+      observer.resume(256);
+      expect(observer.read()).toMatchObject({ kind: 'replay_required', after: 256, through: 257 });
+      expect(() => observer.resume(255)).toThrow();
     } finally { observer.close(); }
   });
 });

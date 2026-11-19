@@ -2190,6 +2190,15 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     if (import.meta.env.DEV) console.timeEnd('codex-connect');
   }
 
+  function attachRuntimeAdapter(sourceAdapter: CodexAdapter, sessionId: string) {
+    teardownConnection(true);
+    adapter = sourceAdapter;
+    activeThreadId.value = sessionId;
+    initialized.value = true;
+    status.value = 'connected';
+    errorMessage.value = '';
+  }
+
   async function restoreConnection() {
     if (!reconnectOnMount.value || connected.value || status.value === 'connecting') return;
     await connect(url.value);
@@ -4076,6 +4085,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   return {
     readSubagentHistory,
+    attachRuntimeAdapter,
     status,
     reconnectOnMount,
     url,

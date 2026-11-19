@@ -594,7 +594,7 @@ const DshProviderManager = defineAsyncComponent(() => import('./dsh/DshProviderM
 import type { DshRpcClient } from '../utils/dshRpc';
 import type { DshProviderConfiguration } from '../backends/dsh/dshProviderConfig';
 import ProviderDiscoveryList from './ProviderDiscoveryList.vue';
-import type { BackendKind } from '../backends/types';
+import type { BackendAdapter, BackendKind } from '../backends/types';
 import type { HarnessManifest } from '../../shared/runtime/harnessContract.js';
 import { describeControlSupport, resolveControlSupport } from '../composables/useRuntimeCapabilities';
 import type { ControlScope, ControlSupport } from '../composables/useRuntimeCapabilities';
@@ -680,7 +680,7 @@ type CustomProviderModelRow = {
 };
 
 function backend() {
-  return getBackendAdapter(props.backendKind);
+  return props.nativeAdapter ?? getBackendAdapter(props.backendKind);
 }
 
 function requireBackendMethod<T>(method: T | undefined, name: string): T {
@@ -745,6 +745,8 @@ type ModelVisibilityEntry = {
 
 const props = defineProps<{
   open: boolean;
+  nativeAdapter?: Partial<BackendAdapter>;
+  nativeKimiProvidersClient?: KimiWebProvidersClient;
   providers: ProviderInfo[];
   connectedProviderIds: string[];
   selectedModel: string;
@@ -824,10 +826,14 @@ const availableProviders = computed<ProviderInfo[]>(() => {
 const kimiWebProvidersClient = ref<KimiWebProvidersClient | null>(null);
 
 watch(
-  () => props.open,
-  (open) => {
+  () => [props.open, props.nativeKimiProvidersClient] as const,
+  ([open, nativeClient]) => {
     if (!open) {
       kimiWebProvidersClient.value = null;
+      return;
+    }
+    if (nativeClient) {
+      kimiWebProvidersClient.value = nativeClient;
       return;
     }
     // Rebuilt on every open so a reconfigured bridge is always picked up.

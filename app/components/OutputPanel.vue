@@ -78,24 +78,38 @@
         <ThreadPanel
           v-if="threadState && threadState.summary.value"
           variant="panel"
-          :open="true"
+          :open="threadPanelOpen ?? false"
           :thread="threadState.summary.value"
           :targets="threadState.targets.value"
           :handoff="threadState.handoff.value"
           :handoff-ops="threadState.handoffOps.value"
+          :handoffs="threadState.handoffs?.value"
+          :handoff-page="threadState.handoffPage?.value"
+          :checkpoint="threadState.checkpoint?.value"
+          :current-target="threadState.currentTarget?.value"
+          :evidence-target-error="threadState.evidenceTargetError?.value"
+          :read-evidence-page="threadState.readEvidencePage"
+          :capture-evidence="threadState.captureEvidence"
+          :captured-evidence="threadState.capturedEvidence?.value"
+          :remove-evidence="threadState.removeCapturedEvidence"
+          :native-history="threadNativeHistory ?? []"
           :timeline="threadState.timelinePage.value"
-          :draft-text="threadDraftText"
-          :handoff-entries="threadHandoffEntries"
-          :latest-native-event-id="threadLatestNativeEventId"
-          :available-sessions="threadAvailableSessions"
-          :native-history="threadNativeHistory"
-          :checkpoint="threadCheckpoint"
-          :current-target="threadCurrentTarget"
-          :read-evidence="threadReadEvidence"
-          :busy="threadState.busy.value"
-          :error="threadState.error.value"
+          :timeline-offset="threadState.timelineOffset?.value"
+          :participant-page="threadState.participantPage?.value"
+          :draft-text="threadDraftText ?? ''"
+          :handoff-entries="threadHandoffEntries ?? []"
+          :available-sessions="threadAvailableSessions ?? []"
+          :harness-labels="threadHarnessLabels"
+          :fanout-enabled="true"
           :selected-session="threadState.selectedSession.value"
           :selected-session-resolution="threadState.selectedSessionResolution.value"
+          @fanout="$emit('open-team-dispatch')"
+          :busy="threadState.busy.value"
+          :error="threadState.error.value"
+          @timeline-page="threadState.loadTimelinePage?.($event)"
+          @handoff-page="threadState.loadHandoffPage?.($event)"
+          @select-handoff="threadState.selectHandoff?.($event)"
+          @participant-page="threadState.loadParticipantPage?.($event)"
           @select-target="onThreadSelectTarget"
           @activate="onThreadActivate"
           @leave="onThreadLeave"
@@ -107,7 +121,7 @@
           @observe-handoff="onThreadObserveHandoff"
           @cancel-handoff="onThreadCancelHandoff"
           @locate-session="onThreadLocateSession"
-          @browse-native-history="onThreadBrowseNativeHistory"
+          @browse-native-history="participantId => $emit('browse-thread-history', participantId)"
           @close="onThreadClose"
         />
 
@@ -156,7 +170,6 @@ import {
   type RuntimeSessionRuntime,
 } from '../composables/useRuntimeSessionActions';
 import { useRuntimeThreadState } from '../composables/useRuntimeThread';
-import type { ContextCheckpointView, EvidenceReader } from '../../shared/runtime/context.js';
 
 // Task 35: the full thread surface, lazily loaded so the output panel's entry chunk keeps its size.
 const ThreadPanel = defineAsyncComponent(() => import('./runtime/ThreadView.vue'));
@@ -171,6 +184,12 @@ const msg = useMessages();
 const { t } = useI18n();
 
 const props = defineProps<{
+  threadNativeHistory?: readonly import('../composables/useRuntimeThread').NativeHistoryGroup[];
+  threadHarnessLabels?: Readonly<Record<string, string>>;
+  threadPanelOpen?: boolean;
+  threadDraftText?: string;
+  threadHandoffEntries?: readonly unknown[];
+  threadAvailableSessions?: readonly { session: SessionRef; label: string; harness: string }[];
   isFollowing: boolean;
   statusText: string;
   isStatusError: boolean;
@@ -211,32 +230,14 @@ const props = defineProps<{
   loadMessageDiffs?: (sessionId: string, messageId: string) => Promise<MessageDiffEntry[]>;
   hasMessageDiffs?: (sessionId: string, messageId: string) => Promise<boolean>;
   kimiSessionContext?: { used: number; limit: number } | null;
-  /**
-   * The composer's current draft, so a handoff carries the prompt the user actually wrote.
-   * Empty by default: this panel has no composer of its own, and the dialog reports that
-   * explicitly instead of rejecting a Begin it can never satisfy.
-   */
-  threadDraftText?: string;
-  /** The bounded context entries a handoff carries. Empty until the container supplies them. */
-  threadHandoffEntries?: readonly unknown[];
-  /** The latest native event id, so a delivered handoff can be observed. Empty until wired. */
-  threadLatestNativeEventId?: string;
-  threadAvailableSessions?: readonly { session: SessionRef; label: string; harness: string }[];
-  threadNativeHistory?: readonly {
-    participantId: string;
-    label: string;
-    harness: string;
-    session: SessionRef;
-    entries: readonly { id: string; kind: string; text: string; at: number }[];
-    unavailable?: boolean;
-  }[];
-  threadCheckpoint?: ContextCheckpointView | null;
-  threadCurrentTarget?: { repoKey: string; revision: string } | null;
-  threadReadEvidence?: EvidenceReader | null;
 }>();
 
 
 const emit = defineEmits<{
+  (event: 'close-thread-panel'): void;
+  (event: 'locate-thread-session', session: SessionRef): void;
+  (event: 'open-team-dispatch'): void;
+  (event: 'browse-thread-history', participantId: string): void;
   (event: 'scroll'): void;
   (event: 'wheel', eventArg: WheelEvent): void;
   (event: 'touchmove'): void;
@@ -277,22 +278,7 @@ function onThreadJoin(session: SessionRef): void {
 
 function onThreadLocateSession(session: SessionRef): void {
   if (threadState === null) return;
-  // The qualified locate: it answers the resolution the container drives the REAL session-tree
-  // selection with, so clicking Locate moves the tree instead of only writing a local ref no
-  // container consumed.
-  threadState.locateSession(session);
-}
-
-/** Native history is browsed per participant; the panel forwards it instead of dropping it. */
-function onThreadBrowseNativeHistory(participantId: string): void {
-  if (threadState === null) return;
-  const session = threadState.sessionOfParticipant(participantId);
-  if (session === null) return;
-  // Locating the participant's session AND asking the container to re-read that
-  // participant's history: writing the selection alone left Refresh unable to
-  // reload anything, because the panel never owns the history source.
-  threadState.locateSession(session);
-  emit('refresh-native-history', { participantId, session });
+  emit('locate-thread-session', session);
 }
 
 function onThreadBeginHandoff(input: {
@@ -346,8 +332,7 @@ function onThreadCancelHandoff(reason?: string): void {
 }
 
 function onThreadClose(): void {
-  if (threadState === null) return;
-  threadState.closeThread();
+  emit('close-thread-panel');
 }
 
 function onForkMessage(payload: { sessionId: string; messageId: string }): void {

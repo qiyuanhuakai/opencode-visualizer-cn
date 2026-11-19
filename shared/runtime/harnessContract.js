@@ -43,7 +43,10 @@ export function validateHarnessManifest(input) {
     names.add(entry.name);
     requireValue(parseHarnessInstanceId(entry.owner) === scope.harnessInstanceId, 'extension.owner', 'unauthorized');
     requireValue(['instance', 'session', 'optional-session'].includes(entry.scope), 'extension.scope');
-    if (Object.hasOwn(NATIVE_EXTENSIONS, entry.name)) requireValue(entry.scope === NATIVE_EXTENSIONS[entry.name].scope, 'extension.scope');
+    if (Object.hasOwn(NATIVE_EXTENSIONS, entry.name)) {
+      const sessionDiscovery = value.kind === 'acp' && ['getSessionConfigOptions', 'listProviders', 'listAgents', 'listCommands'].includes(entry.name);
+      requireValue(entry.scope === (sessionDiscovery ? 'session' : NATIVE_EXTENSIONS[entry.name].scope), 'extension.scope');
+    }
     textValue(entry.permission, 'extension.permission');
     requireValue(Number.isSafeInteger(entry.schemaVersion) && entry.schemaVersion >= 1, 'extension.schemaVersion');
     return Object.freeze({ ...entry, owner: scope.harnessInstanceId, support: declaration(entry.support) });

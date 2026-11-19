@@ -1,4 +1,4 @@
-import { IdentityError, decodeRepoKey, decodeSessionKey, decodeWorkspaceKey, parseEnvironmentId, parseInstanceId } from './identity.js';
+import { IdentityError, decodeRepoKey, decodeSessionKey, decodeWorkspaceKey, parseEnvironmentId, parseInstanceId, parseHarnessInstanceId, parseSessionRef } from './identity.js';
 import { ERROR_CODES, METHODS, ProtocolError, requireValue, objectFields, textValue, integerValue, jsonValue, parseCapabilities } from './capabilities.js';
 import { scanRawFrame } from './rawFrame.js';
 export { ProtocolError, ERROR_CODES } from './capabilities.js';
@@ -49,9 +49,16 @@ export function validateFrame(input) {
       if (METHODS[value.method] === 'mutation') textValue(value.idempotencyKey, 'idempotencyKey');
       else if (value.idempotencyKey !== undefined) textValue(value.idempotencyKey, 'idempotencyKey');
       requireValue(value.params !== null && typeof value.params === 'object' && !Array.isArray(value.params), 'params');
-      if (value.method === 'native.extension') {
-        objectFields(value.params, ['owner', 'name', 'payload']);
-        parseCapabilities({ methods: [], extensions: [{ owner: value.params.owner, name: value.params.name, permission: 'required', schemaVersion: 1, metadata: null }] });
+      if (value.method === 'native.extension' || value.method === 'native.query') {
+        if (Object.hasOwn(value.params, 'owner')) {
+          requireValue(value.method === 'native.extension', 'extension.legacy');
+          objectFields(value.params, ['owner', 'name', 'payload']);
+          parseCapabilities({ methods: [], extensions: [{ owner: value.params.owner, name: value.params.name, permission: 'required', schemaVersion: 1, metadata: null }] });
+        } else {
+          objectFields(value.params, ['harnessInstanceId', 'operation', 'args'], ['session', 'workspaceKey']);
+          parseHarnessInstanceId(value.params.harnessInstanceId); textValue(value.params.operation, 'extension.operation');
+          if (value.params.session !== undefined) requireValue(parseSessionRef(value.params.session).harnessInstanceId === value.params.harnessInstanceId, 'extension.session', 'unauthorized');
+        }
       }
       break;
     case 'result':

@@ -28,6 +28,8 @@ import { artifact, digest, writeJson } from '../runtime-v090-evidence.mjs';
 const environmentId = '11111111-1111-4111-8111-111111111111';
 const epoch = '33333333-3333-4333-8333-333333333333';
 const ids = Object.fromEntries(['opencode', 'codex', 'acp', 'kimi-web', 'dsh'].map((kind, index) => [kind, `18181818-1818-4818-8818-${String(index + 1).padStart(12, '0')}`]));
+const opencodeBinary = process.env.VIS_OPENCODE_QA_BINARY ? path.resolve(process.env.VIS_OPENCODE_QA_BINARY) : 'opencode';
+const codexBinary = process.env.VIS_CODEX_QA_BINARY ? path.resolve(process.env.VIS_CODEX_QA_BINARY) : 'codex';
 const authority = () => ({ epoch, processGeneration: 1 });
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; } };
 const privateEnvironment = (root) => ({ PATH: process.env.PATH, LANG: 'C.UTF-8', HOME: root, XDG_CONFIG_HOME: path.join(root, 'config'), XDG_DATA_HOME: path.join(root, 'data'), XDG_CACHE_HOME: path.join(root, 'cache'), XDG_STATE_HOME: path.join(root, 'state'), OPENCODE_CONFIG_CONTENT: '{"plugin":[]}', OPENCODE_DISABLE_MODELS_FETCH: 'true' });
@@ -103,9 +105,9 @@ export async function runInstalledNative(context) {
     register({ kind: 'OpenCode-profile', root: ocRoot, workspaceRoot, requestedPort: 0, teardown: 'kill owned process; exclusive rebind; remove private root' });
     await mkdir(workspaceRoot, { recursive: true });
     const ocEnv = privateEnvironment(ocRoot);
-    versions.opencode = execFileSync('opencode', ['--version'], { env: ocEnv, encoding: 'utf8', timeout: 15000 }).trim();
+    versions.opencode = execFileSync(opencodeBinary, ['--version'], { env: ocEnv, encoding: 'utf8', timeout: 15000 }).trim();
     assert.equal(versions.opencode, '1.18.34');
-    const command = ['opencode', 'serve', '--pure', '--hostname', '127.0.0.1', '--port', '0'];
+    const command = [opencodeBinary, 'serve', '--pure', '--hostname', '127.0.0.1', '--port', '0'];
     register({ kind: 'OpenCode-process', command, environment: 'allowlist private HOME/XDG, no credentials', teardown: 'SIGTERM, bounded SIGKILL, wait, PID absent, exclusive rebind' });
     const child = spawn(command[0], command.slice(1), { cwd: workspaceRoot, env: ocEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     const exit = once(child, 'exit'); let output = '', endpoint;
@@ -130,7 +132,7 @@ export async function runInstalledNative(context) {
       const text = await response.text(); raw.wire.push({ source: 'opencode-http', route, method, status: response.status });
       assert.equal(response.ok, true, text.slice(0, 500)); return text ? JSON.parse(text) : null;
     };
-    const officialStorePath = execFileSync('opencode', ['db', 'path'], { env: ocEnv, cwd: workspaceRoot, encoding: 'utf8', timeout: 15000 }).trim();
+    const officialStorePath = execFileSync(opencodeBinary, ['db', 'path'], { env: ocEnv, cwd: workspaceRoot, encoding: 'utf8', timeout: 15000 }).trim();
     assert(officialStorePath.startsWith(ocRoot + path.sep));
     const workspace = await createWorkspaceService({ target: environmentId, epoch, roots: [{ root: workspaceRoot, permissions: ['read', 'write', 'reverse'] }] });
     own('workspace-service', () => workspace.close());
@@ -142,7 +144,7 @@ export async function runInstalledNative(context) {
       return proc;
     } });
     own('ACP-manager', async () => { await manager.stopAll(); const pids = raw.resources.filter((entry) => entry.kind === 'ACP-process-created').map((entry) => entry.pid); assert(pids.every((pid) => !alive(pid))); return { pids, allAbsent: true }; });
-    await manager.reconcile([{ id: 'task18', name: 'task18', enabled: true, command: 'opencode', args: ['acp', '--pure', '--cwd', workspaceRoot], env: ocEnv }]);
+    await manager.reconcile([{ id: 'task18', name: 'task18', enabled: true, command: opencodeBinary, args: ['acp', '--pure', '--cwd', workspaceRoot], env: ocEnv }]);
     const acp = await createAcpDriver({ store, manager, agentId: 'task18', target: environmentId, harnessInstanceId: ids.acp, epoch, workspace: workspace.connect({ target: environmentId, epoch, generation: 1, subscriberId: 'native-qa', assertCurrent() {} }), workspaceKey: workspace.workspaces[0].key, cwd: workspaceRoot, homeDir: ocRoot });
     const acpAuthority = () => ({ epoch, processGeneration: acp.binding.processGeneration });
     await attach('acp', acp, acpAuthority);
@@ -168,9 +170,9 @@ export async function runInstalledNative(context) {
       expectedCodex.push({ id, archived, directory: workspaceRoot, modelProvider: records[0].payload.model_provider, file, sha256: digest(await readFile(file)) });
     }
     const codexEnv = { ...privateEnvironment(codexRoot), CODEX_HOME: codexRoot };
-    versions.codex = execFileSync('codex', ['--version'], { env: codexEnv, encoding: 'utf8', timeout: 15000 }).trim();
-    register({ kind: 'Codex-process', command: ['codex', 'app-server'], teardown: 'transport.close/await exited/PID absent' });
-    const transport = createCodexProcess({ cwd: workspaceRoot, env: codexEnv });
+    versions.codex = execFileSync(codexBinary, ['--version'], { env: codexEnv, encoding: 'utf8', timeout: 15000 }).trim();
+    register({ kind: 'Codex-process', command: [codexBinary, 'app-server'], teardown: 'transport.close/await exited/PID absent' });
+    const transport = createCodexProcess({ executable: codexBinary, cwd: workspaceRoot, env: codexEnv });
     register({ kind: 'Codex-process-created', pid: transport.pid });
     own('Codex-process', async () => { await transport.close(); const result = await transport.exited; assert.equal(alive(transport.pid), false); return { ...result, absent: true }; });
     const originalSend = transport.send;
@@ -206,7 +208,7 @@ export async function runInstalledNative(context) {
     await attach('kimi-web', kimiDriver);
     const kimiReceipts = [];
     for (let serial = 0; serial < 2; serial++) kimiReceipts.push(await kimi.transport.request('POST', '/api/v1/sessions', { metadata: { cwd: kimi.workspace }, title: `Native Kimi ${serial}` }));
-    const kimiInventory = () => JSON.parse(execFileSync(path.join(process.env.HOME, '.kimi-code/bin/kimi'), ['session', 'list', '--all', '--json'], { cwd: kimi.workspace, env: { ...privateEnvironment(kimi.root), KIMI_CODE_HOME: kimi.data }, encoding: 'utf8', timeout: 15000 }));
+    const kimiInventory = () => JSON.parse(execFileSync(process.env.VIS_KIMI_QA_BINARY ? path.resolve(process.env.VIS_KIMI_QA_BINARY) : path.join(process.env.HOME, '.kimi-code/bin/kimi'), ['session', 'list', '--all', '--json'], { cwd: kimi.workspace, env: { ...privateEnvironment(kimi.root), KIMI_CODE_HOME: kimi.data }, encoding: 'utf8', timeout: 15000 }));
     raw.native.kimi = { version: kimi.version, binaryHash: kimi.binaryHash, receipts: kimiReceipts, inventory: kimiInventory() };
 
     const dsh = await startNativeDsh({ root, register, log: (value) => raw.wire.push({ source: 'dsh-process', ...value }) });

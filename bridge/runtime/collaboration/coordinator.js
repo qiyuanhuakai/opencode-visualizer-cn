@@ -607,6 +607,28 @@ export function createCollaborationCoordinator({
   }
 
   return {
+    exportRecords() {
+      return [...teamsById.values()].map(team => ({ team: structuredClone(team), tasks: graph.exportRecords(team.teamId), attempts: attempts.exportRecords(team.taskIds) }));
+    },
+    restoreRecords(records) {
+      if (teamsById.size) throw new CollaborationError('conflict', 'team_restore_nonempty');
+      for (const item of records) {
+        const team = structuredClone(item.team); parseTeamId(team.teamId);
+        teamsById.set(team.teamId, team); mailboxes.set(team.teamId, team.mailbox);
+        const byId = new Map(item.tasks.map(task => [task.taskId, task]));
+        if (byId.size !== team.taskIds.length || team.taskIds.some(id => !byId.has(id))) throw new CollaborationError('conflict', 'task_restore_index');
+        graph.restoreRecords(team.teamId, team.taskIds.map(id => byId.get(id))); attempts.restoreRecords(item.attempts);
+      }
+      stats.teams = teamsById.size; stats.tasks = graph.tasks().length; stats.attempts = attempts.attempts().length;
+      stats.messages = [...teamsById.values()].reduce((sum, team) => sum + team.mailbox.length, 0);
+      restart();
+    },
+    bindTaskOwner(taskId, owner) {
+      const record = graph.record(taskId);
+      if (record.attempts.length || !['pending', 'paused'].includes(record.host.state)) throw new CollaborationError('conflict', 'task_writer_binding');
+      record.owner = parseOwner(owner);
+      return graph.task(taskId);
+    },
     createTeam,
     team,
     teams,

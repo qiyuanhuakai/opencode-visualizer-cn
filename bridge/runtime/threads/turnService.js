@@ -251,6 +251,16 @@ export function createTurnService() {
   }
 
   return {
+    exportRecords() { return [...turnsById.values()].map(turn => structuredClone(turn)); },
+    restoreRecords(records) {
+      if (turnsById.size) throw new TurnError('conflict', 'turn_restore_nonempty');
+      for (const input of records) {
+        const turn = structuredClone(input); parseTurnId(turn.turnId); turnsById.set(turn.turnId, turn);
+        for (const entry of turn.entries) { allEntries.push(entry); orderCounter = Math.max(orderCounter, entry.order); }
+      }
+      allEntries.sort((left, right) => left.order - right.order);
+      stats.turns = turnsById.size; stats.entries = allEntries.length;
+    },
     open,
     command,
     event,

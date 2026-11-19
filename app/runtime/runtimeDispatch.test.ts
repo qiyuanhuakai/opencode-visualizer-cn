@@ -1,12 +1,20 @@
 // @vitest-environment node
+import { execFileSync } from 'node:child_process';
+import { createInteractionStore } from '../../bridge/runtime/interactionStore.js';
+import { createOperationJournal } from '../../bridge/runtime/operationJournal.js';
+import { objectFields, textValue } from '../../shared/runtime/capabilities.js';
+import { encodeWorkspaceKey, decodeWorkspaceKey } from '../../shared/runtime/identity.js';
+import { METHODS } from '../../shared/runtime/capabilities.js';
+import { decodeRepoKey } from '../../shared/runtime/identity.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, readdir, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createRuntimeServices } from '../../bridge/runtime/runtimeServices.js';
+import { unavailableRegistration } from '../../bridge/runtime/runtimeDriverFactories.js';
 import { createRuntimeHost } from '../../bridge/runtime/runtimeHost.js';
 import { createVisBridgeServer } from '../../vis_bridge.js';
 import { createBridgeRuntime } from '../../bridge/bridgeRuntime.js';
@@ -15,7 +23,7 @@ import { encodeBinary, type Frame, type Hello, type Result, type Request } from 
 import type { RuntimeMethod } from '../../shared/runtime/runtimeWire.js';
 import { createHarnessRegistry, unsupported } from '../../shared/runtime/harnessContract.js';
 import type { InternalNativeHistoryHandle } from '../../bridge/runtime/historyService.js';
-import { encodeSessionKey, parseSessionRef } from '../../shared/runtime/identity.js';
+import { encodeSessionKey, parseSessionRef, parseEnvironmentId, parseHarnessInstanceId } from '../../shared/runtime/identity.js';
 import { decodeWebSocketFrames } from '../../bridge/webSocketFrames.js';
 
 const cleanups: (() => Promise<unknown>)[] = [];
@@ -48,9 +56,9 @@ async function client(host: ReturnType<typeof createRuntimeHost>) {
   }
   const hello = await next((frame): frame is Hello => frame.kind === 'hello');
   let serial = 0;
-  return { socket, hello, frames, url: `http://127.0.0.1:${address.port}/runtime`, async request(method: RuntimeMethod, params: object, override: { target?: string; epoch?: string; generation?: number } = {}, id = 'request-' + ++serial) {
+  return { socket, hello, frames, terminal: (id: string) => next((frame): frame is Result => frame.kind === 'result' && frame.id === id && (!frame.ok || frame.phase !== 'durable-accepted')), url: `http://127.0.0.1:${address.port}/runtime`, async request(method: RuntimeMethod, params: object, override: { target?: string; epoch?: string; generation?: number } = {}, id = 'request-' + ++serial) {
     const current = { ...hello, ...override };
-    socket.send(JSON.stringify({ version: 1, kind: 'request', target: current.target, epoch: current.epoch, generation: current.generation, id, method, params, ...(['session.create', 'session.send', 'session.cancel', 'interaction.respond'].includes(method) ? { idempotencyKey: id } : {}) }));
+    socket.send(JSON.stringify({ version: 1, kind: 'request', target: current.target, epoch: current.epoch, generation: current.generation, id, method, params, ...(METHODS[method] === 'mutation' ? { idempotencyKey: id } : {}) }));
     return next((frame): frame is Result => frame.kind === 'result' && frame.id === id);
   } };
 }
@@ -100,6 +108,229 @@ async function rawClient(url: string) {
   return { socket, closed, frames, controls, encode, send, take, request: async (method: RuntimeMethod, params: object) => take(send(method, params)) };
 }
 describe('runtime real WebSocket dispatch', () => {
+  it.each([false, true])('retries an initially failed native factory with explicit grants=%s', async restricted => {
+    const root = await mkdtemp(path.join(tmpdir(), 'vis-wire-startup-retry-'));
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+    let attempts = 0;
+    const services = await createRuntimeServices({
+      environmentId: randomUUID(), stateRoot: root, role: 'local', roots: [{ root, permissions: ['read'] }],
+      config: { ...config, nativeServices: { ...config.nativeServices, codex: true } },
+      nativeSupervisor: supervisor, acpManager: acp, runtime: { mutate: action => action() },
+      factories: { codex: async context => {
+        attempts++;
+        if (attempts === 1) throw new Error('Controlled initial connection failure');
+        const registration = unavailableRegistration({ environmentId: parseEnvironmentId(context.environmentId), harnessInstanceId: parseHarnessInstanceId(context.harnessInstanceId), kind: 'codex' }, 'starting');
+        return {
+          registration: {
+            manifest: { ...registration.manifest, core: { ...registration.manifest.core, listSessionPage: { state: 'supported' } },
+              extensions: [{ owner: registration.manifest.harnessInstanceId, name: 'listProviders', scope: 'instance', permission: 'startup:read', schemaVersion: 1, support: { state: 'supported' } }],
+            },
+            driver: { core: { inspect: () => ({ state: 'ready', protocolVersion: 1 }), listSessionPage: () => ({ items: [], cursor: null, completeness: 'complete' }) }, native: { listProviders: () => ({ ready: true }) } },
+          },
+          close: async () => {},
+        };
+      } },
+    });
+    cleanups.push(() => services.close());
+    await services.start();
+    const host = createRuntimeHost({ environmentId: services.target, role: 'local', services, ...(restricted ? { grants: [services.grant] } : {}) });
+    host.start(); cleanups.push(() => host.stop());
+    const connection = await client(host);
+    const manifest = services.registry.list().find(item => item.kind === 'codex');
+    if (!manifest) throw new Error('Codex registration is missing');
+    expect(manifest.core.listSessionPage.state).toBe('unsupported');
+    const params = { harnessInstanceId: manifest.harnessInstanceId, args: {} };
+    const results = await Promise.all([connection.request('session.list', params), connection.request('session.list', params)]);
+    for (const result of results) expect(result).toMatchObject({ ok: true, result: { items: [], completeness: 'complete' } });
+    expect(attempts).toBe(2);
+    expect(services.index.state.sources).toBe(1);
+    const inspection = await connection.request('runtime.inspect', {});
+    if (restricted) {
+      expect(inspection).toMatchObject({ ok: true, result: { targets: [expect.objectContaining({ capabilities: expect.objectContaining({ extensions: [] }) })] } });
+      expect(await connection.request('native.query', { harnessInstanceId: manifest.harnessInstanceId, operation: 'listProviders', args: {} })).toMatchObject({ ok: false, typedError: { code: 'unauthorized' } });
+    } else {
+      expect(inspection).toMatchObject({ ok: true, result: { targets: [expect.objectContaining({
+        capabilities: expect.objectContaining({ extensions: expect.arrayContaining([expect.objectContaining({ owner: manifest.harnessInstanceId, name: 'listProviders' })]) }),
+        permissions: expect.arrayContaining(['startup:read']),
+      })] } });
+      expect(await connection.request('native.query', { harnessInstanceId: manifest.harnessInstanceId, operation: 'listProviders', args: {} })).toMatchObject({ ok: true, result: { ready: true } });
+    }
+    const disabled = services.registry.list().find(item => item.kind === 'opencode');
+    if (!disabled) throw new Error('Disabled OpenCode registration is missing');
+    expect(await connection.request('session.list', { harnessInstanceId: disabled.harnessInstanceId, args: {} })).toMatchObject({ ok: false, typedError: { code: 'source_unavailable' } });
+    expect(attempts).toBe(2);
+  });
+  it('reads pending interaction details only for the captured authorized session and current native generation', async () => {
+    const fixture = await historyRuntime();
+    const connection = await client(fixture.host);
+    const interactions = createInteractionStore({ store: fixture.services.store });
+    const scope = { target: fixture.session.environmentId, session: fixture.session, epoch: fixture.services.epoch, processGeneration: 1 };
+    await interactions.bindProcess(scope);
+    const interactionId = await interactions.pending({ scope, nativeRequestId: 'approval', payload: { method: 'item/commandExecution/requestApproval', params: { command: 'pwd' } } });
+    const read = await connection.request('runtime.interaction.read', { session: fixture.session, interactionId });
+    expect(read).toMatchObject({ ok: true, result: { interactionId, session: fixture.session, phase: 'pending', payload: { params: { command: 'pwd' } } } });
+    const other = parseSessionRef({ ...fixture.session, nativeSessionId: 'other' });
+    await fixture.services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key: encodeSessionKey(other), value: { session: other, workspaceKey: fixture.services.workspace.workspaces[0].key } }] });
+    expect(await connection.request('runtime.interaction.read', { session: other, interactionId })).toMatchObject({ ok: false, typedError: { code: 'unauthorized' } });
+    const large = await interactions.pending({ scope, nativeRequestId: 'large', payload: { text: 'x'.repeat(50000) } });
+    expect(await connection.request('runtime.interaction.read', { session: fixture.session, interactionId: large })).toMatchObject({ ok: false, typedError: { code: 'source_unavailable' } });
+    fixture.changeGeneration();
+    expect(await connection.request('runtime.interaction.read', { session: fixture.session, interactionId })).toMatchObject({ ok: false, typedError: { code: 'reconcile_required' } });
+  });
+
+  it('executes a declared native rename through its durable journal and refuses mutation through query', async () => {
+    const { services } = await graph();
+    const registry = createHarnessRegistry(), harnessInstanceId = randomUUID();
+    const session = parseSessionRef({ environmentId: services.target, harnessInstanceId, nativeSessionId: 'native-lifecycle' });
+    const no = unsupported('fixture'), nativeNames: string[] = [];
+    const scope = { target: services.target, harnessInstanceId, session, epoch: services.epoch, processGeneration: 1 };
+    const journal = createOperationJournal({ store: services.acceptance.store, isProcessCurrent: () => true });
+    registry.register({ manifest: { kind: 'codex', environmentId: session.environmentId, harnessInstanceId: session.harnessInstanceId, protocolVersion: 1, core: { inspect: no, listSessionPage: no, getSession: no, readHistoryPage: no, openHistory: no, createSession: no, send: no, cancel: no, respondInteraction: no, subscribe: no, close: no }, extensions: [
+      { name: 'updateSession', owner: session.harnessInstanceId, scope: 'session', permission: 'native:write', schemaVersion: 1, support: { state: 'supported' } },
+      { name: 'getGlobalConfig', owner: session.harnessInstanceId, scope: 'instance', permission: 'native:read', schemaVersion: 1, support: { state: 'supported' } },
+    ], capabilities: {} }, driver: { core: {}, native: {
+      getGlobalConfig: () => ({ theme: 'fixture' }),
+      updateSession: async context => {
+        const params = objectFields(context.params, ['native', 'idempotencyKey']);
+        const native = objectFields(params.native, ['name']);
+        const name = textValue(native.name, 'native.name');
+        const accepted = await journal.accept({ scope, method: 'thread/name/set', idempotencyKey: textValue(params.idempotencyKey, 'native.idempotencyKey'), payload: { name } });
+        return journal.execute(accepted.operationId, scope, () => { nativeNames.push(name); return { renamed: name }; });
+      },
+    } } });
+    const workspace = services.workspace.workspaces[0]; if (!workspace) throw new Error('Missing workspace');
+    await services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key: encodeSessionKey(session), value: { session, workspaceKey: workspace.key } }] });
+    const configured = { ...services, registry, authority: () => ({ epoch: services.epoch, processGeneration: 1 }), grant: { ...services.grant, permissions: [...services.grant.permissions, 'native:read', 'native:write'] } };
+    const host = createRuntimeHost({ environmentId: services.target, role: 'local', services: configured }); host.start(); cleanups.push(() => host.stop());
+    const peer = await client(host);
+    expect(await peer.request('native.query', { harnessInstanceId, operation: 'getGlobalConfig', args: {} })).toMatchObject({ ok: true, result: { theme: 'fixture' } });
+    expect(await peer.request('native.query', { harnessInstanceId, session, operation: 'updateSession', args: { native: { name: 'forged' } } })).toMatchObject({ ok: false, typedError: { code: 'unauthorized' } });
+    const accepted = await peer.request('native.extension', { harnessInstanceId, session, operation: 'updateSession', args: { native: { name: 'renamed' } } });
+    expect(accepted).toMatchObject({ ok: true, phase: 'durable-accepted' });
+    expect(await peer.terminal(accepted.id)).toMatchObject({ ok: true, phase: 'native-executed', result: { value: { renamed: 'renamed' } } });
+    expect(nativeNames).toEqual(['renamed']);
+    expect(await peer.request('native.extension', { harnessInstanceId, session, operation: 'unregistered', args: {} })).toMatchObject({ ok: false, typedError: { code: 'unsupported' } });
+  });
+
+  it.each([true, false])('shares durable Thread and Team records between windows and restores them with verified imports after restart (committed repository: %s)', async (committed) => {
+    const { services, root, host, connection } = await runtime();
+    execFileSync('git', ['init', root], { stdio: 'ignore' });
+    execFileSync('git', ['-C', root, 'config', 'user.name', 'Evidence Test']);
+    execFileSync('git', ['-C', root, 'config', 'user.email', 'evidence@localhost']);
+    await writeFile(path.join(root, 'evidence.txt'), 'original evidence\n');
+    execFileSync('git', ['-C', root, 'add', 'evidence.txt']);
+    if (committed) execFileSync('git', ['-C', root, 'commit', '-m', 'evidence base'], { stdio: 'ignore' });
+    await writeFile(path.join(root, 'evidence.txt'), 'verified evidence\n');
+    const workspace = services.workspace.workspaces[0];
+    if (!workspace) throw new Error('Missing granted workspace');
+    await services.index.probeWorkspace(encodeWorkspaceKey(decodeWorkspaceKey(workspace.key)), { visible: true });
+    const row = await services.store.get({ collection: 'workspaces', key: workspace.key });
+    const repositoryRecord = objectFields(row?.value, ['kind', 'workspace', 'sources', 'orphan', 'gitKind', 'repoKey'], ['repository', 'head', 'worktrees', 'state', 'reason']);
+    const repo = decodeRepoKey(textValue(repositoryRecord.repoKey, 'repoKey'));
+    const manifest = services.registry.list()[0];
+    if (!manifest) throw new Error('Missing registered harness');
+    const session = parseSessionRef({ environmentId: services.target, harnessInstanceId: manifest.harnessInstanceId, nativeSessionId: 'durable-session' });
+    await services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key: encodeSessionKey(session), value: { session, workspaceKey: workspace.key, archived: false } }] });
+    const second = await client(host);
+    async function mutate(peer: Awaited<ReturnType<typeof client>>, domain: string, operation: string, args: object) {
+      const first = await peer.request('runtime.host.mutate', { domain, operation, args }, {}, randomUUID());
+      if (!first.ok || first.phase !== 'durable-accepted') throw new Error(JSON.stringify(first));
+      const last = await peer.terminal(first.id);
+      if (!last.ok || last.phase !== 'native-executed') throw new Error(JSON.stringify(last));
+      return JSON.parse(JSON.stringify(last.result)).value;
+    }
+    const [left, right] = await Promise.all([mutate(connection, 'thread', 'bind', { session, repo }), mutate(second, 'thread', 'bind', { session, repo })]);
+    expect(right.threadId).toBe(left.threadId);
+    expect(await second.request('runtime.host.read', { domain: 'thread', operation: 'snapshot', args: { threadId: left.threadId } })).toMatchObject({ ok: true, result: { thread: { threadId: left.threadId } } });
+    const joinedManifest = services.registry.list()[1];
+    if (!joinedManifest) throw new Error('Missing second harness');
+    const joinedSession = parseSessionRef({ ...session, harnessInstanceId: joinedManifest.harnessInstanceId, nativeSessionId: 'joined-durable-session' });
+    await services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key: encodeSessionKey(joinedSession), value: { session: joinedSession, workspaceKey: workspace.key, archived: false } }] });
+    const participant = await mutate(second, 'thread', 'join', { threadId: left.threadId, session: joinedSession, repo });
+    expect(participant.session).toEqual(joinedSession);
+    expect(await second.request('runtime.host.read', { domain: 'thread', operation: 'resolveSession', args: { threadId: left.threadId, session: joinedSession } })).toMatchObject({ ok: true, result: { participantId: participant.participantId, session: joinedSession } });
+    const otherOwnerSession = parseSessionRef({ ...joinedSession, harnessInstanceId: session.harnessInstanceId });
+    await services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key: encodeSessionKey(otherOwnerSession), value: { session: otherOwnerSession, workspaceKey: workspace.key, archived: false } }] });
+    expect(await second.request('runtime.host.read', { domain: 'thread', operation: 'resolveSession', args: { threadId: left.threadId, session: otherOwnerSession } })).toMatchObject({ ok: true, result: null });
+    expect(await second.request('runtime.host.read', { domain: 'thread', operation: 'snapshot', args: { threadId: left.threadId, limit: 1 } })).toMatchObject({ ok: true, result: { thread: { participants: [{ session }] }, participantsPagination: { cursor: 1, counts: { participants: 2 } } } });
+    expect(await second.request('runtime.host.read', { domain: 'thread', operation: 'participants', args: { threadId: left.threadId, cursor: 1, limit: 1 } })).toMatchObject({ ok: true, result: { participants: [{ session: joinedSession }], pagination: { cursor: null, counts: { participants: 2 } } } });
+    const captured = await mutate(connection, 'handoff', 'captureEvidence', { threadId: left.threadId, kind: 'file', path: 'evidence.txt' });
+    const diff = await mutate(connection, 'handoff', 'captureEvidence', { threadId: left.threadId, kind: 'diff', path: 'evidence.txt' });
+    const evidenceRef = { hash: captured.hash, bytes: captured.bytes, target: captured.target };
+    const diffRef = { hash: diff.hash, bytes: diff.bytes, target: diff.target };
+    const handoffRecord = await mutate(connection, 'handoff', 'begin', {
+      threadId: left.threadId, sourceParticipantId: left.activeParticipantId, targetParticipantId: participant.participantId,
+      entries: [
+        { class: 'artifact', text: 'Captured file', origin: captured.origin, evidence: evidenceRef },
+        { class: 'diff', text: 'Captured diff', origin: diff.origin, evidence: diffRef },
+      ],
+    });
+    const evidenceArgs = { handoffId: handoffRecord.handoffId, ref: evidenceRef, currentTarget: captured.target, offset: 0, length: 8 };
+    expect(await connection.request('runtime.host.read', { domain: 'handoff', operation: 'checkpoint', args: { handoffId: handoffRecord.handoffId } })).toMatchObject({ ok: true, result: { scope: { threadId: left.threadId, environmentId: services.target }, evidence: expect.arrayContaining([evidenceRef, diffRef]) } });
+    expect(await connection.request('runtime.host.read', { domain: 'handoff', operation: 'evidenceTarget', args: { handoffId: handoffRecord.handoffId } })).toMatchObject({ ok: true, result: captured.target });
+    const filePage = await connection.request('runtime.host.read', { domain: 'handoff', operation: 'evidencePage', args: evidenceArgs });
+    expect(filePage).toMatchObject({ ok: true, result: { available: true, encoding: 'base64', data: Buffer.from('verified').toString('base64'), nextOffset: 8 } });
+    const diffPage = await connection.request('runtime.host.read', { domain: 'handoff', operation: 'evidencePage', args: { ...evidenceArgs, ref: diffRef, length: 65536 } });
+    expect(diffPage).toMatchObject({ ok: true, result: { available: true, hash: diff.hash, totalBytes: diff.bytes, nextOffset: null } });
+    expect(await connection.request('runtime.host.read', { domain: 'handoff', operation: 'evidencePage', args: { ...evidenceArgs, length: 65537 } })).toMatchObject({ ok: false, typedError: { code: 'invalid_request' } });
+    expect(await connection.request('runtime.host.read', { domain: 'handoff', operation: 'evidencePage', args: { ...evidenceArgs, currentTarget: { ...captured.target, revision: '0'.repeat(40) } } })).toMatchObject({ ok: false, typedError: { code: 'conflict' } });
+    expect(await connection.request('runtime.host.read', { domain: 'handoff', operation: 'evidencePage', args: { ...evidenceArgs, ref: { ...evidenceRef, hash: 'f'.repeat(64) } } })).toMatchObject({ ok: false, typedError: { code: 'unauthorized' } });
+    await writeFile(path.join(root, 'evidence.txt'), 'changed after capture\n');
+    expect(await connection.request('runtime.host.read', { domain: 'handoff', operation: 'evidencePage', args: evidenceArgs })).toMatchObject({ ok: false, typedError: { code: 'conflict' } });
+    await rm(path.join(root, 'evidence.txt'));
+    expect(await connection.request('runtime.host.read', { domain: 'handoff', operation: 'evidencePage', args: evidenceArgs })).toMatchObject({ ok: true, result: { available: false, unavailableReason: 'evidence_missing' } });
+    await symlink(tmpdir(), path.join(root, 'evidence.txt'), process.platform === 'win32' ? 'junction' : 'dir');
+    expect(await connection.request('runtime.host.read', { domain: 'handoff', operation: 'evidencePage', args: evidenceArgs })).toMatchObject({ ok: false });
+    await rm(path.join(root, 'evidence.txt'));
+    await writeFile(path.join(root, 'evidence.txt'), 'verified evidence\n');
+    const team = await mutate(connection, 'collaboration', 'createTeam', { name: 'Durable team' });
+    const visible = await second.request('runtime.host.read', { domain: 'collaboration', operation: 'team', args: { teamId: team.teamId } });
+    expect(visible).toMatchObject({ ok: true, result: { name: 'Durable team', members: [] } });
+    const lead = await mutate(connection, 'collaboration', 'addMember', { teamId: team.teamId, participantId: left.activeParticipantId, session, role: 'lead', harnessKind: manifest.kind });
+    const worker = await mutate(second, 'collaboration', 'addMember', { teamId: team.teamId, participantId: participant.participantId, session: joinedSession, role: 'worker', harnessKind: joinedManifest.kind });
+    expect(await second.request('runtime.host.read', { domain: 'collaboration', operation: 'membersPage', args: { teamId: team.teamId, limit: 1 } })).toMatchObject({ ok: true, result: { members: [{ memberId: lead.memberId }], pagination: { cursor: 1, counts: { members: 2 } } } });
+    expect(await second.request('runtime.host.read', { domain: 'collaboration', operation: 'membersPage', args: { teamId: team.teamId, limit: 1, cursor: 1 } })).toMatchObject({ ok: true, result: { members: [{ memberId: worker.memberId }], pagination: { cursor: null, counts: { members: 2 } } } });
+    const task = await mutate(connection, 'collaboration', 'createTask', { teamId: team.teamId, title: 'Durable task', criteria: [{ id: 'persist', text: 'Restored after restart', required: true }], owner: { participantId: left.activeParticipantId, session } });
+    const nextTask = await mutate(second, 'collaboration', 'createTask', { teamId: team.teamId, title: 'Second task', criteria: [{ id: 'persist', text: 'Successive aggregate flush', required: true }], owner: { participantId: left.activeParticipantId, session } });
+    expect(await second.request('runtime.host.read', { domain: 'collaboration', operation: 'tasks', args: { teamId: team.teamId } })).toMatchObject({ ok: true, result: [{ taskId: task.taskId }, { taskId: nextTask.taskId }] });
+    expect(await second.request('runtime.host.read', { domain: 'collaboration', operation: 'snapshot', args: { teamId: team.teamId, limit: 1 } })).toMatchObject({ ok: true, result: { tasks: [{ taskId: task.taskId }], pagination: { cursor: 1, counts: { tasks: 2 } } } });
+    expect(await second.request('runtime.host.read', { domain: 'collaboration', operation: 'snapshot', args: { teamId: team.teamId, limit: 1, cursor: 1 } })).toMatchObject({ ok: true, result: { tasks: [{ taskId: nextTask.taskId }], pagination: { cursor: null, counts: { tasks: 2 } } } });
+    expect(await second.request('runtime.host.read', { domain: 'collaboration', operation: 'snapshot', args: { teamId: team.teamId, limit: 101 } })).toMatchObject({ ok: false, typedError: { code: 'invalid_request' } });
+    const nativeScope = { target: services.target, harnessInstanceId: session.harnessInstanceId, epoch: services.epoch, processGeneration: 1, session };
+    const nativeJournal = createOperationJournal({ store: services.acceptance.store, isProcessCurrent: () => true });
+    const nativeReceipt = await nativeJournal.accept({ scope: nativeScope, method: 'send', idempotencyKey: 'host-observed-send', payload: { text: 'fixture' } });
+    await nativeJournal.execute(nativeReceipt.operationId, nativeScope, () => ({ sent: true }));
+    expect(await second.request('runtime.host.read', { domain: 'thread', operation: 'snapshot', args: { threadId: left.threadId } })).toMatchObject({ ok: true, result: { turns: [{ sourceNativeId: nativeReceipt.operationId, accepted: true, sent: true, observed: false, terminal: false }] } });
+    await nativeJournal.terminal(nativeReceipt.operationId, nativeScope, 'completed');
+    expect(await second.request('runtime.host.read', { domain: 'thread', operation: 'snapshot', args: { threadId: left.threadId } })).toMatchObject({ ok: true, result: { turns: [{ sourceNativeId: nativeReceipt.operationId, terminal: true, terminalReason: 'completed' }] } });
+    const content = 'original unknown fields retained';
+    const batch = { importId: 'a'.repeat(64), environmentId: services.target, sourceRevision: 'b'.repeat(64), offset: 0, nextOffset: 1, total: 1, chunks: [{ sourceKey: 'c'.repeat(64), offset: 0, content, end: true, checksum: createHash('sha256').update(content).digest('hex'), authority: 'sqlite-imported', binding: { environmentId: services.target, harnessInstanceId: manifest.harnessInstanceId, nativeSessionId: session.nativeSessionId, profileId: services.connectionProfileId } }] };
+    expect(await mutate(connection, 'migration', 'accept', batch)).toMatchObject({ phase: 'durable-accepted' });
+    await host.stop(); await services.close();
+    const restarted = await createRuntimeServices({ environmentId: services.target, stateRoot: root, role: 'local', roots: [{ root, permissions: ['read', 'write', 'command', 'pty'] }], config, nativeSupervisor: supervisor, acpManager: acp, runtime: { mutate: operation => operation() } });
+    cleanups.push(() => restarted.close()); await restarted.start();
+    const nextHost = createRuntimeHost({ environmentId: restarted.target, role: 'local', services: restarted }); nextHost.start(); cleanups.push(() => nextHost.stop());
+    const nextClient = await client(nextHost);
+    const restoredPage = await nextClient.request('runtime.host.read', { domain: 'handoff', operation: 'evidencePage', args: evidenceArgs });
+    expect(restoredPage).toMatchObject({ ok: true, result: { available: true, data: Buffer.from('verified').toString('base64') } });
+    execFileSync('git', ['-C', root, 'add', 'evidence.txt']);
+    execFileSync('git', ['-C', root, 'commit', '-m', 'advance evidence target'], { stdio: 'ignore' });
+    const movedTarget = await nextClient.request('runtime.host.read', { domain: 'handoff', operation: 'evidenceTarget', args: { handoffId: handoffRecord.handoffId } });
+    if (!movedTarget.ok) throw new Error('Missing moved target');
+    expect(await nextClient.request('runtime.host.read', { domain: 'handoff', operation: 'evidencePage', args: { ...evidenceArgs, currentTarget: movedTarget.result } })).toMatchObject({ ok: false, typedError: { code: 'conflict' } });
+    if (process.env.VIS_RUNTIME_QA_EVIDENCE) await writeFile(path.join(process.env.VIS_RUNTIME_QA_EVIDENCE, committed ? 'handoff-evidence-trace.json' : 'handoff-evidence-unborn-trace.json'), JSON.stringify({ captured, diff, handoffRecord, filePage, diffPage, restoredPage, movedTarget, movedHeadRefused: true, changedContentRefused: true, deletedFileUnavailable: true, escapedSymlinkRefused: true, forgedReferenceRefused: true, forgedTargetRefused: true, oversizedPageRefused: true }, null, 2));
+    expect(await nextClient.request('runtime.host.read', { domain: 'thread', operation: 'get', args: { threadId: left.threadId } })).toMatchObject({ ok: true, result: { threadId: left.threadId, participants: [{ session }, { session: joinedSession }] } });
+    expect(await nextClient.request('runtime.host.read', { domain: 'collaboration', operation: 'team', args: { teamId: team.teamId } })).toMatchObject({ ok: true, result: { name: 'Durable team' } });
+    expect(await nextClient.request('runtime.host.read', { domain: 'collaboration', operation: 'tasks', args: { teamId: team.teamId } })).toMatchObject({ ok: true, result: [{ taskId: task.taskId }, { taskId: nextTask.taskId }] });
+    expect(await nextClient.request('runtime.host.read', { domain: 'thread', operation: 'snapshot', args: { threadId: left.threadId } })).toMatchObject({ ok: true, result: { turns: [{ sourceNativeId: nativeReceipt.operationId, terminal: true, terminalReason: 'completed' }] } });
+    expect(await mutate(nextClient, 'migration', 'verify', { importId: batch.importId, sourceRevision: batch.sourceRevision, expectedRecords: 1, expectedChunks: 1 })).toMatchObject({ phase: 'durable-accepted' });
+    const imported = (await restarted.store.page({ collection: 'imports', limit: 100 })).items.find(item => item.key.startsWith('chunk:'));
+    expect(imported).toMatchObject({ value: { content } });
+    const refused = await nextClient.request('runtime.host.mutate', { domain: 'thread', operation: 'bind', args: { session: { ...session, environmentId: randomUUID() }, repo } });
+    expect(refused).toMatchObject({ ok: false, typedError: { code: 'unauthorized' } });
+    expect(await nextClient.request('runtime.host.mutate', { domain: 'handoff', operation: 'observe', args: { nativeEventId: 'forged' } })).toMatchObject({ ok: false, typedError: { code: 'unsupported' } });
+  });
+
   it('reconnects after releasing one of three live subscriber snapshots without invalidating the other windows', async () => {
     const { connection, host } = await runtime(); const second = await client(host), third = await client(host);
     const pages = await Promise.all([connection, second, third].map(client => client.request('runtime.snapshot', { collection: 'workspaces' })));
@@ -250,6 +481,8 @@ describe('runtime real WebSocket dispatch', () => {
     const manager = await graph('manager'), execution = await graph('execution');
     const host = createRuntimeHost({ environmentId: manager.services.target, role: 'manager', services: manager.services, targets: [execution.services] }); host.start(); cleanups.push(() => host.stop());
     const connection = await client(host); expect(await connection.request('runtime.snapshot', { collection: 'workspaces' })).toMatchObject({ ok: false, typedError: { code: 'unsupported' } });
+    expect(await connection.request('runtime.host.read', { domain: 'thread', operation: 'state', args: {} })).toMatchObject({ ok: false, typedError: { code: 'unsupported' } });
+    expect(await connection.request('runtime.host.mutate', { domain: 'collaboration', operation: 'createTeam', args: { name: 'Refused manager team' } })).toMatchObject({ ok: false, typedError: { code: 'unsupported' } });
     const attached = await connection.request('runtime.target.attach', { target: execution.services.target }); if (!attached.ok) throw new Error('Attach failed');
     const hello = (attached.result as unknown as { hello: Hello }).hello;
     expect(hello.generation).toBeGreaterThan(connection.hello.generation);
@@ -315,6 +548,15 @@ describe('history wire through real RuntimeHost, WebSocket and SQLite scope chec
     finally { held.release(); await stopping; }
     expect(stopped).toBe(true); expect(context.counts().closed).toBe(1);
   });
+});
+
+it('closes live WebSockets after Host shutdown drains its owned resources', async () => {
+  const context = await runtime();
+  let closed = false;
+  const closing = new Promise<void>(resolve => context.connection.socket.addEventListener('close', () => { closed = true; resolve(); }, { once: true }));
+  await context.host.stop();
+  await expect.poll(() => closed).toBe(true);
+  await closing;
 });
 
 it('physically retires only the exhausted history socket after awaited producer cleanup', async () => {

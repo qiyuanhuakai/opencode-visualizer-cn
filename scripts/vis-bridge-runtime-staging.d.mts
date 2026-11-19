@@ -21,6 +21,7 @@ export function createRuntimeSidecarLayout(
   platform?: NodeJS.Platform,
 ): RuntimeSidecarLayout;
 export function computeRuntimeWorkerClosure(rootDirectory: string): Promise<string[]>;
+export function computeRuntimeHelperClosure(rootDirectory: string): Promise<string[]>;
 export function stageRuntimeWorkerSidecar(
   rootDirectory: string,
   stageRoot: string,

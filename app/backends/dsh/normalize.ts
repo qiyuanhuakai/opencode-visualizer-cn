@@ -146,7 +146,7 @@ export function createDshNormalizer(options: DshNormalizerOptions = {}): DshNorm
       if (event.seq > core.cursor) core.cursor = event.seq;
       stats.appliedRecordCount += 1;
       applyEvent(event, ops);
-      if (isRecord(raw) && raw.type === 'event') core.records.push(raw as DshSessionRecord);
+      if (options.retainRecords !== false && isRecord(raw) && raw.type === 'event') core.records.push(raw as DshSessionRecord);
     }
     return {
       eventType: event.type,

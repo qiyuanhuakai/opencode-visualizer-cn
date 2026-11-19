@@ -50,12 +50,14 @@ export function createSlurmTcpTransport(options = {}) {
       requireValue(Number.isInteger(forward.localPort), 'forward.localPort');
       const binding = createRelayBinding(input.binding ?? options.binding);
       const target = assertComputeTarget({
-        target: { kind: 'compute', node: forward.remoteHost, environmentId: binding.environmentId },
+        target: { kind: 'compute', node: input.computeNode ?? forward.remoteHost, environmentId: binding.environmentId },
         loginHosts: options.loginHosts ?? [],
       });
       const connectionId = `slurm-tcp-${binding.stepId}`;
       states.set(connectionId, 'connecting');
-      const socket = connect({ host: forward.localHost ?? '127.0.0.1', port: forward.localPort });
+      const socket = connect(input.direct === true
+        ? { host: forward.remoteHost, port: forward.remotePort }
+        : { host: forward.localHost ?? '127.0.0.1', port: forward.localPort });
       const channel = createRelayChannel(socket, {
         handshake: createRelayHandshake({ credential: options.credential, binding }),
         role: 'login',
@@ -78,7 +80,7 @@ export function createSlurmTcpTransport(options = {}) {
         target,
         binding,
         channel,
-        forwardArgv: buildForwardArgv(forward),
+        forwardArgv: input.direct === true ? [] : buildForwardArgv(forward),
         async close() {
           states.set(connectionId, 'closed');
           channel.close();

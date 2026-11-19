@@ -1,20 +1,19 @@
 <template>
-  <form class="ssh-host-form" data-testid="ssh-host-form" @submit.prevent="submit">
+  <form class="ssh-host-form" data-runtime-ui data-testid="ssh-host-form" @submit.prevent="submit">
     <header class="form-header">
-      <span class="form-title">SSH host profile</span>
+      <span class="form-title">{{ rt(transportKind === 'slurm' ? 'Slurm cluster profile' : 'SSH host profile') }}</span>
       <span v-if="!available" class="form-unavailable" data-testid="ssh-host-unavailable">
-        unavailable · {{ unavailableReason }}
+        {{ rt("unavailable ·") }} {{ rt(unavailableReason) }}
       </span>
     </header>
 
-    <p class="form-hint">
-      The profile stores a locator and a credential reference only. User, identity files, proxy
-      jump/command, host key checking and the known-hosts file resolve from the host's own ssh
-      config on the bridge, so a locator can never carry a secret.
+    <p v-if="transportKind === 'ssh'" class="form-hint">
+      {{ rt("The profile stores a locator and a credential reference only. User, identity files, proxy jump/command, host key checking and the known-hosts file resolve from the host\u0027s own ssh config on the bridge, so a locator can never carry a secret.") }}
     </p>
+    <p v-else class="form-hint">{{ rt('Configure the Slurm cluster managed by this login Bridge. The cluster identity is stored with the profile and used by its compute runtimes.') }}</p>
 
     <label class="field">
-      <span class="field-label">Name</span>
+      <span class="field-label">{{ rt("Name") }}</span>
       <input
         v-model="form.name"
         class="field-input"
@@ -27,42 +26,49 @@
     </label>
 
     <label class="field">
-      <span class="field-label">Host locator</span>
+      <span class="field-label">{{ rt(transportKind === 'slurm' ? 'Login host' : 'Host locator') }}</span>
       <input
         v-model="form.endpoint"
         class="field-input"
         type="text"
-        placeholder="cluster.example.edu or [cluster.example.edu]:2222"
+        :placeholder="transportKind === 'slurm' ? 'localhost' : rt('cluster.example.edu or [cluster.example.edu]:2222')"
         data-testid="ssh-endpoint"
         :disabled="disabled || !available"
         autocomplete="off"
         spellcheck="false"
       />
-      <span class="field-hint">A host or a bracketed host with a port. No user, password, query or fragment.</span>
+      <span class="field-hint">{{ rt(transportKind === 'slurm' ? 'Use the current login host name or localhost.' : 'A host or a bracketed host with a port. No user, password, query or fragment.') }}</span>
     </label>
+
+    <label class="field">
+      <span class="field-label">{{ rt(transportKind === 'slurm' ? 'Cluster environment UUID' : 'Existing Bridge environment UUID') }}</span>
+      <input v-model="form.environmentId" class="field-input" data-testid="ssh-environment-id" required :disabled="disabled || !available" autocomplete="off" spellcheck="false" />
+      <span class="field-hint">{{ rt(transportKind === 'slurm' ? 'Keep this identity stable for reconnects and existing jobs.' : 'Copy the environment UUID from the remote Bridge runtime information. It must match the live target.') }}</span>
+    </label>
+    <button v-if="transportKind === 'slurm'" type="button" class="action-button" data-testid="slurm-generate-environment" :disabled="disabled || !available" @click="generateEnvironment">{{ rt('Generate cluster identity') }}</button>
 
     <div class="field-row">
       <label class="field">
-        <span class="field-label">Role</span>
-        <Dropdown v-model="form.role" :disabled="disabled || !available" data-testid="ssh-role">
+        <span class="field-label">{{ rt("Role") }}</span>
+        <Dropdown v-model="form.role" :label="rt(form.role)" :disabled="disabled || !available" data-testid="ssh-role">
           <DropdownItem v-for="role in roles" :key="role" :value="role">
-            <span>{{ role }}</span>
+            <span>{{ rt(role) }}</span>
           </DropdownItem>
         </Dropdown>
       </label>
       <label class="field">
-        <span class="field-label">Credential reference</span>
+        <span class="field-label">{{ rt("Credential reference") }}</span>
         <input
           v-model="form.credentialRef"
           class="field-input"
           type="text"
-          placeholder="credential-store reference"
+          :placeholder='rt("credential-store reference")'
           data-testid="ssh-credential-ref"
           :disabled="disabled || !available"
           autocomplete="off"
           spellcheck="false"
         />
-        <span class="field-hint">A reference, never a password, passphrase or OTP.</span>
+        <span class="field-hint">{{ rt("A reference, never a password, passphrase or OTP.") }}</span>
       </label>
     </div>
 
@@ -74,21 +80,21 @@
         data-testid="ssh-enabled"
         :disabled="disabled || !available"
       />
-      <span class="field-label">Enable this profile</span>
-      <span class="field-hint">A new profile starts disabled; enabling is a separate explicit action.</span>
+      <span class="field-label">{{ rt("Enable this profile") }}</span>
+      <span class="field-hint">{{ rt("A new profile starts disabled; enabling is a separate explicit action.") }}</span>
     </label>
 
     <p v-if="!environmentResolved" class="form-problems" role="status" data-testid="ssh-environment-unresolved">
-      <span class="form-problem">Probe the host to resolve its stable environment before saving.</span>
+      <span class="form-problem">{{ rt('Enter a valid environment UUID before saving.') }}</span>
     </p>
 
     <p v-if="problems.length" class="form-problems" role="alert" data-testid="ssh-host-problems">
-      <span v-for="problem in problems" :key="problem" class="form-problem">{{ problem }}</span>
+      <span v-for="problem in problems" :key="problem" class="form-problem">{{ rt(problem) }}</span>
     </p>
 
     <footer class="form-actions">
       <button type="button" class="action-button" data-testid="ssh-host-cancel" :disabled="disabled" @click="$emit('cancel')">
-        Cancel
+        {{ rt("Cancel") }}
       </button>
       <button
         type="submit"
@@ -96,14 +102,16 @@
         data-testid="ssh-host-save"
         :disabled="disabled || !available || !environmentResolved"
       >
-        Save profile
+        {{ rt("Save profile") }}
       </button>
     </footer>
   </form>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { useRuntimeUi } from '../../locales/runtimeUi';
+const { rt } = useRuntimeUi();
+import { computed, reactive, ref, watch } from 'vue';
 import Dropdown from '../Dropdown.vue';
 import DropdownItem from '../Dropdown/Item.vue';
 import type { ConnectionProfileDraft, ConnectionRole } from '../../../shared/runtime/connectionProfile.js';
@@ -124,9 +132,10 @@ const props = withDefaults(
      * two environments. Empty means the probe has not run yet.
      */
     environmentId?: string;
+    transportKind?: 'ssh' | 'slurm';
     disabled?: boolean;
   }>(),
-  { available: true, unavailableReason: '', environmentId: '', disabled: false },
+  { available: true, unavailableReason: '', environmentId: '', transportKind: 'ssh', disabled: false },
 );
 
 const emit = defineEmits<{
@@ -139,12 +148,19 @@ const roles: readonly ConnectionRole[] = ['manager', 'execution'];
 const form = reactive({
   name: '',
   endpoint: '',
-  role: 'manager' as ConnectionRole,
+  role: (props.transportKind === 'slurm' ? 'execution' : 'manager') as ConnectionRole,
   credentialRef: '',
   enabled: false,
+  environmentId: props.environmentId,
+});
+watch(() => props.environmentId, (value, previous) => {
+  if (!form.environmentId || form.environmentId === previous) form.environmentId = value;
 });
 
 const problems = ref<readonly string[]>([]);
+function generateEnvironment(): void {
+  if (props.transportKind === 'slurm' && !props.disabled && props.available) form.environmentId = crypto.randomUUID();
+}
 
 /**
  * Whether the host has been probed and the stable environment is known.
@@ -152,7 +168,7 @@ const problems = ref<readonly string[]>([]);
  * The profile stores the target's own UUID; without it there is nothing stable to bind, so the
  * form says so explicitly instead of inventing an identity from the locator.
  */
-const environmentResolved = computed(() => props.environmentId.trim().length > 0);
+const environmentResolved = computed(() => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(form.environmentId.trim()));
 
 /**
  * Validate through the REAL strict parser.
@@ -165,14 +181,16 @@ const environmentResolved = computed(() => props.environmentId.trim().length > 0
 function submit() {
   if (props.disabled || !props.available) return;
   if (!environmentResolved.value) {
-    problems.value = ['target: probe the host to resolve its stable environment before saving'];
+    problems.value = ['Enter a valid environment UUID before saving.'];
     return;
   }
   try {
     const draft = parseNewConnectionProfile({
       name: form.name,
-      transport: { kind: 'ssh', endpoint: form.endpoint },
-      target: { kind: 'ssh', environmentId: props.environmentId.trim() },
+      transport: { kind: props.transportKind, endpoint: form.endpoint },
+      target: props.transportKind === 'slurm'
+        ? { kind: 'slurm', clusterEnvironmentId: form.environmentId.trim() }
+        : { kind: 'ssh', environmentId: form.environmentId.trim() },
       role: form.role,
       credentialRef: form.credentialRef,
       enabled: form.enabled,
@@ -215,7 +233,7 @@ function submit() {
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
 }
 
 .form-hint {
@@ -291,7 +309,7 @@ function submit() {
   gap: 2px;
   margin: 0;
   font-size: var(--type-sm, 12px);
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
   word-break: break-word;
 }
 

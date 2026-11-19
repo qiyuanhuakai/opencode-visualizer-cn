@@ -609,7 +609,7 @@ function parseCheckpointEntry(raw) {
 /** Validate a wire checkpoint object into a frozen read model, verifying every entry hash and the digest. */
 export function parseCheckpoint(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)
-    || Object.keys(value).length !== CHECKPOINT_KEYS.length
+    || Object.keys(value).some(key => key !== 'bytes' && !CHECKPOINT_KEYS.includes(key))
     || !CHECKPOINT_KEYS.every((key) => Object.hasOwn(value, key))) {
     throw new ContextError('invalid_request', 'checkpoint_schema');
   }
@@ -666,14 +666,17 @@ export function parseCheckpoint(value) {
   if (evidenceHash(JSON.stringify(canonical)) !== digest) {
     throw new ContextError('conflict', 'checkpoint_digest');
   }
-  const serialized = JSON.stringify({ ...canonical, digest });
-  if (byteLengthOf(serialized) > CHECKPOINT_MAX_BYTES) {
+  const bytes = byteLengthOf(JSON.stringify({ ...canonical, digest }));
+  if (bytes > CHECKPOINT_MAX_BYTES) {
     throw new ContextError('invalid_request', 'checkpoint_bytes');
+  }
+  if (Object.hasOwn(value, 'bytes') && value.bytes !== bytes) {
+    throw new ContextError('conflict', 'checkpoint_bytes');
   }
   return deepFreeze({
     ...canonical,
     digest,
-    bytes: byteLengthOf(serialized),
+    bytes,
   });
 }
 
@@ -828,8 +831,9 @@ export function callEvidenceTool(input = {}) {
     throw new ContextError('invalid_request', 'evidence_tool_arguments');
   }
   const required = TOOL_ARGUMENT_KEYS[tool.name];
+  const allowed = tool.name === 'context.evidence.page' ? [...required, 'offset', 'length'] : required;
   if (!required.every((key) => Object.hasOwn(args, key))
-    || !Object.keys(args).every((key) => required.includes(key))) {
+    || !Object.keys(args).every((key) => allowed.includes(key))) {
     throw new ContextError('invalid_request', 'evidence_tool_arguments');
   }
   for (const key of ['offset', 'length']) {

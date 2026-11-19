@@ -165,6 +165,8 @@ const windowStyle = computed(() => {
   return {
     '--win-x': `${props.entry.x}px`,
     '--win-y': `${props.entry.y}px`,
+    '--win-width': `${props.entry.width || 600}px`,
+    '--win-height': `${isMinimized ? 22 : (props.entry.height || 400)}px`,
     width: props.entry.width ? `${props.entry.width}px` : '600px',
     height: isMinimized ? '22px' : (props.entry.height ? `${props.entry.height}px` : '400px'),
     zIndex: props.entry.zIndex,
@@ -1044,5 +1046,29 @@ function onResizeEnd(e: PointerEvent) {
 
 .floating-window-resizer:hover::before {
   filter: brightness(1.15);
+}
+
+@media (max-width: 900px) {
+  .floating-window {
+    max-width: 100%;
+    max-height: 100%;
+    left: clamp(0px, var(--win-x), max(0px, calc(100% - var(--win-width))));
+    top: clamp(0px, var(--win-y), max(0px, calc(100% - var(--win-height))));
+    transform: scale(var(--win-scale-x), var(--win-scale-y));
+  }
+}
+
+@media (max-width: 640px) {
+  .floating-window-titlebar {
+    height: 44px;
+    min-height: 44px;
+    flex-shrink: 0;
+  }
+
+  .window-actions > button,
+  .follow-resume-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 </style>

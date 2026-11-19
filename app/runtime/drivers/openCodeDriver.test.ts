@@ -145,6 +145,28 @@ async function controlledNative() {
 }
 
 describe('OpenCode Bridge driver over controlled HTTP/SSE with real durable store', () => {
+  it('recovers a lost SSE subscription without replaying native mutations', async () => {
+    const fixture = await controlledNative();
+    try {
+      const driver = await createOpenCodeDriver(fixture.options);
+      const first = await driver.registration.driver.core.subscribe?.(input());
+      if (!first || typeof first !== 'object' || !('next' in first) || typeof first.next !== 'function') throw new TypeError('missing subscription');
+      const lost = first.next();
+      const rejected = expect(lost).rejects.toMatchObject({ code: 'reconcile_required' });
+      fixture.options.disconnectStreams();
+      await rejected;
+      const registry = createHarnessRegistry(); registry.register(driver.registration);
+      await expect.poll(async () => registry.invoke({ ...input(), channel: 'core', operation: 'inspect' })).toMatchObject({ state: 'failed' });
+      const second = await driver.registration.driver.core.subscribe?.(input());
+      if (!second || typeof second !== 'object' || !('next' in second) || typeof second.next !== 'function') throw new TypeError('missing recovered subscription');
+      const next = second.next();
+      fixture.publish('session.updated', { info: { ...nativeSession, title: 'Recovered' } });
+      await expect(next).resolves.toMatchObject({ done: false, value: { type: 'session.updated' } });
+      expect(fixture.connections).toBe(2);
+      expect(fixture.calls.filter(call => call.method !== 'GET')).toEqual([]);
+      await driver.close();
+    } finally { await fixture.close(); }
+  });
   it('owns one SSE upstream for two subscribers and keeps it after a subscriber leaves', async () => {
     // Given one Runtime-owned native driver.
     const fixture = await controlledNative();
@@ -823,4 +845,115 @@ describe('OpenCode cancellation retains the original durable session lease', () 
       expect(fixture.calls.filter(call => call.method !== 'GET')).toEqual([]);
       await driver.close();
     } finally { await fixture.close(); }
+  });
+
+  it('retries the same native process binding after a failed init', async () => {
+    // Given a native service whose first health probe reports unhealthy.
+    const fixture = await controlledNative();
+    try {
+      fixture.setHealthy(false);
+      await expect(createOpenCodeDriver(fixture.options)).rejects.toMatchObject({ code: 'source_unavailable', field: 'opencode.health' });
+      const probed = fixture.calls.filter((call) => call.path.startsWith('/global/health')).length;
+      // When the native service recovers and the driver is rebuilt with the same epoch and process generation.
+      fixture.setHealthy(true);
+      const driver = await createOpenCodeDriver(fixture.options); const registry = createHarnessRegistry(); registry.register(driver.registration);
+      // Then the rebuilt driver re-probes health and binds instead of being fenced out as a duplicate upstream.
+      expect(fixture.calls.filter((call) => call.path.startsWith('/global/health')).length).toBe(probed + 1);
+      expect(await registry.invoke({ ...input(), channel: 'core', operation: 'inspect' })).toEqual({ state: 'ready', protocolVersion: 1 });
+    } finally { await fixture.close(); }
+  });
+
+  it('still fences a live concurrent upstream that claims the same epoch and generation', async () => {
+    const fixture = await controlledNative();
+    try {
+      const scope = { environmentId, harnessInstanceId, epoch, processGeneration: 1 };
+      const live = createInstanceOperations({ store: fixture.store, scope, current: () => ({ epoch, processGeneration: 1 }), fingerprint, randomUUID });
+      await live.ready;
+      // When a second instance claims the same epoch and generation while the first claim is still alive.
+      const rival = createInstanceOperations({ store: fixture.store, scope, current: () => ({ epoch, processGeneration: 1 }), fingerprint, randomUUID });
+      // Then the genuinely concurrent upstream is still rejected and the live claim stays authoritative.
+      await expect(rival.ready).rejects.toMatchObject({ code: 'conflict', field: 'opencode.duplicate_upstream' });
+      expect(await live.assertCurrent()).toMatchObject({ key: `opencode-process:${fingerprint([environmentId, harnessInstanceId])}`, value: { alive: true } });
+      await live.close(); await rival.close();
+    } finally { await fixture.close(); }
+  });
+
+it('retries a shared process revision race instead of reporting a missing operation', async () => {
+  const fixture = await controlledNative();
+  try {
+    const operations = createInstanceOperations({ store: fixture.store, scope: { environmentId, harnessInstanceId, epoch, processGeneration: 1 }, current: () => ({ epoch, processGeneration: 1 }), fingerprint, randomUUID }); await operations.ready;
+    // Given two concurrent accepts carrying different idempotency keys.
+    const outcomes = await Promise.allSettled([operations.accept({ idempotencyKey: 'create-a', method: 'createSession', payload: { title: 'a' } }), operations.accept({ idempotencyKey: 'create-b', method: 'createSession', payload: { title: 'b' } })]);
+    // When both collide on the shared process revision inside one control mutation.
+    // Then each intent is durably accepted under its own identity rather than one reporting a missing operation.
+    const accepted = outcomes.flatMap((outcome) => outcome.status === 'fulfilled' ? [outcome.value.operationId] : []);
+    expect(accepted).toHaveLength(2); expect(new Set(accepted).size).toBe(2);
+    await operations.close();
+  } finally { await fixture.close(); }
+});
+
+  it.each([false, true])('does not release a replacement process claim when old close is retried after acknowledgement loss=%s', async lost => {
+    const fixture = await controlledNative();
+    const scope = { environmentId, harnessInstanceId, epoch, processGeneration: 1 };
+    const make = () => createInstanceOperations({ store: fixture.store, scope, current: () => ({ epoch, processGeneration: 1 }), fingerprint, randomUUID });
+    const old = make();
+    const mutate = fixture.store.mutateControl.bind(fixture.store);
+    try {
+      await old.ready;
+      if (lost) {
+        let first = true;
+        fixture.store.mutateControl = async input => {
+          const result = await mutate(input);
+          if (first) { first = false; throw new Error('lost close acknowledgement'); }
+          return result;
+        };
+        await expect(old.close()).rejects.toThrow('lost close acknowledgement');
+        fixture.store.mutateControl = mutate;
+      } else await old.close();
+      const replacement = make();
+      try {
+        await replacement.ready;
+        await old.close();
+        await expect(replacement.assertCurrent()).resolves.toMatchObject({ value: { alive: true } });
+      } finally { await replacement.close(); }
+    } finally { fixture.store.mutateControl = mutate; await old.close(); await fixture.close(); }
+  });
+
+  it('keeps concurrent driver closes behind the durable process release barrier', async () => {
+    const fixture = await controlledNative();
+    const driver = await createOpenCodeDriver(fixture.options);
+    const release = Promise.withResolvers<void>();
+    const mutate = fixture.store.mutateControl.bind(fixture.store);
+    let releasing = false;
+    fixture.store.mutateControl = async input => {
+      if (input.changes.some(change => change.key.startsWith('opencode-process:') && change.value && typeof change.value === 'object' && !Array.isArray(change.value) && 'alive' in change.value && change.value.alive === false)) {
+        releasing = true; await release.promise;
+      }
+      return mutate(input);
+    };
+    let first: Promise<void> | undefined;
+    try {
+      first = driver.close();
+      await expect(driver.registration.driver.core.subscribe?.(input())).rejects.toMatchObject({ code: 'source_unavailable', field: 'opencode.closed' });
+      await expect.poll(() => releasing).toBe(true);
+      let completed = false;
+      const second = driver.close().then(() => { completed = true; });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(completed).toBe(false);
+      release.resolve(); await Promise.all([first, second]);
+    } finally { release.resolve(); fixture.store.mutateControl = mutate; await first?.catch(() => undefined); await driver.close(); await fixture.close(); }
+  });
+
+  it('retries driver cleanup after a durable process release failure', async () => {
+    const fixture = await controlledNative();
+    const driver = await createOpenCodeDriver(fixture.options);
+    const mutate = fixture.store.mutateControl.bind(fixture.store);
+    try {
+      fixture.store.mutateControl = async () => { throw new Error('owned release failed'); };
+      await expect(driver.close()).rejects.toThrow('owned release failed');
+      fixture.store.mutateControl = mutate;
+      await driver.close();
+      const process = await fixture.store.getControl({ collection: 'operations', key: `opencode-process:${fingerprint([environmentId, harnessInstanceId])}` });
+      expect(process?.value).toMatchObject({ alive: false });
+    } finally { fixture.store.mutateControl = mutate; await driver.close(); await fixture.close(); }
   });

@@ -20,6 +20,7 @@ export const sourceFiles = [
   ...['protocol', 'follow'].flatMap((name) => [`shared/runtime/native/dsh/${name}.js`, `shared/runtime/native/dsh/${name}.d.ts`]),
   'bridge/runtime/operationJournal.js', 'bridge/runtime/interactionStore.js', 'bridge/runtime/admissionQueue.js',
   'bridge/runtime/storage/runtimeStore.js', 'bridge/runtime/storage/runtimeDatabaseWorker.mjs', 'bridge/runtime/storage/storeProtocol.js',
+  'app/runtime/drivers/dshPr178.test.ts',
   'app/runtime/drivers/dshDriver.test.ts', 'bridge/dshAuth.js', 'bridge/processSupervisor.js', 'bridge/codexWebSocketProxy.js', 'bridge/webSocketFrames.js',
 ];
 const environmentId = '11111111-1111-4111-8111-111111111111';

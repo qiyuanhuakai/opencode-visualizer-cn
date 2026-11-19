@@ -1,8 +1,10 @@
 import { ref, computed, getCurrentScope, onScopeDispose } from 'vue';
+import { normalizeSettingsChange } from '../../shared/runtime/liveSettings.js';
 import { managementCandidate } from '../runtime/connectionUrl';
 import {
   StorageKeys,
   storageGet,
+  storageRead,
   storageKey,
   storageRemove,
   storageSet,
@@ -19,6 +21,7 @@ import {
 import { normalizeAcpBridgeUrl } from '../backends/acp/bridgeUrl';
 import {
   migrateLegacyCredentials,
+  LEGACY_CREDENTIALS_STORAGE_KEY,
   parseStoredCredentials,
   type StoredCredentials,
 } from './credentialStorage';
@@ -241,6 +244,7 @@ export function useCredentials() {
         storageRemove(StorageKeys.auth.serverUrl);
       }
       storageRemove(StorageKeys.auth.credentials);
+      storageRemove(LEGACY_CREDENTIALS_STORAGE_KEY);
       if (preservedBackendKind === 'codex') {
         storageSet(StorageKeys.auth.codexBridgeUrl, preservedCodexUrl);
         storageRemove(StorageKeys.auth.codexBridgeToken);
@@ -267,7 +271,9 @@ export function useCredentials() {
 
   if (typeof window !== 'undefined') {
     const storageWindow = window;
-    const storageListener = (event: StorageEvent) => {
+    const storageListener = (storageEvent: StorageEvent) => {
+      const event = normalizeSettingsChange(storageEvent, storageRead);
+      if (!event) return;
       if (event.key === storageKey(StorageKeys.auth.backendKind)) {
         backendKind.value =
           event.newValue === 'codex' ||

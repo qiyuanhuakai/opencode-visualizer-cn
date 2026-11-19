@@ -62,6 +62,7 @@ export function summaries(value, baseline, identity) {
     return { session: { ...identity, nativeSessionId }, title: typeof values.title === 'string' ? values.title : '',
       directory: typeof workspace?.path === 'string' ? workspace.path : typeof item.cwd === 'string' ? item.cwd : null,
       workspaceId: item.workspaceId ?? workspace?.workspaceId ?? null, archived: archived.has(nativeSessionId), pinned: pinned.has(nativeSessionId),
+      ...(item.parentSessionId ? { parentSession: { ...identity, nativeSessionId: text(item.parentSessionId) } } : {}),
       createdAt: item.createdAt ?? null, updatedAt: item.updatedAt ?? null };
   });
 }

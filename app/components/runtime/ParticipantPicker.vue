@@ -1,15 +1,15 @@
 <template>
-  <section class="participant-picker" data-testid="participant-picker" :aria-label="'Thread participants'">
+  <section class="participant-picker" data-runtime-ui data-testid="participant-picker" :aria-label="rt('Thread participants')">
     <header class="picker-header">
-      <span class="section-title">Participants</span>
+      <span class="section-title">{{ rt("Participants") }}</span>
       <span class="picker-count" data-testid="participant-count">{{ participants.length }}</span>
     </header>
 
     <p v-if="participants.length === 0" class="picker-empty" data-testid="participant-empty">
-      This thread has no participants yet.
+      {{ rt("This thread has no participants yet.") }}
     </p>
 
-    <ul v-else class="participant-list" role="group" aria-label="Thread participants">
+    <ul v-else class="participant-list" role="group" :aria-label='rt("Thread participants")'>
       <li
         v-for="participant in participants"
         :key="participant.participantId"
@@ -22,15 +22,15 @@
         :data-target="String(isTarget(participant.participantId))"
       >
         <div class="participant-identity">
-          <span class="participant-role">{{ participant.role }}</span>
+          <span class="participant-role">{{ rt(participant.role) }}</span>
           <span class="participant-state" :data-state="participant.state" data-testid="participant-state">
-            {{ participant.state }}
+            {{ rt(participant.state) }}
           </span>
           <span v-if="participant.participantId === activeParticipantId" class="participant-active" data-testid="participant-active">
-            active
+            {{ rt("active") }}
           </span>
           <span v-if="participant.nativeParent" class="participant-parent mono" :title="participant.nativeParent.nativeSessionId">
-            native parent: {{ shortId(participant.nativeParent.nativeSessionId) }}
+            {{ rt("native parent:") }} {{ shortId(participant.nativeParent.nativeSessionId) }}
           </span>
         </div>
         <div class="participant-session mono" data-testid="participant-session" :title="participant.session.nativeSessionId">
@@ -42,13 +42,13 @@
             class="action-button"
             :class="{ active: isTarget(participant.participantId) }"
             :disabled="busy || participant.state !== 'active'"
-            :title="isTarget(participant.participantId) ? 'This participant receives the input' : 'Send the input to this participant'"
+            :title="rt(isTarget(participant.participantId) ? 'This participant receives the input' : 'Send the input to this participant')"
             :data-testid="'set-target'"
             :data-participant-id="participant.participantId"
             :aria-pressed="isTarget(participant.participantId)"
             @click="emit('select-target', participant.participantId)"
           >
-            {{ isTarget(participant.participantId) ? 'Input target' : 'Send here' }}
+            {{ rt(isTarget(participant.participantId) ? 'Input target' : 'Send here') }}
           </button>
           <button
             type="button"
@@ -56,10 +56,10 @@
             :disabled="busy || participant.participantId === activeParticipantId"
             :data-testid="'activate-participant'"
             :data-participant-id="participant.participantId"
-            title="Make this participant the thread's active selection"
+            :title='rt("Make this participant the thread\u0027s active selection")'
             @click="emit('activate', participant.participantId)"
           >
-            Activate
+            {{ rt("Activate") }}
           </button>
           <button
             v-if="participant.state !== 'active'"
@@ -68,27 +68,27 @@
             :disabled="busy"
             :data-testid="'resume-participant'"
             :data-participant-id="participant.participantId"
-            :title="participant.state === 'orphaned' ? 'The native session vanished; resuming re-checks it' : 'Re-bind this participant'"
+            :title="rt(participant.state === 'orphaned' ? 'The native session vanished; resuming re-checks it' : 'Re-bind this participant')"
             @click="emit('resume', participant.participantId)"
           >
-            Resume
+            {{ rt("Resume") }}
           </button>
           <button
             type="button"
             class="action-button"
             :disabled="busy || participant.role === 'owner'"
-            :title="participant.role === 'owner' ? 'The owner binds the thread origin and cannot leave' : 'Remove this participant; its native history is kept'"
+            :title="rt(participant.role === 'owner' ? 'The owner binds the thread origin and cannot leave' : 'Remove this participant; its native history is kept')"
             :data-testid="'leave-participant'"
             :data-participant-id="participant.participantId"
             @click="emit('leave', participant.participantId)"
           >
-            Leave
+            {{ rt("Leave") }}
           </button>
           <button
             type="button"
             class="action-button"
             :disabled="busy"
-            title="Locate this participant's native session in the session tree"
+            :title='rt("Locate this participant\u0027s native session in the session tree")'
             :data-testid="'locate-session'"
             :data-participant-id="participant.participantId"
             @click="emit('locate-session', participant.session)"
@@ -100,17 +100,18 @@
     </ul>
 
     <div v-if="availableSessions.length > 0" class="available-sources">
-      <div class="section-title">Add a source to this thread</div>
-      <div class="available-list" role="group" aria-label="Available native sessions">
+      <div class="section-title">{{ rt("Add a source to this thread") }}</div>
+      <div class="available-list" role="group" :aria-label='rt("Available native sessions")'>
         <button
           v-for="entry in availableSessions"
-          :key="threadBindingKey(entry.session)"
+          :key="encodeSessionKey(entry.session)"
           type="button"
           class="action-button"
           :disabled="busy || joined(entry.session)"
-          :title="joined(entry.session) ? 'Already a participant of this thread' : 'Join this native session to the thread'"
+          :title="rt(joined(entry.session) ? 'Already a participant of this thread' : 'Join this native session to the thread')"
           :data-testid="'add-source'"
           :data-native-session-id="entry.session.nativeSessionId"
+          :data-session-key="encodeSessionKey(entry.session)"
           @click="emit('join', entry.session)"
         >
           <Icon icon="lucide:plus" :width="13" :height="13" />
@@ -119,18 +120,20 @@
         </button>
       </div>
       <p class="available-hint">
-        A participant keeps its own native history; joining never merges two sessions into one.
+        {{ rt("A participant keeps its own native history; joining never merges two sessions into one.") }}
       </p>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
+import { useRuntimeUi } from '../../locales/runtimeUi';
+const { rt } = useRuntimeUi();
 import { computed } from 'vue';
 import { Icon } from '@iconify/vue';
 import type { ParticipantView } from '../../../bridge/runtime/threads/participantService.js';
 import type { SessionRef } from '../../../shared/runtime/identity.js';
-import { threadBindingKey } from '../../../shared/runtime/thread.js';
+import { encodeSessionKey } from '../../../shared/runtime/identity.js';
 import type { AvailableSession } from '../../composables/useRuntimeThread';
 
 const props = withDefaults(
@@ -157,7 +160,7 @@ const emit = defineEmits<{
   (event: 'locate-session', session: SessionRef): void;
 }>();
 
-const joinedKeys = computed(() => new Set(props.participants.map((participant) => threadBindingKey(participant.session))));
+const joinedKeys = computed(() => new Set(props.participants.map((participant) => encodeSessionKey(participant.session))));
 
 function isTarget(participantId: string): boolean {
   if (props.targets.length > 0) return props.targets.includes(participantId);
@@ -165,7 +168,7 @@ function isTarget(participantId: string): boolean {
 }
 
 function joined(session: SessionRef): boolean {
-  return joinedKeys.value.has(threadBindingKey(session));
+  return joinedKeys.value.has(encodeSessionKey(session));
 }
 
 /**
@@ -272,17 +275,17 @@ function shortId(value: string): string {
 }
 
 .participant-state[data-state='active'] {
-  color: var(--theme-status-success, #86efac);
+  color: var(--codex-status-success, var(--theme-text-primary));
   border-color: color-mix(in srgb, var(--color-success-400, #22c55e) 60%, transparent);
 }
 
 .participant-state[data-state='left'] {
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
   border-color: color-mix(in srgb, var(--theme-status-warning, #fcd34d) 45%, transparent);
 }
 
 .participant-state[data-state='orphaned'] {
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
   border-color: color-mix(in srgb, var(--theme-status-error, #f87171) 55%, transparent);
 }
 

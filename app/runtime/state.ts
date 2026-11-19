@@ -13,7 +13,7 @@ import type { SelectionCapture } from './selectionScope';
 
 export type RuntimeResource = Readonly<{ usage(): CacheUsage; dispose(): void | Promise<void> }>;
 export type RuntimeHistoryResource = RuntimeResource & Readonly<{ select(capture: SelectionCapture | null): void | Promise<void>; invalidate?(capture: SelectionCapture): void | Promise<void> }>;
-export type RuntimeStateOptions = Readonly<{ client: RuntimeClient; profileId: ConnectionProfileId; drafts?: RuntimeResource; history?: RuntimeHistoryResource; pins?: RuntimeResource }>;
+export type RuntimeStateOptions = Readonly<{ client: RuntimeClient; profileId: ConnectionProfileId; drafts?: RuntimeResource; history?: RuntimeHistoryResource; pins?: RuntimeResource; onCanonical?: (entity: CanonicalEntity) => void }>;
 export type PageState<T> = Readonly<{ status: 'loading' | 'partial' | 'complete' | 'error'; items: readonly T[]; cursor: string | null; loaded: number; error?: Readonly<{ code: ErrorCode; retryable: boolean }> }>;
 export type RuntimePageView = PageState<CachedEntity> & Readonly<{ release(): void }>;
 export type RuntimeViewRequest = Readonly<{ collection?: IndexCollection; offset?: number; visible?: boolean }>;
@@ -49,6 +49,11 @@ function idle(signal: AbortSignal): Promise<void> {
 export function createRuntimeState(options: RuntimeStateOptions) {
   const { client, profileId } = options;
   const budget = createMemoryBudget({ maxBytes: ENTITY_LIMITS.bytes, maxEntries: ENTITY_LIMITS.entries });
+  const outputReservation = budget.reserve({ bytes: 64 * 1024, entries: 0 });
+  requireValue(outputReservation !== null, 'state.output_reservation', 'source_unavailable');
+  const outputReserve: MemoryLease = outputReservation;
+  outputReserve.commit();
+  const outputBudget = createMemoryBudget({ maxBytes: 64 * 1024, maxEntries: 4 });
   const cache = createEntityCache({ budget });
   const selection = createSelectionScope({ client, profileId });
   const targets = new Map<EnvironmentId, TargetState>();
@@ -95,6 +100,7 @@ export function createRuntimeState(options: RuntimeStateOptions) {
         requireValue(item.revision <= page.revision, 'state.snapshot_revision', 'replay_required');
         const result = cache.admit({ ...item, address: address(entry, item), fence: entry.fence });
         requireValue(result !== 'budget', 'state.entity_budget', 'source_unavailable');
+        if (result === 'applied') options.onCanonical?.(item);
         if (show && position.loaded + index >= offset && item.value !== null) {
           const lease = cache.get(address(entry, item)); requireValue(lease !== null, 'state.view_budget', 'source_unavailable'); window.push(lease);
         } else if (entry.visibleCaptured && visible?.target === entry.target && visible.collection === name
@@ -138,7 +144,7 @@ export function createRuntimeState(options: RuntimeStateOptions) {
       else lease.release();
     }
   }
-  async function deliver(entry: TargetState, delivery: ObserverDelivery) {
+  async function deliver(entry: TargetState, delivery: ObserverDelivery, prefetched?: CanonicalEntity) {
     check(entry);
     if (delivery === null) return;
     switch (delivery.kind) {
@@ -151,21 +157,50 @@ export function createRuntimeState(options: RuntimeStateOptions) {
     requireValue(entry.events++ < 512, 'state.fence_window', 'replay_required');
     const applicationGeneration = entry.applicationGeneration;
     const frame = delivery.frame;
-    requireValue(record(frame.payload) && collection(frame.payload.collection) && typeof frame.payload.key === 'string', 'state.patch');
-    const canonical = await client.request(entry.target, 'runtime.entity.resolve', { event: frame }, { signal: entry.controller.signal, selectionCurrent: () => current(entry) });
+    if (frame.type !== 'entity.patch') return;
+    requireValue(record(frame.payload) && typeof frame.payload.collection === 'string' && typeof frame.payload.key === 'string', 'state.patch');
+    if (!collection(frame.payload.collection)) return;
+    const canonical = prefetched ?? await client.request(entry.target, 'runtime.entity.resolve', { event: frame }, { signal: entry.controller.signal, selectionCurrent: () => current(entry) });
     check(entry);
     requireValue(applicationGeneration === entry.applicationGeneration && entry.fence !== undefined, 'state.application', 'reconcile_required');
     requireValue(canonical.collection === frame.payload.collection && canonical.key === frame.payload.key && canonical.revision >= frame.entityRevision, 'state.canonical', 'replay_required');
     const result = cache.admit({ ...canonical, address: address(entry, canonical), fence: entry.fence });
     requireValue(result !== 'budget', 'state.event_budget', 'replay_required');
     if (result === 'applied') {
+      options.onCanonical?.(canonical);
       if (visible?.target === entry.target && visible.collection === canonical.collection) reconcile(entry, canonical);
       const captured = selection.capture();
-      if (captured && captured.selection.session.environmentId === entry.target && encodeSessionKey(captured.selection.session) === canonical.key) {
-        await options.history?.invalidate?.(captured); check(entry);
+      if (canonical.collection === 'session_summaries' && captured && captured.selection.session.environmentId === entry.target && encodeSessionKey(captured.selection.session) === canonical.key) {
+        if (canonical.value === null) {
+          selection.select(null);
+          await options.history?.select(null);
+        } else await options.history?.invalidate?.(captured);
+        check(entry);
       }
       notify();
     }
+  }
+  async function deliverMany(entry: TargetState, deliveries: readonly ObserverDelivery[]) {
+    requireValue(deliveries.length <= 4, 'state.replay_batch');
+    const retained = cache.reserve({ bytes: deliveries.length * 2 * 1024 * 1024, entries: 0 });
+    if (!retained) {
+      for (const delivery of deliveries) await deliver(entry, delivery);
+      return;
+    }
+    const applicationGeneration = entry.applicationGeneration;
+    try {
+      const results = await Promise.allSettled(deliveries.map(delivery => {
+        if (delivery?.kind !== 'event' || delivery.frame.type !== 'entity.patch' || !record(delivery.frame.payload) || !collection(delivery.frame.payload.collection)) return Promise.resolve(undefined);
+        return client.request(entry.target, 'runtime.entity.resolve', { event: delivery.frame }, { signal: entry.controller.signal, selectionCurrent: () => current(entry) && entry.applicationGeneration === applicationGeneration });
+      }));
+      check(entry);
+      requireValue(entry.applicationGeneration === applicationGeneration, 'state.application', 'reconcile_required');
+      for (let index = 0; index < deliveries.length; index++) {
+        const result = results[index];
+        if (result.status === 'rejected') throw result.reason;
+        await deliver(entry, deliveries[index], result.value);
+      }
+    } finally { retained.release(); }
   }
   async function snapshot(entry: TargetState) {
     entry.applicationGeneration = ++generation; entry.fence = undefined; entry.events = 0; entry.visibleCaptured = false;
@@ -181,7 +216,7 @@ export function createRuntimeState(options: RuntimeStateOptions) {
         onPage: (name, page) => {
           if (first) { requireValue(firstPage.resize(2048 + 2 * estimateRetainedBytes(page.items) + 4 * page.token.length), 'state.first_page_budget', 'source_unavailable'); first = false; }
           publishPage(entry, name, page);
-        }, onDelivery: delivery => deliver(entry, delivery),
+        }, onDelivery: delivery => deliver(entry, delivery), onDeliveries: deliveries => deliverMany(entry, deliveries),
       });
       entry.observer = result.observer; check(entry);
       for (const value of entry.progress.values()) value.status = 'complete';
@@ -246,7 +281,7 @@ export function createRuntimeState(options: RuntimeStateOptions) {
     requireValue(!disposed, 'state.disposed', 'cancelled');
     const entry = target === undefined ? undefined : targets.get(target); const status = entry?.progress.get(name);
     const leases: EntityLease[] = [];
-    const container = cache.reserve({ bytes: 512 + ENTITY_LIMITS.page * 64, entries: 0 });
+    const container = outputBudget.reserve({ bytes: 512 + ENTITY_LIMITS.page * 64, entries: 1 });
     requireValue(container !== null, 'state.output_budget', 'source_unavailable'); container.commit();
     if (visible?.target === target && visible?.collection === name) for (const held of window) {
       const lease = cache.get(held.entity.address); if (lease) leases.push(lease);
@@ -254,7 +289,7 @@ export function createRuntimeState(options: RuntimeStateOptions) {
     let released = false;
     return { status: status?.status ?? 'loading', loaded: status?.loaded ?? 0, cursor: status?.cursor ?? null,
       items: Object.freeze(leases.map(lease => lease.entity)), ...(status?.error ? { error: status.error } : {}),
-      release() { if (released) return; released = true; for (const lease of leases) lease.release(); container.release(); },
+      release() { if (released) return; released = true; for (const lease of leases) lease.release(); container.release(); if (disposed && outputBudget.usage().entries === 0) outputReserve.release(); },
     };
   }
   return {
@@ -281,6 +316,7 @@ export function createRuntimeState(options: RuntimeStateOptions) {
         await Promise.all([...targets.values()].map(stop)); clearWindow(); cache.clear();
         for (const entry of targets.values()) entry.metadata.release(); targets.clear();
         for (const lease of listeners.values()) lease.release(); listeners.clear();
+        if (outputBudget.usage().entries === 0) outputReserve.release();
         const results = await Promise.allSettled([options.history?.dispose(), options.drafts?.dispose(), options.pins?.dispose()]);
         for (const result of results) if (result.status === 'rejected') throw result.reason;
       })();

@@ -35,7 +35,7 @@
 // single traversal stays internally consistent.
 import { computed, getCurrentScope, onScopeDispose, shallowRef } from 'vue';
 import type { ErrorCode } from '../../shared/runtime/capabilities.js';
-import { decodeSessionKey, encodeSessionKey } from '../../shared/runtime/identity.js';
+import { decodeRepoKey, decodeSessionKey, encodeSessionKey } from '../../shared/runtime/identity.js';
 import type { EnvironmentId, HarnessInstanceId, SessionRef } from '../../shared/runtime/identity.js';
 import type { RuntimeClient } from '../runtime/client';
 import { createRuntimeState } from '../runtime/state';
@@ -84,7 +84,7 @@ export type UnifiedFlatRow = Readonly<{ key: string; node: UnifiedTreeNode; dept
 export type HarnessEntry = Readonly<{
   harnessInstanceId: string;
   kind: SessionHarness;
-  status: 'loading' | 'partial' | 'complete' | 'error';
+  status: 'loading' | 'partial' | 'complete' | 'error' | 'disabled';
   reason: string | null;
 }>;
 
@@ -172,7 +172,7 @@ export function parseUnifiedSessionRow(key: string, value: unknown, harness: Ses
     directory: asText(row.directory, 16384),
     harness,
     harnessInstanceId,
-    status: asText(row.status, 128),
+    status: row.status === 'running' ? 'busy' : asText(row.status, 128),
     archived: row.archived === true,
     pinned: row.pinned === true,
     parentSessionKey,
@@ -193,12 +193,23 @@ export function parseHarnessEntry(key: string, value: unknown): HarnessEntry | n
     if (!record) continue;
     const value_ = asText(record.status, 64);
     if (value_ === 'complete') { status = 'complete'; reason = null; }
-    else if (value_ === 'partial') { status = asText(record.reason, 1024) ? 'error' : 'partial'; reason = asText(record.reason, 1024); }
+    else if (value_ === 'partial') {
+      reason = asText(record.reason, 1024);
+      status = reason === 'disabled' ? 'disabled' : reason && !reason.startsWith('api-enumeration-unproven') ? 'error' : 'partial';
+    }
   }
   return Object.freeze({ harnessInstanceId: key, kind: asHarnessKind(row.kind), status, reason });
 }
 
 /** Parse one `workspaces` entity value into the workspace→repo mapping. */
+function repositoryLabel(repoKey: string, directory: string): string {
+  let location = directory;
+  try { location = decodeRepoKey(repoKey).canonicalCommonDir; }
+  catch (error) { if (!(error instanceof TypeError)) throw error; }
+  const normalized = location.replace(/\\/g, '/').replace(/\/+$/, '').replace(/\/\.git$/, '');
+  return normalized.split('/').pop() || 'Repository';
+}
+
 export function parseWorkspaceEntry(value: unknown): WorkspaceEntry | null {
   const row = asRecord(value);
   if (!row) return null;
@@ -275,7 +286,7 @@ export function buildUnifiedTree(
       if (orphanOnly || !bucket.repoKey) worktrees.push(worktree);
       else {
         const repoKey = `repo:${bucket.repoKey}`;
-        const group = repoGroups.get(repoKey) ?? { name: bucket.repoKey.replace(/\/+$/, '').split('/').pop() || bucket.repoKey, children: [] };
+        const group = repoGroups.get(repoKey) ?? { name: repositoryLabel(bucket.repoKey, bucket.directory), children: [] };
         group.children.push(worktree);
         repoGroups.set(repoKey, group);
       }
@@ -357,6 +368,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   const history = options.history;
   const state = createRuntimeState({
     ...options,
+    onCanonical: entity => { if (entity.collection === 'harnesses') mergeHarness(entity.key, entity.value, entity.revision); options.onCanonical?.(entity); },
     ...(history ? {
       history: {
         usage: history.usage,
@@ -372,6 +384,17 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   const sessions = shallowRef<readonly UnifiedSessionRow[]>([]);
   const workspaces = shallowRef<readonly WorkspaceEntry[]>([]);
   const harnesses = shallowRef<readonly HarnessEntry[]>([]);
+  const harnessRevisions = new Map<string, number>();
+  function mergeHarness(key: string, value: unknown, revision: number): void {
+    if (revision <= (harnessRevisions.get(key) ?? -1)) return;
+    if (!harnessRevisions.has(key) && harnessRevisions.size >= 128) return;
+    harnessRevisions.set(key, revision);
+    const parsed = parseHarnessEntry(key, value);
+    const entries = harnesses.value.filter(entry => entry.harnessInstanceId !== key);
+    if (parsed) { entries.push(parsed); kindById.set(key, parsed.kind); }
+    else kindById.delete(key);
+    harnesses.value = Object.freeze(entries);
+  }
   const nativeChildren = shallowRef<ReadonlyMap<string, readonly UnifiedSessionRow[]>>(new Map());
   // The index revision each parent's children were scanned against. A parent is "already scanned"
   // only for the view it was scanned against, so a newer index view re-scans it.
@@ -390,14 +413,12 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   let disposed = false;
   let unsubscribe: (() => void) | undefined;
   let readChain: Promise<unknown> = Promise.resolve();
-  let previousWindowKeys: ReadonlySet<string> = new Set<string>();
   let searchGeneration = 0;
   let searchController: AbortController | undefined;
   // The revision of the most recent index view this composable read. It tells a child expand
   // whether the index has moved on since that parent was last scanned, without minting another
   // bridge snapshot view just to ask.
   let lastIndexRevision: number | null = null;
-  let clearingSelection = false;
 
   function serialize<T>(work: () => Promise<T>): Promise<T> {
     const next = readChain.then(work, work);
@@ -406,39 +427,20 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   }
   function refreshFromState(): void {
     const view = state.view('session_summaries', target);
-    const windowKeys = new Set<string>();
     try {
       viewStatus.value = view.status;
-      viewLoaded.value = view.loaded;
       viewError.value = view.error?.code ?? null;
       const rows: UnifiedSessionRow[] = [];
       for (const item of view.items) {
-        windowKeys.add(item.address.key);
         if (item.value === null || item.value === undefined) continue;
         const harnessInstanceId = asText(asRecord(asRecord(item.value)?.session)?.harnessInstanceId, 64);
         const parsed = parseUnifiedSessionRow(item.address.key, item.value, harnessInstanceId ? kindById.get(harnessInstanceId) ?? 'unknown' : 'unknown');
         if (parsed) rows.push(parsed);
       }
       sessions.value = Object.freeze(rows);
+      viewLoaded.value = Math.max(view.loaded, rows.length);
     } finally {
       view.release();
-    }
-    const captured = selection.value;
-    const clearKey = captured && viewStatus.value !== 'loading' ? encodeSessionKey(captured.selection.session) : null;
-    const shouldClear = clearKey !== null && previousWindowKeys.has(clearKey) && !windowKeys.has(clearKey);
-    // Advance the local window markers BEFORE clearing. `state.select(null)`
-    // notifies synchronously and re-enters this callback; the re-entrant call
-    // must observe the already-advanced markers, so the clear can run at most
-    // once. `clearingSelection` makes that single-clear contract explicit and
-    // bounds the callback even if the markers were ever to regress.
-    previousWindowKeys = windowKeys;
-    if (shouldClear && !clearingSelection) {
-      clearingSelection = true;
-      try {
-        void state.select(null).catch(() => {});
-      } finally {
-        clearingSelection = false;
-      }
     }
     selection.value = state.capture();
     usage.value = state.usage();
@@ -476,14 +478,9 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     }
     lastIndexRevision = view.revision;
     if (disposed) return;
-    const entries: HarnessEntry[] = [];
     for (const value of harnessValues) {
-      const parsed = parseHarnessEntry(String(value.key), value.value);
-      if (!parsed) continue;
-      entries.push(parsed);
-      kindById.set(parsed.harnessInstanceId, parsed.kind);
+      if (typeof value.revision === 'number') mergeHarness(String(value.key), value.value, value.revision);
     }
-    harnesses.value = Object.freeze(entries);
     const mapped: WorkspaceEntry[] = [];
     for (const value of workspaceValues) {
       const parsed = parseWorkspaceEntry(value.value);
@@ -492,12 +489,11 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     workspaces.value = Object.freeze(mapped);
   }
   async function start(): Promise<void> {
+    unsubscribe = state.subscribe(() => { if (!disposed) refreshFromState(); });
     await state.start(target, { collection: 'session_summaries', visible: true });
+    await serialize(() => readTopology(false));
     if (disposed) return;
     started.value = true;
-    refreshFromState();
-    unsubscribe = state.subscribe(() => { if (!disposed) refreshFromState(); });
-    await serialize(() => readTopology(false));
     refreshFromState();
   }
   /** Re-read the state window and the index topology without restarting the target. */

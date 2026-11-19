@@ -4,6 +4,9 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createPersistentStorage } from '../electron/persistentStorage.js';
+import { readConfiguredMaxLocalFileBytes, registerPersistentStorageIpc } from '../electron/persistentStorageIpc.js';
+import type { PersistentStorageIpcEvent } from '../electron/persistentStorageIpc.js';
+import { encodeLiveSetting, liveSettingKey } from '../shared/runtime/liveSettings.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -58,6 +61,85 @@ afterEach(() => {
 });
 
 describe('Electron persistent storage', () => {
+  it('persists live IPC settings and tombstones across native store reopen without changing legacy bytes', () => {
+    const { directory, filePath } = createStorageFile({ 'opencode.vis.runtime.bridgeUrl': 'ws://legacy/runtime' });
+    const legacyBytes = fs.readFileSync(filePath);
+    const livePath = path.join(directory, 'renderer-live-settings.json');
+    const legacy = createPersistentStorage(filePath);
+    let live = createPersistentStorage(livePath);
+    const handlers = new Map<string, (event: PersistentStorageIpcEvent, payload: unknown) => void>();
+    const broadcastChange = vi.fn();
+    registerPersistentStorageIpc({
+      ipcMain: { handle: vi.fn(), on: (name, handler) => handlers.set(name, handler) },
+      assertTrustedRenderer: () => {},
+      getStorage: () => legacy,
+      getLiveStorage: () => live,
+      broadcastChange,
+      getLocalApplicationPath: () => null,
+      localApplicationPathKey: 'opencode.settings.localApplicationPath.v1',
+      rendererStoragePrefix: 'opencode.',
+    });
+    function invoke(channel: string, payload: unknown) {
+      const event: PersistentStorageIpcEvent = { sender: { id: 7 }, returnValue: undefined };
+      const handler = handlers.get(channel);
+      if (!handler) throw new Error('Missing IPC handler');
+      handler(event, payload);
+      return event.returnValue;
+    }
+    const key = liveSettingKey('vis.runtime.bridgeUrl');
+    const value = encodeLiveSetting('ws://127.0.0.1:35807/runtime');
+    expect(invoke('persistent-storage-set', { key, value })).toBe(true);
+    live = createPersistentStorage(livePath);
+    expect(invoke('persistent-storage-get', key)).toEqual({ ok: true, value });
+    expect(invoke('persistent-storage-remove', key)).toBe(true);
+    live = createPersistentStorage(livePath);
+    expect(invoke('persistent-storage-get', key)).toEqual({ ok: true, value: encodeLiveSetting(null) });
+    expect(broadcastChange).toHaveBeenCalledTimes(2);
+    live = createPersistentStorage(livePath, {
+      ...fs,
+      renameSync: () => { throw new Error('injected live rename failure'); },
+    });
+    expect(invoke('persistent-storage-set', { key, value })).toBe(false);
+    expect(broadcastChange).toHaveBeenCalledTimes(2);
+    expect(createPersistentStorage(livePath).getItem(key)).toBe(encodeLiveSetting(null));
+    expect(fs.readFileSync(filePath)).toEqual(legacyBytes);
+    expect(fs.readdirSync(directory).sort()).toEqual(['renderer-live-settings.json', 'renderer-storage.json']);
+  });
+
+  it('uses live file size settings and tombstones while rejecting corrupt values without stale fallback', async () => {
+    const { directory, filePath } = createStorageFile({ 'opencode.settings.openInEditorMaxSizeMb.v1': '7' });
+    const legacyBytes = fs.readFileSync(filePath);
+    const legacy = createPersistentStorage(filePath);
+    const livePath = path.join(directory, 'renderer-live-settings.json');
+    const live = createPersistentStorage(livePath);
+    const getLegacy = vi.fn(() => legacy);
+    const readLimit = () => readConfiguredMaxLocalFileBytes(getLegacy, () => createPersistentStorage(livePath));
+    const key = liveSettingKey('settings.openInEditorMaxSizeMb.v1');
+    expect(await readLimit()).toBe(7 * 1024 * 1024);
+    getLegacy.mockClear();
+    live.setItem(key, encodeLiveSetting('42'));
+    expect(await readLimit()).toBe(42 * 1024 * 1024);
+    live.setItem(key, encodeLiveSetting('150'));
+    expect(await readLimit()).toBe(100 * 1024 * 1024);
+    live.setItem(key, encodeLiveSetting(null));
+    expect(await readLimit()).toBe(20 * 1024 * 1024);
+    live.setItem(key, '{"version":1,"value":42}');
+    await expect(readLimit()).rejects.toThrow('Invalid live file size setting');
+    fs.writeFileSync(livePath, '{invalid json');
+    await expect(readLimit()).rejects.toThrow();
+    expect(getLegacy).not.toHaveBeenCalled();
+    expect(fs.readFileSync(filePath)).toEqual(legacyBytes);
+  });
+
+  it('awaits legacy native size reads and surfaces failed startup reads when no live value exists', async () => {
+    const { directory } = createStorageFile({});
+    const live = createPersistentStorage(path.join(directory, 'renderer-live-settings.json'));
+    const legacy = { getItem: vi.fn(async () => '13') };
+    expect(await readConfiguredMaxLocalFileBytes(() => legacy, () => live)).toBe(13 * 1024 * 1024);
+    legacy.getItem.mockRejectedValueOnce(new Error('native startup read failed'));
+    await expect(readConfiguredMaxLocalFileBytes(() => legacy, () => live)).rejects.toThrow('native startup read failed');
+  });
+
   it('keeps legacy settings readable after migration fails and retries only when explicitly prepared', async () => {
     const key = 'opencode.state.codexAuxiliaryHistory.v1.thread';
     const { filePath } = createStorageFile({ [key]: 'history', draft: 'kept' });

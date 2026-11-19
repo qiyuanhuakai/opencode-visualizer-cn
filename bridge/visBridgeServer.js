@@ -24,6 +24,7 @@ import {
 import { defaultBridgeConfigPath, resolveBridgeProfilePath } from './bridgeConfig.js';
 import { createConnectionManager } from './runtime/transports/connectionManager.js';
 import { createProfileStore } from './runtime/transports/profileStore.js';
+import { createRemoteServices } from './runtime/remoteServices.js';
 import { proxyWebSocket } from './codexWebSocketProxy.js';
 import { proxyDshHttp } from './dshHttpProxy.js';
 import { handleDshUpgrade } from './dshWsProxy.js';
@@ -107,9 +108,12 @@ export function createVisBridgeServer(options) {
     options.profilePath ??
     resolveBridgeProfilePath(bridgeOptions.configPath ?? defaultBridgeConfigPath());
   const profileStore = options.profileStore ?? createProfileStore({ profilePath });
+  const remoteServices = options.remoteServices ?? options.runtime?.remoteServices ?? createRemoteServices(options.remote);
   const profileManager =
     options.profileManager ??
-    createConnectionManager({ store: profileStore, openTransport: options.openProfileTransport });
+    (options.openProfileTransport
+      ? createConnectionManager({ store: profileStore, openTransport: options.openProfileTransport })
+      : remoteServices.configureProfiles(profileStore));
   const server = createServer((request, response) => {
     const requestUrl = new URL(request.url ?? '/', 'http://localhost');
 
@@ -301,12 +305,14 @@ export function createVisBridgeServer(options) {
   });
 
   server.on('close', () => {
+    void remoteServices.close().catch(error => server.emit('runtimeError', error));
     ptyManager.disposeAll();
     void commandRunner.close();
     void bridgeOptions.runtime?.stop().catch((error) => server.emit('runtimeError', error));
   });
 
   server.stopOwnedProcesses = () => commandRunner.close();
+  server.remoteServices = remoteServices;
 
   return server;
 }

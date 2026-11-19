@@ -8,6 +8,7 @@ import { createFileChannels } from './fileChannels.js';
 import { createWorkspaceOperations } from './workspaceOperations.js';
 import { createPtyService } from './ptyService.js';
 import { createWorkspaceReverseTools } from './workspaceReverseTools.js';
+import { createWorkspaceReads } from './workspaceReads.js';
 
 // Construct only on the execution target. Roots and connection callbacks come from
 // the authenticated host, never from request params or a gateway's path resolver.
@@ -68,6 +69,7 @@ export async function createWorkspaceService({ target, epoch, roots }) {
     };
     scope.assertCurrent();
     const client = {
+      reads: createWorkspaceReads(scope),
       async list({ workspaceKey, path: relative = '.' }) {
         const grant = scope.authorize(workspaceKey, 'read');
         return fs.listDirectory(relative, grant.root);

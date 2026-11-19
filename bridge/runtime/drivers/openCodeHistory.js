@@ -143,7 +143,7 @@ export function createOpenCodeHistory(options) {
     requireValue(opened, 'opencode.history_open', 'replay_required');
     integerValue(after, 'opencode.history_after');
     for (;;) {
-      if (failure) return { through, changed: false, status: failure.code === 'replay_required' ? 'replay_required' : 'source_unavailable' };
+      if (failure) return { through, changed: through > after, status: failure.code === 'replay_required' ? 'replay_required' : 'source_unavailable' };
       if (through > after) return { through, changed: true, status: 'current' };
       if (closed || signal?.aborted) throw new ProtocolError('cancelled', 'opencode.history_read');
       await awaitChange(signal);

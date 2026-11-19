@@ -6,7 +6,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createRuntimeServices } from '../bridge/runtime/runtimeServices.js';
-import { decodeRepoKey } from '../shared/runtime/identity.js';
+import type { RuntimeServices } from '../bridge/runtime/runtimeServices.js';
+import { decodeRepoKey, encodeSessionKey, parseSessionRef } from '../shared/runtime/identity.js';
 import type { PathPolicy } from '../shared/runtime/identity.js';
 
 const supervisor = { start: async () => [], stop: async () => {}, getStatus: () => [] };
@@ -14,6 +15,15 @@ const acpManager = { reconcile: async () => [], stopAll: async () => {}, getStat
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
+
+async function probeSelectedSession(services: RuntimeServices, directory: string) {
+  const canonical = await realpath(directory);
+  const workspace = services.workspace.workspaces.find(root => root.root === canonical);
+  if (!workspace) throw new Error('Missing granted workspace');
+  const session = parseSessionRef({ environmentId: services.target, harnessInstanceId: randomUUID(), nativeSessionId: 'selected-session' });
+  await services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key: encodeSessionKey(session), value: { session, directory: canonical, workspaceKey: workspace.key } }] });
+  return services.hostServices.read({ domain: 'thread', operation: 'repository', args: { session } }, { target: services.target, permissions: services.grant.permissions, workspaceKeys: services.grant.workspaceKeys });
+}
 
 async function fixture() {
   const root = await mkdtemp(path.join(tmpdir(), 'runtime-workspace-probe-'));
@@ -33,8 +43,8 @@ async function fixture() {
   };
   return { root, repo, plain, policy };
 }
-describe('the seeded workspace catalog carries the repo identity the Host Thread gates on (F3-P2-2)', () => {
-  it('probes every granted root at catalog-seed time, so a real repository resolves and a non-repository answers non-git', async () => {
+describe('the selected workspace catalog carries the repo identity the Host Thread gates on (F3-P2-2)', () => {
+  it('seeds unknown roots without eager probes, then resolves git and non-git through selected-session requests', async () => {
     // Given: one granted root that IS a real git repository and one that is not.
     const { repo, plain } = await fixture();
     const restricted = path.join(plain, 'restricted');
@@ -63,10 +73,19 @@ describe('the seeded workspace catalog carries the repo identity the Host Thread
     });
     cleanups.push(async () => { await services.close(); });
 
-    // When: the runtime starts (which is where the catalog is seeded).
+    // Startup stays progressive: no Git scan of every registered root.
     await services.start();
+    const initial = await services.index.topology({ collection: 'workspaces' });
+    expect(initial.items).toHaveLength(2);
+    expect(initial.items.every(item => (item.value as { gitKind?: string }).gitKind === 'unknown')).toBe(true);
+    await probeSelectedSession(services, repo);
+    const selected = await services.index.topology({ collection: 'workspaces' });
+    const changed = selected.items.filter(item => initial.items.find(prior => prior.key === item.key)?.revision !== item.revision);
+    expect(changed).toHaveLength(1);
+    expect((changed[0]!.value as { workspace: { canonicalPath: string } }).workspace.canonicalPath).toBe(await realpath(repo));
+    expect(await probeSelectedSession(services, plain)).toBeNull();
 
-    // Then: the catalog entry for the real repository carries gitKind and a
+    // Then: the selected real repository carries gitKind and a
     // repoKey — the exact two fields `repoForSession` (App.vue) reads to decide
     // whether a Host Thread can be opened for a session in that directory.
     const page = await services.index.topology({ collection: 'workspaces' });
@@ -84,7 +103,7 @@ describe('the seeded workspace catalog carries the repo identity the Host Thread
     expect(decoded.canonicalCommonDir).toBe(await realpath(path.join(repo, '.git')));
     expect(decoded.environmentId).toBe(services.target);
 
-    // And: a granted root that is not a repository is probed honestly as
+    // And: the selected root that is not a repository is probed honestly as
     // non-git with no repoKey, rather than being left undescribed.
     expect(byPath.get(await realpath(restricted))).toMatchObject({ gitKind: 'unknown', repoKey: null });
     const plainEntry = byPath.get(await realpath(outsideGit));
@@ -105,7 +124,7 @@ describe('a read-only root is a capability limit, not a startup failure (F3-P2-3
     return repo;
   }
 
-  it('starts with mixed-permission roots, probing the authorized one and recording an explicit unknown for the read-only one', async () => {
+  it('starts with mixed-permission roots and probes only the selected authorized one, refusing read-only commands', async () => {
     // Given: a root granted the full permission set and a second, equally real
     // repository granted READ ONLY — the runtime may read it but is not
     // permitted to run git commands in it, which is a legitimate capability
@@ -133,9 +152,12 @@ describe('a read-only root is a capability limit, not a startup failure (F3-P2-3
     });
     cleanups.push(async () => { await services.close(); });
 
-    // When: the runtime starts. The read-only root's grant carries no command
-    // permission, so the startup probe cannot authorize it.
+    // Both start unknown; only an explicit selection probes a repository.
     await services.start();
+    const initial = await services.index.topology({ collection: 'workspaces' });
+    expect(initial.items.every(item => (item.value as { gitKind?: string }).gitKind === 'unknown')).toBe(true);
+    await probeSelectedSession(services, authorized);
+    await expect(probeSelectedSession(services, readonly)).rejects.toThrow('git.permission');
 
     // Then: the startup completed — the read-only root did not block it — and
     // the catalog still describes BOTH granted roots.
@@ -145,9 +167,8 @@ describe('a read-only root is a capability limit, not a startup failure (F3-P2-3
       return [value.workspace.canonicalPath, value];
     }));
 
-    // And: the AUTHORIZED root is probed for real — the fix probes every root
-    // it is permitted to probe, so the regression cannot be "fixed" by
-    // skipping all probes.
+    // The selected authorized root is probed for real; lazy discovery cannot
+    // be implemented by permanently skipping every probe.
     const authorizedEntry = byPath.get(await realpath(authorized));
     expect(authorizedEntry).toBeDefined();
     expect(authorizedEntry!.gitKind).toBe('git');
@@ -161,5 +182,7 @@ describe('a read-only root is a capability limit, not a startup failure (F3-P2-3
     expect(readonlyEntry).toBeDefined();
     expect(readonlyEntry!.gitKind).toBe('unknown');
     expect(readonlyEntry!.repoKey ?? null).toBeNull();
+    const readonlyInitial = initial.items.find(row => (row.value as { workspace: { canonicalPath: string } }).workspace.canonicalPath === readonlyEntry!.workspace.canonicalPath);
+    expect(page.items.find(item => item.key === readonlyInitial?.key)).toEqual(readonlyInitial);
   });
 });

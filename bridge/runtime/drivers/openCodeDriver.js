@@ -216,7 +216,7 @@ export async function createOpenCodeDriver(options) {
   }
   const core = {
     async inspect(input) { context(input); await fence(); return { state: sourceState, protocolVersion: 1 }; },
-    async listSessionPage(input) { const { params } = context(input); const page = await discovery.listSessionPage(params); return { ...page, items: page.items.map((item) => ({ ...item, session: sessionRef(item.summary.id) })) }; },
+    async listSessionPage(input) { const { params } = context(input); if (sourceState === 'failed' && params.cursor == null) await recoverStream(); const page = await discovery.listSessionPage(params); return { ...page, items: page.items.map((item) => ({ ...item, session: sessionRef(item.summary.id) })) }; },
     async getSession(input) { const { session, params } = context(input, true); await fence(); const item = summary(await request(`/session/${encodeURIComponent(session.nativeSessionId)}`, { query: { directory: params.directory } })); requireValue(item.id === session.nativeSessionId, 'opencode.session_response', 'reconcile_required'); return { session, summary: item, ...current() }; },
     async readHistoryPage(input) {
       const { session, params } = context(input, true); await fence(); const limit = pageLimit(params.limit);

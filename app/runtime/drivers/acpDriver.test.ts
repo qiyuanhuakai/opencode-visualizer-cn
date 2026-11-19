@@ -462,11 +462,20 @@ function openProducer(driver: Awaited<ReturnType<typeof historyDriver>>['driver'
   return method({ ...historyLogin, session: selected, params: historyParams });
 }
 
-async function drainDescriptor(handle: InternalNativeHistoryHandle, pageId: string, descriptorId: string) {
+async function drainDescriptor(
+  handle: InternalNativeHistoryHandle,
+  pageId: string,
+  descriptorId: string,
+) {
   const parts: Buffer[] = [];
   let offset = 0;
   for (;;) {
-    const chunk = await handle.chunk({ pageId, descriptorId, offset, signal: new AbortController().signal });
+    const chunk = await handle.chunk({
+      pageId,
+      descriptorId,
+      offset,
+      signal: new AbortController().signal,
+    });
     expect(chunk.bytes.byteLength).toBeLessThanOrEqual(HISTORY_STREAM_LIMITS.chunkBytes);
     expect(chunk.bytes.buffer.byteLength).toBeLessThanOrEqual(HISTORY_STREAM_LIMITS.chunkBytes);
     parts.push(Buffer.from(chunk.bytes.buffer, chunk.bytes.byteOffset, chunk.bytes.byteLength));
@@ -484,181 +493,222 @@ describe('ACP native selected-history producer over a controlled stdio fixture',
     try {
       const manifest = fx.driver.manifest;
       expect(manifest.core.openHistory).toEqual({ state: 'supported' });
-      for (const support of Object.values(manifest.core)) expect(support).toEqual({ state: 'supported' });
+      for (const support of Object.values(manifest.core))
+        expect(support).toEqual({ state: 'supported' });
       const handle = (await openProducer(fx.driver)) as InternalNativeHistoryHandle;
-      expect(handle.capabilities).toEqual({ archive: 'live-only', recordStream: true, live: 'invalidate' });
+      expect(handle.capabilities).toEqual({
+        archive: 'live-only',
+        recordStream: true,
+        live: 'invalidate',
+      });
     } finally {
       await fx.close();
     }
   });
 
-  test('captures only the selected session raw updates and serves them byte-exact', { timeout: 20_000 }, async () => {
-    const first = updateFrame('sel', 'selected-one');
-    const foreign = updateFrame('other', 'foreign-one');
-    const second = updateFrame('sel', 'selected-two');
-    const emitted = `${[first, foreign, second].join('\n')}\n`;
-    const expected = `[${first},${second}]`;
-    const fx = await historyDriver(JSON.stringify(emitted));
-    const streamStore = await historyStore(JSON.stringify([binding, session]));
-    try {
-      const handle = (await openProducer(fx.driver)) as InternalNativeHistoryHandle;
-      await handle.open({ signal: new AbortController().signal, streamStore });
-      const createSession = fx.driver.driver.core.createSession;
-      if (typeof createSession !== 'function') throw new TypeError('missing createSession');
-      await createSession({
-        ...historyLogin,
-        params: { ...historyParams, idempotencyKey: 'hist-1', directory: fx.dir },
-      });
-      expect(await handle.read({ after: 0, signal: new AbortController().signal })).toMatchObject({
-        through: 2,
-        changed: true,
-        status: 'current',
-      });
-      const page = await handle.page({ signal: new AbortController().signal });
-      if (!page.document) throw new TypeError('missing native document');
-      expect(page).toMatchObject({ completeness: 'partial', cursor: null });
-      expect(page.items.map((item) => item.recordId.length > 0)).toEqual([true, true]);
+  test(
+    'captures only the selected session raw updates and serves them byte-exact',
+    { timeout: 20_000 },
+    async () => {
+      const first = updateFrame('sel', 'selected-one');
+      const foreign = updateFrame('other', 'foreign-one');
+      const second = updateFrame('sel', 'selected-two');
+      const emitted = `${[first, foreign, second].join('\n')}\n`;
+      const expected = `[${first},${second}]`;
+      const fx = await historyDriver(JSON.stringify(emitted));
+      const streamStore = await historyStore(JSON.stringify([binding, session]));
+      try {
+        const handle = (await openProducer(fx.driver)) as InternalNativeHistoryHandle;
+        await handle.open({ signal: new AbortController().signal, streamStore });
+        const createSession = fx.driver.driver.core.createSession;
+        if (typeof createSession !== 'function') throw new TypeError('missing createSession');
+        await createSession({
+          ...historyLogin,
+          params: { ...historyParams, idempotencyKey: 'hist-1', directory: fx.dir },
+        });
+        expect(await handle.read({ after: 0, signal: new AbortController().signal })).toMatchObject(
+          {
+            through: 2,
+            changed: true,
+            status: 'current',
+          },
+        );
+        const page = await handle.page({ signal: new AbortController().signal });
+        if (!page.document) throw new TypeError('missing native document');
+        expect(page).toMatchObject({ completeness: 'partial', cursor: null });
+        expect(page.items.map((item) => item.recordId.length > 0)).toEqual([true, true]);
 
-      const document = await drainDescriptor(handle, page.pageId, page.document.id);
-      expect(document.toString('utf8')).toBe(expected);
-      expect(document.toString('utf8')).not.toContain('foreign-one');
-      expect(createHash('sha256').update(document).digest('hex')).toBe(page.document.sha256);
-      expect(page.document.totalBytes).toBe(Buffer.byteLength(expected));
+        const document = await drainDescriptor(handle, page.pageId, page.document.id);
+        expect(document.toString('utf8')).toBe(expected);
+        expect(document.toString('utf8')).not.toContain('foreign-one');
+        expect(createHash('sha256').update(document).digest('hex')).toBe(page.document.sha256);
+        expect(page.document.totalBytes).toBe(Buffer.byteLength(expected));
 
-      const records = page.items;
-      for (const [index, frame] of [first, second].entries()) {
-        const item = records[index];
-        if (item?.kind !== 'stream') throw new TypeError('missing streamed record');
-        const bytes = await drainDescriptor(handle, page.pageId, item.descriptor.id);
-        expect(bytes.toString('utf8')).toBe(frame);
-        expect(createHash('sha256').update(bytes).digest('hex')).toBe(item.descriptor.sha256);
+        const records = page.items;
+        for (const [index, frame] of [first, second].entries()) {
+          const item = records[index];
+          if (item?.kind !== 'stream') throw new TypeError('missing streamed record');
+          const bytes = await drainDescriptor(handle, page.pageId, item.descriptor.id);
+          expect(bytes.toString('utf8')).toBe(frame);
+          expect(createHash('sha256').update(bytes).digest('hex')).toBe(item.descriptor.sha256);
+        }
+        expect(streamStore.usage().diskBytes).toBe(page.document.totalBytes);
+        expect(streamStore.usage().pages).toBe(1);
+        await handle.close();
+      } finally {
+        await streamStore.close();
+        await fx.close();
       }
-      expect(streamStore.usage().diskBytes).toBe(page.document.totalBytes);
-      expect(streamStore.usage().pages).toBe(1);
-      await handle.close();
-    } finally {
-      await streamStore.close();
-      await fx.close();
-    }
-  });
+    },
+  );
 
-  test('captures a selected update larger than the legacy 256KiB in-memory discard', { timeout: 20_000 }, async () => {
-    const frameShape =
-      "{ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'sel', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'y'.repeat(600000) } } } }";
-    const frameText = JSON.stringify({
-      jsonrpc: '2.0',
-      method: 'session/update',
-      params: {
-        sessionId: 'sel',
-        update: {
-          sessionUpdate: 'agent_message_chunk',
-          content: { type: 'text', text: 'y'.repeat(600000) },
+  test(
+    'captures a selected update larger than the legacy 256KiB in-memory discard',
+    { timeout: 20_000 },
+    async () => {
+      const frameShape =
+        "{ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'sel', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'y'.repeat(600000) } } } }";
+      const frameText = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: 'sel',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'y'.repeat(600000) },
+          },
         },
-      },
-    });
-    const script = [
-      "const readline = require('node:readline');",
-      "readline.createInterface({ input: process.stdin }).on('line', (line) => {",
-      '  const message = JSON.parse(line);',
-      "  if (message.method === 'trigger') process.stdout.write(JSON.stringify(" +
-        frameShape +
-        ") + '\\n');",
-      '});',
-    ].join('\n');
-    const manager = createAcpProcessManager();
-    await manager.reconcile([
-      { id: 'mid', name: 'Mid ACP', command: process.execPath, args: ['-e', script], enabled: true },
-    ]);
-    const socket = Object.assign(new EventEmitter(), { send() {}, close() {} });
-    const attachment = manager.attach('mid', socket, { runtime: true });
-    let fed = 0;
-    const producer = createAcpHistory({
-      session: selected,
-      authority: { epoch: binding.epoch, processGeneration: 1 },
-      current: () => true,
-      assertCurrent: async () => {},
-      attachRaw: (tap) =>
-        attachment.setRawTap(
-          tap
-            ? (chunk) => {
-                fed += chunk.byteLength;
-                tap(chunk);
-              }
-            : undefined,
-        ),
-    });
-    const streamStore = await historyStore(JSON.stringify([binding, session]));
-    try {
-      await producer.open({ signal: new AbortController().signal, streamStore });
-      socket.emit('message', JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'trigger', params: {} }));
-      await vi.waitFor(() => expect(fed).toBeGreaterThanOrEqual(Buffer.byteLength(frameText) + 1));
-      const page = await producer.page({ signal: new AbortController().signal });
-      if (!page.document) throw new TypeError('missing native document');
-      expect(Buffer.byteLength(frameText)).toBeGreaterThan(262144);
-      expect(page.document.totalBytes).toBeGreaterThan(262144);
-      const document = await drainDescriptor(producer, page.pageId, page.document.id);
-      expect(document.toString('utf8')).toBe(`[${frameText}]`);
-      expect(createHash('sha256').update(document).digest('hex')).toBe(page.document.sha256);
-      expect(page.items).toHaveLength(1);
-      expect(page.completeness).toBe('partial');
-    } finally {
-      await producer.close();
-      await streamStore.close();
-      await manager.stopAll();
-    }
-  });
-
-  test('rejects an oversized selected update through the substrate bounds before assembly', { timeout: 20_000 }, async () => {
-    const emit =
-      "JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'sel', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'x'.repeat(2200000) } } } }) + '\\n'";
-    const script = [
-      "const readline = require('node:readline');",
-      "readline.createInterface({ input: process.stdin }).on('line', (line) => {",
-      '  const message = JSON.parse(line);',
-      "  if (message.method === 'trigger') process.stdout.write(" + emit + ');',
-      '});',
-    ].join('\n');
-    const manager = createAcpProcessManager();
-    await manager.reconcile([
-      { id: 'big', name: 'Big ACP', command: process.execPath, args: ['-e', script], enabled: true },
-    ]);
-    const socket = Object.assign(new EventEmitter(), {
-      send() {},
-      close() {},
-    });
-    const attachment = manager.attach('big', socket, { runtime: true });
-    let fed = 0;
-    const producer = createAcpHistory({
-      session: selected,
-      authority: { epoch: binding.epoch, processGeneration: 1 },
-      current: () => true,
-      assertCurrent: async () => {},
-      attachRaw: (tap) =>
-        attachment.setRawTap(
-          tap
-            ? (chunk) => {
-                fed += chunk.byteLength;
-                tap(chunk);
-              }
-            : undefined,
-        ),
-    });
-    const streamStore = await historyStore(JSON.stringify([binding, session]));
-    try {
-      await producer.open({ signal: new AbortController().signal, streamStore });
-      socket.emit('message', JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'trigger', params: {} }));
-      await vi.waitFor(() => expect(fed).toBeGreaterThan(2100000));
-      await expect(producer.page({ signal: new AbortController().signal })).rejects.toMatchObject({
-        code: 'source_unavailable',
       });
-      expect(streamStore.usage()).toMatchObject({ diskBytes: 0, pages: 0, fileHandles: 0 });
-      expect(manager.getStatus()[0]?.droppedFrames ?? 0).toBeGreaterThan(0);
-    } finally {
-      await producer.close();
-      await streamStore.close();
-      await manager.stopAll();
-    }
-  });
+      const script = [
+        "const readline = require('node:readline');",
+        "readline.createInterface({ input: process.stdin }).on('line', (line) => {",
+        '  const message = JSON.parse(line);',
+        "  if (message.method === 'trigger') process.stdout.write(JSON.stringify(" +
+          frameShape +
+          ") + '\\n');",
+        '});',
+      ].join('\n');
+      const manager = createAcpProcessManager();
+      await manager.reconcile([
+        {
+          id: 'mid',
+          name: 'Mid ACP',
+          command: process.execPath,
+          args: ['-e', script],
+          enabled: true,
+        },
+      ]);
+      const socket = Object.assign(new EventEmitter(), { send() {}, close() {} });
+      const attachment = manager.attach('mid', socket, { runtime: true });
+      let fed = 0;
+      const producer = createAcpHistory({
+        session: selected,
+        authority: { epoch: binding.epoch, processGeneration: 1 },
+        current: () => true,
+        assertCurrent: async () => {},
+        attachRaw: (tap) =>
+          attachment.setRawTap(
+            tap
+              ? (chunk) => {
+                  fed += chunk.byteLength;
+                  tap(chunk);
+                }
+              : undefined,
+          ),
+      });
+      const streamStore = await historyStore(JSON.stringify([binding, session]));
+      try {
+        await producer.open({ signal: new AbortController().signal, streamStore });
+        socket.emit(
+          'message',
+          JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'trigger', params: {} }),
+        );
+        await vi.waitFor(() =>
+          expect(fed).toBeGreaterThanOrEqual(Buffer.byteLength(frameText) + 1),
+        );
+        const page = await producer.page({ signal: new AbortController().signal });
+        if (!page.document) throw new TypeError('missing native document');
+        expect(Buffer.byteLength(frameText)).toBeGreaterThan(262144);
+        expect(page.document.totalBytes).toBeGreaterThan(262144);
+        const document = await drainDescriptor(producer, page.pageId, page.document.id);
+        expect(document.toString('utf8')).toBe(`[${frameText}]`);
+        expect(createHash('sha256').update(document).digest('hex')).toBe(page.document.sha256);
+        expect(page.items).toHaveLength(1);
+        expect(page.completeness).toBe('partial');
+      } finally {
+        await producer.close();
+        await streamStore.close();
+        await manager.stopAll();
+      }
+    },
+  );
+
+  test(
+    'rejects an oversized selected update through the substrate bounds before assembly',
+    { timeout: 20_000 },
+    async () => {
+      const emit =
+        "JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'sel', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'x'.repeat(2200000) } } } }) + '\\n'";
+      const script = [
+        "const readline = require('node:readline');",
+        "readline.createInterface({ input: process.stdin }).on('line', (line) => {",
+        '  const message = JSON.parse(line);',
+        "  if (message.method === 'trigger') process.stdout.write(" + emit + ');',
+        '});',
+      ].join('\n');
+      const manager = createAcpProcessManager();
+      await manager.reconcile([
+        {
+          id: 'big',
+          name: 'Big ACP',
+          command: process.execPath,
+          args: ['-e', script],
+          enabled: true,
+        },
+      ]);
+      const socket = Object.assign(new EventEmitter(), {
+        send() {},
+        close() {},
+      });
+      const attachment = manager.attach('big', socket, { runtime: true });
+      let fed = 0;
+      const producer = createAcpHistory({
+        session: selected,
+        authority: { epoch: binding.epoch, processGeneration: 1 },
+        current: () => true,
+        assertCurrent: async () => {},
+        attachRaw: (tap) =>
+          attachment.setRawTap(
+            tap
+              ? (chunk) => {
+                  fed += chunk.byteLength;
+                  tap(chunk);
+                }
+              : undefined,
+          ),
+      });
+      const streamStore = await historyStore(JSON.stringify([binding, session]));
+      try {
+        await producer.open({ signal: new AbortController().signal, streamStore });
+        socket.emit(
+          'message',
+          JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'trigger', params: {} }),
+        );
+        await vi.waitFor(() => expect(fed).toBeGreaterThan(2100000));
+        await expect(producer.page({ signal: new AbortController().signal })).rejects.toMatchObject(
+          {
+            code: 'source_unavailable',
+          },
+        );
+        expect(streamStore.usage()).toMatchObject({ diskBytes: 0, pages: 0, fileHandles: 0 });
+        expect(manager.getStatus()[0]?.droppedFrames ?? 0).toBeGreaterThan(0);
+      } finally {
+        await producer.close();
+        await streamStore.close();
+        await manager.stopAll();
+      }
+    },
+  );
 });
 
 describe('ACP history read cancellation and frame-boundary capture', () => {
@@ -670,12 +720,18 @@ describe('ACP history read cancellation and frame-boundary capture', () => {
       authority: { epoch: binding.epoch, processGeneration: 1 },
       current: () => true,
       assertCurrent: async () => {},
-      attachRaw: (tap) => { rawTap = tap; },
+      attachRaw: (tap) => {
+        rawTap = tap;
+      },
     });
     const service = createHistoryService({
       binding: { target: selected.environmentId, epoch: binding.epoch, generation: 1 },
-      async authorize() { return { epoch: binding.epoch, processGeneration: 1 }; },
-      async openProducer() { return producer; },
+      async authorize() {
+        return { epoch: binding.epoch, processGeneration: 1 };
+      },
+      async openProducer() {
+        return producer;
+      },
     });
     const historyId = randomUUID();
     try {
@@ -703,7 +759,9 @@ describe('ACP history read cancellation and frame-boundary capture', () => {
       authority: { epoch: binding.epoch, processGeneration: 1 },
       current: () => true,
       assertCurrent: async () => {},
-      attachRaw: (tap) => { rawTap = tap; },
+      attachRaw: (tap) => {
+        rawTap = tap;
+      },
     });
     const streamStore = await historyStore(JSON.stringify([binding, selected]));
     try {
@@ -723,12 +781,16 @@ describe('ACP history read cancellation and frame-boundary capture', () => {
       rawTap(Buffer.from(`${second.slice(split)}\n`));
       const pageB = await producer.page({ signal: new AbortController().signal });
       if (!pageB.document) throw new TypeError('missing document');
-      expect((await drainDescriptor(producer, pageB.pageId, pageB.document.id)).toString('utf8')).toBe(`[${second}]`);
+      expect(
+        (await drainDescriptor(producer, pageB.pageId, pageB.document.id)).toString('utf8'),
+      ).toBe(`[${second}]`);
       const third = updateFrame('sel', 'third-complete');
       rawTap(Buffer.from(`${third}\n`));
       const pageC = await producer.page({ signal: new AbortController().signal });
       if (!pageC.document) throw new TypeError('missing document');
-      expect((await drainDescriptor(producer, pageC.pageId, pageC.document.id)).toString('utf8')).toBe(`[${third}]`);
+      expect(
+        (await drainDescriptor(producer, pageC.pageId, pageC.document.id)).toString('utf8'),
+      ).toBe(`[${third}]`);
     } finally {
       await producer.close();
       await streamStore.close();

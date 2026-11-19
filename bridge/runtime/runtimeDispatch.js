@@ -1,6 +1,8 @@
+import { readRecord, readPayload } from './operationJournal.js';
+import { authorizeNativeCall } from './nativeWirePolicy.js';
 import { randomUUID } from 'node:crypto';
 import { ProtocolError, requireValue } from '../../shared/runtime/capabilities.js';
-import { validateFrame } from '../../shared/runtime/protocol.js';
+import { validateFrame, decodeBinary, encodeBinary } from '../../shared/runtime/protocol.js';
 import { encodeSessionKey, decodeWorkspaceKey } from '../../shared/runtime/identity.js';
 import { INDEX_COLLECTIONS, RUNTIME_WIRE_METHODS, parseRuntimeParams, parseRuntimeResult, parseTargetGrant } from '../../shared/runtime/runtimeWire.js';
 import { createHistoryService } from './historyService.js';
@@ -8,7 +10,7 @@ import { createRuntimeChannels } from './runtimeChannels.js';
 
 const operations = { 'session.list': 'listSessionPage', 'session.get': 'getSession', 'session.history': 'readHistoryPage', 'session.create': 'createSession', 'session.send': 'send', 'session.cancel': 'cancel', 'interaction.respond': 'respondInteraction' };
 const critical = new Set(['runtime.history.close', 'session.cancel', 'interaction.respond', 'runtime.channel.ack', 'runtime.channel.cancel', 'runtime.pty.detach', 'runtime.observer.read', 'runtime.observer.resume', 'runtime.observer.close', 'runtime.target.detach']);
-const publicKinds = new Set(['operation', 'acp-operation', 'opencode-instance-operation', 'opencode-cancellation', 'codex-instance-operation', 'codex-cancel-operation', 'kimi-instance', 'kimi-control', 'dsh-operation', 'interaction']);
+const publicKinds = new Set(['operation', 'acp-operation', 'opencode-instance-operation', 'opencode-cancellation', 'codex-instance-operation', 'codex-cancel-operation', 'kimi-instance', 'kimi-control', 'dsh-operation', 'interaction', 'acp-interaction']);
 function project(collection, row) {
   if (!['operations', 'interactions'].includes(collection)) return row;
   if (!row.value || !publicKinds.has(row.value.kind)) return null;
@@ -20,12 +22,21 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
   const allowed = new Map((grants ?? [...graphs.values()].map(graph => graph.grant)).map(grant => [grant.target, parseTargetGrant(grant)]));
   const attached = new Map(), used = new Set();
   const channels = createRuntimeChannels({ canSend });
+  const remoteChannels = new Map();
+  let remoteChannelSerial = 65536;
   const lifetime = new AbortController();
   let historyOwner;
-  let generation = binding.generation, active = true, normal = 0, reserved = 0, closing, retirement;
+  let generation = binding.generation, active = true, normal = 0, reserved = 0, closing;
   function current() { requireValue(active, 'runtime.connection', 'reconcile_required'); assertCurrent(); }
   function grantFor(target) {
-    const graph = graphs.get(target), grant = allowed.get(target);
+    let graph = graphs.get(target), grant = allowed.get(target);
+    if (!graph) {
+      const remote = management.remoteServices?.getTarget(target);
+      if (remote) {
+        graph = { target, epoch: remote.hello.epoch, instanceId: remote.hello.instanceId, capabilities: remote.hello.capabilities, grant: remote.grant, remote };
+        grant = parseTargetGrant(remote.grant); graphs.set(target, graph); allowed.set(target, grant);
+      }
+    }
     requireValue(graph && grant, 'runtime.target', 'unauthorized');
     requireValue(grant.capabilities.methods.every(method => graph.capabilities.methods.includes(method)) && grant.permissions.every(permission => graph.grant.permissions.includes(permission)) && grant.workspaceKeys.every(key => graph.grant.workspaceKeys.includes(key)), 'runtime.grant', 'unauthorized');
     return { graph, grant };
@@ -38,6 +49,12 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
     entry.current = () => { current(); requireValue(entry.active && attached.get(target) === entry, 'runtime.target_binding', 'reconcile_required'); };
     entry.isCurrent = () => { try { entry.current(); return true; } catch { return false; } };
     attached.set(target, entry);
+    if (graph.remote) entry.unsubscribe = graph.remote.subscribe(frame => {
+      if (!entry.isCurrent()) return;
+      if (frame.kind === 'closed') { entry.active = false; attached.delete(target); graphs.delete(target); allowed.delete(target); entry.unsubscribe?.(); return; }
+      if (frame.kind === 'binary') { const chunk = decodeBinary(frame.data); const match = [...remoteChannels].find(([, channel]) => channel.entry === entry && channel.remoteId === chunk.channelId); if (match) sendBinary(encodeBinary({ ...chunk, channelId: match[0] })); return; }
+      if (frame.kind === 'event') send({ ...frame, ...entry.binding });
+    });
     return entry;
   }
   attach(management.target, true);
@@ -77,7 +94,8 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
   }
   async function detach(entry) {
     if (historyOwner?.entry === entry) historyOwner = undefined;
-    entry.active = false; attached.delete(entry.binding.target); channels.detach(entry.binding.target); entry.observer?.value?.close();
+    for (const [id, channel] of remoteChannels) if (channel.entry === entry) remoteChannels.delete(id);
+    entry.active = false; entry.unsubscribe?.(); attached.delete(entry.binding.target); channels.detach(entry.binding.target); entry.observer?.value?.close();
     const cleanup = await Promise.allSettled([entry.history?.dispose(), entry.snapshots ? Promise.resolve(entry.snapshots).then(snapshot => snapshot.close()) : undefined, entry.workspace?.disconnect()]);
     const failures = cleanup.filter(result => result.status === 'rejected');
     if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Runtime target cleanup failed');
@@ -87,6 +105,11 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
     permission(entry, mutation ? 'session:write' : 'session:read');
     const manifest = entry.graph.registry.list().find(item => item.harnessInstanceId === params.harnessInstanceId);
     requireValue(manifest && manifest.environmentId === entry.binding.target, 'runtime.harness', 'unauthorized');
+    const extension = frame.method === 'native.query' || frame.method === 'native.extension';
+    if (extension) {
+      authorizeNativeCall(manifest, params, frame.method, entry.grant.permissions);
+      if (!params.session) indexAccess(entry);
+    }
     if (params.session) {
       requireValue(params.session.environmentId === entry.binding.target, 'runtime.session', 'unauthorized');
       const summary = await entry.graph.store.get({ collection: 'session_summaries', key: encodeSessionKey(params.session) });
@@ -99,6 +122,10 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
     for (const candidate of [args.directory, args.cwd, args.request?.cwd]) if (candidate !== undefined) requireValue(candidate === directory, 'runtime.directory', 'unauthorized');
     if (frame.method === 'session.create') requireValue(directory, 'runtime.workspace', 'unauthorized');
     if (frame.method === 'session.list') indexAccess(entry);
+    if (frame.method === 'session.list' && !params.session && !params.workspaceKey && Object.keys(args).length === 0) {
+      await entry.graph.index.retry(params.harnessInstanceId);
+      entry.current();
+    }
     const authority = entry.graph.authority(params.harnessInstanceId);
     if (manifest.kind === 'codex') { if (params.workspaceKey && frame.method === 'session.create') args.workspaceKey = params.workspaceKey; }
     else {
@@ -109,16 +136,49 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
         else args.directory = directory;
       }
     }
-    if (mutation && (manifest.kind !== 'codex' || ['session.create', 'session.send'].includes(frame.method))) args.idempotencyKey = frame.idempotencyKey;
+    if (mutation && (extension || manifest.kind !== 'codex' || ['session.create', 'session.send'].includes(frame.method))) args.idempotencyKey = frame.idempotencyKey;
     entry.current();
-    const invoke = () => entry.graph.registry.invoke({ environmentId: entry.binding.target, harnessInstanceId: params.harnessInstanceId, ...(params.session ? { session: params.session } : {}), channel: 'core', operation: operations[frame.method], params: args });
+    const invoke = () => entry.graph.registry.invoke({ environmentId: entry.binding.target, harnessInstanceId: params.harnessInstanceId, ...(params.session ? { session: params.session } : {}), channel: extension ? 'native' : 'core', operation: extension ? params.operation : operations[frame.method], ...(extension ? { permissions: entry.grant.permissions } : {}), params: args });
     if (!mutation) return invoke();
     const execution = await entry.graph.acceptance.run({ scope: { target: entry.binding.target, harnessInstanceId: params.harnessInstanceId, ...authority, ...(params.session ? { session: params.session } : {}) }, method: frame.method, idempotencyKey: frame.idempotencyKey, interactionId: args.interactionId, signal, onAccepted: receipt => accepted({ operationId: receipt.operationId }) }, invoke);
     return { operationId: execution.receipt.operationId, value: execution.value };
   }
   async function execute(entry, frame, params, accepted, signal) {
     const graph = entry.graph;
-    if (operations[frame.method]) return native(entry, frame, params, accepted, signal);
+    if (graph.remote) {
+      let remoteParams = params, channel;
+      if (frame.method === 'runtime.entity.resolve') {
+        requireValue(match(params.event) === entry, 'runtime.event_target', 'unauthorized');
+        const remoteBinding = graph.remote.hello;
+        remoteParams = { ...params, event: { ...params.event, target: remoteBinding.target, epoch: remoteBinding.epoch, generation: remoteBinding.generation } };
+      }
+      if (params.channelId !== undefined) {
+        channel = remoteChannels.get(params.channelId);
+        requireValue(channel?.entry === entry, 'runtime.remote_channel', 'unauthorized');
+        remoteParams = { ...params, channelId: channel.remoteId };
+      }
+      const result = await graph.remote.request({ ...frame, params: remoteParams }, accepted);
+      const rebind = nested => {
+        const source = graph.remote.hello;
+        requireValue(nested.target === source.target && nested.epoch === source.epoch && nested.generation === source.generation, 'runtime.remote_binding', 'reconcile_required');
+        return { ...nested, ...entry.binding };
+      };
+      if (frame.method === 'runtime.snapshot') return rebind(result);
+      if (frame.method === 'runtime.replay') return { ...rebind(result), events: result.events.map(rebind) };
+      if (frame.method === 'runtime.observer.read' && result && ['event', 'control'].includes(result.kind)) return { ...result, frame: rebind(result.frame) };
+      if (frame.method === 'runtime.channel.open') {
+        requireValue(remoteChannelSerial < 0xffffffff, 'runtime.remote_channels', 'source_unavailable');
+        const channelId = ++remoteChannelSerial;
+        remoteChannels.set(channelId, { entry, remoteId: result.channelId, ptyId: params.ptyId });
+        return { ...result, channelId };
+      }
+      if (frame.method === 'runtime.channel.ack') return { ...result, channelId: params.channelId };
+      if (frame.method === 'runtime.channel.cancel' || frame.method === 'runtime.channel.finish') remoteChannels.delete(params.channelId);
+      if (frame.method === 'runtime.pty.detach' || frame.method === 'runtime.pty.remove') for (const [id, owned] of remoteChannels) if (owned.entry === entry && owned.ptyId === params.ptyId) remoteChannels.delete(id);
+      if (frame.method === 'runtime.pty.read') return { ...result, chunks: result.chunks.map(chunk => { const match = [...remoteChannels].find(([, owned]) => owned.entry === entry && owned.remoteId === chunk.channelId); requireValue(match, 'runtime.remote_channel', 'unauthorized'); return { ...chunk, channelId: match[0] }; }) };
+      return result;
+    }
+    if (operations[frame.method] || frame.method === 'native.query' || frame.method === 'native.extension') return native(entry, frame, params, accepted, signal);
     switch (frame.method) {
       case 'runtime.history.open': {
         const old = historyOwner, owner = { entry, historyId: params.historyId }; historyOwner = owner;
@@ -133,7 +193,29 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
       case 'runtime.history.chunk': return history(entry).chunk(params);
       case 'runtime.history.read': return history(entry).read(params);
       case 'runtime.history.close': return history(entry).close(params);
-      case 'runtime.inspect': permission(entry, 'runtime:read'); return graph.inspect(inspect(), [...allowed.values()]);
+      case 'runtime.host.read':
+        return graph.hostServices.read(params, { target: entry.binding.target, permissions: entry.grant.permissions, workspaceKeys: entry.grant.workspaceKeys });
+      case 'runtime.host.mutate':
+        return graph.hostServices.mutate(params, { target: entry.binding.target, permissions: entry.grant.permissions, workspaceKeys: entry.grant.workspaceKeys, idempotencyKey: frame.idempotencyKey, onAccepted: accepted });
+      case 'runtime.inspect': {
+        permission(entry, 'runtime:read');
+        await management.remoteServices?.refreshTargets?.();
+        for (const [target, cached] of graphs) {
+          if (cached.remote && management.remoteServices?.getTarget(target) !== cached.remote) {
+            const stale = attached.get(target);
+            if (stale) await detach(stale);
+            graphs.delete(target); allowed.delete(target);
+          }
+          if (!grants && !cached.remote) {
+            const refreshed = parseTargetGrant(cached.grant);
+            allowed.set(target, refreshed);
+            const currentTarget = attached.get(target);
+            if (currentTarget) currentTarget.grant = refreshed;
+          }
+        }
+        for (const grant of management.remoteServices?.listTargets() ?? []) grantFor(grant.target);
+        return graph.inspect(inspect(), [...allowed.values()]);
+      }
       case 'runtime.target.attach': {
         requireValue(entry.graph === management, 'runtime.management', 'unauthorized');
         const target = attach(params.target); return { hello: hello(target), grant: target.grant };
@@ -141,6 +223,26 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
       case 'runtime.target.detach': {
         requireValue(entry.graph === management && params.target !== management.target, 'runtime.management', 'unauthorized');
         const target = attached.get(params.target); requireValue(target, 'runtime.target', 'unauthorized'); await detach(target); return { detached: true };
+      }
+      case 'runtime.interaction.read': {
+        permission(entry, 'session:read');
+        const session = params.session;
+        requireValue(session.environmentId === entry.binding.target, 'interaction.target', 'unauthorized');
+        const summary = await graph.store.get({ collection: 'session_summaries', key: encodeSessionKey(session) });
+        requireValue(summary?.value?.workspaceKey, 'interaction.workspace', 'unauthorized');
+        workspaceKey(entry, summary.value.workspaceKey);
+        const row = await readRecord(graph.store, 'interactions', params.interactionId);
+        requireValue(row?.value && ['interaction', 'acp-interaction'].includes(row.value.kind), 'interaction.missing', 'conflict');
+        const scope = row.value.scope;
+        requireValue(scope?.session && encodeSessionKey(scope.session) === encodeSessionKey(session), 'interaction.session', 'unauthorized');
+        const authority = graph.authority(session.harnessInstanceId);
+        requireValue(scope.epoch === authority.epoch && scope.processGeneration === authority.processGeneration, 'interaction.generation', 'reconcile_required');
+        requireValue(row.value.payloadRef.bytes <= 48 * 1024, 'interaction.payload_budget', 'source_unavailable');
+        const payload = await readPayload(graph.store, 'interactions', row.value.payloadRef);
+        entry.current();
+        const currentAuthority = graph.authority(session.harnessInstanceId);
+        requireValue(scope.epoch === currentAuthority.epoch && scope.processGeneration === currentAuthority.processGeneration, 'interaction.generation', 'reconcile_required');
+        return { interactionId: params.interactionId, session, phase: row.value.phase, payload };
       }
       case 'runtime.snapshot': {
         indexAccess(entry); const page = await (await snapshots(entry)).page(params);
@@ -151,12 +253,13 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
         return (await snapshots(entry)).readChunk(params);
       }
       case 'runtime.replay': indexAccess(entry); return (await snapshots(entry)).replay(params);
+      case 'runtime.snapshot.release': indexAccess(entry); return (await snapshots(entry)).release(params);
       case 'runtime.entity.resolve': {
         indexAccess(entry); match(params.event);
         const patch = params.event.payload; requireValue(INDEX_COLLECTIONS.includes(patch.collection), 'runtime.collection', 'unauthorized');
         const row = await graph.events.log.resolve({ ...patch, epoch: entry.binding.epoch, entityRevision: params.event.entityRevision });
         requireValue(!row.chunked, 'runtime.entity_chunked', 'replay_required');
-        const value = project(patch.collection, row); requireValue(value, 'runtime.private_entity', 'unauthorized'); return { ...value, collection: patch.collection };
+        const value = project(patch.collection, row); return { ...(value ?? { key: row.key, revision: row.revision, value: null }), collection: patch.collection };
       }
       case 'runtime.observer.open': {
         indexAccess(entry); requireValue(!entry.observer, 'runtime.observer_duplicate', 'conflict');
@@ -178,6 +281,11 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
       case 'runtime.channel.ack': return channels.acknowledge(entry.binding, params);
       case 'runtime.channel.finish': return channels.finish(entry.binding, params.channelId);
       case 'runtime.channel.cancel': return channels.cancel(entry.binding, params.channelId);
+      case 'runtime.workspace.info': case 'runtime.workspace.list': case 'runtime.workspace.read': {
+        permission(entry, 'workspace:read'); workspaceKey(entry, params.workspaceKey);
+        const result = await workspace(entry).reads[frame.method.slice('runtime.workspace.'.length)](params);
+        entry.current(); return result;
+      }
       case 'runtime.pty.create': permission(entry, 'workspace:pty'); workspaceKey(entry, params.workspaceKey); return workspace(entry).ptys.create(params);
       case 'runtime.pty.read': {
         permission(entry, 'workspace:pty'); const output = channels.readPty({ binding: entry.binding, workspace: workspace(entry) }, params.ptyId); output.binary.forEach(sendBinary); return output.result;
@@ -185,25 +293,27 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
       case 'runtime.pty.write': permission(entry, 'workspace:pty'); workspace(entry).ptys.write(params.ptyId, params.data); return { written: true };
       case 'runtime.pty.resize': permission(entry, 'workspace:pty'); workspace(entry).ptys.resize(params.ptyId, params); return { resized: true };
       case 'runtime.pty.detach': permission(entry, 'workspace:pty'); channels.detachPty({ binding: entry.binding, current: entry.current, workspace: workspace(entry) }, params.ptyId); return { detached: true };
+      case 'runtime.pty.remove': permission(entry, 'workspace:pty'); channels.detachPty({ binding: entry.binding, current: entry.current, workspace: workspace(entry) }, params.ptyId); await workspace(entry).ptys.remove(params.ptyId); return { removed: true };
       default: throw new ProtocolError('unsupported', 'runtime.method');
     }
   }
   function closeConnection() {
     closing ??= (async () => {
       active = false; lifetime.abort(); channels.close();
-      const cleanup = await Promise.allSettled([...attached.values()].map(detach));
-      const failures = cleanup.filter(result => result.status === 'rejected');
-      if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Runtime connection cleanup failed');
+      try {
+        const cleanup = await Promise.allSettled([...attached.values()].map(detach));
+        const failures = cleanup.filter(result => result.status === 'rejected');
+        if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Runtime connection cleanup failed');
+      } finally { retire?.(); }
     })();
     return closing;
   }
   function retireConnection() {
-    retirement ??= (async () => { try { await closeConnection(); } finally { retire?.(); } })();
-    return retirement;
+    return closeConnection();
   }
   return {
     hello: () => hello(attached.get(management.target)),
-    binary(bytes) { current(); channels.binary(bytes); },
+    binary(bytes) { current(); const chunk = decodeBinary(bytes), channel = remoteChannels.get(chunk.channelId); if (channel) { channel.entry.current(); channel.entry.graph.remote.sendBinary(encodeBinary({ ...chunk, channelId: channel.remoteId })); } else channels.binary(bytes); },
     async request(input) {
       const frame = validateFrame(input); requireValue(frame.kind === 'request', 'runtime.request');
       const base = { version: 1, kind: 'result', target: frame.target, epoch: frame.epoch, generation: frame.generation, id: frame.id };

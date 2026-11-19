@@ -1,6 +1,7 @@
 <template>
   <span
     class="harness-badge"
+    data-runtime-ui
     :class="`is-${props.harness}`"
     :data-harness="props.harness"
     :title="`${label}${props.detail ? ` — ${props.detail}` : ''}`"

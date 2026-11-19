@@ -237,7 +237,7 @@ export function upsertKimiWebSessionIntoProjects(
   };
 }
 
-function modelResponse(models: KimiWebModel[]): BackendProviderResponse {
+export function modelResponse(models: KimiWebModel[]): BackendProviderResponse {
   const providers = new Map<string, NonNullable<BackendProviderResponse['all']>[number]>();
   for (const model of models) {
     const provider = providers.get(model.provider) ?? {

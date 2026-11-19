@@ -49,7 +49,7 @@ describe('useSettings snippets', () => {
         tags: [],
       },
     ]);
-    const migratedStorage = harness.storage.getItem('opencode.settings.textTransformers.v1');
+    const migratedStorage = harness.readSetting('opencode.settings.textTransformers.v1');
     expect(migratedStorage).toBe(JSON.stringify(settings.textTransformers.value));
     settings.textTransformers.value = [
       {
@@ -67,7 +67,7 @@ describe('useSettings snippets', () => {
     }
 
     // Then: edits are canonicalized in storage and the external toggle is applied immediately.
-    expect(harness.storage.getItem('opencode.settings.textTransformers.v1')).toBe(
+    expect(harness.readSetting('opencode.settings.textTransformers.v1')).toBe(
       JSON.stringify(settings.textTransformers.value),
     );
     expect(settings.textTransformersEnabled.value).toBe(false);

@@ -39,6 +39,7 @@ export const NATIVE_METHODS = Object.freeze({
     fields: ['objective', 'status', 'tokenBudget'],
   },
   'codex.goal.clear': { method: 'thread/goal/clear', scope: 'session', mutation: true, fields: [] },
+  'codex.collaborationModes': { method: 'collaborationMode/list', scope: 'instance', fields: [] },
   'codex.models': {
     method: 'model/list',
     scope: 'instance',

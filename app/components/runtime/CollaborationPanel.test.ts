@@ -199,6 +199,33 @@ function phaseOf(view: Mounted, taskId: string): string | null {
 // ---------------------------------------------------------------------------
 
 describe('task 42 — Agent finished / Task review pending / accepted are three distinct phases', () => {
+  it('creates a task with explicit criteria through the rendered form', async () => {
+    const services = buildServices();
+    const view = await mountPanel(services.ports);
+    const title = view.root.querySelector('.task-create input');
+    const criteria = view.root.querySelector('.task-create textarea');
+    const form = view.root.querySelector('.task-create');
+    const create = view.root.querySelector('[data-testid="create-task"]');
+    if (!(title instanceof HTMLInputElement) || !(criteria instanceof HTMLTextAreaElement) || !(form instanceof HTMLFormElement)) {
+      throw new Error('Expected the task creation form');
+    }
+    if (!(create instanceof HTMLButtonElement)) throw new Error('Expected the create task button');
+    expect(create.disabled).toBe(true);
+    title.value = 'Verify persisted session state';
+    title.dispatchEvent(new Event('input', { bubbles: true }));
+    criteria.value = 'Draft survives restart\nHistory remains unchanged';
+    criteria.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(create.disabled).toBe(false);
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    expect(view.state.tasks.value).toHaveLength(1);
+    expect(view.state.tasks.value[0]?.criteria.map((criterion) => criterion.text)).toEqual([
+      'Draft survives restart', 'History remains unchanged',
+    ]);
+    expect(view.state.tasks.value[0]?.phase).toBe('pending');
+  });
+
   it('renders Agent finished, review pending and accepted as three distinct phases derived only from the product', async () => {
     const services = buildServices();
     const view = await mountPanel(services.ports);
@@ -216,9 +243,8 @@ describe('task 42 — Agent finished / Task review pending / accepted are three 
     await view.state.sendTask(taskId);
     await settle();
 
-    // The native-end action is DISABLED until a real native event id exists, so the UI structurally
-    // cannot fabricate the agent-finished transition without one (task 35's observe-button standard).
-    expect(view.root.querySelector<HTMLButtonElement>('[data-testid="attempt-finish"]')?.disabled).toBe(true);
+    expect(view.root.querySelector('[data-testid="attempt-finish"]')).toBeNull();
+    expect(view.root.querySelector('[data-testid="native-event-input"]')).toBeNull();
 
     // A native end with a real native event id moves the task to AGENT FINISHED (never accepted).
     view.state.finishTask(taskId, 'native-evt-1');
@@ -421,7 +447,18 @@ describe('task 42 — writer path, real posture and explicit apply-approve', () 
     await settle();
     const taskId = view.state.tasks.value[0]?.taskId ?? '';
     view.state.selectTask(taskId);
-    await view.state.allocateWriter(taskId, repoDir);
+    await settle();
+
+    const repository = view.root.querySelector('.repository-field input');
+    const allocation = view.root.querySelector('.writer-allocation');
+    if (!(repository instanceof HTMLInputElement) || !(allocation instanceof HTMLFormElement)) {
+      throw new Error('Expected the writer allocation form');
+    }
+    repository.value = repoDir;
+    repository.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    allocation.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(view.state.writer.value).not.toBeNull());
     await settle();
 
     const lease = writer!.lease(view.state.writer.value?.leaseId ?? '') as { worktree: string; nativeCwd: string; baseCommit: string } | null;
@@ -524,15 +561,6 @@ describe('task 42 — the eight PR #198 review findings', () => {
     return button;
   }
 
-  async function typeNativeEventId(view: Mounted, value: string): Promise<void> {
-    const input = view.root.querySelector<HTMLInputElement>('[data-testid="native-event-input"]');
-    if (input === null) throw new Error('no native event input in the mounted panel');
-    input.value = value;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    // Let the v-model land and the dependent disabled binding re-render before the next click.
-    await settle();
-  }
-
   /** Create one task through the container action (TeamEditor renders no create button). */
   async function createOneTask(view: Mounted, title: string): Promise<string> {
     view.state.createTask({ title, criteria: [{ id: 'c1', text: 'x', required: true }] });
@@ -559,8 +587,7 @@ describe('task 42 — the eight PR #198 review findings', () => {
     await settle();
     buttonOf(view, 'attempt-send').click();
     await settle();
-    await typeNativeEventId(view, 'native-evt-w1');
-    buttonOf(view, 'attempt-finish').click();
+    view.state.finishTask(taskId, 'native-evt-w1');
     await settle();
     expect(phaseOf(view, taskId)).toBe('agent-finished');
     // A REAL deliverable is registered through the composable (the container's job — W2 proves the
@@ -583,8 +610,16 @@ describe('task 42 — the eight PR #198 review findings', () => {
     expect(services.coordinator.task(taskId).review.state).toBe('approved');
     expect(phaseOf(view, taskId)).toBe('review-approved');
 
-    // Accept is ENABLED at the real review state, and clicking it reaches accepted.
     const accept = buttonOf(view, 'task-accept');
+    expect(accept.disabled).toBe(true);
+    const criteria = view.root.querySelectorAll('.acceptance-criteria input[type="checkbox"]');
+    expect(criteria.length).toBeGreaterThan(0);
+    for (const criterion of criteria) {
+      if (!(criterion instanceof HTMLInputElement)) throw new Error('Expected a criterion checkbox');
+      expect(criterion.checked).toBe(false);
+      criterion.click();
+    }
+    await settle();
     expect(accept.disabled).toBe(false);
     accept.click();
     await settle();
@@ -603,8 +638,7 @@ describe('task 42 — the eight PR #198 review findings', () => {
     await settle();
     buttonOf(view, 'attempt-send').click();
     await settle();
-    await typeNativeEventId(view, 'native-evt-w2');
-    buttonOf(view, 'attempt-finish').click();
+    view.state.finishTask(taskId, 'native-evt-w2');
     await settle();
     expect(phaseOf(view, taskId)).toBe('agent-finished');
 
@@ -650,7 +684,8 @@ describe('task 42 — the eight PR #198 review findings', () => {
     expect(approve.textContent?.trim()).toBe('Approve review');
     const note = view.root.querySelector('[data-testid="approve-note"]')?.textContent ?? '';
     expect(note).toContain('records the review verdict');
-    expect(note).toContain('not wired');
+    expect(note).toContain('explicitly apply');
+    expect(buttonOf(view, 'prepare-artifact-review').disabled).toBe(true);
     expect(note).toContain('Nothing is pushed automatically');
     approve.click();
     await settle();

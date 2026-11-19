@@ -46,7 +46,7 @@ describe('runtime harness structure', () => {
   });
   it.each(HARNESS_KINDS)('validates %s manifest and every native extension owner without claiming behavior', (kind) => {
     const entry = registration(kind);
-    const manifest = { ...entry.manifest, extensions: Object.entries(NATIVE_EXTENSIONS).map(([name, spec]) => ({ name, owner: entry.manifest.harnessInstanceId, scope: spec.scope, permission: `native.${name}`, schemaVersion: 1, support: no })) };
+    const manifest = { ...entry.manifest, extensions: Object.entries(NATIVE_EXTENSIONS).map(([name, spec]) => ({ name, owner: entry.manifest.harnessInstanceId, scope: kind === 'acp' && ['getSessionConfigOptions', 'listProviders', 'listAgents', 'listCommands'].includes(name) ? 'session' : spec.scope, permission: `native.${name}`, schemaVersion: 1, support: no })) };
     expect(validateHarnessRegistration({ manifest, driver: entry.driver }).manifest.extensions).toHaveLength(41);
   });
   it('normalizes an older omitted history declaration to unsupported without inferring core support', async () => {

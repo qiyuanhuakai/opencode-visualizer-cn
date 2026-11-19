@@ -337,6 +337,10 @@ export function createIntegrationReviewService(options = {}) {
   }
 
   return {
+    exportReviews: () => [...reviewsById.values()].map(value => structuredClone(value)),
+    exportApprovals: () => [...approvalsById.values()].map(value => structuredClone(value)),
+    restoreReviews(records) { for (const record of [...records].sort((left, right) => left.createdAt - right.createdAt)) reviewsById.set(record.reviewId, structuredClone(record)); stats.created = reviewsById.size; },
+    restoreApprovals(records) { for (const record of [...records].sort((left, right) => left.approvedAt - right.approvedAt)) approvalsById.set(record.approvalId, Object.freeze({ ...structuredClone(record), binding: Object.freeze(structuredClone(record.binding)) })); stats.approved = approvalsById.size; },
     INTEGRATION_REVIEW_LIMITS,
     create,
     approve,

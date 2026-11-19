@@ -447,3 +447,25 @@ describe('browser legacy source binding for the REAL IndexedDB writer format', (
     expect(accepted[0].chunks[0].binding).toEqual({ environmentId, harnessInstanceId: 'harness-1', nativeSessionId: FIXTURE_SESSION_ID, profileId: 'profile-1' });
   });
 });
+
+it('rechecks browser source revisions instead of caching a stale migration token', async () => {
+  const { createBrowserLegacySourcePort } = await import('./browserSourcePort');
+  let content = 'before';
+  const port = createBrowserLegacySourcePort(async function* () { yield { key: 'opencode.test', source: 'local', namespace: 'unattached-legacy-local', content, end: true }; });
+  const before = await port.open(); content = 'after';
+  expect((await port.open()).revision).not.toBe(before.revision);
+  await expect(port.page({ token: before })).rejects.toThrow('source_changed');
+});
+
+it('pages inventory without duplicating or dropping records', async () => {
+  const { createBrowserLegacySourcePort } = await import('./browserSourcePort');
+  const { readBrowserInventory } = await import('./browserInventory');
+  const port = createBrowserLegacySourcePort(async function* () {
+    for (let index = 0; index < 101; index++) yield { key: `opencode.item-${index}`, source: 'local', namespace: 'unattached-legacy-local', content: String(index), end: true };
+  });
+  const first = await readBrowserInventory(port);
+  expect(first.sources).toHaveLength(100); expect(first.next).not.toBeNull();
+  const second = await readBrowserInventory(port, first.next!);
+  expect(second.sources).toHaveLength(1); expect(second.next).toBeNull();
+  expect(new Set([...first.sources, ...second.sources].map(row => row.sourceKey)).size).toBe(101);
+});

@@ -1,6 +1,7 @@
 import { METHODS, ProtocolError, requireValue } from '../../shared/runtime/capabilities.js';
 import type { ErrorCode } from '../../shared/runtime/capabilities.js';
-import { createProtocolState, LIMITS } from '../../shared/runtime/protocol.js';
+import { createProtocolState, decodeBinary, encodeBinary } from '../../shared/runtime/protocol.js';
+import type { BinaryChunk, BinaryInput } from '../../shared/runtime/protocol.js';
 import type { Binding, Hello, Result, Snapshot } from '../../shared/runtime/protocol.js';
 import type { FramePreflightDecision, RawFrameSummary } from '../../shared/runtime/rawFrame.js';
 import { HISTORY_LIMITS } from '../../shared/runtime/historyPage.js';
@@ -10,23 +11,12 @@ import type { NativeMutationResult, ObserverDelivery, RuntimeMethod, RuntimePara
 import { parseRuntimeParams, parseRuntimeResult } from '../../shared/runtime/runtimeWire.js';
 import type { RuntimeConnection, RuntimeConnectionEvent } from './connection';
 
-export type MutationMethod = 'session.create' | 'session.send' | 'session.cancel' | 'interaction.respond';
+export type MutationMethod = 'runtime.host.mutate' | 'native.extension' | 'session.create' | 'session.send' | 'session.cancel' | 'interaction.respond';
 export type RequestMethod = Exclude<RuntimeMethod, MutationMethod>;
 export type RequestOptions = { readonly signal?: AbortSignal; readonly selectionCurrent?: () => boolean; readonly onDrained?: () => void };
 export type RuntimeScope = { readonly binding: Binding; readonly generation: number; readonly isCurrent: () => boolean };
 type Collection = RuntimeParams['runtime.snapshot']['collection'];
-/** An index view this client minted, kept only to bound how many are outstanding. */
-type IndexView = Readonly<{ token: string; expiresAt: number }>;
-/**
- * The bridge bounds live snapshot views per environment (`LIMITS.snapshotTokens`) and exposes no
- * wire method to release one early, so a view lives for its whole TTL. `LIMITS.snapshotTokens`
- * counts EVERY live view for the environment — the state layer's observer view plus every index
- * view this client minted — so an index read may mint only while the target still has budget for
- * one after reserving the observer's slot. Minting on every `fresh` read instead exhausts the
- * budget and the store rejects the next mint with `snapshot_limit`.
- */
-const INDEX_VIEW_BUDGET = LIMITS.snapshotTokens - 1;
-type Target = { readonly hello: Hello; readonly state: ProtocolState; readonly generation: number; paging: boolean; indexSnapshot?: Readonly<{ token: string; revision: number; watermark: number; expiresAt: number }>; indexViews?: readonly IndexView[] };
+type Target = { readonly hello: Hello; readonly state: ProtocolState; readonly generation: number; paging: boolean; indexSnapshot?: Readonly<{ token: string; revision: number; watermark: number; expiresAt: number }> };
 type Pending = {
   readonly target: Target; readonly method: RuntimeMethod; readonly current: () => boolean;
   readonly slot: 'normal' | 'reserved';
@@ -39,35 +29,11 @@ function reserved(method: RuntimeMethod) {
   return method === 'runtime.history.close' || method === 'session.cancel' || method === 'interaction.respond' || method === 'runtime.channel.ack' || method === 'runtime.channel.cancel' || method === 'runtime.observer.resume' || method === 'runtime.observer.close' || method === 'runtime.target.detach';
 }
 
-/**
- * Block until the target has live-view budget for one index view. The bridge bounds live views per
- * environment and exposes no wire method to release one early, so a slot opens only when a held view
- * lapses: the wait is bounded by that view's remaining TTL and is cancellable through `signal`.
- * `onWaiting` reports each wait so a caller can surface it instead of showing a stalled read.
- */
-async function acquireIndexSlot(attached: Target, signal: AbortSignal | undefined, onWaiting: ((waitMs: number) => void) | undefined): Promise<void> {
-  for (;;) {
-    // AbortSignal never replays a past abort to a listener registered afterwards, so a caller
-    // whose signal was already aborted when it queued behind another read would otherwise wait
-    // out the full remaining TTL before the listener-free timer resolves. Checking the flag at
-    // the top of every iteration settles both that case and an abort that lands mid-wait.
-    if (signal?.aborted) throw new ProtocolError('cancelled', 'readIndex.slot');
-    const now = Date.now();
-    attached.indexViews = (attached.indexViews ?? []).filter((view) => view.expiresAt > now);
-    const held = attached.indexViews ?? [];
-    if (held.length < INDEX_VIEW_BUDGET) return;
-    const waitMs = Math.max(0, Math.min(...held.map((view) => view.expiresAt)) - Date.now());
-    onWaiting?.(waitMs);
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, waitMs);
-      signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
-    });
-  }
-}
-
 export class RuntimeRequestError extends ProtocolError {
-  constructor(code: ErrorCode, readonly requestId: string, readonly uncertain: boolean, readonly receipt?: string) {
-    super(code, uncertain ? 'request.uncertain' : 'request.failed');
+  constructor(code: ErrorCode, readonly requestId: string, readonly uncertain: boolean, readonly receipt?: string, readonly serverMessage?: string) {
+    const prefix = `${code}: `;
+    const field = serverMessage?.startsWith(prefix) && /^[a-zA-Z0-9_.-]{1,128}$/.test(serverMessage.slice(prefix.length)) ? serverMessage.slice(prefix.length) : undefined;
+    super(code, field ?? (uncertain ? 'request.uncertain' : 'request.failed'));
   }
 }
 
@@ -79,6 +45,44 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
   const grants = new Map<EnvironmentId, TargetGrant>();
   const attaching = new Set<EnvironmentId>();
   const detachListeners = new Set<(target: EnvironmentId) => void>();
+  const deliveryListeners = new Set<(target: EnvironmentId, delivery: ObserverDelivery) => void>();
+  const binaryListeners = new Map<number, (chunk: BinaryChunk) => void>();
+  const viewReaders = new WeakMap<Target, Map<string, number>>();
+  const retiredViews = new WeakMap<Target, Set<string>>();
+  function holdView(attached: Target, token: string) {
+    let readers = viewReaders.get(attached);
+    if (!readers) { readers = new Map(); viewReaders.set(attached, readers); }
+    readers.set(token, (readers.get(token) ?? 0) + 1);
+    let released = false;
+    return async () => {
+      if (released) return;
+      released = true;
+      const count = (readers.get(token) ?? 1) - 1;
+      if (count) readers.set(token, count); else readers.delete(token);
+      await releaseRetiredView(attached, token);
+    };
+  }
+  async function releaseRetiredView(attached: Target, token: string) {
+    if (viewReaders.get(attached)?.has(token) || !retiredViews.get(attached)?.has(token)) return;
+    retiredViews.get(attached)?.delete(token);
+    if (!current(attached) || !attached.hello.capabilities.methods.includes('runtime.snapshot.release')) return;
+    try { await request(attached.hello.target, 'runtime.snapshot.release', { token }); }
+    catch (error) {
+      if (!(error instanceof ProtocolError) || error.code !== 'replay_required') throw error;
+    }
+  }
+  async function retireView(attached: Target, token: string) {
+    if (attached.indexSnapshot?.token === token) attached.indexSnapshot = undefined;
+    let retired = retiredViews.get(attached);
+    if (!retired) { retired = new Set(); retiredViews.set(attached, retired); }
+    retired.add(token);
+    await releaseRetiredView(attached, token);
+  }
+  async function publishView(attached: Target, page: Snapshot) {
+    const previous = attached.indexSnapshot;
+    attached.indexSnapshot = Object.freeze({ token: page.token, revision: page.revision, watermark: page.watermark, expiresAt: page.expiresAt });
+    if (previous && previous.token !== page.token) await retireView(attached, previous.token);
+  }
   let management: EnvironmentId | undefined;
   let nextId = 0;
   let localGeneration = -1;
@@ -130,7 +134,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
         entry.reject(new RuntimeRequestError('cancelled', frame.id, METHODS[entry.method] === 'mutation', entry.receipt));
         entry.clean(); pending.delete(frame.id); entry.drain(); return;
       }
-      if (!frame.ok) throw new RuntimeRequestError(frame.typedError.code, frame.id, METHODS[entry.method] === 'mutation', entry.receipt);
+      if (!frame.ok) throw new RuntimeRequestError(frame.typedError.code, frame.id, METHODS[entry.method] === 'mutation', entry.receipt, frame.typedError.message);
       switch (frame.phase) {
         case 'durable-accepted':
           entry.receipt = frame.result.operationId;
@@ -168,7 +172,11 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
         break;
       case 'disconnected':
       case 'error': clear(); break;
-      case 'binary': break;
+      case 'binary': {
+        const chunk = decodeBinary(event.bytes);
+        binaryListeners.get(chunk.channelId)?.(chunk);
+        break;
+      }
       default: event satisfies never;
     }
   }
@@ -191,7 +199,8 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
 
   function start(input: { readonly target: EnvironmentId; readonly method: RuntimeMethod; readonly params: unknown; readonly options: RequestOptions; readonly idempotencyKey?: string; readonly accept?: Pending['accept'] }) {
     const target = getTarget(input.target);
-    requireValue(target.hello.capabilities.methods.includes(input.method), 'method.capability', 'unsupported');
+    const capabilities = grants.get(input.target)?.capabilities ?? target.hello.capabilities;
+    requireValue(capabilities.methods.includes(input.method), 'method.capability', 'unsupported');
     requireValue(!input.options.signal?.aborted && (input.options.selectionCurrent?.() ?? true), 'request.selection', 'cancelled');
     const normalCount = [...pending.values()].filter((entry) => entry.slot === 'normal').length;
     const slot = normalCount < 496 ? 'normal' : 'reserved';
@@ -199,13 +208,13 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     if (slot === 'reserved') requireValue(reserved(input.method) && pending.size - normalCount < (priorityControl ? 16 : 12), 'request.capacity', 'source_unavailable');
     if (nextId === 65536) {
       clear();
-      connection.disconnect();
+      connection.reconnect();
       throw new ProtocolError('reconcile_required', 'request.retired');
     }
     const id = `${localGeneration}:${++nextId}`;
     const params = parseRuntimeParams(input.method, input.params);
     if ('session' in params && params.session) requireValue(params.session.environmentId === input.target, 'session.target', 'unauthorized');
-    const frame = target.state.register({ version: 1, kind: 'request', ...bindingOf(target.hello), id, method: input.method, params, ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }) });
+    const frame = target.state.register({ version: 1, kind: 'request', ...bindingOf(target.hello), id, method: input.method, params, ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }) }, input.method === 'native.query' || input.method === 'native.extension' ? { capabilities, permissions: grants.get(input.target)?.permissions ?? [] } : undefined);
     return new Promise<unknown>((resolve, reject) => {
       let abandoned = false;
       const abandon = (code: ErrorCode) => {
@@ -296,7 +305,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     attached.state.receive(result);
     return result;
   }
-  async function observe(target: EnvironmentId, options: RequestOptions & { readonly after: number; readonly onDelivery: (delivery: ObserverDelivery) => void | Promise<void> }) {
+  async function observe(target: EnvironmentId, options: RequestOptions & { readonly after: number; readonly onDelivery: (delivery: ObserverDelivery) => void | Promise<void>; readonly onDeliveries?: (deliveries: readonly ObserverDelivery[]) => Promise<void> }) {
     const attached = getTarget(target);
     const { observerId } = await request(target, 'runtime.observer.open', { after: options.after }, options);
     let closed = false;
@@ -311,7 +320,12 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
         let cursor = attached.state.snapshot().seq;
         do {
           const page = await replay(target, cursor, options);
-          for (const frame of page.events) await options.onDelivery({ kind: 'event', frame });
+          for (let offset = 0; offset < page.events.length; offset += 4) {
+            const deliveries = page.events.slice(offset, offset + 4).map(frame => ({ kind: 'event' as const, frame }));
+            if (options.onDeliveries) await options.onDeliveries(deliveries);
+            else for (const delivery of deliveries) await options.onDelivery(delivery);
+            for (const delivery of deliveries) for (const listener of deliveryListeners) listener(target, delivery);
+          }
           requireValue(page.through > cursor || cursor >= through, 'replay.progress', 'replay_required');
           cursor = page.through;
         } while (cursor < through);
@@ -344,6 +358,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
             default: delivery satisfies never;
           }
           await options.onDelivery(delivery);
+          for (const listener of deliveryListeners) listener(target, delivery);
           return delivery;
         } finally { reading = false; }
       },
@@ -355,7 +370,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       },
     };
   }
-  async function snapshot(target: EnvironmentId, collections: Collection | readonly Collection[], options: RequestOptions & { readonly onPage: (collection: Collection, page: Snapshot) => void | Promise<void>; readonly onDelivery?: (delivery: ObserverDelivery) => void | Promise<void> }) {
+  async function snapshot(target: EnvironmentId, collections: Collection | readonly Collection[], options: RequestOptions & { readonly onPage: (collection: Collection, page: Snapshot) => void | Promise<void>; readonly onDelivery?: (delivery: ObserverDelivery) => void | Promise<void>; readonly onDeliveries?: (deliveries: readonly ObserverDelivery[]) => Promise<void> }) {
     const attached = getTarget(target);
     requireValue(!attached.paging, 'snapshot.pending', 'conflict');
     const names = typeof collections === 'string' ? [collections] : collections;
@@ -363,13 +378,17 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     attached.paging = true;
     let first: Snapshot | undefined;
     let observer: Awaited<ReturnType<typeof observe>> | undefined;
+    let releaseView: (() => Promise<void>) | undefined;
     try {
+      if (attached.indexSnapshot) await retireView(attached, attached.indexSnapshot.token);
       for (const collection of names) {
         let cursor: string | null = null;
         do {
           const page: Snapshot = await request(target, 'runtime.snapshot', { collection, ...(first ? { token: first.token } : {}), cursor, limit: 200 }, options);
           if (!first) {
             first = page;
+            releaseView = holdView(attached, page.token);
+            await publishView(attached, page);
             observer = await observe(target, { ...options, after: first.watermark, onDelivery: options.onDelivery ?? (() => {}) });
           }
           requireValue(page.token === first.token && page.revision === first.revision && page.watermark === first.watermark && page.target === attached.hello.target && page.epoch === attached.hello.epoch && page.generation === attached.hello.generation, 'snapshot.atomic', 'replay_required');
@@ -381,12 +400,11 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       }
       requireValue(first !== undefined && observer !== undefined, 'snapshot.empty');
       attached.state.acceptSnapshot(first, Date.now());
-      attached.indexSnapshot = Object.freeze({ token: first.token, revision: first.revision, watermark: first.watermark, expiresAt: first.expiresAt });
       return { token: first.token, revision: first.revision, watermark: first.watermark, observer };
     } catch (error) {
       if (observer) await observer.close();
       throw error;
-    } finally { attached.paging = false; }
+    } finally { attached.paging = false; await releaseView?.(); }
   }
   /**
    * Page index collections WITHOUT opening an observer and WITHOUT taking the
@@ -400,30 +418,11 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
    * disturb the live reader, and they never call `acceptSnapshot`, so the
    * state's contiguous event cursor is untouched.
    *
-   * The bridge bounds live snapshot views per environment (LIMITS.snapshotTokens)
-   * and exposes no wire method to release one early, so this path REUSES the
-   * target's current index view instead of minting a token per read: the view
-   * seeded by `snapshot` (which already covers every index collection) is reused
-   * while it is valid, and a fresh view is minted only once the cached one is
-   * near expiry. Steady state is one index view per target; repeated searches do
-   * not exhaust the token budget. The reuse window is the snapshot TTL, so an
-   * index read observes the index at the shared view's point in time.
-   *
-    * `fresh` bypasses that reuse for a caller that knows the cached view cannot
-    * answer — a new user search, an explicit refresh, or an index update the
-    * caller just performed. Pagination inside ONE traversal leaves it unset so
-    * every page of that traversal stays on one consistent view.
-    *
-    * A `fresh` read always mints its own view: answering it from the cached one
-    * would silently serve rows that predate the request for up to the whole TTL.
-    * Because the bridge cannot release a view early and bounds live views per
-    * environment, a fresh read whose budget is spent first WAITS for a held view
-    * to lapse (bounded by that view's remaining TTL, reported through
-    * `onWaiting`) instead of minting into `snapshot_limit` or reusing the stale
-    * view. The near-expiry reuse bypass applies only while a replacement can
-    * actually be minted — the bridge deletes only truly expired tokens, so a
-    * cached view it still holds stays usable once the budget is spent.
-    */
+   * `fresh` bypasses that reuse for a caller that knows the cached view cannot
+   * answer — a new user search, an explicit refresh, or an index update the
+   * caller just performed. Pagination inside ONE traversal leaves it unset so
+   * every page of that traversal stays on one consistent view.
+   */
   async function readIndex(
     target: EnvironmentId,
     collections: Collection | readonly Collection[],
@@ -432,50 +431,31 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     const attached = getTarget(target);
     const names = typeof collections === 'string' ? [collections] : collections;
     requireValue(names.length > 0 && names.length <= 5 && new Set(names).size === names.length, 'snapshot.collections');
-    const now = Date.now();
-    // Views whose TTL has lapsed are gone from the store, so they no longer hold budget.
-    attached.indexViews = (attached.indexViews ?? []).filter((view) => view.expiresAt > now);
     const cached = attached.indexSnapshot;
-    // A mint needs budget: the bridge bounds live views per environment and rejects a token-less
-    // read past the budget with `snapshot_limit`, and it exposes no wire method to release a view
-    // early, so a read that must mint first WAITS for a held view to lapse (bounded by that view's
-    // remaining TTL, cancellable through `signal`) instead of failing. A `fresh` read may never
-    // answer from the cached view — an explicit search/refresh would otherwise read rows that
-    // predate the request for up to the whole TTL — so it waits rather than silently reusing.
-    const budget = (attached.indexViews?.length ?? 0) < INDEX_VIEW_BUDGET;
-    // `fresh` bypasses the reuse so the read observes rows the cached view predates. The
-    // near-expiry bypass exists so a view that lapses mid-pagination is not reused past its death,
-    // but only while a replacement can actually be minted: the bridge deletes only truly expired
-    // tokens, so a cached view the bridge still holds stays reusable once the budget is spent.
-    const mint = options.fresh === true || cached === undefined || (cached.expiresAt - now <= 2000 && budget);
-    if (mint) await acquireIndexSlot(attached, options.signal, options.onWaiting);
-    const reuse = mint ? undefined : cached.token;
-    if (mint) attached.indexSnapshot = undefined;
+    const reuse = options.fresh === true || cached === undefined || cached.expiresAt - Date.now() <= 2000
+      ? undefined
+      : cached.token;
+    let releaseView = reuse ? holdView(attached, reuse) : undefined;
     let first: Snapshot | undefined;
+    try {
+    if (cached && reuse === undefined) await retireView(attached, cached.token);
     for (const collection of names) {
       let cursor: string | null = null;
       do {
         const token = first ? first.token : (cursor === null && collection === names[0] ? reuse : undefined);
         let page: Snapshot;
-        let minted: boolean;
         try {
           page = await request(target, 'runtime.snapshot', { collection, ...(token === undefined ? {} : { token }), cursor, limit: 200 }, options);
-          minted = token === undefined;
         } catch (error) {
           if (first !== undefined || token === undefined || !(error instanceof ProtocolError) || error.code !== 'replay_required') throw error;
           attached.indexSnapshot = undefined;
-          const retryNow = Date.now();
-          attached.indexViews = (attached.indexViews ?? []).filter((view) => view.expiresAt > retryNow);
-          await acquireIndexSlot(attached, options.signal, options.onWaiting);
+          await releaseView?.(); releaseView = undefined;
           page = await request(target, 'runtime.snapshot', { collection, cursor, limit: 200 }, options);
-          minted = true;
         }
         if (!first) {
           first = page;
-          attached.indexSnapshot = Object.freeze({ token: page.token, revision: page.revision, watermark: page.watermark, expiresAt: page.expiresAt });
-          if (minted) {
-            attached.indexViews = [...(attached.indexViews ?? []), { token: page.token, expiresAt: page.expiresAt }];
-          }
+          releaseView ??= holdView(attached, page.token);
+          if (reuse !== page.token) await publishView(attached, page);
         }
         requireValue(page.token === first.token && page.revision === first.revision && page.watermark === first.watermark && page.target === attached.hello.target && page.epoch === attached.hello.epoch && page.generation === attached.hello.generation, 'snapshot.atomic', 'replay_required');
         requireValue(page.expiresAt > Date.now() && (page.cursor === null || page.cursor !== cursor), 'snapshot.expired', 'replay_required');
@@ -486,15 +466,23 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     }
     requireValue(first !== undefined, 'snapshot.empty');
     return { token: first.token, revision: first.revision, watermark: first.watermark };
+    } finally { await releaseView?.(); }
   }
   return {
     inspect, attach, detach, request, mutate, snapshot, readIndex, replay, observe,
+    subscribeChannel(channelId: number, listener: (chunk: BinaryChunk) => void) {
+      requireValue(!binaryListeners.has(channelId), 'channel.duplicate', 'conflict');
+      binaryListeners.set(channelId, listener);
+      return () => { if (binaryListeners.get(channelId) === listener) binaryListeners.delete(channelId); };
+    },
+    sendBinary(chunk: BinaryInput) { connection.send(encodeBinary(chunk)); },
+    onObserverDelivery(listener: (target: EnvironmentId, delivery: ObserverDelivery) => void) { deliveryListeners.add(listener); return () => { deliveryListeners.delete(listener); }; },
     scope(target: EnvironmentId): RuntimeScope {
       const attached = getTarget(target);
       return { binding: bindingOf(attached.hello), generation: attached.generation, isCurrent: () => current(attached) };
     },
     onDetach(listener: (target: EnvironmentId) => void) { detachListeners.add(listener); return () => { detachListeners.delete(listener); }; },
-    dispose() { if (disposed) return; clear(); disposed = true; unregisterPreflight(); unsubscribe(); detachListeners.clear(); },
+    dispose() { if (disposed) return; clear(); disposed = true; unregisterPreflight(); unsubscribe(); detachListeners.clear(); deliveryListeners.clear(); binaryListeners.clear(); },
   };
 }
 export type RuntimeClient = ReturnType<typeof createRuntimeClient>;

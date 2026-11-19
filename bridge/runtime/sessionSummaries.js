@@ -36,6 +36,7 @@ export function sessionSummary(source, input) {
   if (source.kind === 'acp') native = record(row.native);
   const directory = source.kind === 'codex' || source.kind === 'acp' ? native.cwd : native.directory;
   let parentSession = native.parentSession ?? null;
+  if (source.kind === 'acp' && native._meta?.parentId) parentSession = { ...session, nativeSessionId: text(native._meta.parentId, 2048) };
   if (source.kind === 'opencode' && native.parentID) parentSession = { ...session, nativeSessionId: text(native.parentID, 2048) };
   const spawn = source.kind === 'codex' ? native.source?.subAgent?.thread_spawn ?? native.source?.subAgent?.threadSpawn : undefined;
   const parent = spawn?.parent_thread_id ?? spawn?.parentThreadId;
@@ -45,8 +46,8 @@ export function sessionSummary(source, input) {
     if (parentSession.environmentId !== source.environmentId || parentSession.harnessInstanceId !== source.harnessInstanceId) throw new StoreError('unauthorized', 'index_parent_scope');
   }
   const result = {
-    session, title: text(native.title ?? ''), directory: optional(directory, 16384),
-    archived: source.kind === 'opencode' ? native.time?.archived != null : native.archived === true,
+    session, title: text(native.title ?? ''), directory: directory === '' ? null : optional(directory, 16384),
+    archived: source.kind === 'opencode' ? native.time?.archived != null : native.archived === true || source.kind === 'acp' && native._meta?.archived === true,
     pinned: native.pinned === true, parentSession,
     createdAt: time(source.kind === 'opencode' ? native.time?.created : native.createdAt),
     updatedAt: time(source.kind === 'opencode' ? native.time?.updated : native.updatedAt),
@@ -87,7 +88,9 @@ export function nativePage(source, input) {
   const completeness = source.kind === 'acp' ? page.status : page.completeness;
   if (!['complete', 'partial', 'unsupported'].includes(completeness)) throw new StoreError('invalid_request', 'index_completeness');
   const cursor = page.cursor == null ? null : text(page.cursor, 16384);
-  if (cursor === '' || (cursor !== null && page.items.length === 0)) throw new StoreError('reconcile_required', 'index_cursor_progress');
+  // Empty advancing pages are valid (including Codex's transition to archived sessions).
+  // The discovery loop still rejects repeated cursors and caps scan rounds.
+  if (cursor === '') throw new StoreError('reconcile_required', 'index_cursor_progress');
   const items = page.items.map((item) => sessionSummary(source, item));
   if (Buffer.byteLength(JSON.stringify(items)) > 4194304) throw new StoreError('source_unavailable', 'index_page_bytes');
   const keys = items.map((item) => encodeSessionKey(item.session));

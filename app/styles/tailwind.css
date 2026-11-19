@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import './runtime-controls.css';
 @plugin "@tailwindcss/typography";
 @source "../**/*.{vue,ts}";
 

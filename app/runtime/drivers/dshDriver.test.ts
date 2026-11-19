@@ -52,6 +52,7 @@ describe('DSH Runtime native boundaries', () => {
     expect(items).toEqual([{ session: { ...identity, nativeSessionId: 'native' }, directory: '/correct', workspaceId: 'missing-new', title: 'External instructions are data', archived: true, pinned: true, createdAt: null, updatedAt: null }]);
     expect(() => summaries({ items: [{ sessionId: 'native' }, { sessionId: 'native' }] }, baseline, identity)).toThrow('duplicate_session');
     expect(() => summaries({ items: ['SUCCESS'] }, baseline, identity)).toThrow('object');
+    expect(summaries({ items: [{ sessionId: 'child', parentSessionId: 'native' }] }, baseline, identity)[0]).toMatchObject({ parentSession: { ...identity, nativeSessionId: 'native' } });
   });
   it('rejects ambiguous model names and preserves the selected provider route', () => {
     const catalog = { groups: [{ id: 'a', models: [{ id: 'same' }] }, { id: 'b', models: [{ id: 'same' }] }] };
@@ -136,6 +137,7 @@ async function controlledDsh() {
   const sentFrames: string[] = [];
   const peers: { send(message: string): void; close(): void }[] = [];
   let pageBody: Buffer = pageEnvelope([], false);
+  let sessionPageValue: unknown;
   let snapshotValue: unknown = followSnapshot(0, [], false);
   const snapshotSequence: unknown[] = [];
   let eventsStream = '';
@@ -147,8 +149,22 @@ async function controlledDsh() {
     try { args = (JSON.parse(Buffer.concat(chunks).toString('utf8')) as { payload?: { args?: Record<string, unknown> } }).payload?.args ?? null; } catch { args = null; }
     httpCalls.push({ method: request.method ?? '', path: route.pathname, args });
     response.setHeader('Content-Type', 'application/json');
-    if (route.pathname === '/api/session/page') { response.end(pageBody); return; }
-    response.end(JSON.stringify({ type: 'server-response', rpcId: 'rpc-native', result: { ok: true, value: null } }));
+    if (route.pathname === '/api/session/page') {
+      if (sessionPageValue !== undefined) {
+        const rpcId = JSON.parse(Buffer.concat(chunks).toString('utf8')).rpcId;
+        response.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true, value: sessionPageValue } }));
+      } else response.end(pageBody);
+      return;
+    }
+    const rpcId = JSON.parse(Buffer.concat(chunks).toString('utf8')).rpcId;
+    const values: Record<string, unknown> = {
+      '/api/session/fork': { sessionId: 'forked-native' },
+      '/api/agentPresets/select': args?.agentPreset,
+      '/api/permissionPresets/catalog': { options: [{ value: 'safe', name: 'Safe' }] },
+      '/api/commands/list': [{ name: 'permission' }],
+      '/api/commands/execute': { result: { kind: 'success' } },
+    };
+    response.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true, value: values[route.pathname] ?? null } }));
   });
   server.on('upgrade', (request, socket) => {
     const route = new URL(request.url ?? '/', 'http://fixture');
@@ -195,6 +211,7 @@ async function controlledDsh() {
   return {
     options, store, httpCalls, openedStreams, cancelledStreams, sentFrames,
     page(value: Buffer) { pageBody = value; },
+    sessionPage(value: unknown) { sessionPageValue = value; },
     snapshot(value: unknown) { snapshotValue = value; },
     snapshots(values: unknown[]) { snapshotSequence.push(...values); },
     /** The raw mux frame the producer's own cold-follow stream consumed, identified by its unique streamId. */
@@ -244,6 +261,42 @@ async function drainDescriptor(handle: InternalNativeHistoryHandle, pageId: stri
 const pageCalls = (fixture: Awaited<ReturnType<typeof controlledDsh>>) => fixture.httpCalls.filter((call) => call.path === '/api/session/page');
 
 describe('DSH native selected-history producer over controlled raw HTTP and cold-follow WebSocket', () => {
+  it('routes lifecycle mutations through the captured session and journals duplicate fork intents', async () => {
+    const fixture = await controlledDsh();
+    const driver = createDshDriver(fixture.options);
+    const invoke = (name: string, params: Record<string, JsonValue>) => driver.driver.native[name]!({ ...producerInput, params });
+    try {
+      await invoke('forkSession', { messageId: '12', idempotencyKey: 'fork-1', sessionId: 'foreign' });
+      await expect(invoke('forkSession', { messageId: '12', idempotencyKey: 'fork-1', sessionId: 'foreign' })).rejects.toThrow('operation_phase');
+      await invoke('updateSession', { title: ' Renamed ', idempotencyKey: 'rename-1', sessionId: 'foreign' });
+      await invoke('updateSession', { time: { archived: 1 }, idempotencyKey: 'archive-1' });
+      await invoke('updateSession', { time: { archived: 0 }, idempotencyKey: 'restore-1' });
+      await invoke('updateSession', { time: { pinned: 1 }, idempotencyKey: 'pin-1' });
+      await invoke('updateSession', { time: { pinned: 0 }, idempotencyKey: 'unpin-1' });
+      const calls = fixture.httpCalls.filter(call => /\/(fork|rename|archiveSession|unarchiveSession|pinSession|unpinSession)$/.test(call.path));
+      expect(calls.map(call => [call.path, call.args])).toEqual([
+        ['/api/session/fork', { request: { sessionId: nativeSessionId, atSeq: 12 } }],
+        ['/api/session/rename', { request: { sessionId: nativeSessionId, title: 'Renamed' } }],
+        ...['archiveSession', 'unarchiveSession', 'pinSession', 'unpinSession'].map(name => [`/api/workspace/${name}`, { request: { sessionId: nativeSessionId } }]),
+      ]);
+      await expect(invoke('forkSession', { atSeq: 'invalid', idempotencyKey: 'bad-fork' })).rejects.toThrow('fork_sequence');
+      await expect(invoke('updateSession', { time: { archived: -1 }, idempotencyKey: 'bad-time' })).rejects.toThrow('session_update_time');
+      expect(fixture.httpCalls.filter(call => call.path === '/api/session/fork')).toHaveLength(1);
+    } finally { await driver.close(); await fixture.close(); }
+  });
+  it('resolves a native message checkpoint before the prompt instead of coercing its id to a sequence', async () => {
+    const fixture = await controlledDsh(), driver = createDshDriver(fixture.options);
+    fixture.snapshot(followSnapshot(4, [], false));
+    fixture.sessionPage({ records: sequentialRecords(0, 5).map(row => row.event.seq === 3 ? { type: 'event', event: { seq: 3, type: 'user/message', data: { id: 'prompt-uuid' } } } : row), hasMore: false });
+    try {
+      const fork = driver.driver.native.forkSession;
+      if (!fork) throw new Error('missing native fork');
+      await fork({ ...producerInput, params: { messageId: 'prompt-uuid', idempotencyKey: 'message-fork' } });
+      expect(fixture.httpCalls.find(call => call.path === '/api/session/fork')?.args).toEqual({ request: { sessionId: nativeSessionId, atSeq: 2 } });
+      await expect(fork({ ...producerInput, params: { messageId: 'missing-prompt', idempotencyKey: 'missing-fork' } })).rejects.toThrow('fork_sequence');
+      expect(fixture.httpCalls.filter(call => call.path === '/api/session/fork')).toHaveLength(1);
+    } finally { await driver.close(); await fixture.close(); }
+  });
   it('declares the native selected-history producer supported and leaves every other operation unchanged', async () => {
     const fixture = await controlledDsh();
     try {
@@ -416,6 +469,20 @@ describe('DSH native selected-history producer over controlled raw HTTP and cold
       if (typeof getSession !== 'function') throw new TypeError('missing getSession operation');
       expect(await getSession({ ...producerInput, params: {} })).toMatchObject({ session: sessionRef, cursor: 399 });
     } finally { await store.close(); await driver.close(); await fixture.close(); }
+  });
+  it('sends verified native preset and permission operations with durable receipts', async () => {
+    const fixture = await controlledDsh(), driver = createDshDriver(fixture.options);
+    try {
+      const preset = driver.driver.native['dsh.agentPresets.select'];
+      const permission = driver.driver.native['dsh.permissions.select'];
+      if (!preset || !permission) throw new Error('Missing native selection operations');
+      expect(await preset({ ...producerInput, params: { preset: 'cordis', idempotencyKey: 'native-preset' } })).toMatchObject({ phase: 'native-executed', result: 'cordis' });
+      expect(await permission({ ...producerInput, params: { preset: 'safe', idempotencyKey: 'native-permission' } })).toMatchObject({ phase: 'native-executed' });
+      expect(fixture.httpCalls.find(call => call.path === '/api/agentPresets/select')?.args).toEqual({ agentId: nativeSessionId, agentPreset: 'cordis' });
+      expect(fixture.httpCalls.find(call => call.path === '/api/commands/execute')?.args).toEqual({ agentId: nativeSessionId, line: '/permission safe', submittedAttachments: [] });
+      await expect(permission({ ...producerInput, params: { preset: 'unknown', idempotencyKey: 'native-refused' } })).rejects.toMatchObject({ code: 'unsupported' });
+      expect(fixture.httpCalls.filter(call => call.path === '/api/commands/execute')).toHaveLength(1);
+    } finally { await driver.close(); await fixture.close(); }
   });
   it('answers a native user-questions waterfall frame with a terminal response', async () => {
     const fixture = await controlledDsh();

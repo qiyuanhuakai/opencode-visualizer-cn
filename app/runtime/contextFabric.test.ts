@@ -1049,6 +1049,15 @@ describe('serialization round-trip and integrity', () => {
       }
     }
     expect(parseCheckpoint(JSON.parse(text))).toEqual(view);
+    expect(parseCheckpoint(JSON.parse(JSON.stringify(view)))).toEqual(view);
+    expect(rejectionOf(() => parseCheckpoint({ ...view, bytes: view.bytes + 1 }))).toEqual({
+      code: 'conflict',
+      field: 'checkpoint_bytes',
+    });
+    expect(rejectionOf(() => parseCheckpoint({ ...view, unexpected: true }))).toEqual({
+      code: 'invalid_request',
+      field: 'checkpoint_schema',
+    });
   });
 
   it('rejects a tampered payload with an explicit code and field', () => {

@@ -1,4 +1,7 @@
 // @vitest-environment node
+import { ProtocolError, type JsonValue } from '../../../shared/runtime/capabilities.js';
+import { KIMI_PROVIDER_OPERATIONS } from '../../../shared/runtime/native/kimiWeb/providerOperations.js';
+import { KIMI_SESSION_OPERATIONS } from '../../../shared/runtime/native/kimiWeb/sessionOperations.js';
 import { describe, expect, it } from 'vitest';
 import { applyTranscriptOps, transcriptSnapshot } from '../../../shared/runtime/native/kimiWeb/transcript.js';
 import {
@@ -109,9 +112,10 @@ function transcriptEnvelope(target: number, turns: number, epochValue = 'ep_fixt
   return { body, items };
 }
 const smallTranscript = () => Buffer.from(JSON.stringify({ items: [turn(0, 8), turn(1, 8)], has_more: false, seq: 7, tasks: [], interactions: [], attachments: [], todos: [], prompts: [], meta: {}, agents: [], epoch: 'ep_fixture' }));
-async function controlledKimiWeb() {
+async function controlledKimiWeb(nativePageMaximum = 200) {
   const dir = await mkdtemp(path.join(tmpdir(), 'vis-kimi-http-')); temporary.push(dir);
   const calls: { method: string; path: string; origin: string | undefined }[] = [];
+  const promptBodies: unknown[] = [];
   const transcriptPulls: { path: string; raw: boolean; agentId: string | null; beforeTurn: string | null }[] = [];
   const wsControls: { lane: string; type: string; payload: Record<string, unknown> }[] = [];
   const wsPongs: string[] = [];
@@ -123,18 +127,33 @@ async function controlledKimiWeb() {
   let transcriptChunks = 0;
   let unsubscribeGate: Promise<void> | undefined;
   let published = 39;
+  let providerError = 0;
   const sockets = new Set<import('node:net').Socket>();
   const server = createServer(async (request, response) => {
     const route = new URL(request.url ?? '/', 'http://fixture');
     calls.push({ method: request.method ?? '', path: route.pathname + route.search, origin: request.headers.origin });
     response.setHeader('Content-Type', 'application/json');
+    if (providerError && route.pathname === '/api/v1/providers' && request.method === 'POST') { response.end(JSON.stringify({ code: providerError, data: null, msg: 'secret upstream details' })); return; }
     if (route.pathname === '/openapi.json' || route.pathname === '/asyncapi.json') {
       response.end(JSON.stringify(route.pathname === '/openapi.json' ? {
         paths: {
+          ...Object.values(KIMI_SESSION_OPERATIONS).reduce<Record<string, Record<string, object>>>((paths, route) => { const path = `/api/v1/sessions/{session_id}${route.suffix}`; (paths[path] ??= {})[route.method.toLowerCase()] = {}; return paths; }, {}),
+          '/api/v1/auth': { get: {} },
+          '/api/v1/config': { get: {}, post: {} },
+          '/api/v1/providers': { get: {}, post: {} },
+          '/api/v1/providers/{provider_id}': { put: {}, delete: {} },
+          '/api/v1/providers/{provider_id}:refresh': { post: {} },
+          '/api/v1/providers:refresh': { post: {} },
+          '/api/v1/providers:import_catalog': { post: {} },
+          '/api/v1/catalog/providers': { get: {} },
+          '/api/v1/catalog/providers/{provider_id}': { get: {} },
+          '/api/v1/models/{model_id}:set_default': { post: {} },
           '/api/v2/sessions': { get: {} }, '/api/v1/sessions': { post: {} },
-          '/api/v1/sessions/{session_id}/snapshot': { get: {} }, '/api/v1/sessions/{session_id}/transcript': { get: {} },
+          '/api/v1/sessions/{session_id}/snapshot': { get: {} }, '/api/v1/sessions/{session_id}/transcript': { get: { parameters: [{ in: 'query', name: 'page_size', schema: { maximum: nativePageMaximum } }] } },
           '/api/v1/sessions/{session_id}/prompts': { post: {} }, '/api/v1/sessions/{session_id}:abort': { post: {} },
           '/api/v1/sessions/{session_id}/approvals/{approval_id}': { post: {} }, '/api/v1/sessions/{session_id}/questions/{tail}': { post: {} },
+          '/api/v1/sessions/{session_id}/profile': { post: {} },
+          '/api/v1/sessions/{session_id}:archive': { post: {} }, '/api/v1/sessions/{session_id}:restore': { post: {} }, '/api/v1/sessions/{session_id}:delete': { post: {} },
           '/api/v1/models': { get: {} }, '/api/v1/sessions/{session_id}/status': { get: {} },
         },
       } : { components: { messages: { subscribe_v2: { name: 'subscribe_v2' }, subscribe: { name: 'subscribe' } } } }));
@@ -146,9 +165,16 @@ async function controlledKimiWeb() {
       response.end(JSON.stringify({ code: 0, data: { epoch: 'ep_fixture', as_of_seq: 7, session: { id: nativeSessionId, meta: { title: 'Fixture' }, workspace: { id: 'wd_fixture', cwd: dir }, busy: false, last_seq: 7 }, messages: { items: [], has_more: false }, in_flight_turn: { assistant_text: '', thinking_text: '' }, subagents: [], pending_approvals: [], pending_questions: [] } }));
       return;
     }
+    if (route.pathname === `/api/v1/sessions/${nativeSessionId}/prompts`) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      promptBodies.push(body);
+      response.end(JSON.stringify({ code: 0, data: { prompt_id: body.prompt_id } })); return;
+    }
     if (route.pathname === `/api/v1/sessions/${nativeSessionId}/status`) { response.end(JSON.stringify({ code: 0, data: { busy: false } })); return; }
     if (route.pathname.endsWith('/transcript')) {
-      const raw = route.searchParams.get('page_size') === '200';
+      const raw = request.headers.accept === 'application/json';
       transcriptPulls.push({ path: route.pathname + route.search, raw, agentId: route.searchParams.get('agent_id'), beforeTurn: route.searchParams.get('before_turn') });
       response.on('error', () => {});
       if (transcriptGate) await transcriptGate;
@@ -199,10 +225,11 @@ async function controlledKimiWeb() {
   const runtime = createRuntimeHost({ environmentId, role: 'local' }); runtime.start();
   const options = { environmentId, harnessInstanceId, epoch, processGeneration: 1, endpoint: `http://127.0.0.1:${address.port}`, store, runtime, getAuthority: () => authority, getAuthorization: () => 'Bearer fixture-token', ownership: 'borrowed' as const };
   return {
-    options, store, calls, transcriptPulls, wsControls, wsPongs,
+    options, store, calls, promptBodies, transcriptPulls, wsControls, wsPongs,
     transcript(value: { body?: Buffer; status?: number; gate?: Promise<void> } | undefined) { transcriptBody = value?.body; transcriptStatus = value?.status ?? 0; transcriptGate = value?.gate; },
     transcriptChunks: () => transcriptChunks,
     setAuthority(value: { epoch: string; processGeneration: number }) { authority = value; },
+    providerError(code: number) { providerError = code; },
     holdUnsubscribe(gate: Promise<void> | undefined) { unsubscribeGate = gate; },
     ping(nonce: string) { for (const peer of peers) peer.send(JSON.stringify({ type: 'ping', payload: { nonce } })); },
     publish(type: string, payload: Record<string, unknown> = {}, sessionId: string | undefined = nativeSessionId) {
@@ -255,6 +282,24 @@ const storeScope = JSON.stringify([environmentId, harnessInstanceId, session]);
 const producerInput = { environmentId, harnessInstanceId, session, params: historyAuthority };
 
 describe('Kimi Web native selected-history producer over controlled raw HTTP and WebSocket', () => {
+  it('discovers advanced session routes and keeps query and mutation identity on the captured session', async () => {
+    const fixture = await controlledKimiWeb(), driver = await createKimiWebDriver(fixture.options);
+    try {
+      for (const name of ['forkSession', 'compactSession', 'kimi.btw', 'kimi.undo', 'kimi.children.create', 'kimi.tasks.cancel']) {
+        expect(driver.registration.manifest.extensions.find(entry => entry.name === name)?.support.state).toBe('supported');
+        const invoke = driver.registration.driver.native[name];
+        if (!invoke) throw new Error('missing discovered session route');
+        await expect(invoke({ environmentId, harnessInstanceId, session, params: { id: 'task/a', body: { count: 1 }, idempotencyKey: name, sessionId: 'foreign' } })).resolves.toMatchObject({ phase: 'native-executed' });
+      }
+      const read = driver.registration.driver.native['kimi.fileContent'];
+      if (!read) throw new Error('missing file history route');
+      await read({ environmentId, harnessInstanceId, session, params: { query: { turn_id: 5, path: 'proof.txt', phase: 'start' } } });
+      expect(fixture.calls.some(call => call.path === `/api/v1/sessions/${nativeSessionId}/file-history/content?turn_id=5&path=proof.txt&phase=start`)).toBe(true);
+      expect(fixture.calls.some(call => call.path === `/api/v1/sessions/${nativeSessionId}/tasks/task%2Fa:cancel`)).toBe(true);
+      await expect(read({ environmentId, harnessInstanceId, session, params: { query: { session_id: 'foreign' } } })).rejects.toThrow('kimi.session_query');
+      expect(fixture.calls.some(call => call.path.includes('/sessions/foreign'))).toBe(false);
+    } finally { await driver.close(); await fixture.close(); }
+  });
   it('declares the native selected-history producer supported and leaves every other operation unchanged', async () => {
     const fixture = await controlledKimiWeb();
     try {
@@ -265,8 +310,71 @@ describe('Kimi Web native selected-history producer over controlled raw HTTP and
         if (name === 'openHistory') continue;
         expect(support).toEqual({ state: 'supported' });
       }
-      expect(driver.registration.manifest.extensions.map((entry) => entry.name).sort()).toEqual(['kimi.listWorkspacePage', 'kimi.sessionStatus', 'listProviders']);
+      expect(driver.registration.manifest.extensions.map((entry) => entry.name).sort()).toEqual([...Object.keys(KIMI_PROVIDER_OPERATIONS), ...Object.keys(KIMI_SESSION_OPERATIONS), 'archiveSession', 'deleteSession', 'kimi.listWorkspacePage', 'kimi.meta', 'kimi.sessionStatus', 'kimi.updateProfile', 'listProviders', 'restoreSession'].sort());
     } finally { await fixture.close(); }
+  });
+  it('updates goals with PATCH on the captured session and rejects invalid objectives before dispatch', async () => {
+    const fixture = await controlledKimiWeb(), driver = await createKimiWebDriver(fixture.options);
+    try {
+      const invoke = driver.registration.driver.native['kimi.goal.update'];
+      if (!invoke) throw new Error('Missing goal update');
+      const params = { body: { objective: 'Keep native goal' }, idempotencyKey: 'goal-patch', sessionId: 'foreign' };
+      await expect(invoke({ environmentId, harnessInstanceId, session, params })).resolves.toMatchObject({ phase: 'native-executed' });
+      expect(fixture.calls.filter(call => call.method === 'PATCH' && call.path.endsWith('/goal'))).toEqual([expect.objectContaining({ path: `/api/v1/sessions/${nativeSessionId}/goal` })]);
+      for (const body of [{ objective: '' }, { objective: '  ' }, { objective: 5 }, { objective: 'valid', sessionId: 'foreign' }] as JsonValue[]) {
+        await expect(invoke({ environmentId, harnessInstanceId, session, params: { body, idempotencyKey: 'invalid-goal' } })).rejects.toThrow('kimi.goal_objective');
+      }
+      expect(fixture.calls.filter(call => call.method === 'PATCH' && call.path.endsWith('/goal'))).toHaveLength(1);
+    } finally { await driver.close(); await fixture.close(); }
+  });
+  it('discovers each provider route and executes mutations with the captured instance journal', async () => {
+    const fixture = await controlledKimiWeb(), driver = await createKimiWebDriver(fixture.options);
+    try {
+      for (const [operation, route] of Object.entries(KIMI_PROVIDER_OPERATIONS)) {
+        expect(driver.registration.manifest.extensions.find(entry => entry.name === operation)?.support.state).toBe('supported');
+        const invoke = driver.registration.driver.native[operation];
+        if (!invoke) throw new Error('Missing provider operation');
+        const result = await invoke({ environmentId, harnessInstanceId, params: { id: 'provider/model', body: {}, idempotencyKey: operation } });
+        if (route.method !== 'GET') expect(result).toMatchObject({ phase: 'native-executed' });
+        expect(fixture.calls.some(call => call.method === route.method && call.path === route.path.replace('{id}', 'provider%2Fmodel'))).toBe(true);
+      }
+    } finally { await driver.close(); await fixture.close(); }
+  });
+  it('preserves provider conflict codes as terminal rejection without exposing upstream error text', async () => {
+    const fixture = await controlledKimiWeb(), driver = await createKimiWebDriver(fixture.options);
+    try {
+      fixture.providerError(40921);
+      const invoke = driver.registration.driver.native['kimi.providers.create'];
+      if (!invoke) throw new Error('Missing provider create');
+      const result = await invoke({ environmentId, harnessInstanceId, params: { body: {}, idempotencyKey: 'provider-conflict' } });
+      expect(result).toMatchObject({ phase: 'native-executed', result: { __kimiBusinessError: 40921 } });
+      expect(JSON.stringify(result)).not.toContain('secret upstream details');
+    } finally { await driver.close(); await fixture.close(); }
+  });
+  it('preserves bounded native attachment content and rejects server file paths before sending', async () => {
+    const fixture = await controlledKimiWeb(), driver = await createKimiWebDriver(fixture.options);
+    try {
+      const send = driver.registration.driver.core.send;
+      if (!send) throw new Error('Missing send');
+      const content: JsonValue[] = [{ type: 'text', text: 'Inspect image' }, { type: 'image', source: { kind: 'base64', media_type: 'image/png', data: 'YWJj' } }, { type: 'file', file_id: 'uploaded-1', name: 'notes.txt' }];
+      expect(await send({ environmentId, harnessInstanceId, session, params: { content, idempotencyKey: 'attachment-send' } })).toMatchObject({ phase: 'native-executed' });
+      expect(fixture.promptBodies).toEqual([expect.objectContaining({ content })]);
+      await expect(send({ environmentId, harnessInstanceId, session, params: { content: [{ type: 'file', file_id: 'x', path: '/private' }], idempotencyKey: 'refused-path' } })).rejects.toMatchObject({ code: 'unauthorized' });
+      expect(fixture.promptBodies).toHaveLength(1);
+    } finally { await driver.close(); await fixture.close(); }
+  });
+  it('routes discovered lifecycle and profile mutations through durable native operation journals', async () => {
+    const fixture = await controlledKimiWeb();
+    const driver = await createKimiWebDriver(fixture.options);
+    try {
+      for (const [operation, suffix] of [['kimi.updateProfile', '/profile'], ['archiveSession', ':archive'], ['restoreSession', ':restore'], ['deleteSession', ':delete']]) {
+        const invoke = driver.registration.driver.native[operation];
+        if (!invoke) throw new Error('Missing discovered native operation');
+        const result = await invoke({ environmentId, harnessInstanceId, session, params: { idempotencyKey: operation, body: { model: 'kimi-test' } } });
+        expect(result).toMatchObject({ phase: 'native-executed' });
+        expect(fixture.calls.some(call => call.method === 'POST' && call.path === `/api/v1/sessions/${nativeSessionId}${suffix}`)).toBe(true);
+      }
+    } finally { await driver.close(); await fixture.close(); }
   });
   it('streams the raw native transcript envelope through the bounded substrate before any concat or parse', async () => {
     const fixture = await controlledKimiWeb();
@@ -299,6 +407,38 @@ describe('Kimi Web native selected-history producer over controlled raw HTTP and
       expect(createHash('sha256').update(record.bytes).digest('hex')).toBe(first.descriptor.sha256);
       expect(store.usage().peakMemoryBytes).toBeLessThanOrEqual(HISTORY_STREAM_LIMITS.workingBytes + 2097152);
       expect(store.usage().diskBytes).toBe(page.document.totalBytes);
+    } finally { await producer.close(); await store.close(); await fixture.close(); }
+  });
+  it('streams a code/data native transcript envelope with exact document and turn bytes', async () => {
+    const fixture = await controlledKimiWeb();
+    const inner = transcriptEnvelope(240000, 4);
+    const body = Buffer.concat([Buffer.from('{"code":0,"msg":"success","data":'), inner.body, Buffer.from('}')]);
+    fixture.transcript({ body });
+    const producer = await historyProducer(fixture), store = await historyStore(storeScope);
+    try {
+      await producer.handle.open({ signal: historySignal(), streamStore: store });
+      const page = await producer.handle.page({ signal: historySignal() });
+      if (!page.document || page.items[0]?.kind !== 'stream') throw new Error('missing wrapped transcript descriptors');
+      expect(page.items.map(item => item.recordId)).toEqual(inner.items.map((_, index) => `turn:turn_${String(index).padStart(6, '0')}`));
+      const document = await drainDescriptor(producer.handle, page.pageId, page.document.id);
+      expect(document.bytes.equals(body)).toBe(true);
+      expect(page.document.sha256).toBe(createHash('sha256').update(body).digest('hex'));
+      const first = await drainDescriptor(producer.handle, page.pageId, page.items[0].descriptor.id);
+      expect(first.bytes.toString('utf8')).toBe(JSON.stringify(inner.items[0]));
+      expect(document.sizes.every(size => size <= 65536)).toBe(true);
+    } finally { await producer.close(); await store.close(); await fixture.close(); }
+  });
+  it.each([
+    { code: 40112, data: { items: [], has_more: false, seq: 7 } },
+    { code: 0, items: [turn(3, 0)], data: { items: [turn(0, 0)], has_more: false, seq: 7 } },
+  ])('rejects failed or mixed native envelopes and removes partial history', async value => {
+    const fixture = await controlledKimiWeb();
+    fixture.transcript({ body: Buffer.from(JSON.stringify(value)) });
+    const producer = await historyProducer(fixture), store = await historyStore(storeScope);
+    try {
+      await producer.handle.open({ signal: historySignal(), streamStore: store });
+      await expect(producer.handle.page({ signal: historySignal() })).rejects.toThrow(value.code === 40112 ? 'kimi.history_native_envelope' : 'kimi.history_mixed_envelope');
+      expect(store.usage()).toMatchObject({ diskBytes: 0, pages: 0 });
     } finally { await producer.close(); await store.close(); await fixture.close(); }
   });
   it('preserves attachments, todos, prompts and unknown native fields byte-exactly through the raw path', async () => {
@@ -546,6 +686,33 @@ describe('Kimi Web native selected-history producer over controlled raw HTTP and
   });
 });
 
+ it('rejects a raw transcript pull when authorization fails before response admission', async () => {
+  const fixture = await controlledKimiWeb();
+  let refuse = false;
+  const driver = await createKimiWebDriver({ ...fixture.options, getAuthorization() {
+    if (refuse) throw new Error('controlled credential failure');
+    return fixture.options.getAuthorization();
+  } });
+  const method = driver.registration.driver.core.openHistory;
+  if (!method) throw new Error('missing native history producer');
+  const handle = await method(producerInput) as InternalNativeHistoryHandle;
+  const store = await historyStore(storeScope);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await handle.open({ signal: historySignal(), streamStore: store });
+    refuse = true;
+    const failure = handle.page({ signal: historySignal() }).then(
+      () => ({ status: 'resolved' }),
+      (error: unknown) => ({ status: 'rejected', code: error instanceof ProtocolError ? error.code : 'unknown' }),
+    );
+    const guard = new Promise(resolve => { timer = setTimeout(() => resolve({ status: 'deadline' }), 300); });
+    expect(await Promise.race([failure, guard])).toEqual({ status: 'rejected', code: 'unauthorized' });
+  } finally {
+    clearTimeout(timer); refuse = false;
+    await handle.close(); await driver.close(); await store.close(); await fixture.close();
+  }
+});
+
 it('requires the native GET session route for modern session reads', () => {
   const meta = { backend: 'v2', server_version: '2.5.2' };
   const ws = { components: { messages: {} } };
@@ -554,6 +721,27 @@ it('requires the native GET session route for modern session reads', () => {
   const capabilities = parseNativeCapabilities(meta, { paths: { '/api/v1/sessions/{session_id}': { get: {} } } }, ws);
   expect(capabilities.sessionRead).toBe(true);
   expect(capabilities.snapshot).toBe(false);
+});
+
+it.each(['close', 'abort'] as const)('does not issue raw history after %s during credential lookup', async action => {
+  const fixture = await controlledKimiWeb();
+  let admit: (() => void) | undefined;
+  let entered: (() => void) | undefined;
+  const gate = new Promise<void>(resolve => { admit = resolve; });
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const transport = createKimiWebTransport({ endpoint: fixture.options.endpoint,
+    getAuthorization: async () => { entered?.(); await gate; return fixture.options.getAuthorization(); } });
+  try {
+    const controller = new AbortController();
+    const result = transport.stream(`/api/v1/sessions/${nativeSessionId}/transcript`, controller.signal).then(value => ({ value, error: undefined }), error => ({ value: undefined, error }));
+    await waiting;
+    if (action === 'close') await transport.close(); else controller.abort();
+    admit?.();
+    const outcome = await result;
+    outcome.value?.release();
+    expect(outcome.error).toMatchObject(action === 'close' ? { code: 'source_unavailable', field: 'driver_closed' } : { code: 'cancelled', field: 'native_cancelled' });
+    expect(fixture.transcriptPulls).toHaveLength(0);
+  } finally { admit?.(); await transport.close(); await fixture.close(); }
 });
 
 it('recovers modern transcript cursors per agent without reading or fabricating a legacy snapshot epoch', async () => {
@@ -581,6 +769,19 @@ it('recovers modern transcript cursors per agent without reading or fabricating 
   expect(history.inspect('modern-session').snapshot.items).toMatchObject([{ turnId: 't0' }]);
   history.receive(frame, 1);
   expect(history.inspect('modern-session').snapshot.items).toHaveLength(1);
+});
+
+it.each([50, 100, 1000])('honors native transcript page maximum %s within the host page bound', async nativeMaximum => {
+  const fixture = await controlledKimiWeb(nativeMaximum);
+  fixture.transcript({ body: transcriptEnvelope(2400, 4).body });
+  const producer = await historyProducer(fixture);
+  const store = await historyStore(storeScope);
+  try {
+    await producer.handle.open({ signal: historySignal(), streamStore: store });
+    const page = await producer.handle.page({ signal: historySignal() });
+    expect(page.items).toHaveLength(4);
+    expect(rawPulls(fixture)[0]?.path).toContain(`page_size=${Math.min(200, nativeMaximum)}`);
+  } finally { await producer.close(); await store.close(); await fixture.close(); }
 });
 
 it('limits the modern prompt abort alias to the verified dispatcher profile', () => {

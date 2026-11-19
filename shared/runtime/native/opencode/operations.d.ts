@@ -3,7 +3,7 @@ import type { JsonValue } from '../../capabilities.js';
 import type { RuntimeStore, Json } from '../../../../bridge/runtime/storage/runtimeStore.js';
 import type { OperationScope } from '../../../../bridge/runtime/operationJournal.js';
 import type { ProcessGuard } from './instanceOperations.js';
-export type OpenCodeNativeOperation = 'forkSession' | 'updateSession' | 'deleteSession' | 'revertSession' | 'unrevertSession'
+export type OpenCodeNativeOperation = 'compactSession' | 'forkSession' | 'updateSession' | 'deleteSession' | 'revertSession' | 'unrevertSession'
   | 'getSessionDiff' | 'getSessionChildren' | 'getSessionMessage' | 'getSessionTodos' | 'sendCommand' | 'patchMessagePart'
   | 'getGlobalConfig' | 'updateGlobalConfig' | 'listProviders' | 'listProviderAuthMethods' | 'authorizeProviderOAuth'
   | 'completeProviderOAuth' | 'setProviderAuth' | 'deleteProviderAuth' | 'listAgents' | 'listCommands' | 'getSessionStatusMap'

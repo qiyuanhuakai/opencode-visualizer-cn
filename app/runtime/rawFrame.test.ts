@@ -18,6 +18,19 @@ const budgetPreflight: RawFramePreflight = (summary) => {
 };
 
 describe('scanRawFrame bounded lexical summary', () => {
+  it('rejects an oversized raw frame before UTF-8 allocation or JSON parsing', () => {
+    const raw = ' '.repeat(1048577);
+    const encode = vi.spyOn(TextEncoder.prototype, 'encode');
+    const parse = vi.spyOn(JSON, 'parse');
+    try {
+      expect(() => decodeFrame(raw)).toThrow(expect.objectContaining({ code: 'invalid_request', field: 'json.size' }));
+      expect(encode.mock.calls.length).toBe(0);
+      expect(parse.mock.calls.length).toBe(0);
+    } finally {
+      encode.mockRestore();
+      parse.mockRestore();
+    }
+  });
   it('reports envelope primitives and result span metrics without materializing an object graph', () => {
     const hostile = resultFrame('1:1', tiny(174000));
     expect(Buffer.byteLength(hostile)).toBeLessThanOrEqual(1048576);
@@ -83,6 +96,13 @@ describe('scanRawFrame bounded lexical summary', () => {
     expect(summary.result.stringUnits).toBe(8);
     expect(summary.result.keyUnits).toBe(4);
     expect(summary.result.utf8Bytes).toBe(Buffer.byteLength('{"text":"héllo→\\n\\t"}', 'utf8'));
+  });
+  it.each(['\n', '\t', '\r', '\b', '\f', '"', '\\'])('accepts a terminal escaped character %j without skipping the following closing quote', (escape) => {
+    const value = { text: `ACP writer output${escape}`, next: false };
+    const raw = resultFrame('native\\id', JSON.stringify(value));
+    expect(scanRawFrame(raw)).toMatchObject({ id: 'native\\id', result: { stringUnits: value.text.length } });
+    expect(decodeFrame(raw, budgetPreflight)).toEqual(decodeFrame(raw));
+    expect(decodeFrame(raw, budgetPreflight)).toMatchObject({ result: value });
   });
 
   it('applies the representation-level raw byte ceiling to whitespace inflation', () => {

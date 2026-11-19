@@ -18,7 +18,15 @@ function context(client: ReturnType<typeof createFakeRuntimeActionClient>) {
 }
 
 describe('useRuntimeSessionActions routes session lifecycle operations by SessionRef', () => {
-  it('fork/archive/unarchive/delete/compact/revert emit session.send commands', () => {
+  it('restores a Kimi session without re-archiving it', () => {
+    const client = createFakeRuntimeActionClient([ENV_A]);
+    const actions = useRuntimeSessionActions({ ...context(client), harnessKindFor: () => 'kimi-web' });
+    actions.archive(SESSION_A);
+    actions.unarchive(SESSION_A);
+    expect(client.calls.map(call => Reflect.get(call.params, 'operation'))).toEqual(['archiveSession', 'restoreSession']);
+    expect(client.calls.map(call => call.params.session)).toEqual([SESSION_A, SESSION_A]);
+  });
+  it('routes lifecycle operations through native extensions when sessions are qualified', () => {
     const client = createFakeRuntimeActionClient([ENV_A]);
     const actions = useRuntimeSessionActions(context(client));
     actions.fork(SESSION_A, { messageId: 'm1' });
@@ -27,14 +35,13 @@ describe('useRuntimeSessionActions routes session lifecycle operations by Sessio
     actions.delete(SESSION_A);
     actions.compact(SESSION_A);
     actions.revert(SESSION_A, { messageId: 'm2' });
-    expect(client.calls.map(call => call.method)).toEqual(Array(6).fill('session.send'));
+    expect(client.calls.map(call => call.method)).toEqual(Array(6).fill('native.extension'));
+    expect(client.calls.map(call => Reflect.get(call.params, 'operation'))).toEqual([
+      'forkSession', 'updateSession', 'updateSession', 'deleteSession', 'compactSession', 'revertSession',
+    ]);
     expect(client.calls.map(call => call.params.args)).toEqual([
-      { command: { name: 'fork', arguments: { messageId: 'm1' } } },
-      { command: { name: 'archive' } },
-      { command: { name: 'unarchive' } },
-      { command: { name: 'delete' } },
-      { command: { name: 'compact' } },
-      { command: { name: 'revert', arguments: { messageId: 'm2' } } },
+      { messageId: 'm1' }, { time: { archived: expect.any(Number) } },
+      { time: { archived: 0 } }, {}, {}, { messageId: 'm2' },
     ]);
     for (const call of client.calls) {
       expect(call.target).toBe(ENV_A);
@@ -49,7 +56,7 @@ describe('useRuntimeSessionActions routes session lifecycle operations by Sessio
     expect(() => actions.rename(SESSION_A, '   ')).toThrow();
     expect(client.calls).toHaveLength(0);
     actions.rename(SESSION_A, '  My session  ');
-    expect(client.calls[0]!.params.args).toEqual({ command: { name: 'rename', arguments: { title: 'My session' } } });
+    expect(client.calls[0]!.params.args).toEqual({ title: 'My session' });
   });
 
   it('todos and tokenMonitor read via session.get with the qualified session', () => {

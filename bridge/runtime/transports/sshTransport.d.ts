@@ -119,6 +119,7 @@ export function resolveSshTarget(input: {
   configText?: string;
 }): SshTarget;
 export function buildSshArgv(options: {
+  preferredAuthentications?: readonly ('publickey' | 'password' | 'keyboard-interactive')[];
   target: Partial<SshTarget>;
   platform?: string;
   forward?: SshForward;

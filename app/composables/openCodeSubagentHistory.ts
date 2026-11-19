@@ -54,7 +54,7 @@ export function createOpenCodeSubagentHistory(options: {
       const retained = await store.read(sessionId);
       if (retained.length) return retained;
       const response = await fetchHistory(sessionId);
-      const entries = parseHistory(response, sessionId);
+      const entries = parseSubagentHistory(response, sessionId);
       const observed = options.isActive() && options.getScope() === scope ? options.getMemoryEntries(sessionId) : [];
       return store.merge(sessionId, [...entries, ...observed]);
     };
@@ -67,7 +67,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function parseHistory(value: unknown, sessionId: string): BackendHistoryEntry[] {
+export function parseSubagentHistory(value: unknown, sessionId: string): BackendHistoryEntry[] {
   if (!Array.isArray(value)) throw new Error('Invalid OpenCode session history response.');
   return value.map((entry: unknown) => {
     if (!isRecord(entry) || !isRecord(entry.info) || !Array.isArray(entry.parts) ||

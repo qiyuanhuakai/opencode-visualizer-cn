@@ -18,6 +18,7 @@ import type { JsonValue } from '../../shared/runtime/capabilities.js';
 import { encodeSessionKey, parseSessionRef } from '../../shared/runtime/identity.js';
 import type { ConnectionProfileId, EnvironmentId, HarnessInstanceId, SessionRef } from '../../shared/runtime/identity.js';
 import type { JsonObject, NativeCall, NativeMutationResult, RuntimeParams } from '../../shared/runtime/runtimeWire.js';
+import type { HarnessKind } from '../../shared/runtime/harnessContract.js';
 import type { InjectionKey } from 'vue';
 import type { MutationMethod, RequestMethod, RuntimeClient } from '../runtime/client';
 import type { SelectionCapture } from '../runtime/selectionScope';
@@ -41,6 +42,7 @@ export type RuntimeActionContext = Readonly<{
   profileId: ConnectionProfileId;
   /** The current qualified selection, or null. NEVER used as an in-flight fence. */
   capture(): SelectionCapture | null;
+  harnessKindFor?(session: SessionRef): HarnessKind;
 }>;
 
 /** The immutable qualified identity an operation is bound to. */
@@ -170,9 +172,11 @@ export type RuntimeSessionRouter = Readonly<{
 export function useRuntimeSessionActions(ctx: RuntimeActionContext) {
   const router = createSessionActionRouter(ctx);
 
-  function command(session: SessionRef, name: string, args?: Readonly<Record<string, JsonValue>>): SessionMutation {
+  function command(session: SessionRef, operation: string, args: Readonly<Record<string, JsonValue>> = {}): SessionMutation {
     const bound = router.bind(session);
-    return router.mutate(bound, 'session.send', router.call(bound, router.commandArgs(name, args)));
+    const kind = ctx.harnessKindFor?.(session);
+    const encoded = kind === 'codex' ? { native: args } : kind === 'opencode' || (kind === 'kimi-web' && operation === 'kimi.updateProfile') ? { body: args } : args;
+    return router.mutate(bound, 'native.extension', { ...router.call(bound, encoded), operation });
   }
 
   function readSession(session: SessionRef, include: readonly string[]): Promise<unknown> {
@@ -182,16 +186,17 @@ export function useRuntimeSessionActions(ctx: RuntimeActionContext) {
 
   return {
     router,
-    fork(session: SessionRef, payload: Readonly<Record<string, JsonValue>> = {}) { return command(session, 'fork', payload); },
+    fork(session: SessionRef, payload: Readonly<Record<string, JsonValue>> = {}) { return command(session, 'forkSession', payload); },
     rename(session: SessionRef, title: string) {
       requireValue(typeof title === 'string' && title.trim().length > 0, 'action.title');
-      return command(session, 'rename', { title: title.trim() });
+      const kind = ctx.harnessKindFor?.(session);
+      return command(session, kind === 'kimi-web' ? 'kimi.updateProfile' : 'updateSession', kind === 'codex' ? { name: title.trim() } : { title: title.trim() });
     },
-    archive(session: SessionRef) { return command(session, 'archive'); },
-    unarchive(session: SessionRef) { return command(session, 'unarchive'); },
-    delete(session: SessionRef) { return command(session, 'delete'); },
-    compact(session: SessionRef) { return command(session, 'compact'); },
-    revert(session: SessionRef, payload: Readonly<Record<string, JsonValue>> = {}) { return command(session, 'revert', payload); },
+    archive(session: SessionRef) { if (ctx.harnessKindFor?.(session) === 'kimi-web') return command(session, 'archiveSession'); return command(session, 'updateSession', ctx.harnessKindFor?.(session) === 'codex' ? { archived: true } : { time: { archived: Date.now() } }); },
+    unarchive(session: SessionRef) { if (ctx.harnessKindFor?.(session) === 'kimi-web') return command(session, 'restoreSession'); return command(session, 'updateSession', ctx.harnessKindFor?.(session) === 'codex' ? { archived: false } : { time: { archived: 0 } }); },
+    delete(session: SessionRef) { return command(session, 'deleteSession'); },
+    compact(session: SessionRef) { return command(session, 'compactSession'); },
+    revert(session: SessionRef, payload: Readonly<Record<string, JsonValue>> = {}) { return command(session, 'revertSession', payload); },
     todos(session: SessionRef) { return readSession(session, ['todos']); },
     tokenMonitor(session: SessionRef) { return readSession(session, ['usage']); },
     history(session: SessionRef, args: Readonly<Record<string, JsonValue>> = {}) {
@@ -209,6 +214,7 @@ export type RuntimeSessionActions = ReturnType<typeof useRuntimeSessionActions>;
  * qualified router; otherwise the legacy backend-specific path runs unchanged.
  */
 export type RuntimeSessionRuntime = Readonly<{
+  title?(session: SessionRef): string | undefined;
   binding(): RuntimeActionBinding | null;
   router: RuntimeSessionRouter;
 }>;

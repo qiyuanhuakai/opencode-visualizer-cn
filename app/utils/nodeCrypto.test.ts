@@ -44,6 +44,15 @@ describe('the node:crypto seam', () => {
     );
   });
 
+  it('hashes original bytes across updates and snapshots mutable inputs', () => {
+    const first = Uint8Array.of(0x80, 0xf0, 0x9f);
+    const second = Uint8Array.of(0x98, 0x80);
+    const expected = createHash('sha256').update(first).update(second).update('文').digest('hex');
+    const browser = createBrowserHash('sha256').update(first).update(second).update('文');
+    first.fill(0);
+    expect(browser.digest('hex')).toBe(expected);
+  });
+
   it('refuses an algorithm the browser branch does not implement instead of guessing', () => {
     expect(() => createBrowserHash('md5')).toThrowError(/unsupported hash algorithm/u);
   });

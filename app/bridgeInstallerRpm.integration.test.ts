@@ -15,7 +15,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { packageVisBridgeInstaller } from '../scripts/package-vis-bridge-installer.mjs';
-import { computeRuntimeWorkerClosure } from '../scripts/vis-bridge-runtime-staging.mjs';
+import { computeRuntimeWorkerClosure, computeRuntimeHelperClosure } from '../scripts/vis-bridge-runtime-staging.mjs';
 
 const rpmToolsAvailable =
   process.platform === 'linux' &&
@@ -53,7 +53,8 @@ describe.runIf(rpmToolsAvailable)('vis_bridge RPM package', () => {
       // 100MB build interpreter. A fixture without them cannot produce the
       // staged sidecar at all — which is exactly how this gate used to fail.
       const repositoryRoot = process.cwd();
-      for (const relativePath of await computeRuntimeWorkerClosure(repositoryRoot)) {
+      const sourceClosure = new Set([...await computeRuntimeWorkerClosure(repositoryRoot), ...await computeRuntimeHelperClosure(repositoryRoot)]);
+      for (const relativePath of sourceClosure) {
         const destination = path.join(root, ...relativePath.split('/'));
         mkdirSync(path.dirname(destination), { recursive: true });
         copyFileSync(path.join(repositoryRoot, ...relativePath.split('/')), destination);

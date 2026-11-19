@@ -2,21 +2,25 @@
   <dialog
     ref="dialogRef"
     class="modal-backdrop"
-    :open="open"
+    data-runtime-ui
+    aria-labelledby="connection-manager-title"
     data-testid="connection-manager"
     :data-client="client"
     :data-managed-transport="String(managedTransport)"
     @close="$emit('close')"
-    @cancel.prevent
+    @cancel.prevent="handleClose"
     @click.self="handleClose"
   >
     <div class="modal">
       <header class="modal-header">
-        <div class="modal-title">SSH / HPC connection</div>
-        <button type="button" class="modal-close-button" data-testid="connection-manager-close" @click="handleClose">
+        <div id="connection-manager-title" class="modal-title">{{ t('connections') }}</div>
+        <button type="button" class="modal-close-button" :aria-label="t('closeConnections')" data-testid="connection-manager-close" @click="handleClose">
           <Icon icon="lucide:x" :width="14" :height="14" />
         </button>
       </header>
+
+      <p v-if="managementTarget" class="new-profile-hint">{{ rt('Management Bridge') }}: <span class="mono">{{ managementTarget }}</span></p>
+      <button v-if="canReturnToInitialManager" type="button" class="action-button" :disabled="busy" @click="emit('return-to-initial-manager')">{{ rt('Return to initial management Bridge') }}</button>
 
       <!--
         The direct-only marker is a VISIBLE state, not a missing control.
@@ -26,8 +30,7 @@
       <p v-if="directOnly" class="direct-only" role="status" data-testid="direct-only-marker">
         <Icon icon="lucide:unplug" :width="14" :height="14" />
         <span>
-          Direct only — no managed bridge on this target. Direct targets and pre-built tunnels
-          still work; managed SSH and Slurm transports are unavailable.
+          {{ rt("Direct only — no managed bridge on this target. Direct targets and pre-built tunnels still work; managed SSH and Slurm transports are unavailable.") }}
         </span>
       </p>
 
@@ -36,7 +39,7 @@
         `data-client` is attribution only: the rows come from the transports the target reports
         plus whether a managed bridge exists, so the two runtimes never diverge.
       -->
-      <section class="capability-entry" data-testid="capability-entry" :aria-label="`Capabilities on ${client}`">
+      <section class="capability-entry" data-testid="capability-entry" :aria-label="rt('Capabilities on {client}', { client })">
         <div
           v-for="row in capabilityEntry"
           :key="row.capability"
@@ -48,22 +51,22 @@
         >
           <Icon :icon="row.state === 'supported' ? 'lucide:check' : 'lucide:x'" :width="14" :height="14" />
           <span class="capability-name">{{ row.capability }}</span>
-          <span v-if="row.reason" class="capability-reason">{{ row.reason }}</span>
+          <span v-if="row.reason" class="capability-reason">{{ rt(row.reason) }}</span>
         </div>
       </section>
 
       <p v-if="error" class="modal-error" role="alert" data-testid="connection-manager-error">
         <Icon icon="lucide:alert-triangle" :width="14" :height="14" />
-        <span>{{ error }}</span>
+        <span>{{ rt(error) }}</span>
       </p>
 
       <!-- Profile picker -->
-      <section class="profile-picker" :aria-label="'Connection profiles'">
-        <div class="section-title">Profile</div>
+      <section class="profile-picker" :aria-label="rt('Connection profiles')">
+        <div class="section-title">{{ rt("Profile") }}</div>
         <div v-if="profiles.length === 0" class="empty" data-testid="profile-empty">
-          No profiles yet. Add an SSH host or a Slurm cluster below.
+          {{ rt("No profiles yet. Add an SSH host or a Slurm cluster below.") }}
         </div>
-        <div v-else class="profile-list" role="group" aria-label="Connection profiles">
+        <div v-else class="profile-list" role="group" :aria-label='rt("Connection profiles")'>
           <button
             v-for="profile in profiles"
             :key="profile.profileId"
@@ -78,12 +81,17 @@
             @click="selectProfile(profile.profileId)"
           >
             <span class="profile-label">{{ profile.name }}</span>
-            <span class="profile-transport">{{ profile.transport.kind }} · {{ profile.role }}</span>
+            <span class="profile-transport">{{ profile.transport.kind }} · {{ rt(profile.role) }}</span>
             <span class="profile-target mono">{{ profile.target.kind }} · {{ shortId(environmentOf(profile)) }}</span>
-            <span v-if="!profile.enabled" class="profile-disabled">disabled</span>
+            <span v-if="!profile.enabled" class="profile-disabled">{{ rt("disabled") }}</span>
           </button>
         </div>
       </section>
+
+      <label v-if="selectedProfile" class="new-profile-hint">
+        <input type="checkbox" data-testid="profile-enabled" :checked="selectedProfile.enabled" :disabled="busy" @change="setEnabled" />
+        {{ rt('Enable this profile') }}
+      </label>
 
       <!-- Lifecycle feedback -->
       <ConnectionStatus
@@ -108,19 +116,18 @@
       <!-- Challenge / trust -->
       <section v-if="challenge" class="challenge" data-testid="connection-challenge" :data-kind="challenge.kind">
         <div class="section-title">
-          {{ challenge.kind === 'host-key' ? 'Trust this host key' : 'Authentication required' }}
+          {{ rt(challenge.kind === 'host-key' ? 'Trust this host key' : 'Authentication required') }}
         </div>
-        <p class="challenge-prompt" data-testid="challenge-prompt">{{ challenge.prompt }}</p>
+        <p class="challenge-prompt" data-testid="challenge-prompt">{{ rt(challenge.prompt) }}</p>
         <p v-if="challenge.fingerprint" class="challenge-fingerprint mono" data-testid="challenge-fingerprint">
           {{ challenge.fingerprint }}
         </p>
         <p v-if="challenge.kind === 'host-key-changed'" class="challenge-refusal" data-testid="challenge-refusal">
-          The host key changed. A changed key is never accepted — verify the host out of band and
-          update the known-hosts entry.
+          {{ rt("The host key changed. A changed key is never accepted — verify the host out of band and update the known-hosts entry.") }}
         </p>
         <div v-if="isSecretChallenge" class="challenge-secret">
           <label class="field">
-            <span class="field-label">{{ challenge.kind === 'otp' ? 'One-time code' : 'Secret' }}</span>
+            <span class="field-label">{{ rt(challenge.kind === 'otp' ? 'One-time code' : 'Secret') }}</span>
             <input
               ref="secretInput"
               v-model="secret"
@@ -134,8 +141,7 @@
               @keydown.enter.prevent="answer(true)"
             />
             <span class="field-hint">
-              Held only for this answer. It is never cached, never written to the profile, and the
-              profile keeps a credential reference instead.
+              {{ rt("Held only for this answer. It is never cached, never written to the profile, and the profile keeps a credential reference instead.") }}
             </span>
           </label>
         </div>
@@ -146,7 +152,7 @@
             data-testid="challenge-cancel"
             @click="answer(false)"
           >
-            {{ isSecretChallenge ? 'Cancel' : 'Decline' }}
+            {{ rt(isSecretChallenge ? 'Cancel' : 'Decline') }}
           </button>
           <button
             type="button"
@@ -155,14 +161,14 @@
             :disabled="!challengeAcceptable || (isSecretChallenge && boundSecret.length === 0)"
             @click="answer(true)"
           >
-            {{ isSecretChallenge ? 'Send' : 'Trust and continue' }}
+            {{ rt(isSecretChallenge ? 'Send' : 'Trust and continue') }}
           </button>
         </div>
       </section>
 
       <!-- New profile forms -->
       <div class="new-profile">
-        <div class="section-title">Add a profile</div>
+        <div class="section-title">{{ rt("Add a profile") }}</div>
         <div class="new-profile-actions">
           <button
             type="button"
@@ -172,7 +178,7 @@
             data-testid="new-ssh-profile"
             @click="composer = composer === 'ssh' ? '' : 'ssh'"
           >
-            SSH host
+            {{ rt("SSH host") }}
           </button>
           <button
             type="button"
@@ -182,11 +188,11 @@
             data-testid="new-slurm-profile"
             @click="composer = composer === 'slurm' ? '' : 'slurm'"
           >
-            Slurm cluster
+            {{ rt("Slurm cluster") }}
           </button>
         </div>
         <p v-if="!sshAvailable || !slurmAvailable" class="new-profile-hint" data-testid="new-profile-hint">
-          A transport marked unavailable above cannot be configured here.
+          {{ rt("A transport marked unavailable above cannot be configured here.") }}
         </p>
       </div>
 
@@ -199,9 +205,20 @@
         @cancel="composer = ''"
       />
 
-      <SlurmExecutionForm
+      <SshHostForm
         v-if="composer === 'slurm'"
+        transport-kind="slurm"
         :available="slurmAvailable"
+        :unavailable-reason="slurmReason"
+        :disabled="busy"
+        @save="$emit('save-ssh', $event)"
+        @cancel="composer = ''"
+      />
+
+      <SlurmExecutionForm
+        v-if="composer === 'slurm' && selectedProfile?.transport.kind === 'slurm'"
+        :available="slurmAvailable"
+        :disabled="busy || !selectedProfile.enabled"
         :unavailable-reason="slurmReason"
         :preview="preview"
         @submit="$emit('submit-slurm', $event)"
@@ -211,7 +228,7 @@
 
       <footer class="modal-actions">
         <span class="status-chip" :data-state="status?.state ?? 'disconnected'" data-testid="connection-manager-status">
-          {{ status?.state ?? 'disconnected' }}
+          {{ rt(status?.state ?? 'disconnected') }}
         </span>
         <button
           type="button"
@@ -220,7 +237,7 @@
           :disabled="busy || status?.state !== 'connected'"
           @click="$emit('cancel')"
         >
-          Cancel connection
+          {{ rt("Cancel connection") }}
         </button>
         <button
           type="button"
@@ -229,7 +246,7 @@
           :disabled="!canConnect"
           @click="$emit('connect')"
         >
-          Connect
+          {{ rt("Connect") }}
         </button>
       </footer>
     </div>
@@ -238,8 +255,10 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { useRuntimeUi } from '../../locales/runtimeUi';
 import { Icon } from '@iconify/vue';
 import type { ConnectionProfile } from '../../../shared/runtime/connectionProfile.js';
+import type { ManagedSlurmRequest } from '../../composables/useManagedRemote';
 import type {
   RemoteBridgeUpdatePlan,
   RuntimeCapability,
@@ -250,6 +269,7 @@ import type {
   RuntimeTargetIdentity,
   SlurmLifecycleStatus,
   SlurmResourcePreview,
+  SlurmResourceInput,
 } from '../../composables/useRuntimeProfiles';
 import { isSecretChallengeKind } from '../../composables/useRuntimeProfiles';
 import ConnectionStatus from './ConnectionStatus.vue';
@@ -276,6 +296,8 @@ const props = withDefaults(
     probedEnvironmentId?: string;
     busy?: boolean;
     error?: string;
+    managementTarget?: string;
+    canReturnToInitialManager?: boolean;
   }>(),
   {
     selectedProfileId: '',
@@ -288,10 +310,13 @@ const props = withDefaults(
     probedEnvironmentId: '',
     busy: false,
     error: '',
+    managementTarget: '',
+    canReturnToInitialManager: false,
   },
 );
 
 const emit = defineEmits<{
+  (event: 'return-to-initial-manager'): void;
   (event: 'close'): void;
   (event: 'select', profileId: string): void;
   (event: 'connect'): void;
@@ -301,15 +326,17 @@ const emit = defineEmits<{
   (event: 'reconnect'): void;
   (event: 'update'): void;
   (event: 'save-ssh', draft: unknown): void;
-  (event: 'submit-slurm', request: unknown): void;
+  (event: 'submit-slurm', request: ManagedSlurmRequest): void;
+  (event: 'set-enabled', input: { profileId: string; enabled: boolean }): void;
   /**
    * The Slurm form's resource draft changed. The container answers with a BRIDGE-produced preview
    * for exactly this draft, so what is displayed is what will be submitted.
    */
-  (event: 'preview-request', draft: Readonly<{ resources: unknown; ownership: unknown }>): void;
+  (event: 'preview-request', draft: Readonly<{ resources: SlurmResourceInput; ownership: 'owned' | 'borrowed' }>): void;
   (event: 'challenge-answer', answer: Readonly<{ challengeId: string; accept: boolean; secret?: string }>): void;
 }>();
 
+const { t, rt } = useRuntimeUi();
 const dialogRef = ref<HTMLDialogElement | null>(null);
 const composer = ref('');
 const secret = ref('');
@@ -324,9 +351,8 @@ const secret = ref('');
 const secretChallengeId = ref('');
 
 watch(
-  () => props.open,
-  (open) => {
-    const element = dialogRef.value;
+  [() => props.open, dialogRef],
+  ([open, element]) => {
     if (element === null) return;
     if (open) {
       if (!element.open) element.showModal();
@@ -334,6 +360,7 @@ watch(
       element.close();
     }
   },
+  { flush: 'post', immediate: true },
 );
 
 /**
@@ -394,6 +421,11 @@ const challengeAcceptable = computed(() => props.challenge !== null && props.cha
 
 function selectProfile(profileId: string) {
   emit('select', profileId);
+}
+
+function setEnabled(event: Event): void {
+  if (props.busy || !selectedProfile.value || !(event.target instanceof HTMLInputElement)) return;
+  emit('set-enabled', { profileId: selectedProfile.value.profileId, enabled: event.target.checked });
 }
 
 function handleClose() {
@@ -516,7 +548,7 @@ function shortId(value: string): string {
   border-radius: var(--radius-control, 8px);
   font-size: var(--type-sm, 12px);
   line-height: 1.45;
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
 }
 
 .capability-entry {
@@ -561,7 +593,7 @@ function shortId(value: string): string {
   gap: 8px;
   margin: 0;
   font-size: var(--type-sm, 12px);
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
 }
 
 .section-title {
@@ -645,7 +677,7 @@ function shortId(value: string): string {
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
 }
 
 .mono {
@@ -663,7 +695,7 @@ function shortId(value: string): string {
   margin: 0;
   font-size: var(--type-caption, 10px);
   line-height: 1.4;
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
 }
 
 .challenge {
@@ -691,7 +723,7 @@ function shortId(value: string): string {
   margin: 0;
   font-size: var(--type-sm, 12px);
   line-height: 1.45;
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
 }
 
 .challenge-secret {
@@ -804,7 +836,7 @@ function shortId(value: string): string {
 }
 
 .status-chip[data-state='failed'] {
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
   border-color: var(--theme-status-error, #f87171);
 }
 

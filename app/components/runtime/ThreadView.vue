@@ -7,30 +7,31 @@
     :is="variant === 'panel' ? 'dialog' : 'div'"
     ref="dialogRef"
     class="thread-root"
+    data-runtime-ui
     :class="variant === 'panel' ? 'modal-backdrop' : 'composer-root'"
-    :open="variant === 'panel' ? open : undefined"
+    :aria-label='rt("Thread")'
     data-testid="thread-view"
     :data-thread-id="thread?.threadId ?? ''"
     :data-variant="variant"
     :data-revision="String(thread?.revision ?? 0)"
     @close="$emit('close')"
-    @cancel.prevent
+    @cancel.prevent="handleClose"
     @click.self="handleClose"
   >
     <div :class="variant === 'panel' ? 'modal' : 'composer-body'">
       <header v-if="variant === 'panel'" class="modal-header">
-        <div class="modal-title">Thread</div>
+        <div class="modal-title">{{ rt("Thread") }}</div>
         <span v-if="thread" class="thread-meta mono" data-testid="thread-meta">
-          {{ shortId(thread.threadId) }} · rev {{ thread.revision }} · {{ thread.participants.length }} participants
+          {{ shortId(thread.threadId) }} {{ rt("· rev") }} {{ thread.revision }} · {{ thread.participants.length }} {{ rt("participants") }}
         </span>
-        <button type="button" class="modal-close-button" data-testid="thread-view-close" @click="handleClose">
+        <button type="button" class="modal-close-button" data-testid="thread-view-close" :aria-label='rt("Close Thread")' @click="handleClose">
           <Icon icon="lucide:x" :width="14" :height="14" />
         </button>
       </header>
 
       <p v-if="error" class="modal-error" role="alert" data-testid="thread-error">
         <Icon icon="lucide:alert-triangle" :width="14" :height="14" />
-        <span>{{ error }}</span>
+        <span>{{ rt(error) }}</span>
       </p>
 
       <!--
@@ -38,8 +39,8 @@
         native session, so the user can never wonder where a prompt will land. With no explicit
         target the chips follow the thread's ACTIVE participant and say so.
       -->
-      <section class="target-section" data-testid="target-section" aria-label="Input targets">
-        <div class="section-title">Input goes to</div>
+      <section class="target-section" data-testid="target-section" :aria-label='rt("Input targets")'>
+        <div class="section-title">{{ rt("Input goes to") }}</div>
         <div class="target-chips">
           <span
             v-for="participant in effectiveTargets"
@@ -50,22 +51,22 @@
             :data-participant-id="participant.participantId"
             :data-role="participant.role"
           >
-            <span class="chip-role">{{ participant.role }}</span>
+            <span class="chip-role">{{ rt(participant.role) }}</span>
             <span class="chip-harness">{{ harnessLabel(participant.harnessInstanceId) }}</span>
             <span class="chip-session mono" :title="participant.session.nativeSessionId">{{
               shortId(participant.session.nativeSessionId)
             }}</span>
           </span>
           <span v-if="effectiveTargets.length === 0" class="target-none" data-testid="target-none">
-            No participant can receive the input yet.
+            {{ rt("No participant can receive the input yet.") }}
           </span>
         </div>
         <p v-if="targets.length === 0 && effectiveTargets.length > 0" class="target-follow-hint" data-testid="target-follow-hint">
-          No explicit target: the input follows the thread's active participant.
+          {{ rt("No explicit target: the input follows the thread\u0027s active participant.") }}
         </p>
         <p class="target-count" data-testid="target-count">{{ effectiveTargets.length }}</p>
         <div class="draft-preview" data-testid="draft-preview" :title="draftText">
-          {{ draftText.trim().length > 0 ? draftText : '(no prompt drafted)' }}
+          {{ draftText.trim().length > 0 ? draftText : rt('(no prompt drafted)') }}
         </div>
       </section>
 
@@ -78,14 +79,13 @@
         class="fanout-slot"
         data-testid="fanout-slot"
         :data-reserved="String(!fanoutEnabled)"
-        :aria-label="'Fan-out (reserved)'"
+        :aria-label="rt('Fan-out')"
       >
-        <div class="section-title">Fan-out</div>
+        <div class="section-title">{{ rt("Fan-out") }}</div>
         <p class="fanout-note">
-          <template v-if="fanoutEnabled">Fan-out is enabled for this thread.</template>
+          <template v-if="fanoutEnabled">{{ rt("Fan-out is enabled for this thread.") }}</template>
           <template v-else>
-            Reserved — fan-out is not wired yet. Task 38 builds the per-recipient behaviour and task
-            42 enables this slot; a single prompt still goes to the targets above, one thread.
+            {{ rt("Fan-out is unavailable for this thread. Send to the selected participants above.") }}
           </template>
         </p>
         <button
@@ -95,10 +95,10 @@
           data-testid="fanout-slot-action"
           @click="handleFanout"
         >
-          Fan out
+          {{ rt("Open Team dispatch") }}
         </button>
-        <button v-else type="button" class="action-button" disabled data-testid="fanout-slot-action" title="Reserved for task 42">
-          Fan out (reserved)
+        <button v-else type="button" class="action-button" disabled data-testid="fanout-slot-action" :title="rt('Fan-out unavailable')">
+          {{ rt("Fan-out unavailable") }}
         </button>
       </section>
 
@@ -117,6 +117,23 @@
         @join="emit('join', $event)"
         @locate-session="emit('locate-session', $event)"
       />
+
+      <nav v-if="variant === 'panel' && participantPage && participantPage.total > 50" class="runtime-pagination" :aria-label="rt('Participant pages')">
+        <button type="button" class="action-button" :disabled="busy || participantPage.offset === 0" @click="emit('participant-page', Math.max(0, participantPage.offset - 50))">{{ rt('Previous participants') }}</button>
+        <span>{{ participantPage.offset + 1 }}–{{ Math.min(participantPage.offset + 50, participantPage.total) }} / {{ participantPage.total }}</span>
+        <button type="button" class="action-button" :disabled="busy || participantPage.nextCursor === null" @click="emit('participant-page', participantPage.nextCursor ?? 0)">{{ rt('Next participants') }}</button>
+      </nav>
+
+      <section v-if="variant === 'panel' && handoffs.length" class="handoff-history">
+        <Dropdown :model-value="handoff?.handoffId" :label="handoff ? handoffLabel(handoff) : rt('Handoff history')" :aria-label="rt('Handoff history')" auto-close :disabled="busy" @update:model-value="selectHandoff">
+          <DropdownItem v-for="entry in handoffs" :key="entry.handoffId" :value="entry.handoffId">{{ handoffLabel(entry) }}</DropdownItem>
+        </Dropdown>
+        <nav v-if="handoffPage && handoffPage.total > 50" class="runtime-pagination" :aria-label="rt('Handoff pages')">
+          <button type="button" class="action-button" :disabled="busy || handoffPage.offset === 0" @click="emit('handoff-page', Math.max(0, handoffPage.offset - 50))">{{ rt('Previous handoffs') }}</button>
+          <span>{{ handoffPage.offset + 1 }}–{{ Math.min(handoffPage.offset + 50, handoffPage.total) }} / {{ handoffPage.total }}</span>
+          <button type="button" class="action-button" :disabled="busy || handoffPage.nextCursor === null" @click="emit('handoff-page', handoffPage.nextCursor ?? 0)">{{ rt('Next handoffs') }}</button>
+        </nav>
+      </section>
 
       <HandoffDialog
         v-if="variant === 'panel'"
@@ -147,16 +164,16 @@
         :data-unresolved="String(selectedSessionResolution === null)"
       >
         <template v-if="selectedSessionResolution">
-          The session tree's selection is a participant of this thread.
+          {{ rt("The session tree\u0027s selection is a participant of this thread.") }}
         </template>
         <template v-else>
-          The session tree's selection is not part of this thread.
+          {{ rt("The session tree\u0027s selection is not part of this thread.") }}
         </template>
       </p>
 
       <!-- Causal timeline: every entry keeps its own source; history is not a blind concatenation. -->
       <section v-if="variant === 'panel' && timeline && timeline.entries.length > 0" class="timeline-section" data-testid="timeline-section">
-        <div class="section-title">Causal timeline</div>
+        <div class="section-title">{{ rt("Causal timeline") }}</div>
         <ol class="timeline-list">
           <li
             v-for="entry in timeline.entries"
@@ -172,9 +189,13 @@
             <span class="entry-payload">{{ payloadPreview(entry.payload) }}</span>
           </li>
         </ol>
+        <nav v-if="timeline.total > 50" class="runtime-pagination" :aria-label="rt('Timeline pages')">
+          <button type="button" class="action-button" :disabled="busy || timelineOffset === 0" @click="emit('timeline-page', Math.max(0, timelineOffset - 50))">{{ rt('Previous timeline entries') }}</button>
+          <span>{{ timelineOffset + 1 }}–{{ Math.min(timelineOffset + 50, timeline.total) }} / {{ timeline.total }}</span>
+          <button type="button" class="action-button" :disabled="busy || timeline.nextCursor === null" @click="emit('timeline-page', timeline.nextCursor ?? 0)">{{ rt('Next timeline entries') }}</button>
+        </nav>
         <p class="timeline-note" data-testid="timeline-note">
-          Entries are ordered per-source with their own origin; the host command and each native
-          harness keep separate histories.
+          {{ rt("Entries are ordered per-source with their own origin; the host command and each native harness keep separate histories.") }}
         </p>
       </section>
 
@@ -182,7 +203,13 @@
         v-if="variant === 'panel'"
         :checkpoint="checkpoint"
         :current-target="currentTarget"
+        :target-error="evidenceTargetError"
         :read-evidence="readEvidence"
+        :read-evidence-page="readEvidencePage"
+        :capture-evidence="captureEvidence"
+        :captured-evidence="capturedEvidence"
+        :remove-evidence="removeEvidence"
+        :busy="busy"
         :page-length="pageLength"
       />
 
@@ -192,9 +219,9 @@
         and NEVER concatenated into one history.
       -->
       <section v-if="variant === 'panel' && nativeHistory.length > 0" class="native-history" data-testid="native-history">
-        <div class="section-title">Native history</div>
+        <div class="section-title">{{ rt("Native history") }}</div>
         <p class="native-history-note" data-testid="native-history-note">
-          One list per participant. Histories are browsed individually and never merged.
+          {{ rt("One list per participant. Histories are browsed individually and never merged.") }}
         </p>
         <div
           v-for="group in nativeHistory"
@@ -207,22 +234,24 @@
         >
           <header class="group-header">
             <span class="group-label">{{ group.label }}</span>
-            <span class="group-harness">{{ group.harness }}</span>
+            <span class="group-harness">{{ rt(group.harness) }}</span>
             <span class="group-session mono" data-testid="native-history-session" :title="group.session.nativeSessionId">{{
               group.session.nativeSessionId
             }}</span>
             <button
               type="button"
               class="action-button"
-              :disabled="busy"
-              title="Re-read this participant's own native history"
+              :disabled="busy || nativeHistory.some(entry => entry.loading)"
+              :title='rt("Re-read this participant\u0027s own native history")'
               :data-testid="'browse-native-history'"
               :data-participant-id="group.participantId"
               @click="emit('browse-native-history', group.participantId)"
             >
-              Refresh
+              {{ rt("Refresh") }}
             </button>
           </header>
+          <p v-if="group.loading" role="status">{{ rt('Loading native history') }}</p>
+          <p v-if="group.error" role="alert">{{ group.error }}</p>
           <ol class="group-entries">
             <li
               v-for="entry in group.entries"
@@ -251,14 +280,17 @@
       </section>
 
       <footer v-if="variant === 'panel'" class="modal-actions">
-        <button type="button" class="action-button" data-testid="thread-view-done" @click="handleClose">Done</button>
+        <button type="button" class="action-button" data-testid="thread-view-done" @click="handleClose">{{ rt("Done") }}</button>
       </footer>
     </div>
   </component>
 </template>
 
 <script setup lang="ts">
+import { useRuntimeUi } from '../../locales/runtimeUi';
+const { rt } = useRuntimeUi();
 import { computed, ref, watch } from 'vue';
+import type { AsyncEvidenceCapture, AsyncEvidencePageReader } from '../../runtime/hostEvidenceViews';
 import { Icon } from '@iconify/vue';
 import type { ThreadSummary } from '../../../bridge/runtime/threads/threadService.js';
 import type { ParticipantView } from '../../../bridge/runtime/threads/participantService.js';
@@ -266,6 +298,7 @@ import type { SessionRef } from '../../../shared/runtime/identity.js';
 import type {
   ContextCheckpointView,
   EvidenceReader,
+  EvidenceRecordView,
   EvidenceTarget,
 } from '../../../shared/runtime/context.js';
 import { effectiveTargetParticipants } from '../../composables/useRuntimeThread';
@@ -278,6 +311,8 @@ import type {
 import type { TimelinePage, TimelineSource } from '../../runtime/timeline';
 import ParticipantPicker from './ParticipantPicker.vue';
 import HandoffDialog from './HandoffDialog.vue';
+import Dropdown from '../Dropdown.vue';
+import DropdownItem from '../Dropdown/Item.vue';
 import ContextEvidenceView from './ContextEvidenceView.vue';
 
 const props = withDefaults(
@@ -290,13 +325,22 @@ const props = withDefaults(
     /** The handoff read model; `state`/`active` are the service's DERIVED values. */
     handoff: RuntimeHandoffView | null;
     handoffOps?: readonly RuntimeHandoffOpView[];
+    handoffs?: readonly RuntimeHandoffView[];
+    handoffPage?: { offset: number; total: number; nextCursor: number | null };
     /** The causal timeline page (task 32), each entry carrying its own source. */
     timeline?: TimelinePage | null;
+    timelineOffset?: number;
+    participantPage?: { offset: number; total: number; nextCursor: number | null };
     /** The bounded context checkpoint preview (task 33). */
     checkpoint?: ContextCheckpointView | null;
     /** The CURRENT evidence target the reader re-verifies against. */
     currentTarget?: EvidenceTarget | null;
+    evidenceTargetError?: string;
     readEvidence?: EvidenceReader | null;
+    readEvidencePage?: AsyncEvidencePageReader | null;
+    captureEvidence?: AsyncEvidenceCapture | null;
+    capturedEvidence?: readonly EvidenceRecordView[];
+    removeEvidence?: ((hash: string) => void) | null;
     /** Byte page size for evidence reads; the contract default applies when omitted. */
     pageLength?: number;
     /** Per-participant native histories, supplied by the container — never merged here. */
@@ -325,10 +369,16 @@ const props = withDefaults(
   {
     open: false,
     handoffOps: () => [],
+    handoffs: () => [],
     timeline: null,
+    timelineOffset: 0,
     checkpoint: null,
     currentTarget: null,
     readEvidence: null,
+    readEvidencePage: null,
+    captureEvidence: null,
+    capturedEvidence: () => [],
+    removeEvidence: null,
     pageLength: 4096,
     nativeHistory: () => [],
     availableSessions: () => [],
@@ -346,6 +396,11 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{
+  (event: 'handoff-page', offset: number): void;
+  (event: 'select-handoff', handoffId: string): void;
+  (event: 'fanout'): void;
+  (event: 'participant-page', offset: number): void;
+  (event: 'timeline-page', offset: number): void;
   (event: 'close'): void;
   (event: 'select-target', participantId: string): void;
   (event: 'activate', participantId: string): void;
@@ -362,10 +417,14 @@ const emit = defineEmits<{
 }>();
 
 const dialogRef = ref<HTMLDialogElement | null>(null);
+function selectHandoff(value: unknown): void { if (typeof value === 'string') emit('select-handoff', value); }
+function handoffLabel(value: RuntimeHandoffView): string {
+  return `${rt(value.state)} · ${new Date(value.createdAt).toLocaleString()} · ${value.target.session.nativeSessionId}`;
+}
 
 watch(
-  () => props.open,
-  (open) => {
+  () => [props.open, props.variant, dialogRef.value] as const,
+  ([open]) => {
     // Only the panel variant owns a real dialog element; the composer row is inline.
     if (props.variant !== 'panel') return;
     const element = dialogRef.value;
@@ -412,13 +471,19 @@ function handleClose(): void {
   emit('close');
 }
 
-/** Task 42 owns the fan-out behaviour; the slot only reports that it is still reserved. */
 function handleFanout(): void {
-  emit('close');
+  emit('fanout');
 }
 </script>
 
 <style scoped>
+.runtime-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .modal-backdrop {
   border: none;
   padding: 0;
@@ -516,7 +581,7 @@ function handleFanout(): void {
   gap: 8px;
   margin: 0;
   font-size: var(--type-sm, 12px);
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
   word-break: break-word;
 }
 
@@ -565,7 +630,7 @@ function handleFanout(): void {
 }
 
 .chip-harness {
-  color: var(--theme-status-info, #7dd3fc);
+  color: var(--codex-status-info, var(--theme-text-primary));
 }
 
 .chip-session {
@@ -575,7 +640,7 @@ function handleFanout(): void {
 
 .target-none {
   font-size: var(--type-sm, 12px);
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
 }
 
 .target-follow-hint,
@@ -619,7 +684,7 @@ function handleFanout(): void {
   margin: 0;
   font-size: var(--type-caption, 10px);
   line-height: 1.45;
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
 }
 
 .session-resolution {
@@ -630,7 +695,7 @@ function handleFanout(): void {
 }
 
 .session-resolution[data-unresolved='true'] {
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
 }
 
 .timeline-section {
@@ -662,7 +727,7 @@ function handleFanout(): void {
 
 .entry-source {
   font-weight: 600;
-  color: var(--theme-status-info, #7dd3fc);
+  color: var(--codex-status-info, var(--theme-text-primary));
 }
 
 .entry-source[data-source-kind='host'] {
@@ -737,7 +802,7 @@ function handleFanout(): void {
 
 .group-harness {
   font-size: var(--type-caption, 10px);
-  color: var(--theme-status-info, #7dd3fc);
+  color: var(--codex-status-info, var(--theme-text-primary));
 }
 
 .group-session {

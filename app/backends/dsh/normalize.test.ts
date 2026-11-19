@@ -51,6 +51,19 @@ const snapshot = (() => {
 /** Every real record of the captured turn, in wire order. */
 const fixtureRecords: readonly DshSessionRecord[] = snapshot.records;
 const fixtureEvents: readonly DshSessionWireEvent[] = fixtureRecords.map((record) => record.event);
+it('can normalize captured history without retaining a redundant raw transcript while preserving replay semantics', () => {
+  const retained = createDshNormalizer({ now: () => 1 });
+  const projected = createDshNormalizer({ now: () => 1, retainRecords: false });
+  for (const frame of sessionFollow.frames) expect(projected.ingest(frame)).toEqual(retained.ingest(frame));
+  expect(retained.appliedRecords().length).toBeGreaterThan(0);
+  expect(projected.appliedRecords()).toHaveLength(0);
+  for (const raw of fixtureRecords) expect(projected.ingest(raw)).toEqual(retained.ingest(raw));
+  expect(projected.stats()).toEqual(retained.stats());
+  expect(projected.cursor()).toBe(retained.cursor());
+  projected.reset();
+  expect(projected.appliedRecords()).toHaveLength(0);
+  expect(projected.ingest(fixtureRecords[0])).toEqual(createDshNormalizer({ now: () => 1 }).ingest(fixtureRecords[0]));
+});
 const eventBySeq = (seq: number): DshSessionWireEvent => {
   const found = fixtureEvents.find((event) => event.seq === seq);
   if (!found) throw new Error(`fixture has no record at seq ${seq}`);

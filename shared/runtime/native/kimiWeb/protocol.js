@@ -109,6 +109,10 @@ export function parseNativeCapabilities(metaValue, openapiValue, asyncapiValue) 
     approvals: route('/api/v1/sessions/{session_id}/approvals/{approval_id}', 'post') || (promptAbort && route('/api/v1/sessions/{session_id}/interactions/{interaction_id}', 'post')),
     questions: route('/api/v1/sessions/{session_id}/questions/{tail}', 'post') || (promptAbort && route('/api/v1/sessions/{session_id}/interactions/{interaction_id}', 'post')),
     models: route('/api/v1/models'),
+    updateProfile: route('/api/v1/sessions/{session_id}/profile', 'post'),
+    archive: route('/api/v1/sessions/{session_id}:archive', 'post'),
+    restore: route('/api/v1/sessions/{session_id}:restore', 'post'),
+    delete: route('/api/v1/sessions/{session_id}:delete', 'post'),
     agents: route('/api/v1/sessions/{session_id}/agents'),
     status: route('/api/v1/sessions/{session_id}/status'),
   });

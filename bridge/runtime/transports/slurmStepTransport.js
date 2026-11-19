@@ -9,6 +9,7 @@ import { assertNoShellConcatenation } from './sshTransport.js';
 import { redactSecrets } from './sshAuthentication.js';
 import { createRelayChannel, dispatchStoreOperation } from './computeRelay.js';
 import { assertComputeTarget, createRelayBinding, createRelayHandshake } from './relayHandshake.js';
+import { slurmEnvelopeStream } from './slurmStdioEnvelope.js';
 
 /**
  * Slurm step channel — login side (plan task 29 / Scope 13, second of the two required channels).
@@ -122,6 +123,7 @@ export function buildStepArgv(options = {}) {
     `--job-name=${stepId}`,
     '--',
     textValue(options.program ?? 'vis_bridge', 'step.program'),
+    ...(options.programArgs ?? []),
     ...stepArgs,
   ];
   assertNoShellConcatenation(argv);
@@ -171,6 +173,7 @@ function childStream(child) {
   child.on?.('error', (error) => out?.emit?.('error', error));
   child.on?.('exit', () => out?.emit?.('end'));
   return {
+    get writableLength() { return child.stdin?.writableLength ?? 0; },
     write: (chunk) => child.stdin?.write?.(chunk),
     on: (event, handler) => child.stdout?.on?.(event, handler),
     off: (event, handler) => child.stdout?.off?.(event, handler),
@@ -227,7 +230,7 @@ export function createSlurmStepTransport(options = {}) {
       env: options.env,
       cwd: options.cwd,
     });
-    const channel = createRelayChannel(childStream(spawned.child), {
+    const channel = createRelayChannel(options.stdioEncoding === 'base64-lines' ? slurmEnvelopeStream(spawned.child) : childStream(spawned.child), {
       handshake: createRelayHandshake({ credential: options.credential, binding }),
       role: 'login',
       timeoutMs: options.timeoutMs,
@@ -245,7 +248,9 @@ export function createSlurmStepTransport(options = {}) {
     } catch (error) {
       // An explicit close already settled this transport; only a genuine failure flips the state.
       if (state !== 'closed') state = 'failed';
-      await relay.terminate(spawned.id);
+      error.transportLog = stderrText;
+      try { await relay.terminate(spawned.id); }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Slurm relay handshake and cleanup failed'); }
       if (current !== null && current.relayId === spawned.id) current = null;
       throw error;
     }
@@ -271,6 +276,7 @@ export function createSlurmStepTransport(options = {}) {
       gres: step.gres,
       program: step.program,
       args: step.args,
+      programArgs: step.programArgs,
       relay: relayBindingFor(binding),
     });
     return startStep({ argv, binding, target, step });
@@ -310,6 +316,7 @@ export function createSlurmStepTransport(options = {}) {
       gres: step.gres,
       program: step.program,
       args: step.args,
+      programArgs: step.programArgs,
       relay: relayBindingFor(previous.binding),
     });
     return startStep({ argv, binding: previous.binding, target: previous.target, step });

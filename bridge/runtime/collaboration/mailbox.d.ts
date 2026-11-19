@@ -1,11 +1,7 @@
-/** The bounded participant mailbox (task 39). */
-export interface MailboxLimits {
-  readonly messages: number;
-  readonly bytes: number;
-}
-
+/** The participant mailbox is opaque to App; the delegation service consumes it. */
+declare const mailboxBrand: unique symbol;
 export interface Mailbox {
-  readonly limits: MailboxLimits;
+  readonly [mailboxBrand]: true;
 }
 
 export function createMailbox(): Mailbox;

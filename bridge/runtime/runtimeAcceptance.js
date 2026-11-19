@@ -17,13 +17,13 @@ function operation(change, context) {
     && change.key === context.interactionId && value.kind === 'interaction' && value.phase === 'replying'
     && value.answerRef && Number.isSafeInteger(change.expectedRevision) && change.expectedRevision > 0;
   return change.collection === 'operations' && kinds.has(value.kind) && value.phase === 'accepted'
-    && (methods[context.method]?.includes(value.method) || (value.kind === 'opencode-cancellation' && context.method === 'session.cancel'))
+    && (context.method === 'native.extension' || methods[context.method]?.includes(value.method) || (value.kind === 'opencode-cancellation' && context.method === 'session.cancel'))
     && Number.isSafeInteger(change.expectedRevision) && change.expectedRevision >= 0;
 }
-export function createRuntimeAcceptance({ store }) {
+export function createRuntimeAcceptance({ store, onNativeObservation }) {
   const local = new AsyncLocalStorage();
   const watchers = new Map();
-  let closed = false;
+  let closed = false, observationFailure;
   function notify(context, receipt) {
     if (context.receipt) {
       if (receipt.collection === 'interactions' && context.receipt.collection === 'operations') return;
@@ -60,6 +60,10 @@ export function createRuntimeAcceptance({ store }) {
       }
     }
     for (const change of input.changes) {
+      if (change.collection === 'operations' && kinds.has(change.value?.kind) && change.value?.scope?.session && ['accepted', 'sent', 'observed', 'terminal'].includes(change.value.phase)) {
+        const notification = onNativeObservation?.({ operationId: change.key, scope: change.value.scope, phase: change.value.phase, outcome: change.value.outcome, method: change.value.method });
+        if (notification) notification.catch(error => { observationFailure = error; closed = true; for (const entries of watchers.values()) for (const entry of entries) entry.stop(); });
+      }
       const key = JSON.stringify([change.collection, change.key]);
       const entries = watchers.get(key);
       if (!entries) continue;
@@ -99,6 +103,7 @@ export function createRuntimeAcceptance({ store }) {
   return {
     store: observedStore,
     async run(input, invoke) {
+      if (observationFailure) throw observationFailure;
       requireValue(!closed, 'acceptance.closed', 'source_unavailable');
       const context = { ...input, scope: structuredClone(input.scope), receipt: null, invalid: false };
       const value = await local.run(context, invoke);
@@ -106,7 +111,7 @@ export function createRuntimeAcceptance({ store }) {
       if (!context.receipt) throw new ProtocolError('reconcile_required', 'acceptance.unobserved');
       if (value?.phase === 'durable-accepted') return { receipt: context.receipt, value: await awaitExecution(context) };
       requireValue(value?.phase === 'native-executed' || value?.phase === 'already-completed', 'acceptance.execution', 'reconcile_required');
-      return { receipt: context.receipt, value: Object.hasOwn(value, 'result') ? value.result : value.session ? { session: value.session } : { status: 'observed' } };
+      return { receipt: context.receipt, value: value.session ? { session: value.session, ...(Object.hasOwn(value, 'result') ? { nativeResult: value.result } : {}) } : Object.hasOwn(value, 'result') ? value.result : { status: 'observed' } };
     },
     close() { closed = true; for (const entries of watchers.values()) for (const entry of entries) entry.stop(); watchers.clear(); },
   };

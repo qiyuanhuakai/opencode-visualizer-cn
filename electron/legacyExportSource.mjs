@@ -76,7 +76,7 @@ async function localBindingHint(source, sourceKey) {
   if (local.key === 'opencode.drafts.composer.v1') return { sourceKey, kind: 'composer' };
   if (local.key === 'opencode.drafts.question.v1') return { sourceKey, kind: 'question' };
   let nativeSessionId; let scopeFingerprint;
-  const scoped = /^opencode\.state\.backendHistory\.v1\.([a-f0-9]{32})\.(.+)$/u.exec(local.key);
+  const scoped = /^(?:opencode\.)?state\.backendHistory\.v1\.([a-f0-9]{32})\.(.+)$/u.exec(local.key);
   try {
     if (scoped) { nativeSessionId = decodeURIComponent(scoped[2]); scopeFingerprint = createHash('sha256').update('backend-history-v1:' + scoped[1]).digest('hex'); }
     else if (local.namespace.startsWith('backend-history-v1:')) {

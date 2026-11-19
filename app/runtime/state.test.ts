@@ -29,6 +29,7 @@ class StateWire extends EventTarget {
   readonly methods = new Map<string, number>();
   readonly canonical = new Map<string, CanonicalEntity>();
   readonly deliveries = new Map<EnvironmentId, ObserverDelivery[]>();
+  readonly replayEvents = new Map<EnvironmentId, RuntimeEvent[]>();
   readonly held: Request[] = [];
   readonly seq = new Map<EnvironmentId, number>();
   block: ((request: Request) => boolean) | undefined;
@@ -87,6 +88,14 @@ class StateWire extends EventTarget {
       }
       case 'runtime.observer.read': this.reply(request, this.deliveries.get(request.target)?.shift() ?? null); break;
       case 'runtime.observer.close': this.closed++; this.reply(request, { closed: true }); break;
+      case 'runtime.snapshot.release': this.reply(request, { released: true }); break;
+      case 'runtime.replay': {
+        const after = Number(request.params.after);
+        const events = (this.replayEvents.get(request.target) ?? []).filter(frame => frame.seq > after).slice(0, 200);
+        this.reply(request, { version: 1, kind: 'replay', target: request.target, epoch: request.epoch, generation: request.generation, after, through: events.at(-1)?.seq ?? after, events });
+        break;
+      }
+      case 'runtime.observer.resume': this.reply(request, { resumed: true }); break;
       case 'runtime.entity.resolve': {
         const event = request.params.event;
         if (!event || typeof event !== 'object' || Array.isArray(event) || !('payload' in event)) throw new TypeError('missing event');
@@ -100,12 +109,12 @@ class StateWire extends EventTarget {
 }
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const dispose of cleanup.splice(0)) await dispose(); vi.useRealTimers(); });
-async function fixture(count = 2400, history?: RuntimeHistoryResource) {
+async function fixture(count = 2400, history?: RuntimeHistoryResource, onCanonical?: (entity: CanonicalEntity) => void) {
   vi.useFakeTimers();
   const wire = new StateWire(count); const created = Promise.withResolvers<void>();
   const connection = createRuntimeConnection({ reference: { url: 'ws://127.0.0.1:43210/runtime' }, resolveAuthentication: async () => ({}), createWebSocket: () => { created.resolve(); return wire; } });
   const client = createRuntimeClient({ connection }); const ready = connection.connect(); await created.promise; wire.frame(hello); await ready;
-  const state = createRuntimeState({ client, profileId, ...(history ? { history } : {}) });
+  const state = createRuntimeState({ client, profileId, ...(history ? { history } : {}), ...(onCanonical ? { onCanonical } : {}) });
   cleanup.push(async () => { await state.dispose(); client.dispose(); connection.dispose(); });
   return { state, wire, client, connection };
 }
@@ -144,11 +153,48 @@ describe('runtime state through production client and frame codecs', () => {
     expect(wire.methods.has('session.history')).toBe(false);
   });
 
+  it('prefetches bounded replay reads but applies no later row before an earlier read finishes', async () => {
+    const { state, wire } = await fixture(10);
+    await state.start(target);
+    const frames = Array.from({ length: 4 }, (_, index) => wire.event(index, { title: `updated-${index}` }));
+    wire.replayEvents.set(target, frames);
+    wire.deliveries.set(target, [{ kind: 'replay_required', after: 0, through: 4, reason: 'overflow' }]);
+    const firstKey = encodeSessionKey(session(0));
+    wire.block = request => request.method === 'runtime.entity.resolve' && JSON.stringify(request.params).includes(firstKey);
+    await vi.advanceTimersByTimeAsync(25);
+    await wire.waitHeld();
+    expect(wire.methods.get('runtime.entity.resolve')).toBe(4);
+    expect(read(state).items.slice(0, 4).map(item => item.value)).toEqual(Array.from({ length: 4 }, (_, index) => ({ session: session(index), title: `title-${index}` })));
+    wire.block = undefined;
+    wire.release();
+    await vi.advanceTimersByTimeAsync(25);
+    expect(read(state).items.slice(0, 4).map(item => item.value)).toEqual(Array.from({ length: 4 }, (_, index) => ({ title: `updated-${index}` })));
+    const usage = state.usage().entities;
+    expect(usage.residentBytes + usage.reservedBytes).toBeLessThanOrEqual(16 * 1024 * 1024);
+  });
+
+  it('keeps the selected session and bounded cache through a background-update rollover', async () => {
+    const { state, wire } = await fixture(10);
+    await state.start(target);
+    const selected = await state.select(session(0));
+    for (let index = 0; index < 600; index++) wire.event(1, { title: `background-${index}` });
+    await vi.advanceTimersByTimeAsync(25);
+    expect(read(state).items.find(item => item.key === encodeSessionKey(session(1)))?.value).toEqual({ title: 'background-599' });
+    expect(state.capture()).toBe(selected);
+    expect(wire.opened).toBe(2);
+    expect(wire.closed).toBe(1);
+    const usage = state.usage().entities;
+    expect(usage.entries).toBeLessThanOrEqual(2000);
+    expect(usage.residentBytes + usage.reservedBytes).toBeLessThanOrEqual(16 * 1024 * 1024);
+  });
+
   it('uses the canonical newer deletion and ignores a later event for that same revision', async () => {
     const { state, wire } = await fixture(10); await state.start(target);
+    await state.select(session(0));
     wire.event(0, { title: 'superseded' }); wire.event(0, null);
     await vi.advanceTimersByTimeAsync(25);
     expect(read(state).items.some(item => item.key === encodeSessionKey(session(0)))).toBe(false);
+    expect(state.capture()).toBeNull();
     await state.retry(target);
     expect(read(state).items.some(item => item.key === encodeSessionKey(session(0)))).toBe(false);
     expect(wire.closed).toBe(1);
@@ -194,6 +240,20 @@ describe('runtime state through production client and frame codecs', () => {
     expect(read(state).items[0]?.value).toEqual({ title: 'ordered' }); expect(wire.methods.get('runtime.entity.resolve')).toBe(1);
   });
 
+  it('keeps the index observer alive across Host Thread and migration entity patches', async () => {
+    const { state, wire } = await fixture(10); await state.start(target);
+    const host = wire.event(0, { title: 'host-patch-placeholder' });
+    const queue = wire.deliveries.get(target)!;
+    queue[queue.length - 1] = { kind: 'event', frame: { ...host, scope: 'host:v1:thread:test', payload: { collection: 'threads', key: 'host:v1:thread:test', deleted: false } } };
+    const imported = wire.event(0, { title: 'import-placeholder' });
+    queue[queue.length - 1] = { kind: 'event', frame: { ...imported, scope: 'manifest:test', payload: { collection: 'imports', key: 'manifest:test', deleted: false } } };
+    wire.event(0, { title: 'native update after host writes' });
+    await vi.advanceTimersByTimeAsync(25);
+    expect(read(state).status).toBe('complete');
+    expect(read(state).items[0]?.value).toEqual({ title: 'native update after host writes' });
+    expect(wire.methods.get('runtime.entity.resolve')).toBe(1);
+  });
+
   it('reconciles periodic fence-window rollover without losing an intervening deletion', async () => {
     const { state, wire } = await fixture(800); await state.start(target);
     for (let index = 0; index < 513; index++) wire.event(index, index === 0 ? null : { title: `updated-${index}` });
@@ -202,6 +262,17 @@ describe('runtime state through production client and frame codecs', () => {
     expect(read(state).items.some(item => item.key === encodeSessionKey(session(0)))).toBe(false);
     expect(read(state).items.find(item => item.key === encodeSessionKey(session(1)))?.value).toEqual({ title: 'updated-1' });
     expect(wire.closed).toBe(1); expect(state.usage().entities.entries).toBeLessThanOrEqual(2000);
+  });
+  it('publishes canonical metadata from a replacement snapshot as well as live events', async () => {
+    const canonical: CanonicalEntity[] = [];
+    const { state, wire } = await fixture(800, undefined, entity => canonical.push(entity));
+    await state.start(target);
+    expect(canonical.some(entity => entity.key === encodeSessionKey(session(799)))).toBe(true);
+    canonical.length = 0;
+    for (let index = 0; index < 513; index++) wire.event(index, { title: `updated-${index}` });
+    await vi.advanceTimersByTimeAsync(25);
+    expect(wire.snapshots).toBe(2);
+    expect(canonical.findLast(entity => entity.key === encodeSessionKey(session(512)))?.value).toEqual({ title: 'updated-512' });
   });
 
   it('releases selected history and every observer on disposal during an in-flight resolve', async () => {
@@ -234,6 +305,23 @@ describe('runtime state through production client and frame codecs', () => {
     expect(view.items).toHaveLength(1);
     expect(view.items[0]?.key).toBe(encodeSessionKey(session(5)));
     expect(state.usage().entities.entries).toBeLessThanOrEqual(2000);
+  });
+  it('keeps subscribed views available while replay fills the shared byte budget', async () => {
+    const { state, wire } = await fixture(400);
+    const observed: string[] = [];
+    const unsubscribe = state.subscribe(() => {
+      const view = state.view('session_summaries', target);
+      try { observed.push(view.status); } finally { view.release(); }
+    });
+    await state.start(target);
+    for (let index = 0; index < 300; index++) wire.event(10000 + index, { title: 'x'.repeat(12000) });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(observed).not.toContain('error');
+    expect(read(state).status).toBe('complete');
+    const usage = state.usage().entities;
+    expect(usage.residentBytes + usage.reservedBytes).toBeLessThanOrEqual(16 * 1024 * 1024);
+    unsubscribe(); await state.dispose();
+    expect(state.usage().entities).toEqual({ residentBytes: 0, reservedBytes: 0, entries: 0 });
   });
 
   it('shows a session added to a not yet full visible page', async () => {

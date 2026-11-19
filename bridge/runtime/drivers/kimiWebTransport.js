@@ -95,7 +95,11 @@ export function createKimiWebTransport({ endpoint, getAuthorization, deadlineMs 
               if (pathname === '/openapi.json' || pathname === '/asyncapi.json') return settle(null, value);
               if (!value || typeof value.code !== 'number' || !Object.hasOwn(value, 'data'))
                 return settle(failure('source_unavailable', 'native_envelope'));
-              if (value.code !== 0) return settle(failure(value.code === 40112 ? 'unauthorized' : pathname.includes('page_token=') ? 'replay_required' : 'source_unavailable', 'native_business_error'));
+              if (value.code !== 0) {
+                const error = failure(value.code === 40112 ? 'unauthorized' : pathname.includes('page_token=') ? 'replay_required' : 'source_unavailable', 'native_business_error');
+                if (Number.isSafeInteger(value.code)) error.nativeBusinessCode = value.code;
+                return settle(error);
+              }
               settle(null, value.data);
             });
           });
@@ -115,6 +119,8 @@ export function createKimiWebTransport({ endpoint, getAuthorization, deadlineMs 
     if (url.origin !== base.origin) return Promise.reject(failure('invalid_request', 'native_path'));
     return (async () => {
       const auth = await authorization();
+      if (stopped) throw failure('source_unavailable', 'driver_closed');
+      if (signal?.aborted) throw failure('cancelled', 'native_cancelled');
       return new Promise((resolve, reject) => {
         let settled = false;
         const request = (url.protocol === 'https:' ? https : http).request(url, { method: 'GET', headers: { Authorization: auth, Accept: 'application/json' } });

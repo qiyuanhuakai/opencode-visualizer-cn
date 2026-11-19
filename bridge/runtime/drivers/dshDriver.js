@@ -6,17 +6,23 @@ import { createFollowState, terminalTurn } from '../../../shared/runtime/native/
 import { record, text, integer, summaries, selectModel, approvalOutcome, fail, DshError } from '../../../shared/runtime/native/dsh/protocol.js';
 import { parseSessionRef, parseEnvironmentId, parseHarnessInstanceId } from '../../../shared/runtime/identity.js';
 import { jsonValue } from '../../../shared/runtime/capabilities.js';
+import { DSH_UI_OPERATIONS } from '../../../shared/runtime/native/dsh/uiOperations.js';
 import { CORE_OPERATIONS, unsupported } from '../../../shared/runtime/harnessContract.js';
 import { readRecord, compareRecord, fingerprint } from '../operationJournal.js';
 
 const supported = Object.freeze({ state: 'supported' });
 const SELECTED_SLOTS = 4, SNAPSHOT_SLOTS = 3, SNAPSHOT_TTL_MS = 60000, SNAPSHOT_BUDGET_BYTES = 33554432, NATIVE_EVENT_LIMIT = 256;
 const EXTENSIONS = Object.freeze({
+  forkSession: { method: 'session/fork', scope: 'session', mutation: true },
+  updateSession: { scope: 'session', mutation: true },
+  ...Object.fromEntries(Object.entries(DSH_UI_OPERATIONS).map(([method, declaration]) => [`dsh.ui.${method.replace('/', '.')}`, { method, ...declaration }])),
   'dsh.providers.list': { method: 'session/modelCatalog', scope: 'instance' },
   'dsh.models.list': { method: 'session/modelCatalog', scope: 'instance' },
   'dsh.models.select': { method: 'session/selectModel', scope: 'session', mutation: true },
   'dsh.plugins.list': { method: 'pluginInventory/list', scope: 'instance' },
+  'dsh.agentPresets.select': { method: 'agentPresets/select', scope: 'session', mutation: true },
   'dsh.agentPresets.list': { method: 'agentPresets/list', scope: 'instance' },
+  'dsh.permissions.select': { method: 'commands/execute', scope: 'session', mutation: true },
   'dsh.permissions.catalog': { method: 'permissionPresets/catalog', scope: 'instance' },
 });
 
@@ -411,7 +417,7 @@ export function createDshDriver(options) {
       source: 'native-summary-snapshot', total: snapshot.items.length, expiresAt: snapshot.expiresAt };
   }
   async function respondInteraction(input) {
-    const { session, params } = context(input, true), key = text(params.interactionId), outcome = approvalOutcome(params.answer);
+    const { session, params } = context(input, true), key = text(params.interactionId), outcome = approvalOutcome(typeof params.answer === 'object' && params.answer !== null ? params.answer.outcome : params.answer);
     const delivery = [...deliveries.values()].find((value) => value.key === key);
     if (!delivery || !delivery.live || fingerprint(delivery.session) !== fingerprint(session)) fail('conflict', 'interaction_stale');
     const guard = () => { leaseCurrent(delivery.generation, delivery.clientId); if (!delivery.live || deliveries.get(delivery.eventId) !== delivery) fail('conflict', 'interaction_cancelled'); };
@@ -499,19 +505,25 @@ export function createDshDriver(options) {
     },
     async openHistory(input) {
       const { session } = context(input, true);
-      const lease = transport.capture();
-      const entry = await select(session);
-      return createDshHistory({
-        session,
-        authority: Object.freeze({ generation: lease.generation }),
-        current: () => { try { const now = transport.capture(); return now.generation === lease.generation && now.origin === lease.origin; } catch { return false; } },
-        assertCurrent: async () => { transport.assertCurrent(lease); },
-        fence: () => entry.state.historyFence(),
-        pullPage: ({ before, through, signal }) => pullDshPage(session, { before, through, signal }),
-        pullSnapshot: ({ signal }) => pullDshSnapshot(session, { signal }),
-        subscribe: () => historyEvents(session),
-        randomUUID,
-      });
+      const release = retain(session, 'history');
+      try {
+        const lease = transport.capture();
+        const entry = await select(session);
+        const producer = createDshHistory({
+          session,
+          authority: Object.freeze({ generation: lease.generation }),
+          current: () => { try { const now = transport.capture(); return now.generation === lease.generation && now.origin === lease.origin; } catch { return false; } },
+          assertCurrent: async () => { transport.assertCurrent(lease); },
+          fence: () => entry.state.historyFence(),
+          pullPage: ({ before, through, signal }) => pullDshPage(session, { before, through, signal }),
+          pullSnapshot: ({ signal }) => pullDshSnapshot(session, { signal }),
+          subscribe: () => historyEvents(session),
+          randomUUID,
+        });
+        return Object.freeze({ ...producer, async close() {
+          try { await producer.close(); } finally { release(); }
+        } });
+      } catch (error) { release(); throw error; }
     },
     async createSession(input) {
       const { params } = context(input), idempotencyKey = text(params.idempotencyKey);
@@ -542,6 +554,73 @@ export function createDshDriver(options) {
   };
   const native = Object.fromEntries(Object.entries(EXTENSIONS).map(([name, declaration]) => [name, async (input) => {
     const { session, params } = context(input, declaration.scope === 'session');
+    if (name === 'forkSession') {
+      const raw = params.atSeq ?? params.messageId;
+      let atSeq = raw === undefined || raw === '' ? undefined : Number(raw);
+      let entry, historyFence;
+      const capturedScope = operations.capture(session);
+      if (params.atSeq === undefined && typeof params.messageId === 'string' && params.messageId && !Number.isFinite(atSeq)) {
+        entry = await select(session); historyFence = entry.state.historyFence();
+        let beforeSeq = historyFence.cursor + 1, promptSeq;
+        for (let pageIndex = 0; pageIndex < 100 && beforeSeq > 0; pageIndex++) {
+          const page = await readDshHistoryPage({ transport, session, state: entry.state, beforeSeq, throughSeq: historyFence.cursor, limit: 200 });
+          entry.state.assertHistory(historyFence);
+          const matches = page.records.filter(({ event }) => event.type === 'user/message' && event.data?.id === params.messageId ||
+            event.type === 'agent/inbox/spliced' && Array.isArray(event.data?.inserted) && event.data.inserted.some(item => item?.id === params.messageId));
+          if (matches.length) {
+            const lowest = Math.min(...matches.map(({ event }) => event.seq));
+            promptSeq = promptSeq === undefined ? lowest : Math.min(promptSeq, lowest);
+            if (matches.some(({ event }) => event.type === 'agent/inbox/spliced')) break;
+          }
+          if (page.cursor === null) break;
+          beforeSeq = page.cursor;
+        }
+        if (promptSeq === undefined || promptSeq <= 0) fail('invalid_request', 'fork_sequence');
+        atSeq = promptSeq - 1;
+      }
+      if (atSeq !== undefined && (!Number.isSafeInteger(atSeq) || atSeq < 0)) fail('invalid_request', 'fork_sequence');
+      if (entry) entry.state.assertHistory(historyFence);
+      const result = await operations.sessionMutation({ session, capturedScope, idempotencyKey: text(params.idempotencyKey), method: declaration.method,
+        args: { request: { sessionId: session.nativeSessionId, ...(atSeq === undefined ? {} : { atSeq }) } } });
+      text(record(result.result).sessionId);
+      snapshots.clear(); known.add(result.result.sessionId);
+      return result;
+    }
+    if (name === 'updateSession') {
+      let method, value;
+      if (params.title !== undefined) {
+        const title = text(params.title).trim();
+        if (!title) fail('invalid_request', 'session_title');
+        method = 'session/rename'; value = { title };
+      } else {
+        const time = record(params.time);
+        const fields = ['archived', 'pinned'].filter(field => time[field] !== undefined);
+        if (fields.length !== 1) fail('invalid_request', 'session_update');
+        const field = fields[0], timestamp = time[field];
+        if (!Number.isSafeInteger(timestamp) || timestamp < 0) fail('invalid_request', 'session_update_time');
+        method = `workspace/${timestamp > 0 ? '' : 'un'}${field === 'archived' ? 'archive' : 'pin'}Session`; value = {};
+      }
+      const result = await operations.sessionMutation({ session, idempotencyKey: text(params.idempotencyKey), method,
+        args: { request: { ...value, sessionId: session.nativeSessionId } } });
+      snapshots.clear();
+      publish({ type: 'native-emit', event: 'session.updated', args: { sessionId: session.nativeSessionId } });
+      return result;
+    }
+    if (name.startsWith('dsh.ui.')) {
+      const args = { ...record(params.request ?? {}) };
+      if (declaration.identity === 'agentId') args.agentId = session.nativeSessionId;
+      if (declaration.identity === 'request.sessionId') args.request = { ...record(args.request ?? {}), sessionId: session.nativeSessionId };
+      if (!declaration.mutation) return transport.call(declaration.method, args);
+      if (declaration.scope === 'session') return operations.sessionMutation({ session, idempotencyKey: text(params.idempotencyKey), method: declaration.method, args });
+      return operations.durable({ idempotencyKey: text(params.idempotencyKey), method: declaration.method, args });
+    }
+    if (name === 'dsh.permissions.select') {
+      const capturedScope = operations.capture(session), preset = text(params.preset);
+      const [catalog, commands] = await Promise.all([transport.call('permissionPresets/catalog', {}), transport.call('commands/list', { agentId: session.nativeSessionId })]);
+      if (!/^[a-zA-Z0-9_-]+$/.test(preset) || !Array.isArray(commands) || !commands.some(command => record(command).name === 'permission') || !Array.isArray(record(catalog).options) || !catalog.options.some(option => record(option).value === preset)) fail('unsupported', 'permission_preset');
+      return operations.sessionMutation({ session, capturedScope, idempotencyKey: text(params.idempotencyKey), method: declaration.method, args: { agentId: session.nativeSessionId, line: `/permission ${preset}`, submittedAttachments: [] } });
+    }
+    if (name === 'dsh.agentPresets.select') return operations.sessionMutation({ session, idempotencyKey: text(params.idempotencyKey), method: declaration.method, args: { agentId: session.nativeSessionId, agentPreset: text(params.preset) } });
     if (name === 'dsh.models.select') {
       const capturedScope = operations.capture(session);
       const catalog = await transport.call('session/modelCatalog', {});

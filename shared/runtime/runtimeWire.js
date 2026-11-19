@@ -1,3 +1,4 @@
+import { parseHostCall } from './hostWire.js';
 import { parseHistoryOpen, parseHistoryPage, parseHistoryChunk, parseHistoryChange } from './historyPage.js';
 import { METHODS, ProtocolError, requireValue, objectFields, jsonValue, textValue, integerValue, parseCapabilities } from './capabilities.js';
 import { parseEnvironmentId, parseConnectionProfileId, parseHarnessInstanceId, parseSessionRef, decodeWorkspaceKey } from './identity.js';
@@ -6,6 +7,10 @@ import { validateHarnessManifest, INSPECTION_STATES } from './harnessContract.js
 
 export const INDEX_COLLECTIONS = Object.freeze(['harnesses', 'workspaces', 'session_summaries', 'interactions', 'operations']);
 const fields = {
+  'runtime.interaction.read': [['session', 'interactionId'], []],
+  'runtime.workspace.info': [['workspaceKey'], []],
+  'runtime.workspace.list': [['workspaceKey', 'path'], ['offset', 'limit', 'version']],
+  'runtime.workspace.read': [['workspaceKey', 'path'], ['offset', 'version']],
   'runtime.history.open': [['historyId', 'session'], ['agentId']],
   'runtime.history.page': [['historyId'], ['cursor', 'releasePageIds']],
   'runtime.history.chunk': [['historyId', 'pageId', 'descriptorId', 'offset'], []],
@@ -15,17 +20,19 @@ const fields = {
   'runtime.target.attach': [['target'], []], 'runtime.target.detach': [['target'], []],
   'runtime.snapshot': [['collection'], ['token', 'cursor', 'limit']],
   'runtime.snapshot.chunk': [['collection', 'key', 'revision', 'offset', 'token'], []],
+  'runtime.snapshot.release': [['token'], []],
   'runtime.replay': [['after'], ['limit']], 'runtime.entity.resolve': [['event'], []],
   'runtime.observer.open': [['after'], []], 'runtime.observer.read': [['observerId'], []],
   'runtime.observer.resume': [['observerId', 'after'], []], 'runtime.observer.close': [['observerId'], []],
   'runtime.channel.ack': [['channelId', 'offset', 'length'], []],
   'runtime.channel.finish': [['channelId'], []], 'runtime.channel.cancel': [['channelId'], []],
-  'runtime.pty.create': [['workspaceKey', 'command'], ['args', 'cwd']],
+  'runtime.pty.create': [['workspaceKey'], ['command', 'args', 'cwd']],
   'runtime.pty.read': [['ptyId'], []], 'runtime.pty.write': [['ptyId', 'data'], []],
   'runtime.pty.resize': [['ptyId', 'cols', 'rows'], []], 'runtime.pty.detach': [['ptyId'], []],
+  'runtime.pty.remove': [['ptyId'], []],
 };
 const native = ['session.list', 'session.get', 'session.history', 'session.create', 'session.send', 'session.cancel', 'interaction.respond'];
-export const RUNTIME_WIRE_METHODS = Object.freeze(Object.fromEntries([...Object.keys(fields), 'runtime.channel.open', ...native].map(name => [name, METHODS[name]])));
+export const RUNTIME_WIRE_METHODS = Object.freeze(Object.fromEntries([...Object.keys(fields), 'runtime.channel.open', ...native, 'native.query', 'native.extension', 'runtime.host.read', 'runtime.host.mutate'].map(name => [name, METHODS[name]])));
 function bounded(value) {
   const result = jsonValue(value);
   requireValue(new TextEncoder().encode(JSON.stringify(result)).length <= LIMITS.jsonBytes - 1024, 'wire.size');
@@ -66,12 +73,15 @@ export function parseRuntimeParams(method, input) {
     return bounded(value);
   }
   const value = bounded(input);
-  if (native.includes(method)) {
-    objectFields(value, ['harnessInstanceId', 'args'], ['session', 'workspaceKey']);
+  if (method === 'runtime.host.read' || method === 'runtime.host.mutate') return parseHostCall(method === 'runtime.host.read' ? 'read' : 'mutate', value);
+  if (native.includes(method) || method === 'native.query' || method === 'native.extension') {
+    const extension = method.startsWith('native.');
+    objectFields(value, ['harnessInstanceId', 'args', ...(extension ? ['operation'] : [])], ['session', 'workspaceKey']);
+    if (extension) textValue(value.operation, 'wire.operation');
     parseHarnessInstanceId(value.harnessInstanceId);
     const sessionRequired = !['session.list', 'session.create'].includes(method);
-    requireValue(sessionRequired === (value.session !== undefined), 'wire.session');
-    if (sessionRequired) requireValue(parseSessionRef(value.session).harnessInstanceId === value.harnessInstanceId, 'wire.harness', 'unauthorized');
+    if (!extension) requireValue(sessionRequired === (value.session !== undefined), 'wire.session');
+    if (value.session !== undefined) requireValue(parseSessionRef(value.session).harnessInstanceId === value.harnessInstanceId, 'wire.harness', 'unauthorized');
     if (value.workspaceKey !== undefined) decodeWorkspaceKey(value.workspaceKey);
     requireValue(value.args !== null && typeof value.args === 'object' && !Array.isArray(value.args), 'wire.args');
     const reserved = ['target', 'environmentId', 'harnessInstanceId', 'session', 'epoch', 'processGeneration', 'permissions', 'idempotencyKey'];
@@ -80,15 +90,17 @@ export function parseRuntimeParams(method, input) {
   }
   if (method === 'runtime.channel.open') {
     switch (value?.service) {
-      case 'file': objectFields(value, ['service', 'workspaceKey', 'path', 'size', 'sha256']); break;
+      case 'file': objectFields(value, ['service', 'workspaceKey', 'path', 'size', 'sha256'], ['replace']); if (value.replace !== undefined) requireValue(typeof value.replace === 'boolean', 'workspace.replace'); break;
       case 'pty': objectFields(value, ['service', 'ptyId']); break;
       default: throw new ProtocolError('unsupported', 'wire.channel_service');
     }
   } else objectFields(value, ...fields[method]);
-  for (const key of ['observerId', 'ptyId', 'token', 'path', 'command', 'cwd']) if (value[key] !== undefined) textValue(value[key], key);
+  for (const key of ['observerId', 'ptyId', 'token', 'path', 'command', 'cwd', 'version']) if (value[key] !== undefined) textValue(value[key], key);
   if (value.key !== undefined) requireValue(typeof value.key === 'string' && value.key.length > 0 && value.key.length <= 4096 && !value.key.includes('\0'), 'wire.key');
   for (const key of ['after', 'revision', 'offset', 'size']) if (value[key] !== undefined) integerValue(value[key], key);
   if (value.target !== undefined) parseEnvironmentId(value.target);
+  if (method === 'runtime.snapshot.release') textValue(value.token, 'token');
+  if (method === 'runtime.interaction.read') { parseSessionRef(value.session); textValue(value.interactionId, 'interactionId'); }
   if (value.workspaceKey !== undefined) decodeWorkspaceKey(value.workspaceKey);
   if (value.collection !== undefined) collection(value.collection);
   if (value.cursor != null) textValue(value.cursor, 'cursor');
@@ -110,6 +122,11 @@ export function parseRuntimeParams(method, input) {
 export function parseRuntimeResult(method, input) {
   requireValue(Object.hasOwn(RUNTIME_WIRE_METHODS, method), 'wire.method', 'unsupported');
   switch (method) {
+    case 'runtime.interaction.read': {
+      const value = bounded(input); objectFields(value, ['interactionId', 'session', 'phase', 'payload']);
+      textValue(value.interactionId, 'interactionId'); parseSessionRef(value.session); textValue(value.phase, 'phase');
+      return value;
+    }
     case 'runtime.history.open': return parseHistoryOpen(input);
     case 'runtime.history.page': return parseHistoryPage(input);
     case 'runtime.history.chunk': return parseHistoryChunk(input);
@@ -117,6 +134,24 @@ export function parseRuntimeResult(method, input) {
   }
   const value = bounded(input);
   switch (method) {
+    case 'runtime.workspace.info':
+      objectFields(value, ['directory', 'home', 'platform', 'shell']);
+      for (const key of ['directory', 'home', 'platform', 'shell']) textValue(value[key], key);
+      break;
+    case 'runtime.workspace.list':
+      objectFields(value, ['items', 'version', 'nextOffset']);
+      textValue(value.version, 'version');
+      requireValue(Array.isArray(value.items) && value.items.length <= 200, 'workspace.items');
+      for (const item of value.items) { objectFields(item, ['name', 'path', 'type']); textValue(item.name, 'name'); textValue(item.path, 'path'); requireValue(['file', 'directory'].includes(item.type), 'workspace.item_type'); }
+      if (value.nextOffset !== null) integerValue(value.nextOffset, 'nextOffset');
+      break;
+    case 'runtime.workspace.read':
+      objectFields(value, ['path', 'version', 'size', 'offset', 'dataBase64', 'nextOffset']);
+      textValue(value.path, 'path'); textValue(value.version, 'version');
+      integerValue(value.size, 'size'); integerValue(value.offset, 'offset');
+      requireValue(typeof value.dataBase64 === 'string' && value.dataBase64.length <= 87384 && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value.dataBase64), 'workspace.chunk');
+      if (value.nextOffset !== null) { integerValue(value.nextOffset, 'nextOffset'); requireValue(value.nextOffset > value.offset && value.nextOffset <= value.size, 'workspace.chunk_offset'); }
+      break;
     case 'runtime.inspect':
       objectFields(value, ['role', 'state', 'subscribers', 'topology', 'sources', 'connectionProfileId', 'targets', 'harnesses', 'transports']);
       role(value.role); textValue(value.state, 'state'); integerValue(value.subscribers, 'subscribers'); parseConnectionProfileId(value.connectionProfileId);
@@ -150,16 +185,18 @@ export function parseRuntimeResult(method, input) {
     case 'runtime.pty.read':
       objectFields(value, ['chunks', 'exited', 'exitCode', 'bufferedBytes']); requireValue(Array.isArray(value.chunks) && value.chunks.length <= 4, 'wire.chunks'); value.chunks.forEach(validateChunk);
       requireValue(typeof value.exited === 'boolean' && (value.exitCode === null || Number.isInteger(value.exitCode)), 'wire.pty'); integerValue(value.bufferedBytes, 'bufferedBytes'); break;
+    case 'runtime.snapshot.release':
+      objectFields(value, ['released']); requireValue(typeof value.released === 'boolean', 'snapshot.released'); break;
     case 'runtime.snapshot.chunk':
       objectFields(value, ['revision', 'bytes', 'offset', 'data', 'nextOffset']); for (const key of ['revision', 'bytes', 'offset']) integerValue(value[key], key);
       requireValue(typeof value.data === 'string' && value.data.length <= 87384, 'wire.chunk'); if (value.nextOffset !== null) integerValue(value.nextOffset, 'nextOffset'); break;
     case 'runtime.entity.resolve':
       objectFields(value, ['collection', 'key', 'revision'], ['value', 'chunked', 'bytes']); collection(value.collection); requireValue(typeof value.key === 'string', 'wire.key'); integerValue(value.revision, 'revision'); break;
-    case 'session.create': case 'session.send': case 'session.cancel': case 'interaction.respond':
+    case 'runtime.host.mutate': case 'native.extension': case 'session.create': case 'session.send': case 'session.cancel': case 'interaction.respond':
       objectFields(value, ['operationId', 'value']); textValue(value.operationId, 'operationId'); break;
-    case 'session.list': case 'session.get': case 'session.history': break;
+    case 'runtime.host.read': case 'native.query': case 'session.list': case 'session.get': case 'session.history': break;
     default: {
-      const key = { 'runtime.target.detach': 'detached', 'runtime.observer.resume': 'resumed', 'runtime.observer.close': 'closed', 'runtime.history.close': 'closed', 'runtime.channel.cancel': 'closed', 'runtime.pty.write': 'written', 'runtime.pty.resize': 'resized', 'runtime.pty.detach': 'detached' }[method];
+      const key = { 'runtime.target.detach': 'detached', 'runtime.observer.resume': 'resumed', 'runtime.observer.close': 'closed', 'runtime.history.close': 'closed', 'runtime.channel.cancel': 'closed', 'runtime.pty.write': 'written', 'runtime.pty.resize': 'resized', 'runtime.pty.detach': 'detached', 'runtime.pty.remove': 'removed' }[method];
       requireValue(key !== undefined, 'wire.result'); objectFields(value, [key]); requireValue(value[key] === true, 'wire.result');
     }
   }

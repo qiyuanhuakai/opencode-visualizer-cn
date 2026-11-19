@@ -45,6 +45,8 @@ export function createDshOperations({ store, transport, environmentId, harnessIn
     const accepted = await journal.accept({ scope, idempotencyKey, method, payload });
     const executed = await journal.execute(accepted.operationId, scope, ({ signal }) => prepared.send(signal).then((result) => {
       if (method === 'session/prompt' && record(result).accepted !== true) fail('reconcile_required', 'prompt_not_accepted');
+      if (method === 'commands/execute' && record(record(result).result).kind !== 'success') fail('reconcile_required', 'permission_selection');
+      if (method === 'agentPresets/select' && typeof result !== 'string') fail('reconcile_required', 'preset_selection');
       if (method === 'session/selectModel') {
         const selected = record(record(result).selected), requested = record(payload.request);
         if (selected.provider !== requested.provider || selected.model !== requested.model) fail('reconcile_required', 'model_selection');

@@ -1,4 +1,5 @@
 import { confirmLegacyWrite, legacyEditingPaused, retainFrozenLegacyWrite } from '../runtime/migration/writerFreeze';
+import { APPROVED_APPLICATION_KEY, decodeLiveSetting, encodeLiveSetting, isLiveSetting, liveSettingKey } from '../../shared/runtime/liveSettings.js';
 const STORAGE_PREFIX = 'opencode.';
 const LOCAL_STORAGE_OWNED_KEYS = new Set([
   'opencode.global.dat:model',
@@ -240,11 +241,46 @@ export function storageGet(key: string) {
 }
 
 export function storageRead(key: string): StorageReadResult {
+  if (isLiveSetting(key)) {
+    if (typeof window === 'undefined') return { kind: 'missing' };
+    try {
+      const native = window.electronAPI?.persistentStorage;
+      if (native && key === APPROVED_APPLICATION_KEY) {
+        return readStorageItem(() => native.getItem(storageKey(key)));
+      }
+      const raw = native
+        ? native.getItem(liveSettingKey(key))
+        : window.localStorage.getItem(liveSettingKey(key));
+      if (raw !== null) return decodeLiveSetting(raw);
+      if (native) {
+        const legacy = native.getItem(storageKey(key));
+        if (legacy !== null) return { kind: 'value', value: legacy };
+      }
+      return readStorageItem(() => window.localStorage.getItem(storageKey(key)));
+    } catch {
+      return { kind: 'error' };
+    }
+  }
   const storage = resolveStorageBackend();
   return storage?.readItem(storageKey(key)) ?? { kind: 'missing' };
 }
 
+function writeLiveSetting(key: string, value: string | null): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const native = window.electronAPI?.persistentStorage;
+    if (native && key === APPROVED_APPLICATION_KEY) {
+      return (value === null ? native.removeItem(storageKey(key)) : native.setItem(storageKey(key), value)) !== false;
+    }
+    const backend = native ?? window.localStorage;
+    return backend.setItem(liveSettingKey(key), encodeLiveSetting(value)) !== false;
+  } catch {
+    return false;
+  }
+}
+
 export function storageSet(key: string, value: string) {
+  if (isLiveSetting(key)) return writeLiveSetting(key, value);
   if (retainFrozenLegacyWrite({ channel: 'storage', key: storageKey(key), value })) return true;
   const storage = resolveStorageBackend();
   if (!storage) return false;
@@ -254,6 +290,7 @@ export function storageSet(key: string, value: string) {
 }
 
 export function storageRemove(key: string) {
+  if (isLiveSetting(key)) return writeLiveSetting(key, null);
   if (retainFrozenLegacyWrite({ channel: 'storage', key: storageKey(key), value: null })) return true;
   const storage = resolveStorageBackend();
   if (!storage) return false;

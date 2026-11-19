@@ -785,6 +785,25 @@ export function createHandoffService({
   }
 
   return {
+    exportRecords() {
+      return [...handoffsById.values()].map(record => ({ record: structuredClone(record), ops: structuredClone(journal.byHandoff.get(record.handoffId) ?? []), carried: structuredClone(carriedCheckpoints.get(record.host.checkpoint?.checkpointId) ?? null) }));
+    },
+    restoreRecords(records) {
+      assertOpen();
+      if (handoffsById.size) throw new HandoffError('conflict', 'handoff_restore_nonempty');
+      for (const item of records) {
+        const record = structuredClone(item.record); parseHandoffId(record.handoffId);
+        threads.get(record.threadId);
+        handoffsById.set(record.handoffId, record);
+        const ops = structuredClone(item.ops); journal.byHandoff.set(record.handoffId, ops);
+        for (const op of ops) { journal.ops.push(op); journal.byKey.set(`${record.handoffId}\u0000${op.kind}`, op); }
+        if (item.carried && record.host.checkpoint) carriedCheckpoints.set(record.host.checkpoint.checkpointId, structuredClone(item.carried));
+        if (!record.observation.observed && (record.sends > 0 || ops.some(op => op.kind === 'send' || op.kind === 'deliver'))) {
+          createHostSink(hostScope(record)).reconcile({ code: 'reconcile_required', field: 'handoff_restart_ambiguous', reason: 'Native delivery outcome requires reconciliation', at: Date.now() });
+        }
+      }
+      stats.handoffs = handoffsById.size; stats.ops = journal.ops.length;
+    },
     begin,
     attach,
     prepare,

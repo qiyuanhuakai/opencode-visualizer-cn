@@ -1,3 +1,4 @@
+import type { HostReadCall, HostMutationCall } from './hostWire.js';
 import type { HistoryOpenParams, HistoryOpenResult, HistoryPageParams, HistoryPage, HistoryChunkParams, HistoryChunk, HistoryReadParams, HistoryChange, HistoryCloseParams } from './historyPage.js';
 import type { Capabilities, JsonValue } from './capabilities.js';
 import type { EnvironmentId, ConnectionProfileId, HarnessInstanceId, SessionRef, WorkspaceKey } from './identity.js';
@@ -16,6 +17,7 @@ export type RuntimeInspection = {
   readonly harnesses: readonly HarnessInspection[]; readonly transports: { readonly direct: boolean; readonly ssh: boolean; readonly slurm: boolean };
 };
 export type NativeCall = { readonly harnessInstanceId: HarnessInstanceId; readonly session?: SessionRef; readonly workspaceKey?: WorkspaceKey; readonly args: JsonObject };
+export type NativeExtensionCall = NativeCall & { readonly operation: string };
 export type ChannelDescriptor = { readonly channelId: number; readonly direction: 'upload' | 'download'; readonly service: 'file' | 'pty'; readonly credits: 4; readonly chunkBytes: 65536; readonly offset: number };
 export type WireChunk = { readonly channelId: number; readonly offset: number; readonly length: number };
 export type ObserverDelivery = null | { readonly kind: 'event' | 'control'; readonly frame: RuntimeEvent } | { readonly kind: 'replay_required'; readonly after: number; readonly through: number; readonly reason: string } | ({ readonly kind: 'binary' } & WireChunk);
@@ -26,6 +28,14 @@ type ObserverRef = { readonly observerId: string };
 type PtyRef = { readonly ptyId: string };
 type ChannelRef = { readonly channelId: number };
 export interface RuntimeParams {
+  readonly 'runtime.interaction.read': { readonly session: SessionRef; readonly interactionId: string };
+  readonly 'runtime.workspace.info': { readonly workspaceKey: WorkspaceKey };
+  readonly 'runtime.workspace.list': { readonly workspaceKey: WorkspaceKey; readonly path: string; readonly offset?: number; readonly limit?: number; readonly version?: string };
+  readonly 'runtime.workspace.read': { readonly workspaceKey: WorkspaceKey; readonly path: string; readonly offset?: number; readonly version?: string };
+  readonly 'runtime.host.read': HostReadCall;
+  readonly 'runtime.host.mutate': HostMutationCall;
+  readonly 'native.query': NativeExtensionCall;
+  readonly 'native.extension': NativeExtensionCall;
   readonly 'runtime.history.open': HistoryOpenParams;
   readonly 'runtime.history.page': HistoryPageParams;
   readonly 'runtime.history.chunk': HistoryChunkParams;
@@ -36,21 +46,23 @@ export interface RuntimeParams {
   readonly 'runtime.target.detach': { readonly target: EnvironmentId };
   readonly 'runtime.snapshot': { readonly collection: IndexCollection; readonly token?: string; readonly cursor?: string | null; readonly limit?: number };
   readonly 'runtime.snapshot.chunk': { readonly collection: IndexCollection; readonly key: string; readonly revision: number; readonly offset: number; readonly token: string };
+  readonly 'runtime.snapshot.release': { readonly token: string };
   readonly 'runtime.replay': { readonly after: number; readonly limit?: number };
   readonly 'runtime.entity.resolve': { readonly event: RuntimeEvent };
   readonly 'runtime.observer.open': { readonly after: number };
   readonly 'runtime.observer.read': ObserverRef;
   readonly 'runtime.observer.resume': ObserverRef & { readonly after: number };
   readonly 'runtime.observer.close': ObserverRef;
-  readonly 'runtime.channel.open': { readonly service: 'file'; readonly workspaceKey: WorkspaceKey; readonly path: string; readonly size: number; readonly sha256: string } | { readonly service: 'pty'; readonly ptyId: string };
+  readonly 'runtime.channel.open': { readonly service: 'file'; readonly workspaceKey: WorkspaceKey; readonly path: string; readonly size: number; readonly sha256: string; readonly replace?: boolean } | { readonly service: 'pty'; readonly ptyId: string };
   readonly 'runtime.channel.ack': WireChunk;
   readonly 'runtime.channel.finish': ChannelRef;
   readonly 'runtime.channel.cancel': ChannelRef;
-  readonly 'runtime.pty.create': { readonly workspaceKey: WorkspaceKey; readonly command: string; readonly args?: readonly string[]; readonly cwd?: string };
+  readonly 'runtime.pty.create': { readonly workspaceKey: WorkspaceKey; readonly command?: string; readonly args?: readonly string[]; readonly cwd?: string };
   readonly 'runtime.pty.read': PtyRef;
   readonly 'runtime.pty.write': PtyRef & { readonly data: string };
   readonly 'runtime.pty.resize': PtyRef & { readonly cols: number; readonly rows: number };
   readonly 'runtime.pty.detach': PtyRef;
+  readonly 'runtime.pty.remove': PtyRef;
   readonly 'session.list': NativeCall;
   readonly 'session.get': NativeCall;
   readonly 'session.history': NativeCall;
@@ -60,6 +72,14 @@ export interface RuntimeParams {
   readonly 'interaction.respond': NativeCall;
 }
 export interface RuntimeResults {
+  readonly 'runtime.interaction.read': { readonly interactionId: string; readonly session: SessionRef; readonly phase: string; readonly payload: JsonValue };
+  readonly 'runtime.workspace.info': { readonly directory: string; readonly home: string; readonly platform: string; readonly shell: string };
+  readonly 'runtime.workspace.list': { readonly items: readonly { readonly name: string; readonly path: string; readonly type: 'file' | 'directory' }[]; readonly version: string; readonly nextOffset: number | null };
+  readonly 'runtime.workspace.read': { readonly path: string; readonly version: string; readonly size: number; readonly offset: number; readonly dataBase64: string; readonly nextOffset: number | null };
+  readonly 'runtime.host.read': JsonValue;
+  readonly 'runtime.host.mutate': NativeMutationResult;
+  readonly 'native.query': JsonValue;
+  readonly 'native.extension': NativeMutationResult;
   readonly 'runtime.history.open': HistoryOpenResult;
   readonly 'runtime.history.page': HistoryPage;
   readonly 'runtime.history.chunk': HistoryChunk;
@@ -70,6 +90,7 @@ export interface RuntimeResults {
   readonly 'runtime.target.detach': { readonly detached: true };
   readonly 'runtime.snapshot': Snapshot;
   readonly 'runtime.snapshot.chunk': { readonly revision: number; readonly bytes: number; readonly offset: number; readonly data: string; readonly nextOffset: number | null };
+  readonly 'runtime.snapshot.release': { readonly released: boolean };
   readonly 'runtime.replay': Replay;
   readonly 'runtime.entity.resolve': CanonicalEntity;
   readonly 'runtime.observer.open': ObserverRef;
@@ -85,6 +106,7 @@ export interface RuntimeResults {
   readonly 'runtime.pty.write': { readonly written: true };
   readonly 'runtime.pty.resize': { readonly resized: true };
   readonly 'runtime.pty.detach': { readonly detached: true };
+  readonly 'runtime.pty.remove': { readonly removed: true };
   readonly 'session.list': JsonValue;
   readonly 'session.get': JsonValue;
   readonly 'session.history': JsonValue;
@@ -94,7 +116,7 @@ export interface RuntimeResults {
   readonly 'interaction.respond': NativeMutationResult;
 }
 export type RuntimeMethod = keyof RuntimeParams;
-export type RuntimeMutationMethod = 'session.create' | 'session.send' | 'session.cancel' | 'interaction.respond';
+export type RuntimeMutationMethod = 'runtime.host.mutate' | 'native.extension' | 'session.create' | 'session.send' | 'session.cancel' | 'interaction.respond';
 export type RuntimeReadMethod = Exclude<RuntimeMethod, RuntimeMutationMethod>;
 export const RUNTIME_WIRE_METHODS: Readonly<Record<RuntimeMethod, 'read' | 'control' | 'mutation'>>;
 export const INDEX_COLLECTIONS: readonly IndexCollection[];

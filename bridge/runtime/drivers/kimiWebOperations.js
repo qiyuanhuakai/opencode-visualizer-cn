@@ -15,12 +15,12 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
   const recoveryAuthority = createKimiWebRecovery({ store, isCurrent });
   const leaseKey = (scope) => `lease:${fingerprint(encodeSessionKey(scope.session))}`;
   function fence(scope) { if (!isCurrent(scope)) fail('reconcile_required', 'stale_generation'); }
-  async function instance(scope, method, payload, idempotencyKey, pathname) {
+  async function instance(scope, method, payload, idempotencyKey, pathname, httpMethod = 'POST', createsSession = true) {
     scope = clean(scope); payload = clean(payload);
     nativeText(idempotencyKey, 'idempotency_key', 512);
     const digest = fingerprint({ scope, method, payload });
     const key = `kimi-instance:${fingerprint([scope.target, scope.harnessInstanceId, idempotencyKey])}`;
-    const prepared = await transport.prepare('POST', pathname, payload);
+    const prepared = await transport.prepare(httpMethod, pathname, payload);
     return admission.run({ size: Buffer.byteLength(JSON.stringify(payload)) }, async (signal) => {
       const ready = await store.ready;
       if (ready.environment !== scope.target) fail('conflict', 'store_target');
@@ -38,10 +38,15 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
         if (signal.aborted) fail('timeout', 'deadline');
         const result = await prepared.send(signal);
         fence(scope);
-        const nativeSessionId = nativeText(record(result).id, 'created_session_id', 512);
-        await compareRecord(store, 'operations', key, sent, { ...sent.value, phase: 'terminal', outcome: 'completed', nativeSessionId });
+        const nativeSessionId = createsSession ? nativeText(record(result).id, 'created_session_id', 512) : undefined;
+        await compareRecord(store, 'operations', key, sent, { ...sent.value, phase: 'terminal', outcome: 'completed', ...(nativeSessionId ? { nativeSessionId } : {}) });
         return { phase: 'native-executed', operationId: key, result };
       } catch (error) {
+        if (!createsSession && Number.isSafeInteger(error.nativeBusinessCode) && error.code !== 'unauthorized') {
+          const result = { __kimiBusinessError: error.nativeBusinessCode };
+          await compareRecord(store, 'operations', key, sent, { ...sent.value, phase: 'terminal', outcome: 'rejected', result });
+          return { phase: 'native-executed', operationId: key, result };
+        }
         const current = await readRecord(store, 'operations', key);
         if (current?.value.phase === 'sent') await compareRecord(store, 'operations', key, current, { ...current.value, phase: 'reconciling' });
         throw error;
@@ -79,6 +84,17 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
       fail('reconcile_required', 'native_prompt_identity');
     }
     return { ...executed, promptId };
+  }
+  async function nativeMutation(scope, method, payload, idempotencyKey, pathname, httpMethod = 'POST') {
+    scope = clean(scope); payload = clean(payload); fence(scope);
+    if (!['POST', 'PATCH'].includes(httpMethod)) fail('invalid_request', 'native_mutation_method');
+    const prepared = await transport.prepare(httpMethod, pathname, payload);
+    const accepted = await journal.accept({ scope, method, payload, idempotencyKey });
+    const executed = await journal.execute(accepted.operationId, scope, async ({ signal }) => {
+      fence(scope); const result = await prepared.send(signal); fence(scope); return result ?? null;
+    });
+    await journal.terminal(accepted.operationId, scope, 'completed');
+    return executed;
   }
   async function started(scope, payload) {
     if ((payload.agentId ?? payload.agent_id ?? 'main') !== 'main') return;
@@ -161,7 +177,7 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     const binding = await readRecord(store, 'operations', `kimi-native:${lease.value.operationId}`);
     if (!binding || binding.value.turnId === undefined || binding.value.turnId !== (payload.turn_id ?? payload.turnId))
       fail('reconcile_required', 'interaction_turn_unknown');
-    const key = await interactions.pending({ scope, nativeRequestId, payload: { kind, nativeRequestId, details: payload } });
+    const key = await interactions.pending({ scope, nativeRequestId, parentOperationId: lease.value.operationId, payload: { kind, nativeRequestId, details: payload } });
     const metadataKey = `kimi-interaction:${key}`;
     const prior = await readRecord(store, 'operations', metadataKey);
     const value = { scope, kind, nativeRequestId, parentOperationId: lease.value.operationId, ...(modern ? { modern: true } : {}) };
@@ -243,7 +259,7 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     if (kind !== 'approval' && kind !== 'question') fail('invalid_request', 'interaction_kind');
     const prepared = metadata.value.modern === true
       ? await transport.prepare('POST', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/interactions/${encodeURIComponent(nativeRequestId)}`, answer.dismiss === true ? { kind, dismissed: true } : { ...answer, kind })
-      : await transport.prepare('POST', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/${kind === 'approval' ? 'approvals' : 'questions'}/${encodeURIComponent(nativeRequestId)}`, answer);
+      : await transport.prepare('POST', `/api/v1/sessions/${encodeURIComponent(scope.session.nativeSessionId)}/${kind === 'approval' ? 'approvals' : 'questions'}/${encodeURIComponent(nativeRequestId)}${kind === 'question' && answer.dismiss === true ? ':dismiss' : ''}`, kind === 'question' && answer.dismiss === true ? undefined : answer);
     return control(scope, parentOperationId, 'respondInteraction', { interactionId, answer }, idempotencyKey, prepared,
       (enqueue) => interactions.reply(interactionId, scope, answer, ({ signal }) => enqueue(signal)));
   }
@@ -294,7 +310,7 @@ export function createKimiWebOperations({ store, transport, isCurrent, promptAbo
     }
     if (failed) throw failed.error;
   }
-  return { instance, send, started, cancel, pending, modernInteraction, recoverModernInteractions, reply, terminal, syncTranscript, liveTask, journal, interactions, admission,
+  return { instance, send, nativeMutation, started, cancel, pending, modernInteraction, recoverModernInteractions, reply, terminal, syncTranscript, liveTask, journal, interactions, admission,
     async invalidate(scope) { await interactions.processExited(scope); },
     close,
   };

@@ -2,6 +2,7 @@
   <dialog
     ref="dialogRef"
     class="modal-backdrop"
+    data-runtime-ui
     :open="open"
     @close="$emit('close')"
     @cancel.prevent
@@ -10,7 +11,7 @@
     <div class="modal" data-testid="connection-entry">
       <header class="modal-header">
         <div class="modal-title">{{ $t('app.runtimeConnection.title') }}</div>
-        <button type="button" class="modal-close-button" @click="handleClose">
+        <button type="button" class="modal-close-button" :aria-label="$t('common.close')" @click="handleClose">
           <Icon icon="lucide:x" :width="14" :height="14" />
         </button>
       </header>
@@ -263,7 +264,7 @@ function shortTarget(environmentId: string): string {
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
 }
 
 .profile-list {
@@ -375,7 +376,7 @@ function shortTarget(environmentId: string): string {
 }
 
 .status-chip[data-state='error'] {
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
   border-color: var(--theme-status-error, #f87171);
 }
 

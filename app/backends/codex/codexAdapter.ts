@@ -1021,6 +1021,7 @@ export type CodexAdapterOptions = CodexJsonRpcClientOptions & {
   clientInfo?: CodexClientInfo;
   experimentalApi?: boolean;
   mcpStatusTimeoutMs?: number;
+  nativeRequest?: (method: string, params: unknown) => Promise<unknown>;
 };
 
 export type NormalizedCodexSession = {
@@ -1438,6 +1439,11 @@ export class CodexAdapter implements BackendAdapter {
   };
 
   private readonly client: CodexJsonRpcClient;
+  private readonly nativeRequest: CodexAdapterOptions['nativeRequest'];
+
+  private request: CodexJsonRpcClient['request'] = <T = unknown>(method: string, params?: unknown, options?: Parameters<CodexJsonRpcClient['request']>[2]): Promise<T> => {
+    return this.nativeRequest ? this.nativeRequest(method, params ?? {}) as Promise<T> : this.client.request<T>(method, params, options);
+  };
   private readonly clientInfo: CodexClientInfo;
   private readonly experimentalApi: boolean;
   private readonly mcpStatusTimeoutMs: number;
@@ -1450,6 +1456,8 @@ export class CodexAdapter implements BackendAdapter {
 
   constructor(options: CodexAdapterOptions) {
     this.client = new CodexJsonRpcClient(options);
+    this.nativeRequest = options.nativeRequest;
+    this.initialized = options.nativeRequest !== undefined;
     this.clientInfo = options.clientInfo ?? defaultClientInfo();
     this.experimentalApi = options.experimentalApi ?? false;
     this.mcpStatusTimeoutMs = options.mcpStatusTimeoutMs ?? 30_000;
@@ -1536,7 +1544,7 @@ export class CodexAdapter implements BackendAdapter {
     };
     let result: CodexInitializeResult;
     try {
-      result = await this.client.request<CodexInitializeResult>('initialize', {
+      result = await this.request<CodexInitializeResult>('initialize', {
         clientInfo: params.clientInfo ?? this.clientInfo,
         capabilities,
       });
@@ -1558,7 +1566,7 @@ export class CodexAdapter implements BackendAdapter {
   }
 
   private requestRead<T>(method: CodexIdempotentMethod, params: unknown = {}) {
-    return this.client.request<T>(method, params, CODEX_IDEMPOTENT_RETRY_OPTIONS);
+    return this.request<T>(method, params, CODEX_IDEMPOTENT_RETRY_OPTIONS);
   }
 
   async listThreads(params: CodexThreadListParams = {}) {
@@ -1572,7 +1580,7 @@ export class CodexAdapter implements BackendAdapter {
 
   async startThread(params: CodexThreadStartParams = {}) {
     await this.ensureInitialized();
-    const result = await this.client.request<CodexThreadStartResult>('thread/start', params);
+    const result = await this.request<CodexThreadStartResult>('thread/start', params);
     this.locallyStartedThreadIds.add(result.thread.id);
     return result;
   }
@@ -1584,11 +1592,11 @@ export class CodexAdapter implements BackendAdapter {
         ? { ...params, excludeTurns: true }
         : params;
     try {
-      return await this.client.request<CodexThreadResumeResult>('thread/resume', resumeParams);
+      return await this.request<CodexThreadResumeResult>('thread/resume', resumeParams);
     } catch (error) {
       if (params.excludeTurns !== undefined || !isUnsupportedResumeHistoryError(error)) throw error;
       this.resumeHistoryUnsupported = true;
-      return this.client.request<CodexThreadResumeResult>('thread/resume', {
+      return this.request<CodexThreadResumeResult>('thread/resume', {
         ...params,
         excludeTurns: true,
       });
@@ -1597,42 +1605,42 @@ export class CodexAdapter implements BackendAdapter {
 
   async setThreadName(params: CodexThreadNameSetParams) {
     await this.ensureInitialized();
-    return this.client.request<{}>('thread/name/set', params);
+    return this.request<{}>('thread/name/set', params);
   }
 
   async archiveThread(params: CodexThreadArchiveParams) {
     await this.ensureInitialized();
-    return this.client.request<{}>('thread/archive', params);
+    return this.request<{}>('thread/archive', params);
   }
 
   async unarchiveThread(params: CodexThreadArchiveParams) {
     await this.ensureInitialized();
-    return this.client.request<{ thread: CodexThread }>('thread/unarchive', params);
+    return this.request<{ thread: CodexThread }>('thread/unarchive', params);
   }
 
   async deleteThread(params: CodexThreadDeleteParams) {
     await this.ensureInitialized();
-    return this.client.request<{}>('thread/delete', params);
+    return this.request<{}>('thread/delete', params);
   }
 
   async unsubscribeThread(params: CodexThreadUnsubscribeParams) {
     await this.ensureInitialized();
-    return this.client.request<{}>('thread/unsubscribe', params);
+    return this.request<{}>('thread/unsubscribe', params);
   }
 
   async forkThread(params: CodexThreadForkParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexThreadForkResult>('thread/fork', params);
+    return this.request<CodexThreadForkResult>('thread/fork', params);
   }
 
   async rollbackThread(params: CodexThreadRollbackParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexThreadRollbackResult>('thread/rollback', params);
+    return this.request<CodexThreadRollbackResult>('thread/rollback', params);
   }
 
   async revertThread(params: { readonly threadId: string; readonly beforeTurnId: string }) {
     await this.ensureInitialized();
-    return this.client.request<CodexThreadRollbackResult>('thread/revert', params);
+    return this.request<CodexThreadRollbackResult>('thread/revert', params);
   }
 
   async readDirectory(params: CodexFsReadDirectoryParams) {
@@ -1657,12 +1665,12 @@ export class CodexAdapter implements BackendAdapter {
 
   async setThreadGoal(params: CodexThreadGoalSetParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexThreadGoalSetResult>('thread/goal/set', params);
+    return this.request<CodexThreadGoalSetResult>('thread/goal/set', params);
   }
 
   async clearThreadGoal(params: CodexThreadGoalClearParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexThreadGoalClearResult>('thread/goal/clear', params);
+    return this.request<CodexThreadGoalClearResult>('thread/goal/clear', params);
   }
 
   async listThreadTurns(params: CodexThreadTurnsListParams) {
@@ -1672,12 +1680,12 @@ export class CodexAdapter implements BackendAdapter {
 
   async startTurn(params: CodexTurnStartParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexTurnStartResult>('turn/start', params);
+    return this.request<CodexTurnStartResult>('turn/start', params);
   }
 
   async interruptTurn(params: CodexTurnInterruptParams) {
     await this.ensureInitialized();
-    return this.client.request<{}>('turn/interrupt', params);
+    return this.request<{}>('turn/interrupt', params);
   }
 
   async sendPrompt(input: CodexPromptInput): Promise<CodexPromptResult> {
@@ -1758,12 +1766,12 @@ export class CodexAdapter implements BackendAdapter {
 
   async reviewStart(params: CodexReviewStartParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexReviewStartResult>('review/start', params);
+    return this.request<CodexReviewStartResult>('review/start', params);
   }
 
   async commandExec(params: CodexCommandExecParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexCommandExecResult>('command/exec', params);
+    return this.request<CodexCommandExecResult>('command/exec', params);
   }
 
   async readAccount(params: CodexAccountReadParams = {}) {
@@ -1773,17 +1781,17 @@ export class CodexAdapter implements BackendAdapter {
 
   async startAccountLogin(params: CodexAccountLoginStartParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexAccountLoginStartResult>('account/login/start', params);
+    return this.request<CodexAccountLoginStartResult>('account/login/start', params);
   }
 
   async cancelAccountLogin(params: CodexAccountCancelLoginParams) {
     await this.ensureInitialized();
-    return this.client.request<{}>('account/login/cancel', params);
+    return this.request<{}>('account/login/cancel', params);
   }
 
   async logoutAccount() {
     await this.ensureInitialized();
-    return this.client.request<{}>('account/logout', {});
+    return this.request<{}>('account/logout', {});
   }
 
   async readAccountRateLimits() {
@@ -1798,7 +1806,7 @@ export class CodexAdapter implements BackendAdapter {
 
   async sendAddCreditsNudge(params: CodexAccountSendNudgeParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexAccountSendNudgeResult>(
+    return this.request<CodexAccountSendNudgeResult>(
       'account/sendAddCreditsNudgeEmail',
       params,
     );
@@ -1807,12 +1815,12 @@ export class CodexAdapter implements BackendAdapter {
   // fs/* methods
   async writeFile(params: CodexFsWriteFileParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexFsWriteFileResult>('fs/writeFile', params);
+    return this.request<CodexFsWriteFileResult>('fs/writeFile', params);
   }
 
   async createDirectory(params: CodexFsCreateDirectoryParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexFsCreateDirectoryResult>('fs/createDirectory', params);
+    return this.request<CodexFsCreateDirectoryResult>('fs/createDirectory', params);
   }
 
   // model/* methods
@@ -1841,13 +1849,13 @@ export class CodexAdapter implements BackendAdapter {
 
   async writeSkillConfig(params: CodexSkillsConfigWriteParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexSkillsConfigWriteResult>('skills/config/write', params);
+    return this.request<CodexSkillsConfigWriteResult>('skills/config/write', params);
   }
 
   // marketplace/* methods
   async addMarketplace(params: CodexMarketplaceAddParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexMarketplaceAddResult>('marketplace/add', params);
+    return this.request<CodexMarketplaceAddResult>('marketplace/add', params);
   }
 
   // plugin/* methods
@@ -1864,23 +1872,23 @@ export class CodexAdapter implements BackendAdapter {
 
   async installPlugin(params: CodexPluginInstallParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexPluginInstallResult>('plugin/install', params);
+    return this.request<CodexPluginInstallResult>('plugin/install', params);
   }
 
   async uninstallPlugin(params: CodexPluginUninstallParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexPluginUninstallResult>('plugin/uninstall', params);
+    return this.request<CodexPluginUninstallResult>('plugin/uninstall', params);
   }
 
   // mcpServer/* methods
   async mcpServerOauthLogin(params: CodexMcpServerOauthLoginParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexMcpServerOauthLoginResult>('mcpServer/oauth/login', params);
+    return this.request<CodexMcpServerOauthLoginResult>('mcpServer/oauth/login', params);
   }
 
   async reloadMcpServerConfig(_params: CodexConfigMcpServerReloadParams = {}) {
     await this.ensureInitialized();
-    return this.client.request<CodexConfigMcpServerReloadResult>('config/mcpServer/reload', {});
+    return this.request<CodexConfigMcpServerReloadResult>('config/mcpServer/reload', {});
   }
 
   async listMcpServerStatus(params: CodexMcpServerStatusListParams = {}) {
@@ -1895,7 +1903,7 @@ export class CodexAdapter implements BackendAdapter {
 
   async callMcpTool(params: CodexMcpServerToolCallParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexMcpServerToolCallResult>('mcpServer/tool/call', params);
+    return this.request<CodexMcpServerToolCallResult>('mcpServer/tool/call', params);
   }
 
   // config/* methods
@@ -1907,28 +1915,28 @@ export class CodexAdapter implements BackendAdapter {
   // turn/* methods
   async steerTurn(params: CodexTurnSteerParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexTurnSteerResult>('turn/steer', params);
+    return this.request<CodexTurnSteerResult>('turn/steer', params);
   }
 
   // thread/* methods
   async updateThreadMetadata(params: CodexThreadMetadataUpdateParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexThreadMetadataUpdateResult>('thread/metadata/update', params);
+    return this.request<CodexThreadMetadataUpdateResult>('thread/metadata/update', params);
   }
 
   async startThreadCompaction(params: CodexThreadCompactStartParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexThreadCompactStartResult>('thread/compact/start', params);
+    return this.request<CodexThreadCompactStartResult>('thread/compact/start', params);
   }
 
   async runThreadShellCommand(params: CodexThreadShellCommandParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexThreadShellCommandResult>('thread/shellCommand', params);
+    return this.request<CodexThreadShellCommandResult>('thread/shellCommand', params);
   }
 
   async injectThreadItems(params: CodexThreadInjectItemsParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexThreadInjectItemsResult>('thread/inject_items', params);
+    return this.request<CodexThreadInjectItemsResult>('thread/inject_items', params);
   }
 
   async listLoadedThreads() {
@@ -1939,17 +1947,17 @@ export class CodexAdapter implements BackendAdapter {
   // fs/* methods
   async removeFile(params: CodexFsRemoveParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexFsRemoveResult>('fs/remove', params);
+    return this.request<CodexFsRemoveResult>('fs/remove', params);
   }
 
   async watchFile(params: CodexFsWatchParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexFsWatchResult>('fs/watch', params);
+    return this.request<CodexFsWatchResult>('fs/watch', params);
   }
 
   async unwatchFile(params: CodexFsUnwatchParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexFsUnwatchResult>('fs/unwatch', params);
+    return this.request<CodexFsUnwatchResult>('fs/unwatch', params);
   }
 
   async getFileMetadata(params: CodexFsGetMetadataParams) {
@@ -1959,28 +1967,28 @@ export class CodexAdapter implements BackendAdapter {
 
   async copyFile(params: CodexFsCopyParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexFsCopyResult>('fs/copy', params);
+    return this.request<CodexFsCopyResult>('fs/copy', params);
   }
 
   // command/* methods
   async writeCommandExec(params: CodexCommandExecWriteParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexCommandExecWriteResult>('command/exec/write', params);
+    return this.request<CodexCommandExecWriteResult>('command/exec/write', params);
   }
 
   async terminateCommandExec(params: CodexCommandExecTerminateParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexCommandExecTerminateResult>('command/exec/terminate', params);
+    return this.request<CodexCommandExecTerminateResult>('command/exec/terminate', params);
   }
 
   async resizeCommandExec(params: CodexCommandExecResizeParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexCommandExecResizeResult>('command/exec/resize', params);
+    return this.request<CodexCommandExecResizeResult>('command/exec/resize', params);
   }
 
   async cleanThreadBackgroundTerminals(params: CodexThreadBackgroundTerminalsCleanParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexThreadBackgroundTerminalsCleanResult>(
+    return this.request<CodexThreadBackgroundTerminalsCleanResult>(
       'thread/backgroundTerminals/clean',
       params,
     );
@@ -1993,12 +2001,12 @@ export class CodexAdapter implements BackendAdapter {
 
   async writeConfigValue(params: CodexConfigValueWriteParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexConfigValueWriteResult>('config/value/write', params);
+    return this.request<CodexConfigValueWriteResult>('config/value/write', params);
   }
 
   async batchWriteConfig(params: CodexConfigBatchWriteParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexConfigBatchWriteResult>('config/batchWrite', params);
+    return this.request<CodexConfigBatchWriteResult>('config/batchWrite', params);
   }
 
   async readConfigRequirements(params: CodexConfigRequirementsReadParams = {}) {
@@ -2016,7 +2024,7 @@ export class CodexAdapter implements BackendAdapter {
 
   async importExternalAgentConfig(params: CodexExternalAgentConfigImportParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexExternalAgentConfigImportResult>(
+    return this.request<CodexExternalAgentConfigImportResult>(
       'externalAgentConfig/import',
       params,
     );
@@ -2029,7 +2037,7 @@ export class CodexAdapter implements BackendAdapter {
 
   async setExperimentalFeatureEnablement(params: CodexExperimentalFeatureEnablementSetParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexExperimentalFeatureEnablementSetResult>(
+    return this.request<CodexExperimentalFeatureEnablementSetResult>(
       'experimentalFeature/enablement/set',
       params,
     );
@@ -2042,7 +2050,7 @@ export class CodexAdapter implements BackendAdapter {
 
   async startWindowsSandboxSetup(params: CodexWindowsSandboxSetupStartParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexWindowsSandboxSetupStartResult>(
+    return this.request<CodexWindowsSandboxSetupStartResult>(
       'windowsSandbox/setupStart',
       params,
     );
@@ -2050,7 +2058,7 @@ export class CodexAdapter implements BackendAdapter {
 
   async uploadFeedback(params: CodexFeedbackUploadParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexFeedbackUploadResult>('feedback/upload', params);
+    return this.request<CodexFeedbackUploadResult>('feedback/upload', params);
   }
 
   async createSession(directory?: string) {
@@ -2514,7 +2522,7 @@ export class CodexAdapter implements BackendAdapter {
       .catch(() => null);
 
     try {
-      const result = await this.client.request<CodexMcpServerStatusListResult>(
+      const result = await this.request<CodexMcpServerStatusListResult>(
         'mcpServerStatus/list',
         { detail: 'toolsAndAuthOnly' },
         requestOptions,

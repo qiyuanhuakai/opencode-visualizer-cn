@@ -33,11 +33,18 @@
     <div v-else class="subagent-empty">
       {{ t('subagentHistory.empty') }}
     </div>
+    <button v-if="runtimeHistory && loadError" type="button" class="subagent-close-button" :disabled="loading" @click="runtimeRetry++">{{ t('common.retry') }}</button>
+    <button v-if="runtimeHistory && runtimeReader.hasMore.value" type="button" class="subagent-close-button" :disabled="loading" @click="nextRuntimePage">{{ t('subagentHistory.nextPage') }}</button>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { useRuntimeConversation } from '../composables/useRuntimeConversation';
+import { createSelectionScope } from '../runtime/selectionScope';
+import type { RuntimeClient } from '../runtime/client';
+import type { ConnectionProfileId, SessionRef } from '../../shared/runtime/identity.js';
+import { parseSubagentHistory } from '../composables/openCodeSubagentHistory';
 import type { CodexCanonicalHistoryEntry } from '../backends/codex/normalize';
 import { useI18n } from 'vue-i18n';
 import ThreadHistoryContent from './ThreadHistoryContent.vue';
@@ -59,6 +66,7 @@ const props = withDefaults(
     parentThreadId: string;
     sessionLabel?: string;
     theme?: string;
+    runtimeHistory?: { open: () => Promise<{ client: RuntimeClient; dispose(): void }>; profileId: ConnectionProfileId; session: SessionRef; observed: () => CodexCanonicalHistoryEntry[] };
     loadHistory?: (threadId: string) => Promise<CodexCanonicalHistoryEntry[]>;
   }>(),
   {
@@ -75,27 +83,65 @@ const emit = defineEmits<{
 const msg = useMessages();
 const floatingWindow = useFloatingWindow();
 const loadedHistory = ref<CodexCanonicalHistoryEntry[]>([]);
-const loading = ref(false);
-const loadError = ref('');
+const legacyLoading = ref(false);
+const legacyError = ref('');
+const runtimeConnecting = ref(false);
+const runtimeRetry = ref(0);
+const runtimeReader = useRuntimeConversation({ publish: values => {
+  const context = props.runtimeHistory;
+  if (!context) return;
+  const entries = parseSubagentHistory(values, context.session.nativeSessionId);
+  const observed = parseSubagentHistory(context.observed(), context.session.nativeSessionId);
+  const merged = new Map([...entries, ...observed].map(entry => [entry.info.id, entry]));
+  loadedHistory.value = [...merged.values()].slice(-200);
+} });
+const loading = computed(() => props.runtimeHistory ? runtimeConnecting.value || runtimeReader.loading.value : legacyLoading.value);
+const loadError = computed(() => {
+  const error = props.runtimeHistory ? runtimeReader.error.value : legacyError.value;
+  return error.startsWith('source_unavailable:') ? t('subagentHistory.loadFailed') : error;
+});
+async function nextRuntimePage() { try { await runtimeReader.loadMore(); } catch { /* reader exposes the failure */ } }
+watch(() => [props.runtimeHistory, runtimeRetry.value] as const, async ([context], _, onCleanup) => {
+  if (!context) return;
+  runtimeConnecting.value = true;
+  let current = true;
+  let connection: Awaited<ReturnType<typeof context.open>> | undefined;
+  let scope: ReturnType<typeof createSelectionScope> | undefined;
+  onCleanup(() => {
+    current = false;
+    scope?.dispose();
+    void runtimeReader.dispose().catch(error => console.error('[Runtime] Subagent history cleanup failed', error)).finally(() => connection?.dispose());
+  });
+  try {
+    connection = await context.open();
+    if (!current) { connection.dispose(); return; }
+    scope = createSelectionScope({ client: connection.client, profileId: context.profileId });
+    const capture = scope.select(context.session);
+    if (capture) await runtimeReader.select(connection.client, capture, 'opencode');
+  } catch (error) {
+    if (current) await runtimeReader.unavailable(error instanceof Error ? error.message : String(error));
+  } finally { if (current) runtimeConnecting.value = false; }
+}, { immediate: true });
 watch(() => [props.parentThreadId, props.loadHistory] as const, async ([threadId, loadHistory], _, onCleanup) => {
   let stale = false;
   onCleanup(() => { stale = true; });
+  if (props.runtimeHistory) return;
   loadedHistory.value = [];
-  loadError.value = '';
-  loading.value = !!loadHistory;
+  legacyError.value = '';
+  legacyLoading.value = !!loadHistory;
   if (!loadHistory) return;
   try {
     const history = await loadHistory(threadId);
     if (!stale) loadedHistory.value = history;
   } catch (error) {
-    if (!stale) loadError.value = error instanceof Error ? error.message : String(error);
+    if (!stale) legacyError.value = error instanceof Error ? error.message : String(error);
   } finally {
-    if (!stale) loading.value = false;
+    if (!stale) legacyLoading.value = false;
   }
 }, { immediate: true });
 
 function getParts(messageId: string) {
-  return props.loadHistory
+  return props.loadHistory || props.runtimeHistory
     ? loadedHistory.value.find((entry) => entry.info.id === messageId)?.parts ?? []
     : msg.getParts(messageId);
 }
@@ -110,7 +156,7 @@ function getTextParts(message: { id: string }): TextPart[] {
 }
 
 const subagentMessages = computed(() =>
-  props.loadHistory
+  props.loadHistory || props.runtimeHistory
     ? loadedHistory.value.map((entry) => entry.info)
     : selectSubagentMessages(msg.roots.value, (rootId) => msg.getThread(rootId), props.parentThreadId),
 );
@@ -233,5 +279,11 @@ function handleReasoningClick(part: ReasoningPart) {
   text-align: center;
   color: var(--floating-text-muted, #94a3b8);
   font-size: 13px;
+}
+@media (max-width: 640px) {
+  .subagent-close-button {
+    min-height: 44px;
+    min-width: 44px;
+  }
 }
 </style>

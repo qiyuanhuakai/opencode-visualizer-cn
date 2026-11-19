@@ -1416,7 +1416,7 @@ describe('task 41 — serialized post-review integration', () => {
       // And the service surface itself has no push, remote or refspec capability at all.
       const surface = Object.keys(harness.integration).sort();
       expect(surface).toEqual([
-        'INTEGRATION_LIMITS', 'close', 'integrate', 'operation', 'operations', 'state',
+        'INTEGRATION_LIMITS', 'close', 'exportRecords', 'integrate', 'operation', 'operations', 'restoreRecords', 'state',
       ]);
       for (const member of surface) {
         expect(member).not.toMatch(/push|remote|refspec|reset|stash|force/i);

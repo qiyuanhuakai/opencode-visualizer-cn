@@ -53,17 +53,22 @@ class WireSocket extends EventTarget {
 }
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); vi.useRealTimers(); });
-async function fixture() {
+async function fixture(renewSocket = false) {
   const socket = new WireSocket();
+  const sockets = [socket];
   const created = Promise.withResolvers<void>();
-  const connection = createRuntimeConnection({ reference: { url: 'ws://127.0.0.1:43210/runtime' }, resolveAuthentication: async () => ({}), createWebSocket: () => { created.resolve(); return socket; } });
+  const connection = createRuntimeConnection({ reference: { url: 'ws://127.0.0.1:43210/runtime' }, resolveAuthentication: async () => ({}), createWebSocket: () => {
+    created.resolve();
+    if (renewSocket && socket.readyState === 3) { const next = new WireSocket(); sockets.push(next); return next; }
+    return socket;
+  } });
   const client = createRuntimeClient({ connection });
   cleanups.push(() => { client.dispose(); connection.dispose(); });
   const connected = connection.connect();
   await created.promise;
   socket.frame(hello);
   await connected;
-  return { socket, connection, client };
+  return { socket, sockets, connection, client };
 }
 function event(seq: number): RuntimeEvent {
   return { version: 1, kind: 'event', target, epoch: 'epoch', generation: 1, seq, entityRevision: seq + 10, scope: `row-${seq}`, type: 'entity.patch', payload: { collection: 'session_summaries', key: String(seq), deleted: false } };
@@ -82,6 +87,25 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     socket.reply(request, { rows: ['remote'] });
     await expect(result).resolves.toEqual({ rows: ['remote'] });
   });
+  it('uses a refreshed source grant after startup and enforces later permission revocation on the same binding', async () => {
+    const { client, socket } = await fixture();
+    const query = { harnessInstanceId: harness, operation: 'listProviders', args: {} };
+    await expect(client.request(target, 'native.query', query)).rejects.toMatchObject({ code: 'unsupported' });
+    const capabilities = parseCapabilities({ methods: Object.keys(RUNTIME_WIRE_METHODS), extensions: [{ owner: harness, name: 'listProviders', permission: 'native:providers', schemaVersion: 1, metadata: { scope: 'instance' } }] });
+    const inspect = client.inspect();
+    socket.reply(await socket.next(), { ...inspection, targets: [{ ...grant(), capabilities, permissions: ['native:providers'] }] });
+    await inspect;
+    const reading = client.request(target, 'native.query', query);
+    const request = await socket.next();
+    expect(request).toMatchObject({ target, epoch: 'epoch', generation: 1, method: 'native.query', params: query });
+    socket.reply(request, { all: [], connected: [] });
+    await expect(reading).resolves.toEqual({ all: [], connected: [] });
+    const revoked = client.inspect();
+    socket.reply(await socket.next(), { ...inspection, targets: [{ ...grant(), capabilities, permissions: [] }] });
+    await revoked;
+    await expect(client.request(target, 'native.query', query)).rejects.toMatchObject({ code: 'unauthorized' });
+  });
+
   it('ignores a same-id result from the wrong target and stale binding', async () => {
     const { client, socket } = await fixture();
     const result = client.request(target, 'session.get', native);
@@ -317,11 +341,33 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
 
     // A fresh read mints a new view and therefore sees the new row.
     const fresh = client.readIndex(target, 'session_summaries', { fresh: true, onPage: (_collection, page) => { seen.push([...page.items]); } });
+    const release = await socket.next(); expect(release).toMatchObject({ method: 'runtime.snapshot.release', params: { token: 'idx-1' } });
+    socket.reply(release, { released: true });
     const freshRequest = await socket.next(); expect(freshRequest.params).not.toHaveProperty('token');
     socket.reply(freshRequest, { ...empty, token: 'idx-2', revision: 11, items: [{ key: 'new-session', value: { title: 'new' } }], cursor: null });
     await expect(fresh).resolves.toMatchObject({ token: 'idx-2', revision: 11 });
     expect(seen.at(-1)).toEqual([{ key: 'new-session', value: { title: 'new' } }]);
   });
+  it('retains a superseded view until its last traversal completes', async () => {
+    const { client, socket } = await fixture();
+    const entered = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>();
+    const page = { version: 1, kind: 'snapshot', target, epoch: 'epoch', generation: 1, token: 'held', revision: 10, watermark: 4, expiresAt: Date.now() + 60000, items: [], cursor: null };
+    const first = client.readIndex(target, 'workspaces', { onPage: async () => { entered.resolve(); await resume.promise; } });
+    socket.reply(await socket.next(), page);
+    await entered.promise;
+    const fresh = client.readIndex(target, 'workspaces', { fresh: true, onPage: () => {} });
+    const request = await socket.next();
+    expect(request.method).toBe('runtime.snapshot');
+    socket.reply(request, { ...page, token: 'replacement', revision: 11 });
+    await fresh;
+    expect(socket.sent.some(frame => frame.method === 'runtime.snapshot.release')).toBe(false);
+    resume.resolve();
+    const release = await socket.next();
+    expect(release).toMatchObject({ method: 'runtime.snapshot.release', params: { token: 'held' } });
+    socket.reply(release, { released: true });
+    await first;
+  });
+
   it('rejects mixed snapshot tokens and closes the pending observer', async () => {
     const { client, socket } = await fixture();
     const page = { version: 1, kind: 'snapshot', target, epoch: 'epoch', generation: 1, token: 'atomic', revision: 10, watermark: 4, expiresAt: Date.now() + 60000, items: [], cursor: null };
@@ -338,8 +384,9 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     socket.error(await socket.next());
     await expect(replay).rejects.toMatchObject({ code: 'replay_required' });
   });
-  it('retires the connection after65536 correlation identities instead of recycling them', async () => {
-    const { client, socket, connection } = await fixture();
+  it('renews the connection after65536 identities without reusing old identities or replaying mutations', async () => {
+    vi.useFakeTimers();
+    const { client, socket, sockets, connection } = await fixture(true);
     for (let index = 0; index < 65536; index++) {
       const pending = client.request(target, 'runtime.pty.write', { ptyId: 'pty', data: 'x' });
       socket.reply(await socket.next(), { written: true });
@@ -348,6 +395,17 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     await expect(client.request(target, 'runtime.pty.write', { ptyId: 'pty', data: 'x' })).rejects.toMatchObject({ code: 'reconcile_required' });
     expect(new Set(socket.sent.map(request => request.id)).size).toBe(65536);
     expect(connection.status.state).toBe('disconnected');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(sockets).toHaveLength(2);
+    const next = sockets[1];
+    next.frame(hello);
+    expect(connection.status.state).toBe('ready');
+    expect(next.sent).toHaveLength(0);
+    const explicit = client.request(target, 'runtime.pty.write', { ptyId: 'pty', data: 'new user request' });
+    const request = await next.next();
+    expect(socket.sent.some(previous => previous.id === request.id)).toBe(false);
+    next.reply(request, { written: true });
+    await expect(explicit).resolves.toEqual({ written: true });
   }, 20000);
   it('keeps four reserved slots for permissions when recovery acknowledgements are saturated', async () => {
     const { client, socket, connection } = await fixture();

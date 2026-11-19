@@ -9,4 +9,4 @@ export interface NativeEventIntake {
   readonly state: { readonly bytes: number; readonly count: number; readonly sequence: number; readonly failure: string | null; readonly subscribed: boolean; readonly closed: boolean };
 }
 export const INTAKE_LIMITS: Readonly<{ bytes: 4194304; events: 256; frameBytes: 1048576 }>;
-export function createNativeEventIntake(options: { readonly source: DiscoverySource; readonly mutations: IndexMutations; readonly dirty: () => void; readonly onControl: () => void; readonly onFailure: (reason: string) => void }): NativeEventIntake;
+export function createNativeEventIntake(options: { readonly source: DiscoverySource; readonly mutations: IndexMutations; readonly dirty: () => void; readonly invalidate?: () => void; readonly onControl: () => void; readonly onFailure: (reason: string) => void }): NativeEventIntake;

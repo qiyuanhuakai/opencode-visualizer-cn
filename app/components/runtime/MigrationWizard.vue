@@ -2,15 +2,16 @@
   <dialog
     ref="dialogRef"
     class="modal-backdrop"
-    :open="open"
+    data-runtime-ui
+    :aria-label="$t('app.runtimeMigration.title')"
     @close="$emit('close')"
-    @cancel.prevent
+    @cancel.prevent="handleClose"
     @click.self="handleClose"
   >
     <div class="modal" data-testid="migration-wizard">
       <header class="modal-header">
         <div class="modal-title">{{ $t('app.runtimeMigration.title') }}</div>
-        <button type="button" class="modal-close-button" @click="handleClose">
+        <button type="button" class="modal-close-button" :aria-label="$t('common.close')" @click="handleClose">
           <Icon icon="lucide:x" :width="14" :height="14" />
         </button>
       </header>
@@ -27,6 +28,7 @@
         <span>{{ $t('app.runtimeMigration.retained') }}</span>
       </div>
 
+      <p v-if="bindingTargetLabel" class="modal-description">{{ bindingTargetLabel }}</p>
       <section class="inventory-section">
         <h3 class="section-title">{{ $t('app.runtimeMigration.inventory') }}</h3>
         <div class="source-list" role="group" :aria-label="$t('app.runtimeMigration.sourcesLabel')">
@@ -44,6 +46,10 @@
             <span class="source-key">{{ source.sourceKey }}</span>
             <span class="source-meta">{{ formatBytes(source.bytes) }}</span>
           </button>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="action-button" @click="$emit('first-page')">{{ rt('First page') }}</button>
+          <button type="button" class="action-button" :disabled="!hasMore" @click="$emit('next-page')">{{ rt('Next page') }}</button>
         </div>
         <div v-if="boundSourceKeys.size" class="bound-note" data-testid="migration-bound">
           <Icon icon="lucide:link" :width="14" :height="14" />
@@ -102,6 +108,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
+import { useRuntimeUi } from '../../locales/runtimeUi';
+
+const { rt } = useRuntimeUi();
 
 export type MigrationSourceKind = 'composer' | 'question' | 'history' | 'metadata' | 'local';
 
@@ -143,21 +152,26 @@ const props = defineProps<{
   result?: MigrationResult;
   error?: string;
   retained?: boolean;
+  boundSourceKeys?: ReadonlySet<string>;
+  hasMore?: boolean;
+  bindingTargetLabel?: string;
 }>();
 
 const emit = defineEmits<{
   (event: 'close'): void;
+  (event: 'next-page'): void;
+  (event: 'first-page'): void;
   (event: 'bind', value: Readonly<{ sourceKey: string; nativeSessionId?: string }>): void;
   (event: 'start'): void;
   (event: 'retry'): void;
 }>();
 
 const dialogRef = ref<HTMLDialogElement | null>(null);
-const boundSourceKeys = ref<ReadonlySet<string>>(new Set());
+const boundSourceKeys = computed(() => props.boundSourceKeys ?? new Set<string>());
 
 watch(
-  () => props.open,
-  (open) => {
+  () => [props.open, dialogRef.value] as const,
+  ([open]) => {
     const el = dialogRef.value;
     if (!el) return;
     if (open) {
@@ -180,7 +194,7 @@ const canStart = computed(() => props.status === 'idle' || props.status === 'fai
 
 function bind(source: MigrationSourceEntry) {
   emit('bind', { sourceKey: source.sourceKey, nativeSessionId: source.nativeSessionId });
-  boundSourceKeys.value = new Set([...boundSourceKeys.value, source.sourceKey]);
+
 }
 
 function handleClose() {
@@ -221,6 +235,7 @@ function formatBytes(bytes: number): string {
 }
 
 .modal {
+  --migration-success: color-mix(in srgb, var(--theme-text-success, #86efac) 40%, var(--theme-modal-text, var(--theme-text-primary, #e2e8f0)));
   width: min(600px, 95vw);
   max-height: 90vh;
   overflow-y: auto;
@@ -282,11 +297,11 @@ function formatBytes(bytes: number): string {
 }
 
 .modal-error {
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
 }
 
 .retained-note {
-  color: var(--color-success-400, #22c55e);
+  color: var(--migration-success);
 }
 
 .section-title {
@@ -323,7 +338,7 @@ function formatBytes(bytes: number): string {
 }
 
 .source-row.bound {
-  border-color: var(--color-success-400, #22c55e);
+  border-color: var(--migration-success);
 }
 
 .source-row:focus-visible {
@@ -359,7 +374,7 @@ function formatBytes(bytes: number): string {
   gap: 8px;
   margin-top: 8px;
   font-size: 11px;
-  color: var(--color-success-400, #22c55e);
+  color: var(--migration-success);
 }
 
 .progress-track {
@@ -385,7 +400,7 @@ function formatBytes(bytes: number): string {
 
 .result-text {
   font-size: 12px;
-  color: var(--color-success-400, #22c55e);
+  color: var(--migration-success);
 }
 
 .modal-actions {

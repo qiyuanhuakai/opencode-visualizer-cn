@@ -498,6 +498,20 @@ export function createAttemptService() {
   }
 
   return {
+    exportRecords(taskIds) {
+      return [...attemptsById.values()].filter(record => taskIds.includes(record.taskId)).map(record => ({ record: structuredClone(record), ops: structuredClone(journal.byAttempt.get(record.attemptId) ?? []) }));
+    },
+    restoreRecords(records) {
+      for (const item of records) {
+        const record = structuredClone(item.record); parseAttemptId(record.attemptId);
+        if (attemptsById.has(record.attemptId)) throw new CollaborationError('conflict', 'attempt_restore_duplicate');
+        attemptsById.set(record.attemptId, record);
+        const ids = attemptIdsByTask.get(record.taskId) ?? []; ids.push(record.attemptId); attemptIdsByTask.set(record.taskId, ids);
+        const ops = structuredClone(item.ops); journal.byAttempt.set(record.attemptId, ops);
+        for (const op of ops) { journal.ops.push(op); journal.byKey.set(`${record.attemptId}\u0000${op.kind}`, op); }
+      }
+      stats.attempts = attemptsById.size; stats.ops = journal.ops.length;
+    },
     begin,
     deliver,
     observe,

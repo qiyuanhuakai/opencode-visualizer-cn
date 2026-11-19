@@ -1,16 +1,17 @@
 <template>
   <section
     class="handoff-dialog"
+    data-runtime-ui
     data-testid="handoff-dialog"
     :data-state="handoff?.state ?? 'none'"
-    :aria-label="'Handoff'"
+    :aria-label="rt('Handoff')"
   >
     <header class="handoff-header">
-      <span class="section-title">Handoff</span>
+      <span class="section-title">{{ rt("Handoff") }}</span>
       <span v-if="handoff" class="state-chip" :data-state="handoff.state" data-testid="handoff-state">
-        {{ handoff.state }}
+        {{ rt(handoff.state) }}
       </span>
-      <span v-else class="state-chip" data-state="none" data-testid="handoff-state">not started</span>
+      <span v-else class="state-chip" data-state="none" data-testid="handoff-state">{{ rt("not started") }}</span>
       <!--
         `active` is the service's DERIVED value: it exists only after a real native observation.
         This marker renders `handoff.active` verbatim, so a native ack alone can never show it.
@@ -21,18 +22,16 @@
         data-testid="handoff-active"
         data-active="true"
       >
-        active — confirmed by a native observation
+        {{ rt("active — confirmed by a native observation") }}
       </span>
     </header>
 
     <p v-if="!handoff" class="handoff-empty">
-      No handoff on this thread. A handoff carries the bounded context checkpoint from the source
-      participant to the target participant; the thread's active selection moves only after the
-      target's own native observation arrives.
+      {{ rt("No handoff on this thread. A handoff carries the bounded context checkpoint from the source participant to the target participant; the thread\u0027s active selection moves only after the target\u0027s own native observation arrives.") }}
     </p>
 
     <template v-else>
-      <ol class="ladder" data-testid="handoff-ladder" :aria-label="'Handoff ladder'">
+      <ol class="ladder" data-testid="handoff-ladder" :aria-label="rt('Handoff ladder')">
         <li
           v-for="rung in ladder"
           :key="rung"
@@ -41,15 +40,15 @@
           :data-rung="rung"
           :data-current="String(handoff.state === rung)"
         >
-          {{ rung }}
+          {{ rt(rung) }}
         </li>
       </ol>
 
       <dl class="handoff-grid">
         <div class="handoff-cell" data-testid="handoff-source" :data-participant-id="handoff.source.participantId">
-          <dt>Source</dt>
+          <dt>{{ rt("Source") }}</dt>
           <dd>
-            <span class="cell-label">{{ roleOf(handoff.source.participantId) }}</span>
+            <span class="cell-label">{{ rt(roleOf(handoff.source.participantId)) }}</span>
             <span class="cell-harness" data-testid="handoff-source-harness">{{
               harnessLabel(handoff.source.session.harnessInstanceId)
             }}</span>
@@ -59,9 +58,9 @@
           </dd>
         </div>
         <div class="handoff-cell" data-testid="handoff-target" :data-participant-id="handoff.target.participantId">
-          <dt>Target</dt>
+          <dt>{{ rt("Target") }}</dt>
           <dd>
-            <span class="cell-label">{{ roleOf(handoff.target.participantId) }}</span>
+            <span class="cell-label">{{ rt(roleOf(handoff.target.participantId)) }}</span>
             <span class="cell-harness" data-testid="handoff-target-harness">{{
               harnessLabel(handoff.target.session.harnessInstanceId)
             }}</span>
@@ -71,35 +70,34 @@
           </dd>
         </div>
         <div v-if="handoff.checkpoint" class="handoff-cell" data-testid="handoff-checkpoint">
-          <dt>Carried checkpoint</dt>
+          <dt>{{ rt("Carried checkpoint") }}</dt>
           <dd class="mono" :title="handoff.checkpoint.digest">
-            {{ shortId(handoff.checkpoint.checkpointId) }} · {{ handoff.checkpoint.entryCount }} entries · {{
+            {{ shortId(handoff.checkpoint.checkpointId) }} · {{ handoff.checkpoint.entryCount }} {{ rt("entries ·") }} {{
               handoff.checkpoint.bytes }} B
           </dd>
         </div>
         <div v-if="handoff.delivered" class="handoff-cell" data-testid="handoff-delivered">
-          <dt>Native ack</dt>
+          <dt>{{ rt("Native ack") }}</dt>
           <dd>
-            delivered by <span class="mono" data-testid="handoff-delivered-by">{{ handoff.deliveredBy }}</span> — an
-            ack only means delivered, never active
+            {{ rt("delivered by") }} <span class="mono" data-testid="handoff-delivered-by">{{ handoff.deliveredBy }}</span> {{ rt("— an ack only means delivered, never active") }}
           </dd>
         </div>
         <div v-if="handoff.observed" class="handoff-cell" data-testid="handoff-observed">
-          <dt>Native observation</dt>
+          <dt>{{ rt("Native observation") }}</dt>
           <dd class="mono" data-testid="handoff-observed-by">{{ handoff.observedBy }}</dd>
         </div>
       </dl>
 
       <p v-if="handoff.resolution" class="handoff-resolution" role="status" data-testid="handoff-resolution">
-        Resolved as <strong>{{ handoff.resolution.resolution }}</strong> — {{ handoff.resolution.code }} /
+        {{ rt("Resolved as") }} <strong>{{ rt(handoff.resolution.resolution) }}</strong> — {{ handoff.resolution.code }} /
         {{ handoff.resolution.field }}<span v-if="handoff.resolution.reason"> ({{ handoff.resolution.reason }})</span>
       </p>
 
       <div v-if="ops.length > 0" class="handoff-ops" data-testid="handoff-ops">
-        <div class="section-title">Journal</div>
+        <div class="section-title">{{ rt("Journal") }}</div>
         <ol class="ops-list">
           <li v-for="op in ops" :key="op.opId" class="op-row" data-testid="handoff-op">
-            {{ op.kind }} {{ op.outcome }}
+            {{ rt(op.kind) }} {{ rt(op.outcome) }}
           </li>
         </ol>
       </div>
@@ -116,61 +114,52 @@
         type="button"
         class="action-button"
         :disabled="busy || !canBegin"
-        :title="beginDisabledReason"
+        :title="rt(beginDisabledReason)"
         data-testid="begin-handoff"
         @click="emit('begin', { sourceParticipantId, targetParticipantId, prompt: draftText, entries: handoffEntries })"
       >
-        Begin handoff
+        {{ rt("Begin handoff") }}
       </button>
       <button
         type="button"
         class="action-button"
         :disabled="busy || handoff?.state !== 'attached' || draftText.trim().length === 0"
-        :title="handoff?.state === 'attached' ? 'Freeze the prompt for this handoff' : 'The handoff must be attached first'"
+        :title="rt(handoff?.state === 'attached' ? 'Freeze the prompt for this handoff' : 'The handoff must be attached first')"
         data-testid="prepare-handoff"
         @click="emit('prepare', draftText)"
       >
-        Prepare prompt
+        {{ rt("Prepare prompt") }}
       </button>
       <button
         type="button"
         class="action-button save"
         :disabled="busy || handoff?.state !== 'prepared'"
-        :title="handoff?.state === 'prepared' ? 'Send the prepared prompt to the target' : 'The handoff must be prepared first'"
+        :title="rt(handoff?.state === 'prepared' ? 'Send the prepared prompt to the target' : 'The handoff must be prepared first')"
         data-testid="deliver-handoff"
         @click="emit('deliver')"
       >
-        Deliver
+        {{ rt("Deliver") }}
       </button>
       <button
         type="button"
         class="action-button"
-        :disabled="busy || handoff?.state !== 'delivered' || latestNativeEventId.trim().length === 0"
-        :title="handoff?.state !== 'delivered' ? 'Only a delivered handoff can be observed' : 'Record the real native observation'"
-        data-testid="observe-handoff"
-        @click="emit('observe', latestNativeEventId)"
-      >
-        Record observation
-      </button>
-      <button
-        type="button"
-        class="action-button"
-        :disabled="busy || handoff === null || handoff.state === 'active'"
-        :title="handoff?.state === 'active' ? 'A completed handoff cannot be cancelled' : 'Cancel this handoff'"
+        :disabled="busy || handoff === null || handoff.state === 'active' || handoff.resolution !== null"
+        :title="rt(handoff?.state === 'active' ? 'A completed handoff cannot be cancelled' : 'Cancel this handoff')"
         data-testid="cancel-handoff"
         @click="emit('cancel', 'cancelled from the thread view')"
       >
-        Cancel
+        {{ rt("Cancel") }}
       </button>
     </footer>
-    <p v-if="handoff?.state === 'delivered' && latestNativeEventId.trim().length === 0" class="observe-waiting" data-testid="observe-waiting">
-      Waiting for a real native observation. The handoff stays at delivered until the target's own
-      native event arrives — it is never marked active from an ack, and it is never retried.
+    <p v-if="handoff?.state === 'delivered'" class="observe-waiting" data-testid="observe-waiting" role="status">
+      {{ rt("Waiting for a real native observation. The handoff stays at delivered until the target\u0027s own native event arrives — it is never marked active from an ack, and it is never retried.") }}
     </p>
   </section>
 </template>
 
 <script setup lang="ts">
+import { useRuntimeUi } from '../../locales/runtimeUi';
+const { rt } = useRuntimeUi();
 import { computed } from 'vue';
 import type { ParticipantView } from '../../../bridge/runtime/threads/participantService.js';
 import { handoffStateAllowsBegin } from '../../composables/useRuntimeThread';
@@ -239,7 +228,7 @@ const canBegin = computed(() => {
   if (current !== null && !handoffStateAllowsBegin(current.state)) return false;
   if (sourceParticipantId.value === '' || targetParticipantId.value === '') return false;
   if (sourceParticipantId.value === targetParticipantId.value) return false;
-  return props.draftText.trim().length > 0;
+  return props.draftText.trim().length > 0 && props.handoffEntries.length > 0;
 });
 
 const beginDisabledReason = computed(() => {
@@ -314,30 +303,30 @@ function shortId(value: string): string {
 .state-chip[data-state='checkpoint'],
 .state-chip[data-state='attached'],
 .state-chip[data-state='prepared'] {
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
   border-color: color-mix(in srgb, var(--theme-status-warning, #fcd34d) 45%, transparent);
 }
 
 .state-chip[data-state='delivered'] {
-  color: var(--theme-status-info, #7dd3fc);
+  color: var(--codex-status-info, var(--theme-text-primary));
   border-color: color-mix(in srgb, var(--theme-status-info, #7dd3fc) 45%, transparent);
 }
 
 .state-chip[data-state='active'] {
-  color: var(--theme-status-success, #86efac);
+  color: var(--codex-status-success, var(--theme-text-primary));
   border-color: color-mix(in srgb, var(--color-success-400, #22c55e) 60%, transparent);
 }
 
 .state-chip[data-state='reconcile'],
 .state-chip[data-state='failed'] {
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
   border-color: color-mix(in srgb, var(--theme-status-error, #f87171) 55%, transparent);
 }
 
 .active-marker {
   font-size: var(--type-caption, 10px);
   font-weight: 600;
-  color: var(--theme-status-success, #86efac);
+  color: var(--codex-status-success, var(--theme-text-primary));
 }
 
 .handoff-empty {
@@ -380,7 +369,7 @@ function shortId(value: string): string {
 
 .ladder-rung.is-resolution {
   border-color: var(--theme-status-error, #f87171);
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
 }
 
 .handoff-grid {
@@ -410,7 +399,11 @@ function shortId(value: string): string {
   flex-wrap: wrap;
   font-size: var(--type-sm, 12px);
   color: var(--theme-text-primary, #e2e8f0);
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
+
+.handoff-cell dd > * { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 
 .cell-label {
   font-weight: 600;
@@ -418,7 +411,7 @@ function shortId(value: string): string {
 
 .cell-harness {
   font-size: var(--type-caption, 10px);
-  color: var(--theme-status-info, #7dd3fc);
+  color: var(--codex-status-info, var(--theme-text-primary));
 }
 
 .cell-session {
@@ -430,7 +423,7 @@ function shortId(value: string): string {
   margin: 0;
   font-size: var(--type-sm, 12px);
   line-height: 1.45;
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
   word-break: break-word;
 }
 
@@ -469,7 +462,7 @@ function shortId(value: string): string {
   margin: 0;
   font-size: var(--type-caption, 10px);
   line-height: 1.45;
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
 }
 
 .mono {

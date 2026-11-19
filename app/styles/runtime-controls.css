@@ -1,0 +1,85 @@
+html [data-runtime-ui] input:not([type='checkbox']):not([type='radio']),
+html [data-runtime-ui] textarea[class] {
+  min-width: 0;
+  background: var(--ui-form-control-bg);
+  border-color: var(--ui-form-control-border);
+  color: var(--ui-form-control-text);
+  font-family: inherit;
+  font-size: var(--type-sm);
+}
+
+html [data-runtime-ui] input[class]::placeholder,
+html [data-runtime-ui] textarea[class]::placeholder {
+  color: var(--ui-form-control-placeholder);
+  opacity: 1;
+}
+
+html [data-runtime-ui] input[class]:focus-visible,
+html [data-runtime-ui] textarea[class]:focus-visible {
+  border-color: var(--ui-form-control-focus-border);
+  outline: 2px solid var(--ui-form-control-focus-border);
+  outline-offset: 1px;
+  box-shadow: var(--ui-form-control-focus-ring);
+}
+
+html [data-runtime-ui] button.action-button {
+  min-height: 28px;
+  background: var(--ui-form-button-bg);
+  border-color: var(--ui-form-button-border);
+  color: var(--ui-form-button-text);
+  font-size: var(--type-sm);
+}
+
+html [data-runtime-ui] button.action-button:hover:not(:disabled) {
+  background: var(--ui-form-button-hover-bg);
+}
+
+html [data-runtime-ui] button.action-button.primary,
+html [data-runtime-ui] button.action-button.save,
+html [data-runtime-ui] button.action-button.active {
+  background: var(--ui-form-button-primary-bg);
+  border-color: var(--ui-form-button-primary-border);
+  color: var(--ui-form-button-primary-text);
+}
+
+html [data-runtime-ui] button.action-button.primary:hover:not(:disabled),
+html [data-runtime-ui] button.action-button.save:hover:not(:disabled),
+html [data-runtime-ui] button.action-button.active:hover:not(:disabled) {
+  background: var(--ui-form-button-primary-hover-bg);
+}
+
+html [data-runtime-ui] button:focus-visible {
+  outline: 2px solid var(--ui-form-control-focus-border);
+  outline-offset: 2px;
+}
+
+html [data-runtime-ui] .phase-chip.phase-agent-finished {
+  color: var(--codex-status-info, var(--theme-text-primary));
+}
+
+html [data-runtime-ui] .phase-chip.phase-review-pending,
+html [data-runtime-ui] .phase-chip.phase-review-approved {
+  color: var(--codex-status-warning, var(--theme-text-primary));
+}
+
+html [data-runtime-ui] .phase-chip.phase-accepted {
+  color: var(--codex-status-success, var(--theme-text-primary));
+}
+
+@media (pointer: coarse), (max-width: 640px) {
+  html [data-runtime-ui] button,
+  html [data-runtime-ui] button.action-button,
+  html [data-runtime-ui] input:not([type='checkbox']):not([type='radio']) {
+    min-height: 44px;
+  }
+  html [data-runtime-ui] button,
+  html [data-runtime-ui] button.action-button {
+    min-width: 44px;
+  }
+  html [data-runtime-ui] label:has(input[type='checkbox']),
+  html [data-runtime-ui] label:has(input[type='radio']) {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+}

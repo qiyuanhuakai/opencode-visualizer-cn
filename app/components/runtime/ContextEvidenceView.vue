@@ -1,45 +1,67 @@
 <template>
-  <section class="evidence-view" data-testid="context-evidence-view" :aria-label="'Context checkpoint and evidence'">
+  <section class="evidence-view" data-runtime-ui data-testid="context-evidence-view" :aria-label="rt('Context checkpoint and evidence')">
     <header class="evidence-header">
-      <span class="section-title">Context checkpoint</span>
+      <span class="section-title">{{ rt("Context checkpoint") }}</span>
       <span v-if="checkpoint" class="checkpoint-id mono" data-testid="checkpoint-id" :title="checkpoint.checkpointId">
         {{ shortId(checkpoint.checkpointId) }}
       </span>
     </header>
 
+    <form v-if="captureEvidence" class="evidence-capture" @submit.prevent="capture">
+      <label class="capture-label">
+        <span>{{ rt('Evidence kind') }}</span>
+        <Dropdown :model-value="captureKind" :label="rt(captureKind === 'file' ? 'File' : 'Git diff')" :disabled="busy || capturing" auto-close @update:model-value="setCaptureKind">
+          <DropdownItem value="file">{{ rt('File') }}</DropdownItem>
+          <DropdownItem value="diff">{{ rt('Git diff') }}</DropdownItem>
+        </Dropdown>
+      </label>
+      <label class="capture-label">
+        <span>{{ rt('Evidence path') }}</span>
+        <input v-model="capturePath" class="capture-path" required autocomplete="off" :disabled="busy || capturing" />
+      </label>
+      <button class="action-button" type="submit" :disabled="busy || capturing || !capturePath.trim()">{{ rt('Capture evidence') }}</button>
+      <p class="evidence-empty">{{ rt('Selected evidence is included in the next handoff. File content is checked again before each preview.') }}</p>
+    </form>
+    <ul v-if="capturedEvidence.length" class="entry-list">
+      <li v-for="record in capturedEvidence" :key="record.hash" class="entry-row">
+        <span class="entry-origin">{{ originLabel(record.origin) }}</span>
+        <span>{{ record.bytes }} B</span>
+        <button v-if="removeEvidence" type="button" class="action-button" :disabled="busy || capturing" @click="removeEvidence(record.hash)">{{ rt('Remove from handoff') }}</button>
+      </li>
+    </ul>
+
     <p v-if="!checkpoint" class="evidence-empty" data-testid="checkpoint-empty">
-      No checkpoint on this thread yet. A handoff mints the bounded context checkpoint that carries
-      the goal, the plan, the decisions and the unresolved questions — never the transcript.
+      {{ rt("No checkpoint on this thread yet. A handoff mints the bounded context checkpoint that carries the goal, the plan, the decisions and the unresolved questions — never the transcript.") }}
     </p>
 
     <template v-else>
       <dl class="checkpoint-numbers">
         <div class="number-cell">
-          <dt>Entries</dt>
+          <dt>{{ rt("Entries") }}</dt>
           <dd data-testid="checkpoint-entry-count">{{ checkpoint.entryCount }}</dd>
         </div>
         <div class="number-cell">
-          <dt>Bytes</dt>
+          <dt>{{ rt("Bytes") }}</dt>
           <dd data-testid="checkpoint-bytes">{{ checkpoint.bytes }}</dd>
         </div>
         <div class="number-cell">
-          <dt>Est. tokens</dt>
+          <dt>{{ rt("Est. tokens") }}</dt>
           <dd data-testid="checkpoint-tokens">{{ checkpoint.estimatedTokens }}</dd>
         </div>
         <div class="number-cell">
-          <dt>Dropped</dt>
-          <dd data-testid="checkpoint-dropped">{{ checkpoint.droppedEntries }} entries / {{ checkpoint.droppedBytes }} B</dd>
+          <dt>{{ rt("Dropped") }}</dt>
+          <dd data-testid="checkpoint-dropped">{{ checkpoint.droppedEntries }} {{ rt("entries /") }} {{ checkpoint.droppedBytes }} B</dd>
         </div>
         <div class="number-cell">
-          <dt>Demoted</dt>
+          <dt>{{ rt("Demoted") }}</dt>
           <dd data-testid="checkpoint-demoted">{{ checkpoint.demoted }}</dd>
         </div>
         <div class="number-cell">
-          <dt>Untrusted</dt>
+          <dt>{{ rt("Untrusted") }}</dt>
           <dd data-testid="checkpoint-untrusted">{{ checkpoint.untrustedEntries }}</dd>
         </div>
         <div class="number-cell">
-          <dt>Redactions</dt>
+          <dt>{{ rt("Redactions") }}</dt>
           <dd data-testid="checkpoint-redactions">{{ checkpoint.redactions }}</dd>
         </div>
       </dl>
@@ -53,24 +75,23 @@
           :data-class="entry.class"
           :data-untrusted="String(entry.untrusted)"
         >
-          <span class="entry-class" :data-class="entry.class">{{ entry.class }}</span>
+          <span class="entry-class" :data-class="entry.class">{{ rt(entry.class) }}</span>
           <span class="entry-origin">{{ originLabel(entry.origin) }}</span>
           <span v-if="entry.untrusted" class="entry-untrusted">
-            untrusted: <span data-testid="untrusted-reason">{{ entry.untrustedReason }}</span>
+            {{ rt("untrusted:") }} <span data-testid="untrusted-reason">{{ entry.untrustedReason }}</span>
           </span>
           <span v-if="entry.redactions > 0" class="entry-redactions" data-testid="entry-redactions">
-            {{ entry.redactions }} redacted
+            {{ entry.redactions }} {{ rt("redacted") }}
           </span>
-          <span class="entry-text" data-testid="entry-text">{{ entry.text ?? '(evidence reference)' }}</span>
+          <span class="entry-text" data-testid="entry-text">{{ entry.text ?? rt('(evidence reference)') }}</span>
           <span class="entry-hash mono" :title="entry.hash">{{ shortId(entry.hash) }}</span>
         </li>
       </ul>
 
       <div v-if="checkpoint.evidence.length > 0" class="evidence-section">
-        <div class="section-title">Evidence</div>
+        <div class="section-title">{{ rt("Evidence") }}</div>
         <p class="evidence-hint">
-          Evidence is addressed by hash and read by page from the CURRENT target: a stale snapshot is
-          refused, never served.
+          {{ rt("Evidence is addressed by hash and read by page from the CURRENT target: a stale snapshot is refused, never served.") }}
         </p>
         <ul class="evidence-list">
           <li
@@ -86,20 +107,20 @@
               type="button"
               class="action-button"
               :disabled="!canRead"
-              :title="canRead ? 'Read one byte page of this evidence' : 'No evidence reader is wired to this surface'"
+              :title="rt(canRead ? 'Read one byte page of this evidence' : 'No evidence reader is wired to this surface')"
               :data-testid="'read-evidence-page'"
               @click="readPage(ref)"
             >
-              Read page
+              {{ rt("Read page") }}
             </button>
           </li>
         </ul>
 
         <div v-if="page" class="evidence-page" data-testid="evidence-page">
           <div class="page-meta">
-            <span>offset <span class="mono" data-testid="evidence-page-offset">{{ page.offset }}</span></span>
-            <span>length <span class="mono" data-testid="evidence-page-length">{{ page.length }}</span></span>
-            <span>total <span class="mono" data-testid="evidence-page-total">{{ page.totalBytes }}</span></span>
+            <span>{{ rt("offset") }} <span class="mono" data-testid="evidence-page-offset">{{ page.offset }}</span></span>
+            <span>{{ rt("length") }} <span class="mono" data-testid="evidence-page-length">{{ page.length }}</span></span>
+            <span>{{ rt("total") }} <span class="mono" data-testid="evidence-page-total">{{ page.totalBytes }}</span></span>
             <span v-if="page.nextOffset !== null" class="mono" data-testid="evidence-page-next">{{ page.nextOffset }}</span>
           </div>
           <pre class="page-text mono" data-testid="evidence-page-text">{{ decodedPage }}</pre>
@@ -111,111 +132,118 @@
             data-testid="evidence-page-next-button"
             @click="readNext"
           >
-            Next page
+            {{ rt("Next page") }}
           </button>
         </div>
         <div v-else-if="lastPage && lastPage.available === false" class="evidence-unavailable" data-testid="evidence-unavailable">
-          This evidence is unavailable: {{ lastPage.unavailableReason }}.
+          {{ rt("This evidence is unavailable:") }} {{ rt(lastPage.unavailableReason) }}.
         </div>
       </div>
     </template>
 
+    <p v-if="targetError" class="evidence-error" role="status">{{ rt(targetError) }}</p>
     <p v-if="pageError" class="evidence-error" role="alert" data-testid="evidence-error">
-      {{ pageError }}
+      {{ rt(pageError) }}
     </p>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
-import { readEvidencePage, type ContextCheckpointView, type EvidencePageView, type EvidenceReader, type EvidenceRef, type EvidenceTarget } from '../../../shared/runtime/context.js';
+import { useRuntimeUi } from '../../locales/runtimeUi';
+const { rt } = useRuntimeUi();
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { readEvidencePage as readLocalEvidencePage, type ContextCheckpointView, type EvidenceOrigin, type EvidencePageView, type EvidenceReader, type EvidenceRef, type EvidenceTarget } from '../../../shared/runtime/context.js';
+import type { AsyncEvidencePageReader } from '../../runtime/hostEvidenceViews';
+import type { AsyncEvidenceCapture } from '../../runtime/hostEvidenceViews';
+import type { EvidenceRecordView } from '../../../shared/runtime/context.js';
+import Dropdown from '../Dropdown.vue';
+import DropdownItem from '../Dropdown/Item.vue';
 
-/**
- * Task 35 — the checkpoint preview and the evidence query.
- *
- * The page read goes through the contract's OWN `readEvidencePage` (shared/runtime/context.js),
- * which re-verifies the recorded target against the CURRENT one, re-hashes the live bytes and
- * only then slices. It is called directly rather than through the MCP dispatcher on purpose: the
- * dispatcher's frozen TOOL_ARGUMENT_KEYS accepts only [checkpointId, scope, hash], so a second
- * harness could only ever obtain the FIRST page through it — a carried-forward task-33 gap this
- * surface must not inherit. A stale target or changed bytes throw, and the throw is rendered as a
- * readable refusal; a missing artifact is reported unavailable, never fabricated.
- */
 const props = withDefaults(
   defineProps<{
     checkpoint: ContextCheckpointView | null;
     /** The CURRENT evidence target the reader re-verifies against. */
     currentTarget?: EvidenceTarget | null;
+    targetError?: string;
     /** The injected reader that re-reads live bytes by hash. */
     readEvidence?: EvidenceReader | null;
+    readEvidencePage?: AsyncEvidencePageReader | null;
+    captureEvidence?: AsyncEvidenceCapture | null;
+    capturedEvidence?: readonly EvidenceRecordView[];
+    removeEvidence?: ((hash: string) => void) | null;
+    busy?: boolean;
     /** Byte page size; the contract's own default applies when omitted. */
     pageLength?: number;
   }>(),
-  { currentTarget: null, readEvidence: null, pageLength: 4096 },
+  { currentTarget: null, readEvidence: null, readEvidencePage: null, captureEvidence: null, capturedEvidence: () => [], removeEvidence: null, busy: false, pageLength: 4096 },
 );
 
 const page = ref<Extract<EvidencePageView, { available: true }> | null>(null);
 const lastPage = ref<EvidencePageView | null>(null);
 const pageError = ref('');
 let lastRef: EvidenceRef | null = null;
+let sequence = 0;
+const loading = ref(false);
+const captureKind = ref<'file' | 'diff'>('file');
+const capturePath = ref('');
+const capturing = ref(false);
 
-/**
- * The cached page is scoped to the exact boundary it was read through. Any change of checkpoint,
- * current target or reader makes the held bytes stale, so the cache is dropped rather than shown
- * under a different scope.
- */
-function resetPage(): void {
-  page.value = null;
-  lastPage.value = null;
-  pageError.value = '';
-  lastRef = null;
+function setCaptureKind(value: unknown): void { if (value === 'file' || value === 'diff') captureKind.value = value; }
+async function capture(): Promise<void> {
+  const capture = props.captureEvidence;
+  if (!capture || props.busy || capturing.value || !capturePath.value.trim()) return;
+  capturing.value = true;
+  try {
+    const record = await capture({ kind: captureKind.value, path: capturePath.value.trim() });
+    if (record) capturePath.value = '';
+  } catch (error) { pageError.value = error instanceof Error ? error.message : 'The evidence could not be captured.'; }
+  finally { capturing.value = false; }
 }
 
-/**
- * The cached page is scoped to the exact boundary it was read through. Any change of checkpoint,
- * current target or reader makes the held bytes stale, so the cache is dropped rather than shown
- * under a different scope. The target's boundary is its IDENTITY — repoKey and revision — read as
- * scalars, because a live target can be revised in place (the same object, a new revision) and a
- * reference watch would never fire for that.
- */
-watch(
-  () => [
-    props.checkpoint?.checkpointId ?? null,
-    props.currentTarget?.repoKey ?? null,
-    props.currentTarget?.revision ?? null,
-    props.readEvidence,
-  ] as const,
-  () => { resetPage(); },
-);
+function resetPage(): void {
+  sequence += 1; lastRef = null; page.value = null; lastPage.value = null; pageError.value = ''; loading.value = false;
+}
+watch([
+  () => props.checkpoint?.checkpointId,
+  () => props.checkpoint?.digest,
+  () => props.currentTarget?.repoKey,
+  () => props.currentTarget?.revision,
+  () => props.readEvidence,
+  () => props.readEvidencePage,
+], resetPage);
+onBeforeUnmount(resetPage);
 
-const canRead = computed(() => props.readEvidence !== null && props.currentTarget !== null);
+const canRead = computed(() => !props.busy && !loading.value && (props.readEvidence !== null || props.readEvidencePage !== null) && props.currentTarget !== null);
 const decoder = new TextDecoder();
 const decodedPage = computed(() => (page.value === null ? '' : decoder.decode(page.value.bytes)));
 
-function readPage(ref: EvidenceRef, offset = 0): void {
+async function readPage(ref: EvidenceRef, offset = 0): Promise<void> {
+  const token = ++sequence;
   pageError.value = '';
   const reader = props.readEvidence;
   const target = props.currentTarget;
-  if (reader === null || target === null) {
+  if ((reader === null && props.readEvidencePage === null) || target === null) {
     pageError.value = 'No evidence reader is wired to this surface, so no byte can be served.';
     page.value = null;
     lastPage.value = null;
     return;
   }
   lastRef = ref;
+  loading.value = true;
   try {
-    const next = readEvidencePage({
-      ref,
-      currentTarget: target,
-      readEvidence: reader,
-      offset,
-      length: props.pageLength,
-    });
+    const request = { ref, currentTarget: target, offset, length: props.pageLength };
+    const next = props.readEvidencePage
+      ? await props.readEvidencePage(request)
+      : reader === null ? null : readLocalEvidencePage({ ...request, readEvidence: reader });
+    if (token !== sequence || next === null) return;
     lastPage.value = next;
     page.value = next.available ? next : null;
   } catch (error) {
+    if (token !== sequence) return;
     page.value = null;
-    pageError.value = error instanceof Error ? `${error.message} (${String((error as { code?: string }).code ?? '')})` : 'The evidence page could not be read.';
+    pageError.value = error instanceof Error ? error.message : 'The evidence page could not be read.';
+  } finally {
+    if (token === sequence) loading.value = false;
   }
 }
 
@@ -224,14 +252,14 @@ function readNext(): void {
   readPage(lastRef, page.value.nextOffset);
 }
 
-function originLabel(origin: unknown): string {
-  if (origin === null || typeof origin !== 'object') return 'unknown';
-  const record = origin as Record<string, unknown>;
-  if (record.kind === 'host') return `host:${String(record.commandId ?? '')}`;
-  if (record.kind === 'native') return `native:${String(record.harness ?? '')}`;
-  if (record.kind === 'file') return `file:${String(record.path ?? '')}`;
-  if (record.kind === 'diff') return `diff:${String(record.path ?? '')}`;
-  return 'unknown';
+function originLabel(origin: EvidenceOrigin): string {
+  switch (origin.kind) {
+    case 'host': return `${rt('host')}: ${origin.commandId}`;
+    case 'native': return `${rt('native')}: ${origin.harness}`;
+    case 'file': return `${rt('file')}: ${origin.path}`;
+    case 'diff': return `${rt('diff')}: ${origin.path}`;
+    default: return origin satisfies never;
+  }
 }
 
 function shortId(value: string): string {
@@ -240,6 +268,9 @@ function shortId(value: string): string {
 </script>
 
 <style scoped>
+.evidence-capture, .capture-label { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.capture-path { padding: 6px 8px; min-height: 28px; border: 1px solid var(--ui-form-control-border); border-radius: var(--radius-control); }
+
 .evidence-view {
   display: flex;
   flex-direction: column;
@@ -332,11 +363,11 @@ function shortId(value: string): string {
   padding: 1px 6px;
   border-radius: 999px;
   border: 1px solid var(--theme-border-default, #334155);
-  color: var(--theme-status-info, #7dd3fc);
+  color: var(--codex-status-info, var(--theme-text-primary));
 }
 
 .entry-class[data-class='unresolved'] {
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
 }
 
 .entry-origin,
@@ -346,11 +377,11 @@ function shortId(value: string): string {
 
 .entry-untrusted {
   font-weight: 600;
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
 }
 
 .entry-redactions {
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
 }
 
 .entry-text {
@@ -423,14 +454,14 @@ function shortId(value: string): string {
 .evidence-unavailable {
   margin: 0;
   font-size: var(--type-caption, 10px);
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
 }
 
 .evidence-error {
   margin: 0;
   font-size: var(--type-sm, 12px);
   line-height: 1.45;
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
   word-break: break-word;
 }
 

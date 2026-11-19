@@ -21,6 +21,7 @@ const profile = parseConnectionProfileId('33333333-3333-4333-8333-333333333333')
 const session = { environmentId: target, harnessInstanceId: harness, nativeSessionId: 'same' };
 const fence = { id: '44444444-4444-4444-8444-444444444444', sourceGeneration: 1 };
 class Wire extends EventTarget {
+  historyLive: 'invalidate' | 'unsupported' = 'invalidate';
   binaryType: BinaryType = 'arraybuffer'; readyState: 0 | 1 | 2 | 3 = 1; bufferedAmount = 0;
   autoOpen = true; autoClose = true;
   chunkResponder: ((request: Request) => void) | undefined;
@@ -47,7 +48,7 @@ class Wire extends EventTarget {
   error(request: Request) { this.frame({ version: 1, kind: 'result', target, epoch: 'epoch', generation: 1, id: request.id, ok: false, typedError: { code: 'source_unavailable', message: 'test fault' } }); }
   open(request: Request) {
     if (request.method !== 'runtime.history.open') throw new TypeError('Open required');
-    this.reply(request, { historyId: request.params.historyId, session: request.params.session, fence, capabilities: { archive: 'paged', recordStream: true, live: 'invalidate' } });
+    this.reply(request, { historyId: request.params.historyId, session: request.params.session, fence, capabilities: { archive: 'paged', recordStream: true, live: this.historyLive } });
   }
   page(request: Request, options: { readonly items?: readonly HistoryItem[]; readonly document?: HistoryDescriptor; readonly cursor?: string; readonly completeness?: 'partial' | 'complete' | 'unsupported' } = {}) {
     if (request.method !== 'runtime.history.page') throw new TypeError('Page required');
@@ -61,8 +62,8 @@ class Wire extends EventTarget {
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); vi.useRealTimers(); });
 async function checkpoint() { for (let i = 0; i < 24; i++) await Promise.resolve(); }
-async function setup() {
-  const wire = new Wire(); const created = Promise.withResolvers<void>();
+async function setup(live: 'invalidate' | 'unsupported' = 'invalidate') {
+  const wire = new Wire(); wire.historyLive = live; const created = Promise.withResolvers<void>();
   const connection = createRuntimeConnection({ reference: { url: 'ws://127.0.0.1:43210/runtime' }, resolveAuthentication: async () => ({}), createWebSocket: () => { created.resolve(); return wire; } });
   const client = createRuntimeClient({ connection });
   const scope = createSelectionScope({ client, profileId: profile });
@@ -78,6 +79,15 @@ async function setup() {
 }
 
 describe('bounded selected history cache through production wire codecs', () => {
+  it('keeps paged archive usable when native live invalidation is unsupported and refuses polling before a wire request', async () => {
+    const { cache, page, wire } = await setup('unsupported');
+    expect(cache.canPoll).toBe(false);
+    const result = await page(); result.release();
+    await expect(cache.poll()).rejects.toMatchObject({ code: 'unsupported' });
+    expect(wire.sent.filter(request => request.method === 'runtime.history.read')).toHaveLength(0);
+    expect(cache.status.status).toBe('complete');
+    await cache.dispose();
+  });
   it('evicts the fourth selected page but charges held obsolete page references until release', async () => {
     // Given three cached pages, including a caller-held first output.
     const { cache, page, wire } = await setup();

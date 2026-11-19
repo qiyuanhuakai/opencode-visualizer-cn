@@ -71,9 +71,10 @@ export function createEventObserver({ binding: input, after, isCurrent, onClose 
     },
     resume(afterReplay) {
       check();
-      if (!Number.isSafeInteger(afterReplay) || afterReplay < through) throw new StoreError('replay_required', 'observer_recovery_watermark');
-      consumed = through = afterReplay;
-      recovery = null;
+      if (!Number.isSafeInteger(afterReplay) || afterReplay < consumed) throw new StoreError('replay_required', 'observer_recovery_watermark');
+      consumed = afterReplay;
+      recovery = afterReplay < through ? 'events_after_replay' : null;
+      through = Math.max(through, afterReplay);
       normal.length = control.length = 0;
       normalBytes = controlBytes = 0;
     },

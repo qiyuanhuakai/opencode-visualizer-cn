@@ -191,6 +191,25 @@ describe('target Git topology', () => {
     });
     expect((await f.git.probe(f.ref(f.root))).kind).toBe('non-git');
   });
+  it('merges duplicate workspace registrations in one durable batch and preserves Git metadata across concurrent sources', async () => {
+    const f = await fixture();
+    const catalog = createWorkspaceCatalog({ store: f.store, git: f.git });
+    const key = await catalog.register({ workspace: f.workspace, harnessInstanceId: foreign, harness: 'codex' });
+    const repository = await catalog.probe(key, { selected: true });
+    const before = await f.store.inspect();
+    const inputs = (['opencode', 'codex', 'kimi', 'dsh', 'acp'] as const).map((harness, index) => ({ workspace: f.workspace, harnessInstanceId: `55555555-5555-4555-8555-55555555555${index}`, harness }));
+    expect(await catalog.registerMany(inputs)).toEqual(Array.from({ length: 5 }, () => key));
+    expect((await f.store.inspect()).seq - before.seq).toBe(1);
+    await Promise.all([
+      catalog.registerMany([{ workspace: f.workspace, harnessInstanceId: '66666666-6666-4666-8666-666666666666', harness: 'acp' }]),
+      catalog.registerMany([{ workspace: f.workspace, harnessInstanceId: '77777777-7777-4777-8777-777777777777', harness: 'codex' }]),
+    ]);
+    const row = await f.store.get({ collection: 'workspaces', key });
+    expect(row?.value).toMatchObject({ gitKind: 'git', repoKey: repository.kind === 'git' ? repository.repoKey : '' });
+    expect(row?.value).toMatchObject({ sources: expect.arrayContaining([...inputs.map(({ harnessInstanceId, harness }) => ({ harnessInstanceId, harness })), { harnessInstanceId: foreign, harness: 'codex' }, { harnessInstanceId: '66666666-6666-4666-8666-666666666666', harness: 'acp' }, { harnessInstanceId: '77777777-7777-4777-8777-777777777777', harness: 'codex' }]) });
+    await expect(catalog.registerMany(Array.from({ length: 201 }, () => inputs[0]!))).rejects.toThrow('batch');
+  });
+
   it('requires visibility before metadata can trigger Git', async () => {
     // Given a registered workspace.
     const f = await fixture();

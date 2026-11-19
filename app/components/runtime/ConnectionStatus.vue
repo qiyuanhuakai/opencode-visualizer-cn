@@ -2,6 +2,7 @@
   <section
     v-if="identity || status || slurm"
     class="connection-status"
+    data-runtime-ui
     data-testid="connection-lifecycle"
     :data-environment-id="identity?.environmentId ?? ''"
     :data-target-kind="identity?.targetKind ?? ''"
@@ -15,65 +16,67 @@
     :data-terminal="slurm && isSlurmTerminal(slurm) ? 'true' : 'false'"
   >
     <header class="status-header">
-      <span class="status-title">Execution target</span>
+      <span class="status-title">{{ rt("Execution target") }}</span>
       <span class="status-chip" :data-state="status?.state ?? 'disconnected'" data-testid="connection-state">
-        {{ status?.state ?? 'disconnected' }}
+        {{ rt(status?.state ?? 'disconnected') }}
       </span>
     </header>
 
     <dl class="status-grid">
       <div class="status-cell" data-testid="connection-environment">
-        <dt>Environment</dt>
+        <dt>{{ rt("Environment") }}</dt>
         <dd class="mono" data-testid="connection-environment-id">{{ identity?.environmentId ?? '—' }}</dd>
       </div>
       <div class="status-cell" data-testid="connection-target-kind">
-        <dt>Target kind</dt>
+        <dt>{{ rt("Target kind") }}</dt>
         <dd class="mono">{{ identity?.targetKind ?? '—' }}</dd>
       </div>
       <div v-if="slurm" class="status-cell" data-testid="connection-compute-node">
-        <dt>Compute node</dt>
+        <dt>{{ rt("Compute node") }}</dt>
         <dd class="mono" data-testid="connection-compute-node-id">{{ slurm.computeNode ?? '—' }}</dd>
       </div>
       <div v-if="slurm" class="status-cell" data-testid="connection-job">
-        <dt>Job</dt>
+        <dt>{{ rt("Job") }}</dt>
         <dd class="mono" data-testid="connection-job-id">{{ slurm.jobId ?? '—' }}</dd>
       </div>
       <div v-if="slurm" class="status-cell" data-testid="connection-intent">
-        <dt>Intent</dt>
+        <dt>{{ rt("Intent") }}</dt>
         <dd class="mono" data-testid="connection-intent-id">{{ slurm.intentId }}</dd>
       </div>
       <div v-if="slurm" class="status-cell" data-testid="connection-ownership">
-        <dt>Ownership</dt>
-        <dd class="mono" data-testid="connection-ownership-kind">{{ slurm.ownership }}</dd>
+        <dt>{{ rt("Ownership") }}</dt>
+        <dd class="mono" data-testid="connection-ownership-kind">{{ rt(slurm.ownership) }}</dd>
       </div>
       <div v-if="slurm" class="status-cell" data-testid="connection-queue">
-        <dt>Queue / state</dt>
-        <dd class="mono" data-testid="connection-queue-state">{{ slurm.queue ?? '—' }} / {{ slurm.state }}</dd>
+        <dt>{{ rt("Queue / state") }}</dt>
+        <dd class="mono" data-testid="connection-queue-state">{{ rt(slurm.queue ?? '—') }} / {{ rt(slurm.state) }}</dd>
       </div>
       <div v-if="slurm" class="status-cell" data-testid="connection-step">
-        <dt>Step / epoch</dt>
+        <dt>{{ rt("Step / epoch") }}</dt>
         <dd class="mono" data-testid="connection-step-epoch">{{ slurm.stepId ?? '—' }} / {{ slurm.epoch ?? '—' }}</dd>
       </div>
       <div v-if="slurm" class="status-cell" data-testid="connection-bridge-instance">
-        <dt>Bridge instance</dt>
+        <dt>{{ rt("Bridge instance") }}</dt>
         <dd class="mono" data-testid="connection-bridge-instance-id">{{ slurm.bridgeInstanceId ?? '—' }}</dd>
       </div>
     </dl>
 
     <p v-if="pendingReason" class="status-pending" data-testid="connection-pending-reason">
-      {{ pendingReason }}
+      {{ rt(pendingReason) }}
     </p>
     <p v-else-if="slurm && isSlurmTerminal(slurm)" class="status-terminal" data-testid="connection-terminal">
-      Terminal: {{ slurm.terminal }}
+      {{ rt("Terminal:") }} {{ rt(slurm.terminal ?? '') }}
     </p>
 
     <p v-if="status?.state === 'failed' && error" class="status-error" role="alert" data-testid="connection-status-error">
-      {{ error }}
+      {{ rt(error) }}
     </p>
   </section>
 </template>
 
 <script setup lang="ts">
+import { useRuntimeUi } from '../../locales/runtimeUi';
+const { rt } = useRuntimeUi();
 import { computed } from 'vue';
 import type {
   RuntimeConnectionStatus,
@@ -145,17 +148,17 @@ const pendingReason = computed<string | null>(() => {
 }
 
 .status-chip[data-state='connected'] {
-  color: var(--theme-status-success, #86efac);
+  color: var(--codex-status-success, var(--theme-text-primary));
   border-color: var(--color-success-400, #22c55e);
 }
 
 .status-chip[data-state='failed'] {
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
   border-color: var(--theme-status-error, #f87171);
 }
 
 .status-chip[data-state='connecting'] {
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
   border-color: var(--theme-status-warning, #fcd34d);
 }
 
@@ -194,7 +197,7 @@ const pendingReason = computed<string | null>(() => {
   margin: 0;
   font-size: var(--type-sm, 12px);
   line-height: 1.45;
-  color: var(--theme-status-warning, #fcd34d);
+  color: var(--codex-status-warning, var(--theme-text-primary));
   word-break: break-word;
 }
 
@@ -209,7 +212,7 @@ const pendingReason = computed<string | null>(() => {
   margin: 0;
   font-size: var(--type-sm, 12px);
   line-height: 1.45;
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, var(--theme-text-primary));
   word-break: break-word;
 }
 

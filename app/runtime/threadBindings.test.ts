@@ -466,6 +466,7 @@ describe('canonical binding index survives concurrent bind, join and close', () 
 
     harness.park(owner);
     const pending = harness.service.bind({ session: owner, repo });
+    await Promise.resolve();
     await harness.service.close();
     harness.release(owner);
 
@@ -482,6 +483,7 @@ describe('canonical binding index survives concurrent bind, join and close', () 
 
     harness.park(guest);
     const joining = harness.service.join({ threadId: thread.threadId, session: guest, repo });
+    await Promise.resolve();
     await harness.service.close();
     harness.release(guest);
 

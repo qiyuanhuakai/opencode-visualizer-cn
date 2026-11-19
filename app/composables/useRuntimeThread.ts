@@ -30,6 +30,8 @@ import type { ParticipantView } from '../../bridge/runtime/threads/participantSe
 import { threadBindingKey } from '../../shared/runtime/thread.js';
 import type { TimelinePage, TurnTimeline } from '../runtime/timeline';
 import { createTurnTimeline } from '../runtime/timeline';
+import type { ContextCheckpointView, EvidenceRecordView, EvidenceTarget } from '../../shared/runtime/context.js';
+import type { AsyncEvidenceCapture, AsyncEvidencePageReader } from '../runtime/hostEvidenceViews';
 
 /**
  * THE target rule, in one place: an explicit selection wins; with none, the
@@ -144,6 +146,8 @@ export interface NativeHistoryGroup {
    * and never a silent empty history that reads as "no messages".
    */
   readonly unavailable?: boolean;
+  readonly loading?: boolean;
+  readonly error?: string;
 }
 
 /** A native session the picker can offer to the thread (the session tree's rows). */
@@ -159,6 +163,7 @@ export interface ThreadSessionResolution {
 }
 
 export interface RuntimeThreadState {
+  readonly composerActive?: Readonly<Ref<boolean>>;
   /** False until a thread port exists; components render nothing when false. */
   readonly available: boolean;
   readonly threadId: Ref<string | null>;
@@ -172,11 +177,26 @@ export interface RuntimeThreadState {
   readonly effectiveTargets: ComputedRef<readonly ParticipantView[]>;
   readonly handoff: Ref<RuntimeHandoffView | null>;
   readonly handoffOps: Ref<readonly RuntimeHandoffOpView[]>;
+  readonly handoffs?: Ref<readonly RuntimeHandoffView[]>;
+  readonly handoffPage?: Ref<{ readonly offset: number; readonly total: number; readonly nextCursor: number | null }>;
+  loadHandoffPage?(offset: number): Promise<void>;
+  selectHandoff?(handoffId: string): Promise<void>;
   /** The session tree's current selection, resolved against this thread. */
   readonly selectedSession: Ref<SessionRef | null>;
   readonly busy: Ref<boolean>;
   readonly error: Ref<string>;
   readonly timelinePage: Ref<TimelinePage | null>;
+  readonly checkpoint?: Ref<ContextCheckpointView | null>;
+  readonly currentTarget?: Ref<EvidenceTarget | null>;
+  readonly evidenceTargetError?: Ref<string>;
+  readonly readEvidencePage?: AsyncEvidencePageReader;
+  readonly capturedEvidence?: Ref<readonly EvidenceRecordView[]>;
+  readonly captureEvidence?: AsyncEvidenceCapture;
+  removeCapturedEvidence?(hash: string): void;
+  readonly participantPage?: Ref<{ readonly offset: number; readonly total: number; readonly nextCursor: number | null }>;
+  loadParticipantPage?(offset: number): Promise<void>;
+  readonly timelineOffset?: Ref<number>;
+  loadTimelinePage?(offset: number): Promise<void>;
   readonly selectedSessionResolution: ComputedRef<ThreadSessionResolution | null>;
   openThread(input: { session: SessionRef; repo: RepoRef }): Promise<void>;
   joinThread(session: SessionRef): Promise<void>;

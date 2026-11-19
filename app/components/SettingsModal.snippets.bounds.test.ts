@@ -7,6 +7,7 @@ import {
   initialSnippets,
   inputValue,
   changeValue,
+  persistedSnippets,
 } from './SettingsModal.snippets.shared';
 
 registerSnippetSettingsLifecycle();
@@ -77,8 +78,9 @@ describe('SettingsModal snippets bounds', () => {
       enabled: false,
     });
     expect(
-      JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1')!)[0],
+      JSON.parse(persistedSnippets()!)[0],
     ).toMatchObject({ trigger: '/legacy', enabled: false });
+    expect(JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1')!)).toEqual(initialSnippets);
     const enableButton = host.querySelector<HTMLButtonElement>('.transformer-enable')!;
     expect(enableButton.disabled).toBe(true);
     expect(enableButton.getAttribute('aria-pressed')).toBe('false');
@@ -126,7 +128,7 @@ describe('SettingsModal snippets bounds', () => {
     expect(settings.textTransformers.value[0]?.description).toHaveLength(4_096);
     expect(settings.textTransformers.value[0]?.body).toHaveLength(1024 * 1024);
     const persisted = JSON.parse(
-      localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]',
+      persistedSnippets() ?? '[]',
     )[0];
     expect(persisted.name).toHaveLength(512);
     expect(persisted.description).toHaveLength(4_096);

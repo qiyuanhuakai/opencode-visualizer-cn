@@ -326,6 +326,16 @@ export function createTaskGraph() {
   }
 
   return {
+    exportRecords(teamId) { return [...tasksById.values()].filter(record => record.teamId === teamId).map(record => structuredClone(record)); },
+    restoreRecords(teamId, records) {
+      registerTeam(teamId);
+      for (const record of records) {
+        parseTaskId(record.taskId);
+        if (record.teamId !== teamId || tasksById.has(record.taskId)) throw new CollaborationError('conflict', 'task_restore_scope');
+        tasksById.set(record.taskId, structuredClone(record));
+        taskIdsByTeam.get(teamId).push(record.taskId);
+      }
+    },
     createTask,
     addDependency,
     task,
