@@ -159,6 +159,7 @@ it('loads DSH account status from the management instance while OpenCode owns th
   const fixture = await mountRuntimeApp([], { dshAccount });
   await fixture.connect();
   await fixture.select('Session A');
+  await vi.waitFor(() => expect(fixture.historyOpens.map(session => session.nativeSessionId)).toEqual(['session-a']), { timeout: 10000 });
   fixture.element.querySelector<HTMLButtonElement>('button[title="Status monitor"]')!.click();
   const monitor = await vi.waitFor(() => {
     const panel = fixture.element.querySelector('.status-monitor-popover');
