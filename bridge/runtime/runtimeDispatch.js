@@ -342,7 +342,9 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
           observer.reading = true;
           try {
             const delivery = await observer.value.waitRead(signal, params.resolveSummary ? INLINE_OBSERVER_WAIT_MS : undefined);
-            if (!params.resolveSummary || delivery?.kind !== 'event' || delivery.frame.payload?.collection !== 'session_summaries') return delivery;
+            if (!params.resolveSummary || delivery?.kind !== 'event' || delivery.frame.type !== 'entity.patch') return delivery;
+            const collection = delivery.frame.payload?.collection;
+            if (collection !== 'session_summaries' && !(params.resolveWorkspace && collection === 'workspaces')) return delivery;
             const canonical = await resolveEntity(entry, delivery.frame).catch(() => undefined);
             requireValue(entry.observer === observer, 'runtime.observer', 'reconcile_required');
             return canonical ? { ...delivery, canonical } : delivery;

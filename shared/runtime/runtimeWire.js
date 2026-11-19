@@ -22,7 +22,7 @@ const fields = {
   'runtime.snapshot.chunk': [['collection', 'key', 'revision', 'offset', 'token'], []],
   'runtime.snapshot.release': [['token'], []],
   'runtime.replay': [['after'], ['limit']], 'runtime.entity.resolve': [['event'], []],
-  'runtime.observer.open': [['after'], []], 'runtime.observer.read': [['observerId'], ['resolveSummary']],
+  'runtime.observer.open': [['after'], []], 'runtime.observer.read': [['observerId'], ['resolveSummary', 'resolveWorkspace']],
   'runtime.observer.resume': [['observerId', 'after'], []], 'runtime.observer.close': [['observerId'], []],
   'runtime.channel.ack': [['channelId', 'offset', 'length'], []],
   'runtime.channel.finish': [['channelId'], []], 'runtime.channel.cancel': [['channelId'], []],
@@ -100,6 +100,9 @@ export function parseRuntimeParams(method, input) {
   for (const key of ['after', 'revision', 'offset', 'size']) if (value[key] !== undefined) integerValue(value[key], key);
   if (value.target !== undefined) parseEnvironmentId(value.target);
   if (method === 'runtime.observer.read' && value.resolveSummary !== undefined) requireValue(value.resolveSummary === true, 'wire.resolve_summary');
+  if (method === 'runtime.observer.read' && value.resolveWorkspace !== undefined) {
+    requireValue(value.resolveWorkspace === true && value.resolveSummary === true, 'wire.resolve_workspace');
+  }
   if (method === 'runtime.inspect' && value.bootstrapTree !== undefined) requireValue(value.bootstrapTree === true, 'wire.bootstrap_tree');
   if (method === 'runtime.inspect' && value.bootstrapEncoding !== undefined) {
     requireValue(value.bootstrapTree === true && ['gzip', 'gzip-inspection'].includes(value.bootstrapEncoding), 'wire.bootstrap_encoding');
@@ -201,7 +204,7 @@ export function parseRuntimeResult(method, input) {
           if (value.canonical !== undefined) {
             const canonical = parseRuntimeResult('runtime.entity.resolve', value.canonical);
             const patch = value.frame.payload;
-            requireValue(value.frame.type === 'entity.patch' && patch.collection === 'session_summaries'
+            requireValue(value.frame.type === 'entity.patch' && ['session_summaries', 'workspaces'].includes(patch.collection)
               && canonical.collection === patch.collection && canonical.key === patch.key
               && canonical.revision >= value.frame.entityRevision
               && !canonical.chunked && canonical.value !== undefined, 'wire.observer_entity');
