@@ -33,12 +33,12 @@ const report = {
   status: 'failed',
 };
 const cleanup = [];
+let fixture, state;
 try {
   const app = await buildApp(path.join(output, 'app'), path.join(output, 'build.log'));
   const web = await serveApp(app.output);
   cleanup.push(() => web.close());
-  const fixture = await prepareFixture(count, output);
-  cleanup.push(() => rm(fixture, { recursive: true, force: true }));
+  fixture = await prepareFixture(count, output);
   const native = await startNative(fixture, count, output);
   cleanup.push(() => native.close());
   const emptyBridge = await startBridge(fixture, path.join(fixture, 'empty-bridge-state'), path.join(output, 'empty-bridge'), true);
@@ -57,7 +57,7 @@ try {
     await emptyBridge.close();
   }
 
-  const state = path.join(fixture, 'bridge-state');
+  state = path.join(fixture, 'bridge-state');
   const bridge = await startBridge(fixture, state, path.join(output, 'bridge'));
   cleanup.push(() => bridge.close());
   const network = await shapeRuntimeNetwork(bridge.descriptor.port, rttMs);
@@ -71,7 +71,6 @@ try {
     const connected = await connectApp(browser.page, web.origin, network.port);
     report.tree = await measureTree(browser.page, connected);
     report.index = await bridge.indexed();
-    report.inventory = indexInventory(state, count);
     report.interactions = await measureInteractions(browser.page, { ...summaryAt(5), title: 'Vis measured native history session' });
     report.renderer = await browser.heap();
     report.bridgeObservedRssPeakBytes = Math.max(rssPeak, bridge.rss().rssBytes);
@@ -87,9 +86,6 @@ try {
       passed: bridgeAdditionalRssMiB <= SLO.bridgeRssMiB[label] && rendererAdditionalHeapMiB <= SLO.rendererHeapMiB[label],
     };
     report.network = { ...network.stats };
-    if (report.index.failures.length || !report.inventory.coverage || report.inventory.workspaces !== 200) {
-      throw new Error('Production index did not enumerate the complete fixture');
-    }
     if (!report.memory.passed) throw new Error('Production memory sample exceeded the profile budget');
     report.status = 'passed';
   } finally {
@@ -103,6 +99,21 @@ try {
   for (const close of cleanup.reverse()) {
     try { await close(); }
     catch (error) { failures.push({ reason: error }); }
+  }
+  try {
+    if (report.index) {
+      report.inventory = indexInventory(state, count);
+      if (report.index.failures.length || !report.inventory.coverage || report.inventory.workspaces !== 200) {
+        throw new Error('Production index did not enumerate the complete fixture');
+      }
+    }
+  } catch (error) {
+    failures.push({ reason: error });
+  } finally {
+    if (fixture) {
+      try { await rm(fixture, { recursive: true, force: true }); }
+      catch (error) { failures.push({ reason: error }); }
+    }
   }
   try {
     validateSources(sourceHashes, repository);
