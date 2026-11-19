@@ -76,14 +76,14 @@ describe('the selected workspace catalog carries the repo identity the Host Thre
     // Startup stays progressive: no Git scan of every registered root.
     await services.start();
     const initial = await services.index.topology({ collection: 'workspaces' });
-    expect(initial.items).toHaveLength(2);
+    expect(initial.items).toHaveLength(3);
     expect(initial.items.every(item => (item.value as { gitKind?: string }).gitKind === 'unknown')).toBe(true);
     await probeSelectedSession(services, repo);
     const selected = await services.index.topology({ collection: 'workspaces' });
     const changed = selected.items.filter(item => initial.items.find(prior => prior.key === item.key)?.revision !== item.revision);
     expect(changed).toHaveLength(1);
     expect((changed[0]!.value as { workspace: { canonicalPath: string } }).workspace.canonicalPath).toBe(await realpath(repo));
-    expect(await probeSelectedSession(services, plain)).toBeNull();
+    expect(await probeSelectedSession(services, outsideGit)).toBeNull();
 
     // Then: the selected real repository carries gitKind and a
     // repoKey — the exact two fields `repoForSession` (App.vue) reads to decide
