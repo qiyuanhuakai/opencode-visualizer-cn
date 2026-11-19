@@ -31,6 +31,7 @@ function initialize(input) {
     if (options.takeover && options.takeover.expectedFence !== current?.fence) throw new StoreError('conflict', 'stale_takeover');
     fence = (current?.fence ?? 0) + 1;
     db.prepare('INSERT INTO runtime_meta(environment,owner,epoch,fence) VALUES(?,?,?,?) ON CONFLICT(environment) DO UPDATE SET owner=excluded.owner,epoch=excluded.epoch,fence=excluded.fence').run(options.environmentId, lease, options.epoch, fence);
+    queries.claimPriorStorage(current?.fence, fence);
     if (current && current.epoch !== options.epoch) {
       db.prepare('DELETE FROM runtime_events WHERE environment=?').run(options.environmentId);
       db.prepare('DELETE FROM runtime_snapshots WHERE environment=?').run(options.environmentId);

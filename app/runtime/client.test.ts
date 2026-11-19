@@ -89,13 +89,13 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     socket.reply(request, { rows: ['remote'] });
     await expect(result).resolves.toEqual({ rows: ['remote'] });
   });
-  it('falls back to plain inspection when an older Bridge rejects startup page negotiation', async () => {
+  it.each(['fields', 'wire.bootstrap_encoding'])('falls back to plain inspection after startup negotiation is rejected (%s)', async (field) => {
     const { client, socket } = await fixture();
     const inspected = client.inspect(true);
     const extended = await socket.next();
-    expect(extended).toMatchObject({ method: 'runtime.inspect', params: { bootstrapTree: true, bootstrapEncoding: 'gzip' } });
+    expect(extended).toMatchObject({ method: 'runtime.inspect', params: { bootstrapTree: true, bootstrapEncoding: 'gzip-inspection' } });
     socket.frame({ version: 1, kind: 'result', target, epoch: extended.epoch, generation: extended.generation,
-      id: extended.id, ok: false, typedError: { code: 'invalid_request', message: 'invalid_request: fields' } });
+      id: extended.id, ok: false, typedError: { code: 'invalid_request', message: `invalid_request: ${field}` } });
     const legacy = await socket.next();
     expect(legacy).toMatchObject({ method: 'runtime.inspect', params: {} });
     socket.reply(legacy, inspection);
@@ -110,7 +110,7 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
       targets: inspection.targets, harnesses: inspection.harnesses, treeBootstrap: [page, page, page],
     }));
     socket.reply(await socket.next(), { ...inspection, targets: [], harnesses: [],
-      treeBootstrapGzip: { data: gzipSync(payload).toString('base64'), bytes: payload.length },
+      treeBootstrapGzip: { data: gzipSync(payload).toString('base64'), bytes: payload.length, includesInspection: true },
     });
     await expect(inspected).resolves.toEqual(inspection);
     const order: string[] = [];

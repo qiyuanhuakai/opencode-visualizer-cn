@@ -258,12 +258,19 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
           entry.current();
           if (!pages || signal.aborted) return base;
           const result = { ...base };
-          if (params.bootstrapEncoding === 'gzip') {
-            const raw = Buffer.from(JSON.stringify({ targets: base.targets, harnesses: base.harnesses, treeBootstrap: pages }));
+          if (params.bootstrapEncoding) {
+            const includesInspection = params.bootstrapEncoding === 'gzip-inspection';
+            const payload = includesInspection ? { targets: base.targets, harnesses: base.harnesses, treeBootstrap: pages } : pages;
+            const raw = Buffer.from(JSON.stringify(payload));
             if (raw.length > LIMITS.jsonBytes - 4096) return base;
-            result.targets = [];
-            result.harnesses = [];
-            result.treeBootstrapGzip = { bytes: raw.length, data: gzipSync(raw, { level: 1 }).toString('base64') };
+            if (includesInspection) {
+              result.targets = [];
+              result.harnesses = [];
+            }
+            result.treeBootstrapGzip = {
+              bytes: raw.length, data: gzipSync(raw, { level: 1 }).toString('base64'),
+              ...(includesInspection ? { includesInspection: true } : {}),
+            };
           } else result.treeBootstrap = pages;
           if (Buffer.byteLength(JSON.stringify(result)) > LIMITS.jsonBytes - 4096) return base;
           keep = true;

@@ -102,7 +102,7 @@ export function parseRuntimeParams(method, input) {
   if (method === 'runtime.observer.read' && value.resolveSummary !== undefined) requireValue(value.resolveSummary === true, 'wire.resolve_summary');
   if (method === 'runtime.inspect' && value.bootstrapTree !== undefined) requireValue(value.bootstrapTree === true, 'wire.bootstrap_tree');
   if (method === 'runtime.inspect' && value.bootstrapEncoding !== undefined) {
-    requireValue(value.bootstrapTree === true && value.bootstrapEncoding === 'gzip', 'wire.bootstrap_encoding');
+    requireValue(value.bootstrapTree === true && ['gzip', 'gzip-inspection'].includes(value.bootstrapEncoding), 'wire.bootstrap_encoding');
   }
   if (method === 'runtime.snapshot.release') textValue(value.token, 'token');
   if (method === 'runtime.interaction.read') { parseSessionRef(value.session); textValue(value.interactionId, 'interactionId'); }
@@ -160,10 +160,13 @@ export function parseRuntimeResult(method, input) {
     case 'runtime.inspect':
       objectFields(value, ['role', 'state', 'subscribers', 'topology', 'sources', 'connectionProfileId', 'targets', 'harnesses', 'transports'], ['treeBootstrap', 'treeBootstrapGzip']);
       if (value.treeBootstrapGzip !== undefined) {
-        const compressed = objectFields(value.treeBootstrapGzip, ['data', 'bytes']);
-        requireValue(value.treeBootstrap === undefined && Array.isArray(value.targets) && value.targets.length === 0
-          && Array.isArray(value.harnesses) && value.harnesses.length === 0 && typeof compressed.data === 'string'
+        const compressed = objectFields(value.treeBootstrapGzip, ['data', 'bytes'], ['includesInspection']);
+        requireValue(value.treeBootstrap === undefined && typeof compressed.data === 'string'
           && /^[A-Za-z0-9+/]+={0,2}$/.test(compressed.data), 'wire.bootstrap_encoding');
+        if (compressed.includesInspection !== undefined) {
+          requireValue(compressed.includesInspection === true && Array.isArray(value.targets) && value.targets.length === 0
+            && Array.isArray(value.harnesses) && value.harnesses.length === 0, 'wire.bootstrap_encoding');
+        }
         positive(compressed.bytes, 'wire.bootstrap_bytes', LIMITS.jsonBytes);
       }
       if (value.treeBootstrap !== undefined) {

@@ -86,6 +86,16 @@ export function createQueries(db, binding) {
     if (!snapshotCollections(definition).includes(params.collection)) throw new StoreError('replay_required', 'snapshot_collection');
     return { ...header, definition, priors };
   }
+  function claimPriorStorage(previousFence, fence) {
+    const previousWriter = db.prepare('SELECT fence FROM runtime_snapshot_writers WHERE environment=?').get(environment);
+    if (previousFence !== undefined && previousWriter?.fence !== previousFence) {
+      // An older worker may have written without retaining the before-images.
+      db.prepare('DELETE FROM runtime_snapshots WHERE environment=? AND collection LIKE ?')
+        .run(environment, PRIOR_SNAPSHOT_MARKER + '%');
+    }
+    db.prepare(`INSERT INTO runtime_snapshot_writers VALUES(?,?)
+      ON CONFLICT(environment) DO UPDATE SET fence=excluded.fence`).run(environment, fence);
+  }
   function activePriorSnapshots() {
     return db.prepare("SELECT token,revision,collection FROM runtime_snapshots WHERE environment=? AND epoch=? AND expires>? AND collection LIKE '@%'")
       .all(environment, binding.epoch, Date.now())
@@ -121,7 +131,7 @@ export function createQueries(db, binding) {
     db.prepare('UPDATE runtime_meta SET floor=? WHERE environment=?').run(floor, environment);
   }
   return {
-    meta, page, snapshot, replay, trim, activePriorSnapshots, preservePrior,
+    meta, page, snapshot, replay, trim, claimPriorStorage, activePriorSnapshots, preservePrior,
     releaseSnapshot(params) {
       return transaction(db, () => {
         binding.assertOwner();

@@ -226,6 +226,41 @@ describe('runtime common-watermark snapshots', () => {
       ]);
     });
   });
+  it('rejects a newer prior snapshot after a legacy writer and preserves legacy materialized views', async () => {
+    const stateDirectory = await mkdtemp(path.join(tmpdir(), 'runtime-snapshot-legacy-writer-'));
+    const options = { stateDirectory, environmentId, ownerId, epoch };
+    const original = createRuntimeStore(options);
+    let reopened: ReturnType<typeof createRuntimeStore> | undefined;
+    try {
+      const ready = await original.ready;
+      await original.mutate({ intentId: 'before-legacy', changes: [{ collection: 'workspaces', key: 'a', value: 'before' }] });
+      const prior = await original.snapshot({ collection: 'workspaces' });
+      await original.close();
+
+      const legacyToken = '55555555-5555-4555-8555-555555555555';
+      const legacy = new DatabaseSync(path.join(stateDirectory, 'runtime/runtime.db'));
+      try {
+        legacy.prepare('INSERT INTO runtime_snapshots VALUES(?,?,?,?,?,?,?)')
+          .run(legacyToken, environmentId, 'workspaces', epoch, 1, 1, Date.now() + 60000);
+        legacy.prepare('INSERT INTO runtime_snapshot_rows VALUES(?,?,?,?)').run(legacyToken, 'a', 1, JSON.stringify('before'));
+        legacy.prepare('UPDATE workspaces SET revision=2,value=? WHERE environment=? AND key=?')
+          .run(JSON.stringify('legacy write'), environmentId, 'a');
+        // A v1 worker owns the next fence and writes without before-images.
+        legacy.prepare('UPDATE runtime_meta SET fence=?,revision=2 WHERE environment=?').run(ready.fence + 1, environmentId);
+      } finally { legacy.close(); }
+
+      reopened = createRuntimeStore(options);
+      await reopened.ready;
+      await expect(reopened.snapshot({ collection: 'workspaces', token: prior.token })).rejects.toMatchObject({ code: 'replay_required' });
+      expect((await reopened.snapshot({ collection: 'workspaces', token: legacyToken })).items)
+        .toEqual([{ key: 'a', revision: 1, value: 'before' }]);
+      expect(await reopened.get({ collection: 'workspaces', key: 'a' })).toMatchObject({ revision: 2, value: 'legacy write' });
+    } finally {
+      await original.close();
+      await reopened?.close();
+      await rm(stateDirectory, { recursive: true, force: true });
+    }
+  });
   it('bounds materialized page bytes and roundtrips maximum-length keys', async () => {
     await withStore(async (store) => {
       const largeKey = '界'.repeat(4096);

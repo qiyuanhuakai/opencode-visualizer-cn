@@ -29,7 +29,7 @@ function reserved(method: RuntimeMethod) {
   return method === 'runtime.history.close' || method === 'session.cancel' || method === 'interaction.respond' || method === 'runtime.channel.ack' || method === 'runtime.channel.cancel' || method === 'runtime.observer.resume' || method === 'runtime.observer.close' || method === 'runtime.target.detach';
 }
 
-async function decodeStartupPages(compressed: { readonly data: string; readonly bytes: number }) {
+async function decodeStartupPayload(compressed: { readonly data: string; readonly bytes: number }) {
   const compressedBytes = Uint8Array.from(atob(compressed.data), byte => byte.charCodeAt(0));
   // Feed the decompressor in bounded increments even if the peer supplies
   // an invalid declared size smaller than the represented pages.
@@ -315,14 +315,18 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     const target = managementTarget();
     const attached = getTarget(target);
     bootstrapTree &&= attached.hello.capabilities.methods.includes('runtime.snapshot');
-    const result = await request(target, 'runtime.inspect', bootstrapTree ? { bootstrapTree: true, ...(typeof DecompressionStream === 'function' ? { bootstrapEncoding: 'gzip' } : {}) } : {}).catch(error => {
-      if (!bootstrapTree || !(error instanceof RuntimeRequestError) || error.code !== 'invalid_request' || error.field !== 'fields') throw error;
+    const result = await request(target, 'runtime.inspect', bootstrapTree ? { bootstrapTree: true, ...(typeof DecompressionStream === 'function' ? { bootstrapEncoding: 'gzip-inspection' } : {}) } : {}).catch(error => {
+      if (!bootstrapTree || !(error instanceof RuntimeRequestError) || error.code !== 'invalid_request'
+        || !['fields', 'wire.bootstrap_encoding'].includes(error.field)) throw error;
       return request(target, 'runtime.inspect', {});
     });
     let unpacked = result;
     if (result.treeBootstrapGzip) {
       try {
-        const decoded = objectFields(await decodeStartupPages(result.treeBootstrapGzip), ['targets', 'harnesses', 'treeBootstrap']);
+        const payload = await decodeStartupPayload(result.treeBootstrapGzip);
+        const decoded = result.treeBootstrapGzip.includesInspection
+          ? objectFields(payload, ['targets', 'harnesses', 'treeBootstrap'])
+          : { treeBootstrap: payload };
         const { treeBootstrapGzip: _, ...metadata } = result;
         unpacked = parseRuntimeResult('runtime.inspect', { ...metadata, ...decoded });
       } catch {
