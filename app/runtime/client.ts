@@ -378,13 +378,16 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     attached.paging = true;
     let first: Snapshot | undefined;
     let openingObserver: ReturnType<typeof observe> | undefined;
+    const prefetched = new Map<Collection, Promise<Snapshot>>();
     let releaseView: (() => Promise<void>) | undefined;
     try {
       if (attached.indexSnapshot) await retireView(attached, attached.indexSnapshot.token);
       for (const collection of names) {
         let cursor: string | null = null;
         do {
-          const page: Snapshot = await request(target, 'runtime.snapshot', { collection, ...(first ? { token: first.token } : {}), cursor, limit: 200 }, options);
+          const ahead = cursor === null ? prefetched.get(collection) : undefined;
+          const page: Snapshot = await (ahead ?? request(target, 'runtime.snapshot', { collection, ...(first ? { token: first.token } : {}), cursor, limit: 200 }, options));
+          if (ahead) prefetched.delete(collection);
           if (!first) {
             first = page;
             releaseView = holdView(attached, page.token);
@@ -393,6 +396,15 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
             // are downloaded. Event reads still begin after snapshot commit.
             openingObserver = observe(target, { ...options, after: first.watermark, onDelivery: options.onDelivery ?? (() => {}) });
             void openingObserver.catch(() => undefined);
+            if (names.length >= 3) {
+              // Queue at most two independent first pages on this same token.
+              // Apply them in collection order so session rows see topology.
+              for (const nextCollection of names.slice(1, 3)) {
+                const pending = request(target, 'runtime.snapshot', { collection: nextCollection, token: page.token, cursor: null, limit: 200 }, options);
+                prefetched.set(nextCollection, pending);
+                void pending.catch(() => undefined);
+              }
+            }
           }
           requireValue(page.token === first.token && page.revision === first.revision && page.watermark === first.watermark && page.target === attached.hello.target && page.epoch === attached.hello.epoch && page.generation === attached.hello.generation, 'snapshot.atomic', 'replay_required');
           requireValue(page.expiresAt > Date.now() && (page.cursor === null || page.cursor !== cursor), 'snapshot.expired', 'replay_required');
@@ -410,7 +422,11 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       const observer = await openingObserver?.catch(() => undefined);
       if (observer) await observer.close().catch(() => undefined);
       throw error;
-    } finally { attached.paging = false; await releaseView?.(); }
+    } finally {
+      await Promise.allSettled(prefetched.values());
+      attached.paging = false;
+      await releaseView?.();
+    }
   }
   /**
    * Page index collections WITHOUT opening an observer and WITHOUT taking the
