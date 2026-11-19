@@ -99,7 +99,7 @@ export async function measureTree(page, connected) {
 export async function measureInteractions(page, selected) {
   const attempted = new Set();
   selected = await until(async () => {
-    const candidates = page.locator('[data-row-kind="session"][data-harness="opencode"][data-directory]:not([data-directory=""])');
+    const candidates = page.locator('[data-row-kind="session"]:is([data-harness="opencode"], [data-harness="acp"])[data-directory]:not([data-directory=""])');
     if (await candidates.count()) return candidates.first();
     const groups = await page.locator('[data-tree-row]').evaluateAll(elements => elements.map(element => ({ key: element.getAttribute('data-row-key'), expanded: element.getAttribute('aria-expanded'), expandable: Boolean(element.querySelector('[data-testid="row-toggle"]:not(.is-leaf)')) })));
     const candidate = groups.find(group => group.expandable && group.expanded !== 'true' && !attempted.has(group.key));
