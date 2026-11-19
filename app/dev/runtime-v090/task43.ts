@@ -90,9 +90,13 @@ class TreeWire extends EventTarget {
     if (request.kind !== 'request') throw new TypeError('unexpected frame');
     this.respond(request);
   }
+  failSource(source: string) {
+    this.failures.add(source);
+    this.revision += 1;
+  }
   private harnesses() {
     return SOURCES.map((source) => ({
-      collection: 'harnesses', key: HARNESS_INSTANCE[source], revision: 1,
+      collection: 'harnesses', key: HARNESS_INSTANCE[source], revision: this.revision,
       value: {
         environmentId: TARGET, harnessInstanceId: HARNESS_INSTANCE[source], kind: source,
         indexDiscovery: [{ scopeKey: '{}', status: this.failures.has(source) ? 'partial' : 'complete', count: this.failures.has(source) ? 0 : this.rows.filter((row) => row.source === source).length, ...(this.failures.has(source) ? { reason: 'native_timeout' } : {}) }],
@@ -137,6 +141,7 @@ class TreeWire extends EventTarget {
         });
         break;
       }
+      case 'runtime.snapshot.release': this.reply(request, { released: true }); break;
       case 'runtime.observer.open': this.reply(request, { observerId: 'observer-1' }); break;
       case 'runtime.observer.read': this.reply(request, null); break;
       case 'runtime.observer.close': this.reply(request, { closed: true }); break;
@@ -144,7 +149,9 @@ class TreeWire extends EventTarget {
       // instance, so the wire clears that source's injected failure and reports a complete page.
       case 'session.list': {
         const harnessInstanceId = String(request.params.harnessInstanceId);
-        for (const source of SOURCES) if (HARNESS_INSTANCE[source] === harnessInstanceId) this.failures.delete(source);
+        for (const source of SOURCES) {
+          if (HARNESS_INSTANCE[source] === harnessInstanceId && this.failures.delete(source)) this.revision += 1;
+        }
         this.reply(request, { items: [], cursor: null, completeness: 'complete' });
         break;
       }
@@ -248,7 +255,7 @@ const api = {
   boot: async (rows: readonly LegacyRow[]) => { (window as AnyRecord).__task43Ready = false; await boot(rows); await api.whenReady(); return state(); },
   state: () => state(),
   failSource: async (source: string) => {
-    ((window as AnyRecord).__task43Wire as TreeWire).failures.add(source);
+    ((window as AnyRecord).__task43Wire as TreeWire).failSource(source);
     await tree.refresh();
     await nextTick();
     return state();
@@ -256,8 +263,6 @@ const api = {
   // The REAL UI retry path: `onRetry-source` hands the composable the failing harness instance,
   // exactly as the rendered retry affordance does, so recovery is observed through the product.
   recoverSources: async (source: string) => {
-    const wire = (window as AnyRecord).__task43Wire as TreeWire;
-    wire.failures.clear();
     const entry = tree.harnesses.value.find((item) => item.kind === source);
     if (entry === undefined) throw new Error(`missing harness source ${source}`);
     await tree.retrySource(entry.harnessInstanceId);

@@ -47,6 +47,7 @@ import { fileURLToPath } from 'node:url';
 import vue from '@vitejs/plugin-vue';
 import { chromium } from 'playwright';
 import { createServer as createViteServer } from 'vite';
+import { listenLoopback } from './runtime-v090-browser.mjs';
 import { artifact, sourceSnapshot, writeJson } from './runtime-v090-evidence.mjs';
 import { loadBrowserKernel } from './runtime-v090-browser-kernel.mjs';
 import { OLD_FEATURE_MAPPING, assertMappingComplete } from '../../app/dev/runtime-v090/system43-mapping.mjs';
@@ -366,9 +367,11 @@ export async function runSystem(context) {
     writeFileSync(path.join(lease.nativeCwd, 'src', 'change.txt'), 'the reviewed change\n');
     writeFileSync(path.join(lease.nativeCwd, 'untracked.bin'), Buffer.from([0x00, 0x01, 0x02, 0x03, 0xfe, 0xff]));
     const captured = await artifacts.capture({ lease, at: T0 });
-    const review = await reviews.create({ repository, target: 'main', artifactHash: captured.artifactHash, at: T0 });
-    const approval = reviews.approve({ reviewId: review.reviewId, at: T0 + 1, reviewerId: 'reviewer-system43' });
     const base = headOf(repository);
+    const target = 'system43-integration-target';
+    runGit(repository, ['branch', target, base]);
+    const review = await reviews.create({ repository, target, artifactHash: captured.artifactHash, at: T0 });
+    const approval = reviews.approve({ reviewId: review.reviewId, at: T0 + 1, reviewerId: 'reviewer-system43' });
     const integrated = await integration.integrate({ approvalId: approval.approvalId, criteria: CRITERIA_PARSED, tests: CRITERIA.map((criterion) => ({ criterionId: criterion.id, command: process.execPath, args: ['-e', 'process.exit(0)'] })), commitMessage: 'integrate the reviewed change', at: T0 + 2 });
     const coordinator = coordinatorModule.createCollaborationCoordinator({ deliver: async () => ({ ackId: 'ack-team' }) });
     const team = coordinator.createTeam({ name: 'system43 team', at: T0 });
@@ -381,13 +384,14 @@ export async function runSystem(context) {
     check('a team task is dispatched once and fanned out to two harnesses, and the reviewed artifact is captured from a real leased writer worktree and integrated through a real fast-forward of a real private git repository', {
       artifactHashShape: /^[a-f0-9]{64}$/u.test(captured.artifactHash), approvedHashMatchesCaptured: approval.binding.artifactHash === captured.artifactHash,
       integrated: { ok: integrated.ok, outcome: integrated.outcome, verified: integrated.artifact.verified },
-      targetMoved: integrated.targetAfter.targetHead !== base, base,
+      targetMoved: runGit(repository, ['rev-parse', '--verify', target]).trim() !== base,
+      checkedOutHeadUnchanged: headOf(repository) === base, base,
       attemptState: dispatched.attempt ? coordinator.attempt(dispatched.attempt.attemptId).state : null, duplicateDispatch: duplicate,
       fanout: { state: fanned.state, targets: fanned.targets.map((entry) => entry.outcome), sent: fanned.stats.sent },
       writerPostureSandbox: posture.sandbox === false, writerIsolationByIdentity: JSON.stringify(posture) === JSON.stringify(writerModule.WRITER_ISOLATION),
     }, {
       artifactHashShape: true, approvedHashMatchesCaptured: true,
-      integrated: { ok: true, outcome: 'integrated', verified: true }, targetMoved: true, base,
+      integrated: { ok: true, outcome: 'integrated', verified: true }, targetMoved: true, checkedOutHeadUnchanged: true, base,
       attemptState: 'accepted', duplicateDispatch: { code: 'conflict', field: 'task_dispatched' },
       fanout: { state: 'succeeded', targets: ['sent', 'sent'], sent: 2 },
       writerPostureSandbox: true, writerIsolationByIdentity: true,
@@ -445,7 +449,8 @@ export async function runSystem(context) {
     const observer = createEventObserver({ binding: { target: ENV_A, epoch: 'epoch', generation: 1 }, after: 0, isCurrent: () => true, onClose: () => {} });
     let peakNormal = 0; let peakBytes = 0;
     for (let seq = 1; seq <= OBSERVER_LIMITS.normalFrames + 64; seq += 1) {
-      observer.push({ version: 1, kind: 'event', target: ENV_A, epoch: 'epoch', generation: 1, seq, entityRevision: seq, scope: `session:${seq}`, type: 'entity.patch', payload: { collection: 'session_summaries', key: `session:${seq}`, revision: seq } });
+      const key = encodeSessionKey({ environmentId: ENV_A, harnessInstanceId: HARNESS_INSTANCE.opencode, nativeSessionId: `session:${seq}` });
+      observer.push({ version: 1, kind: 'event', target: ENV_A, epoch: 'epoch', generation: 1, seq, entityRevision: seq, scope: key, type: 'entity.patch', payload: { collection: 'session_summaries', key, deleted: false } });
       peakNormal = Math.max(peakNormal, observer.state.normal);
       peakBytes = Math.max(peakBytes, observer.state.bytes);
     }
@@ -491,8 +496,7 @@ export async function runSystem(context) {
 
     /* ---------------------------------------------------------------- browser realm */
     vite.middlewares.use('/qa43', (_request, response) => { response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(PAGE_HTML); });
-    await vite.listen();
-    const browserPort = vite.httpServer.address().port;
+    const browserPort = await listenLoopback(vite.httpServer);
     ledger.resources.push({ kind: 'Vite-created', port: browserPort });
     persistLedger();
     const pageUrl = `http://127.0.0.1:${browserPort}/qa43/`;

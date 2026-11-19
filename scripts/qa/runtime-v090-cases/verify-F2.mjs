@@ -194,23 +194,31 @@ export async function run(context) {
     check('npx vue-tsc --noEmit exits zero with empty output', { exitCode: vueTsc.exitCode, outputBytes: Buffer.byteLength(`${vueTsc.stdout}${vueTsc.stderr}`) }, { exitCode: 0, outputBytes: 0 }, 'the real TypeScript gate over the whole worktree, executed by this module');
 
     // ── the risk-case collection over all eight review areas ──────────────────────────────────
-    const risk = runTool(['vitest', 'run', ...RISK_FILES], { cwd: root });
+    const riskReportPath = path.join(detailDir, 'risk-cases.json');
+    rmSync(riskReportPath, { force: true });
+    const risk = runTool(['vitest', 'run', '--reporter=json', '--outputFile', riskReportPath, ...RISK_FILES], { cwd: root });
     writeFileSync(path.join(detailDir, 'risk-cases.log'), `${risk.stdout}${risk.stderr}`);
-    const riskParsed = parseVitest(`${risk.stdout}${risk.stderr}`);
-    check('the risk-case collection passes in full: the 20 test files covering all eight review areas (identity/host scope, migration secret, DB queue/ack/fencing, SSH argv/hostkey, relay/Slurm owned resources, artifact dirty target, native capabilities, old global routing) run green with zero failures', { exitCode: risk.exitCode, files: RISK_FILES.length, ...riskParsed, failed: riskParsed.testsFailed }, { exitCode: 0, files: 20, testFilesPassed: 20, testFilesFailed: 0, testFilesTotal: 20, testsPassed: 389, testsFailed: 0, testsTotal: 389, failed: 0 }, 'the real Vitest risk collection executed by this module; automated checks do not replace the code review recorded in final/DoneClaim.json');
+    assert.equal(risk.exitCode, 0, 'Vitest risk collection failed; see risk-cases.log');
+    const riskReport = JSON.parse(readFileSync(riskReportPath, 'utf8'));
+    const passedFiles = new Set(riskReport.testResults.filter(item => item.status === 'passed')
+      .map(item => path.relative(root, item.name).split(path.sep).join('/')));
+    check('each registered risk suite ran and passed', RISK_FILES.filter(file => passedFiles.has(file)), RISK_FILES, 'individual file results from the Vitest JSON report');
+    check('the risk suite has no failed or skipped tests', {
+      failed: riskReport.numFailedTests, passed: riskReport.numPassedTests, total: riskReport.numTotalTests,
+    }, { failed: 0, passed: riskReport.numTotalTests, total: riskReport.numTotalTests }, 'Vitest risk coverage and totals from the current worktree');
 
     // The vue-tsc log is legitimately empty (clean output) and the evidence helper refuses empty
     // artifacts, so the empty-output proof lives in the assertion's outputBytes: 0 instead.
-    artifacts.push(artifact(path.join(detailDir, 'oxlint.log'), 'f2-oxlint-log'), artifact(path.join(detailDir, 'risk-cases.log'), 'f2-risk-cases-log'));
+    artifacts.push(artifact(path.join(detailDir, 'oxlint.log'), 'f2-oxlint-log'), artifact(path.join(detailDir, 'risk-cases.log'), 'f2-risk-cases-log'), artifact(riskReportPath, 'f2-risk-cases-json'));
     return {
       scenario: 'F2 code quality review — automated gates on the delivered tree',
-      verdict: 'APPROVE (automated legs; the code review itself is final/DoneClaim.json)',
+      verdict: 'PASS (automated checks at the current revision)',
       oxlintWarnings: oxlintCounts.warnings,
       reviewAreas: {
         identityHostScope: 'PASS', migrationSecret: 'PASS', dbQueueAckFencing: 'PASS', sshArgvHostKey: 'PASS',
         relaySlurmOwnedResources: 'PASS', artifactDirtyTarget: 'PASS', nativeCapabilities: 'PASS', oldGlobalRouting: 'PASS',
       },
-      codeReviewRecord: 'final/DoneClaim.json (F2 lane): APPROVE WITH ONE BLOCKER OUTSIDE THE CODE — the missing verify-F*.mjs registrations and the parseSelector rejection that this task (54) closes; 12 LOW findings, none blocking; automated checks are not a substitute for the code review.',
+      historicalReviewRecord: 'final/DoneClaim.json records the original F2 review and its revision.',
       scenarios,
       artifacts,
       versions: { node: process.version },

@@ -217,6 +217,56 @@ describe('progressive native summary index', () => {
       expect(source.state.intake.sequence).toBe(1000000);
     }, 'opencode');
   });
+  it('updates an indexed OpenCode title without enumerating again and rescans a moved session', async () => {
+    let lists = 0;
+    const ref = session('retitle');
+    let summary = { directory: '/repo', title: 'original', time: { updated: 1 } };
+    await fixture(async () => {
+      lists++;
+      return { items: [{ session: ref, summary }], cursor: null, completeness: 'complete' };
+    }, async ({ index, store }) => {
+      const source = await index.attach({ harnessInstanceId, authority: () => ({ epoch, processGeneration: 1 }), subscribe: false });
+      await source.discover();
+      const key = encodeSessionKey(ref);
+      summary = { ...summary, title: 'retitled', time: { updated: 2 } };
+      expect(source.publish({ type: 'session.updated', session: ref, summary })).toBe(true);
+      await source.flush();
+      expect((await store.get({ collection: 'session_summaries', key }))?.value).toMatchObject({ title: 'retitled' });
+      await new Promise(resolve => setTimeout(resolve, 60));
+      expect(lists).toBe(1);
+
+      expect(source.publish({ type: 'session.updated', session: ref, summary: { ...summary, title: 'stale', time: { updated: 1 } } })).toBe(true);
+      await source.flush();
+      expect((await store.get({ collection: 'session_summaries', key }))?.value).toMatchObject({ title: 'retitled' });
+      expect(lists).toBe(1);
+
+      summary = { ...summary, directory: '/next-repo' };
+      expect(source.publish({ type: 'session.updated', session: ref, summary })).toBe(true);
+      await source.flush();
+      await expect.poll(() => lists).toBe(2);
+      expect((await store.get({ collection: 'session_summaries', key }))?.value).toMatchObject({ directory: '/next-repo' });
+    }, 'opencode');
+  });
+  it('completes an active OpenCode scan while a title update is committed', async () => {
+    const ref = session('updated-during-scan');
+    let updateDuringScan: (() => Promise<void>) | undefined;
+    let calls = 0;
+    await fixture(async () => {
+      const summary = { directory: '/repo', title: 'previous', time: { updated: ++calls * 2 - 1 } };
+      await updateDuringScan?.();
+      return { items: [{ session: ref, summary }], cursor: null, completeness: 'complete' };
+    }, async ({ index, store }) => {
+      const source = await index.attach({ harnessInstanceId, authority: () => ({ epoch, processGeneration: 1 }), subscribe: false });
+      await source.discover();
+      updateDuringScan = async () => {
+        source.publish({ type: 'session.updated', session: ref, summary: { directory: '/repo', title: 'new', time: { updated: calls * 2 } } });
+        await source.flush();
+      };
+      await expect(source.discover()).resolves.toMatchObject({ status: 'complete', count: 1 });
+      expect(calls).toBe(2);
+      expect((await store.get({ collection: 'session_summaries', key: encodeSessionKey(ref) }))?.value).toMatchObject({ title: 'new' });
+    }, 'opencode');
+  });
   it('uses the installed Kimi full-summary page limit of100', async () => {
     await fixture(async ({ params }) => {
       expect(params).toEqual({ cursor: null, limit: 100 });

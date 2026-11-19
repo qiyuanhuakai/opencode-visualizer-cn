@@ -4,6 +4,20 @@ import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { artifact, writeJson } from './runtime-v090-evidence.mjs';
 
+export async function listenLoopback(http) {
+  // Bind the owned listener directly to avoid a wildcard probe and rebind.
+  await new Promise((resolve, reject) => {
+    http.once('error', reject);
+    http.listen(0, '127.0.0.1', () => {
+      http.removeListener('error', reject);
+      resolve();
+    });
+  });
+  const address = http.address();
+  assert(address && typeof address === 'object', 'server must bind a private port');
+  return address.port;
+}
+
 export async function browserScenario(context, frame) {
   // Bind the actual owned listener to port zero; do not probe/release/rebind
   // wildcard ports before opening a loopback-only QA server.
@@ -15,17 +29,15 @@ export async function browserScenario(context, frame) {
   const scenarios = [];
   const lifecycle = { serverPort: null, browserClosed: false, serverClosed: false };
   try {
-    await new Promise((resolve, reject) => { http.once('error', reject); http.listen(0, '127.0.0.1', resolve); });
-    const address = http.address();
-    assert(address && typeof address === 'object', 'server must bind a private port');
-    lifecycle.serverPort = address.port;
+    const port = await listenLoopback(http);
+    lifecycle.serverPort = port;
     browser = await chromium.launch({ headless: true });
     const browserContext = await browser.newContext();
     await browserContext.tracing.start({ screenshots: true, snapshots: true });
     const page = await browserContext.newPage();
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
-    await page.goto(`http://127.0.0.1:${address.port}/app/dev/runtime-v090/index.html`);
+    await page.goto(`http://127.0.0.1:${port}/app/dev/runtime-v090/index.html`);
     for (const variant of [{ name: 'valid fixture', input: frame, expected: 'accepted' }, { name: 'invalid version', input: { ...frame, version: 999 }, expected: 'rejected' }]) {
       await page.getByLabel('Protocol frame').fill(JSON.stringify(variant.input));
       await page.getByRole('button', { name: 'Validate frame' }).click();

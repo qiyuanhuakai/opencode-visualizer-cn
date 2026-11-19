@@ -348,6 +348,18 @@ export function flattenUnifiedTree(
   return rows;
 }
 
+function firstSessionBranch(nodes: readonly UnifiedTreeNode[], filter: ReadonlySet<SessionHarness>, key?: string): { key: string; ancestors: string[] } | null {
+  for (const node of nodes) {
+    if (node.kind === 'session') {
+      if (!node.session.archived && filter.has(node.session.harness) && (key === undefined || node.key === key)) return { key: node.key, ancestors: [] };
+    } else if (node.kind !== 'native') {
+      const branch = firstSessionBranch(node.children, filter, key);
+      if (branch !== null) return { key: branch.key, ancestors: [node.key, ...branch.ancestors] };
+    }
+  }
+  return null;
+}
+
 function matchesQuery(row: UnifiedSessionRow, query: string): boolean {
   const needle = query.trim().toLowerCase();
   if (!needle) return false;
@@ -412,7 +424,8 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   // only for the view it was scanned against, so a newer index view re-scans it.
   const childScanRevisions = new Map<string, number>();
   const childScans = computed<ReadonlySet<string>>(() => new Set(childScanRevisions.keys()));
-  const expanded = shallowRef<ReadonlySet<string>>(new Set<string>());
+  const manualExpanded = shallowRef<ReadonlySet<string> | null>(null);
+  const initialSessionKey = shallowRef<string | undefined>();
   const filterKinds = shallowRef<ReadonlySet<SessionHarness>>(new Set<SessionHarness>([...HARNESS_KINDS, 'unknown']));
   const search = shallowRef<UnifiedSearchState>(idleSearchState());
   /** A topology re-read is waiting for the bridge's bounded live-view budget to free a slot. */
@@ -451,6 +464,9 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
         if (parsed) rows.push(parsed);
       }
       sessions.value = Object.freeze(rows);
+      if (manualExpanded.value === null && initialSessionKey.value === undefined && rows.length > 0) {
+        initialSessionKey.value = firstSessionBranch(tree.value, filterKinds.value)?.key;
+      }
       viewLoaded.value = Math.max(view.loaded, rows.length);
     } finally {
       view.release();
@@ -713,6 +729,14 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     }
   }
   const tree = computed(() => buildUnifiedTree(sessions.value, workspaces.value, nativeChildren.value));
+  const expanded = computed<ReadonlySet<string>>({
+    get() {
+      if (manualExpanded.value !== null) return manualExpanded.value;
+      const key = initialSessionKey.value;
+      return new Set(key === undefined ? [] : firstSessionBranch(tree.value, filterKinds.value, key)?.ancestors);
+    },
+    set(value) { manualExpanded.value = value; },
+  });
   const rows = computed(() => flattenUnifiedTree(tree.value, expanded.value, filterKinds.value));
   async function dispose(): Promise<void> {
     if (disposed) return;

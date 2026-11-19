@@ -115,11 +115,27 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
       } while (cursor !== null);
       return { count, deleted };
     },
-    async event({ source, authority, summary, session, deleted, assertCurrent }) {
+    async event({ source, authority, summary, session, deleted, assertCurrent, reconcile }) {
       const ref = deleted ? session : summary.session;
       if (ref.environmentId !== source.environmentId || ref.harnessInstanceId !== source.harnessInstanceId) throw new StoreError('unauthorized', 'index_event_scope');
       const workspaceKey = deleted ? null : await workspaceFor(source, authority, summary.directory, assertCurrent);
-      return replace(encodeSessionKey(ref), () => deleted ? null : { ...summary, workspaceKey, _index: { authority, scanId: null, seen: [] } }, assertCurrent);
+      let needsReconcile = false;
+      const changed = await replace(encodeSessionKey(ref), (prior) => {
+        if (deleted) return null;
+        const current = prior?.value;
+        const sameGeneration = Boolean(current?._index?.authority && sameAuthority(current._index.authority, authority));
+        const ordered = typeof summary.updatedAt === 'number' && typeof current?.updatedAt === 'number';
+        needsReconcile = false;
+        if (reconcile && sameGeneration && ordered && summary.updatedAt < current.updatedAt) return undefined;
+        const titleOnly = Boolean(reconcile && sameGeneration && ordered && summary.updatedAt > current.updatedAt
+          && current.workspaceKey === workspaceKey
+          && Object.keys(summary).every(key => key === 'title' || key === 'updatedAt'
+            || JSON.stringify(summary[key]) === JSON.stringify(current[key])));
+        needsReconcile = !titleOnly;
+        return { ...summary, workspaceKey, _index: { authority, scanId: null, seen: titleOnly ? (current._index.seen ?? []) : [] } };
+      }, assertCurrent);
+      if (changed && needsReconcile) reconcile?.();
+      return changed;
     },
     async activity({ source, authority, session, status, assertCurrent }) {
       if (session.environmentId !== source.environmentId || session.harnessInstanceId !== source.harnessInstanceId) throw new StoreError('unauthorized', 'index_activity_scope');

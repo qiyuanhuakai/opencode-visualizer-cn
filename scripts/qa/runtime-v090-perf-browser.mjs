@@ -16,13 +16,38 @@ export async function openBrowser(output, userDataDirectory = `${output}-profile
     '--lang=en-US', `--user-data-dir=${userDataDirectory}`, 'about:blank',
   ], { stdio: ['ignore', 'pipe', 'pipe'] });
   processHandle.stdout.pipe(stream); processHandle.stderr.pipe(stream);
-  const exited = new Promise((resolve) => processHandle.once('exit', (code, signal) => resolve({ code, signal })));
-  const port = await until(async () => {
-    if (processHandle.exitCode !== null) throw new Error(`Chrome exited ${processHandle.exitCode}`);
-    try { return Number((await readFile(path.join(userDataDirectory, 'DevToolsActivePort'), 'utf8')).split('\n')[0]); }
+  let spawnFailure;
+  const exited = new Promise(resolve => {
+    processHandle.once('exit', (code, signal) => resolve({ code, signal }));
+    processHandle.once('error', error => { spawnFailure = error; resolve({ error }); });
+  });
+  const discovered = await until(async () => {
+    if (spawnFailure) throw spawnFailure;
+    if (processHandle.exitCode !== null || processHandle.signalCode !== null) throw new Error('Chrome exited before opening DevTools');
+    const activePort = path.join(userDataDirectory, 'DevToolsActivePort');
+    let registration;
+    try { registration = await readFile(activePort, 'utf8'); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-  }, 'Chrome CDP port');
-  const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    const [portText, browserPath] = registration.trim().split(/\r?\n/u);
+    const port = Number(portText);
+    if (!Number.isInteger(port) || port < 1 || port > 65535 || !browserPath?.startsWith('/devtools/browser/')) return null;
+    // Chrome may bind IPv6 loopback only when its chosen port is busy on IPv4.
+    // Require the exact registration path so a different listener can't be used.
+    for (const host of ['127.0.0.1', '[::1]']) {
+      const version = await fetch(`http://${host}:${port}/json/version`, { signal: AbortSignal.timeout(500), redirect: 'error' })
+        .then(response => response.ok ? response.json() : null).catch(() => null);
+      if (version?.webSocketDebuggerUrl === `ws://${host}:${port}${browserPath}`) return { port, endpoint: version.webSocketDebuggerUrl };
+    }
+    return null;
+  }, 'Chrome CDP endpoint', 15000).then(async ({ port, endpoint }) => ({
+    port, browser: await chromium.connectOverCDP(endpoint, { timeout: 5000 }),
+  })).catch(async error => {
+    processHandle.kill('SIGTERM');
+    await exited;
+    stream.end();
+    throw error;
+  });
+  const { port, browser } = discovered;
   const context = browser.contexts()[0];
   await context.addInitScript(() => {
     window.__productionPerf = { longTasks: [], errors: [], frames: [], start: performance.now() };

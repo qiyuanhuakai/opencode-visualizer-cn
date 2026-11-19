@@ -315,6 +315,50 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     socket.reply(reopening, { observerId: 'second' });
     await expect(retry).resolves.toHaveProperty('read');
   });
+  it('shares observer close completion and retries an admission refusal', async () => {
+    const { client, socket } = await fixture();
+    const opening = client.observe(target, { after: 0, onDelivery: () => {} });
+    socket.reply(await socket.next(), { observerId: 'observer' });
+    const observer = await opening;
+    const closing = observer.close();
+    expect(observer.close()).toBe(closing);
+    const refused = await socket.next();
+    expect(refused.method).toBe('runtime.observer.close');
+    socket.error(refused, 'source_unavailable');
+    const retry = await socket.next();
+    expect(retry).toMatchObject({ method: 'runtime.observer.close', params: { observerId: 'observer' } });
+    socket.reply(retry, { closed: true });
+    await closing;
+  });
+
+  it('reconnects when an observer close cannot be confirmed', async () => {
+    vi.useFakeTimers();
+    const { client, socket, sockets } = await fixture(true);
+    const opening = client.observe(target, { after: 0, onDelivery: () => {} });
+    socket.reply(await socket.next(), { observerId: 'observer' });
+    const closing = expect((await opening).close()).rejects.toMatchObject({ code: 'source_unavailable' });
+    socket.error(await socket.next(), 'source_unavailable');
+    socket.error(await socket.next(), 'source_unavailable');
+    await closing;
+    expect(socket.readyState).toBe(3);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(sockets).toHaveLength(2);
+  });
+
+  it('renews the connection when an observer allocation is not acknowledged', async () => {
+    vi.useFakeTimers();
+    const { client, socket, sockets, connection } = await fixture(true);
+    const observer = client.observe(target, { after: 4, onDelivery: () => {} });
+    const timedOut = expect(observer).rejects.toMatchObject({ code: 'timeout' });
+    expect((await socket.next()).method).toBe('runtime.observer.open');
+    await vi.advanceTimersByTimeAsync(15000);
+    await timedOut;
+    expect(socket.readyState).toBe(3);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(sockets).toHaveLength(2);
+    sockets[1].frame(hello);
+    expect(connection.status.state).toBe('ready');
+  });
   it('prefetches workspace and session pages on one token and applies them in collection order', async () => {
     const { client, socket } = await fixture();
     const pages: string[] = [];

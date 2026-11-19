@@ -10026,11 +10026,23 @@ const EMPTY_SESSION_TREE_DATA: SessionTreeData = [];
  */
 const unifiedSessionTree = shallowRef<UnifiedSessionTree | null>(null);
 let runtimeTreeReady: Promise<void> = Promise.resolve();
+let runtimeTreeOwner: { tree: UnifiedSessionTree; client: RuntimeClient; target: EnvironmentId } | undefined;
+const runtimeTreeRetirements = new WeakMap<RuntimeClient, Map<EnvironmentId, Promise<void>>>();
 
 function disposeUnifiedSessionTree(): void {
-  const owned = unifiedSessionTree.value;
+  const owner = runtimeTreeOwner;
+  runtimeTreeOwner = undefined;
   unifiedSessionTree.value = null;
-  if (owned !== null) void owned.dispose().catch(() => {});
+  if (!owner) return;
+  const { tree, client, target } = owner;
+  const retirements = runtimeTreeRetirements.get(client) ?? new Map<EnvironmentId, Promise<void>>();
+  const prior = retirements.get(target);
+  const retiring = tree.dispose().catch(() => {});
+  const settled = Promise.all([prior, retiring]).then(() => {
+    if (retirements.get(target) === settled) retirements.delete(target);
+  });
+  retirements.set(target, settled);
+  runtimeTreeRetirements.set(client, retirements);
 }
 
 function buildUnifiedSessionTree(): void {
@@ -10052,8 +10064,14 @@ function buildUnifiedSessionTree(): void {
       }
     },
   });
+  const owner = { tree, client, target };
+  runtimeTreeOwner = owner;
   unifiedSessionTree.value = tree;
-  runtimeTreeReady = tree.start().then(() => undefined).catch(() => {
+  const retiring = runtimeTreeRetirements.get(client)?.get(target);
+  const ready = retiring ? retiring.then(() => {
+    if (runtimeTreeOwner === owner) return tree.start();
+  }) : tree.start();
+  runtimeTreeReady = ready.catch(() => {
     // A target whose snapshot cannot be opened leaves the tree in its error
     // state, which the sidebar renders; the legacy tree keeps running.
   });
