@@ -28,6 +28,7 @@
  *   VIS_ELECTRON_EXECUTABLE=dist-electron/linux-unpacked/vis pnpm qa:electron
  */
 import { _electron } from 'playwright';
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -332,8 +333,36 @@ async function main() {
     const noChildWindow = afterOpen.count === 1 && beforeOpen.count === 1;
     record('window-open-creates-no-child-window', noChildWindow, `windows before=${beforeOpen.count} after=${afterOpen.count}`);
 
+    const capturePidBefore = process.env.VIS_SMOKE_BUILD_IDENTITY ? await app.evaluate(() => process.pid) : null;
     await page.screenshot({ path: SCREENSHOT_PATH });
     consoleLines.push(`[driver] screenshot saved to ${SCREENSHOT_PATH}`);
+    if (process.env.VIS_SMOKE_BUILD_IDENTITY) {
+      const build = JSON.parse(readFileSync(process.env.VIS_SMOKE_BUILD_IDENTITY, 'utf8'));
+      const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
+      const main = await app.evaluate(({ app: mainApp }) => ({
+        executablePath: process.execPath,
+        appPath: mainApp.getAppPath(),
+        pid: process.pid,
+      }));
+      receipt.packagedCapture = {
+        revision: build.revision,
+        tree: build.tree,
+        buildIdentitySha256: sha256(process.env.VIS_SMOKE_BUILD_IDENTITY),
+        executableSha256: sha256(main.executablePath),
+        appAsarSha256: sha256(main.appPath),
+        screenshotSha256: sha256(SCREENSHOT_PATH),
+        main,
+        capturePidBefore,
+        launcherPid: app.process().pid,
+        isolatedProfileMatched: profileMatches,
+      };
+      const capture = receipt.packagedCapture;
+      record('candidate-package-capture', capture.main.pid === capture.capturePidBefore && capture.isolatedProfileMatched &&
+        realpathSync(main.executablePath) === realpathSync(executablePath) &&
+        path.basename(main.appPath) === 'app.asar' &&
+        capture.executableSha256 === build.executableSha256 && capture.appAsarSha256 === build.appAsarSha256,
+      'the captured window belongs to the launched process with the recorded packaged app bytes');
+    }
 
     // Relaunch against the SAME profile: the stored value must survive.
     await closeApp(app);

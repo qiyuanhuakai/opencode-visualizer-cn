@@ -401,7 +401,8 @@ function monitorSnapshot(): AnyRecord {
 }
 
 // ── SettingsModal surface (workspace channel) ──
-(window as unknown as AnyRecord).electronAPI = { localFile: { open: async () => null, save: async () => true }, desktop: {} };
+let localApplicationSelections = 0;
+(window as unknown as AnyRecord).electronAPI = { localFile: { open: async () => null, save: async () => true, selectApplication: async () => { localApplicationSelections++; return null; } }, desktop: {} };
 const settingsHost = document.createElement('div');
 settingsHost.id = 'qa23-settings';
 const settingsState = reactive({ open: true, workspaceEnvironmentId: ENV as string | undefined, workspacePath: '/repo' as string | undefined });
@@ -421,13 +422,15 @@ async function setWorkspaceScope(input: AnyRecord): Promise<void> {
   target?.click();
   await nextTick();
 }
-function settingsSnapshot(): AnyRecord {
+function settingsSnapshot(openChooser = false): AnyRecord {
   const controls = Array.from(settingsHost.querySelectorAll<HTMLButtonElement>('.local-application-controls button'));
   const browse = controls[0] ?? null;
+  if (openChooser) browse?.click();
   const source = settingsHost.querySelector('[data-testid="workspace-control-source"]');
   return {
     hasLocalApplicationRow: controls.length > 0,
     browseDisabled: browse ? browse.disabled : null,
+    localApplicationSelections,
     browseTitle: browse ? browse.getAttribute('title') : null,
     sourceText: source ? source.textContent?.trim() ?? '' : null,
     sourceCount: source ? 1 : 0,
