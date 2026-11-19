@@ -1,6 +1,9 @@
 import { legacyEditingPaused, registerLegacyWriter, retainFrozenLegacyWrite } from '../../runtime/migration/writerFreeze';
 import { StorageKeys, storageGetJSON, storageKey, storageRemove, storageSetJSON } from '../../utils/storageKeys';
-import { clearNativeAuxiliaryHistory, flushNativeAuxiliaryStorage, hydrateNativeAuxiliaryHistory, initializeNativeAuxiliaryStorage, nativeAuxiliaryDatabase, readNativeAuxiliarySnapshot, writeNativeAuxiliarySnapshot } from './nativeAuxiliaryStorage';
+import type { HistoryPageCache } from '../../runtime/historyPages';
+import { NATIVE_AUXILIARY_PAGED_NAMESPACE, clearNativeAuxiliaryHistory, flushNativeAuxiliaryStorage, hydrateNativeAuxiliaryHistory, initializeNativeAuxiliaryStorage, nativeAuxiliaryDatabase, openNativeAuxiliaryPaging, readNativeAuxiliarySnapshot, writeNativeAuxiliarySnapshot } from './nativeAuxiliaryStorage';
+
+export { NATIVE_AUXILIARY_PAGED_NAMESPACE };
 
 const DATABASE = 'opencode.codexAuxiliaryHistory';
 const STORE = 'snapshots';
@@ -282,5 +285,10 @@ export async function flushCodexAuxiliaryStorage(): Promise<void> {
 }
 
 registerLegacyWriter(flushCodexAuxiliaryStorage);
+
+export function openCodexAuxiliaryPaging(threadId: string): HistoryPageCache | undefined {
+  if (nativeAuxiliaryDatabase()) return openNativeAuxiliaryPaging(nativeAuxiliaryDatabase(), threadId);
+  return undefined;
+}
 
 if (import.meta.hot) import.meta.hot.dispose(closeConnection);
