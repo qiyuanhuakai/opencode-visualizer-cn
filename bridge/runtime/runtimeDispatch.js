@@ -259,8 +259,10 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
           if (!pages || signal.aborted) return base;
           const result = { ...base };
           if (params.bootstrapEncoding === 'gzip') {
-            const raw = Buffer.from(JSON.stringify(pages));
-            if (raw.length > LIMITS.jsonBytes) return base;
+            const raw = Buffer.from(JSON.stringify({ targets: base.targets, harnesses: base.harnesses, treeBootstrap: pages }));
+            if (raw.length > LIMITS.jsonBytes - 4096) return base;
+            result.targets = [];
+            result.harnesses = [];
             result.treeBootstrapGzip = { bytes: raw.length, data: gzipSync(raw, { level: 1 }).toString('base64') };
           } else result.treeBootstrap = pages;
           if (Buffer.byteLength(JSON.stringify(result)) > LIMITS.jsonBytes - 4096) return base;

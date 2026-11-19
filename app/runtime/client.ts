@@ -1,4 +1,4 @@
-import { METHODS, ProtocolError, requireValue } from '../../shared/runtime/capabilities.js';
+import { METHODS, ProtocolError, requireValue, objectFields } from '../../shared/runtime/capabilities.js';
 import type { ErrorCode } from '../../shared/runtime/capabilities.js';
 import { createProtocolState, decodeBinary, encodeBinary } from '../../shared/runtime/protocol.js';
 import type { BinaryChunk, BinaryInput } from '../../shared/runtime/protocol.js';
@@ -319,17 +319,19 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       if (!bootstrapTree || !(error instanceof RuntimeRequestError) || error.code !== 'invalid_request' || error.field !== 'fields') throw error;
       return request(target, 'runtime.inspect', {});
     });
-    const { treeBootstrap, treeBootstrapGzip, ...inspection } = result;
-    let pages = treeBootstrap;
-    if (treeBootstrapGzip) {
+    let unpacked = result;
+    if (result.treeBootstrapGzip) {
       try {
-        const decoded = await decodeStartupPages(treeBootstrapGzip);
-        pages = parseRuntimeResult('runtime.inspect', { ...inspection, treeBootstrap: decoded }).treeBootstrap;
+        const decoded = objectFields(await decodeStartupPages(result.treeBootstrapGzip), ['targets', 'harnesses', 'treeBootstrap']);
+        const { treeBootstrapGzip: _, ...metadata } = result;
+        unpacked = parseRuntimeResult('runtime.inspect', { ...metadata, ...decoded });
       } catch {
-        // The independently validated inspection can still establish a connection.
+        if (!bootstrapTree) throw new ProtocolError('reconcile_required', 'snapshot.bootstrap_encoding');
+        return inspect(false);
       }
     }
-    if (pages) bootstrapPages.set(attached, pages);
+    const { treeBootstrap, treeBootstrapGzip: _, ...inspection } = unpacked;
+    if (treeBootstrap) bootstrapPages.set(attached, treeBootstrap);
     grants.clear();
     for (const grant of inspection.targets) grants.set(grant.target, grant);
     return inspection;

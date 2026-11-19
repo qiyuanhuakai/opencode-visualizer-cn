@@ -106,8 +106,10 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     const inspected = client.inspect(true);
     const page = { kind: 'snapshot', version: 1, target, epoch: hello.epoch, generation: hello.generation,
       token: 'bootstrap', revision: 10, watermark: 4, expiresAt: Date.now() + 60000, items: [], cursor: null };
-    const payload = Buffer.from(JSON.stringify([page, page, page]));
-    socket.reply(await socket.next(), { ...inspection,
+    const payload = Buffer.from(JSON.stringify({
+      targets: inspection.targets, harnesses: inspection.harnesses, treeBootstrap: [page, page, page],
+    }));
+    socket.reply(await socket.next(), { ...inspection, targets: [], harnesses: [],
       treeBootstrapGzip: { data: gzipSync(payload).toString('base64'), bytes: payload.length },
     });
     await expect(inspected).resolves.toEqual(inspection);

@@ -161,7 +161,8 @@ export function parseRuntimeResult(method, input) {
       objectFields(value, ['role', 'state', 'subscribers', 'topology', 'sources', 'connectionProfileId', 'targets', 'harnesses', 'transports'], ['treeBootstrap', 'treeBootstrapGzip']);
       if (value.treeBootstrapGzip !== undefined) {
         const compressed = objectFields(value.treeBootstrapGzip, ['data', 'bytes']);
-        requireValue(value.treeBootstrap === undefined && typeof compressed.data === 'string'
+        requireValue(value.treeBootstrap === undefined && Array.isArray(value.targets) && value.targets.length === 0
+          && Array.isArray(value.harnesses) && value.harnesses.length === 0 && typeof compressed.data === 'string'
           && /^[A-Za-z0-9+/]+={0,2}$/.test(compressed.data), 'wire.bootstrap_encoding');
         positive(compressed.bytes, 'wire.bootstrap_bytes', LIMITS.jsonBytes);
       }
