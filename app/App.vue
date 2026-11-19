@@ -909,6 +909,7 @@ import {
   bindRuntimeAction,
   useRuntimeSessionActions,
   type RuntimeSessionRuntime,
+  type SessionMutation,
 } from './composables/useRuntimeSessionActions';
 import { HARNESS_KINDS } from '../shared/runtime/harnessContract.js';
 import { HARNESS_CONTROLS } from './composables/useRuntimeCapabilities';
@@ -10091,8 +10092,23 @@ async function deliverRuntimePrompt(session: SessionRef, prompt: string): Promis
     ? ambient
     : Object.freeze({ profileId: ambient.profileId, session: given });
   try {
-    const result = (await runtimeSessionRuntime.router.sendMessage(binding, { text: prompt })) as { operationId?: string };
-    return { ackId: typeof result?.operationId === 'string' ? result.operationId : '' };
+    // The router hands back a SessionMutation, not a receipt: `accepted` is
+    // the native acceptance and its receipt's operationId IS the ack, while
+    // `executed` is the turn's own terminal state. Awaiting the mutation
+    // itself resolved immediately — it is not a thenable — and read
+    // `operationId === undefined`, so a send the native side had ACCEPTED was
+    // reported as an empty ack and every handoff/fan-out/delegation/attempt
+    // delivery stopped at reconcile.
+    const mutation = runtimeSessionRuntime.router.sendMessage(binding, { text: prompt }) as SessionMutation;
+    // The turn's terminal state is observed explicitly: an accepted delivery
+    // stays accepted, and a turn that fails afterwards must never surface as
+    // an unhandled rejection from this seam.
+    void mutation.executed.then(
+      () => {},
+      () => {},
+    );
+    const receipt = await mutation.accepted;
+    return { ackId: typeof receipt?.operationId === 'string' ? receipt.operationId : '' };
   } catch {
     return { ackId: '' };
   }
@@ -10144,12 +10160,32 @@ async function openRuntimeThreadForSelection(): Promise<void> {
  * `accepted` is reachable only through the acceptance sink, so a native end
  * structurally cannot render a task as accepted.
  */
+/**
+ * The exact payload the coordinator's attemptService delivers
+ * (`bridge/runtime/collaboration/attemptService.js`): the prompt's target is
+ * the attempt OWNER's own session, one level below the payload top. A
+ * top-level `session` field does not exist on this payload, so reading one
+ * answered `{ackId: ''}` for every real attempt and the attempt stopped at
+ * `reconcile` before a single prompt was sent. Delegation carries a top-level
+ * session and fan-out a `target.session`; only the attempt payload nests under
+ * the owner, which is why this is its own resolver.
+ */
+type CollaborationAttemptPayload = Readonly<{
+  readonly attemptId: string;
+  readonly taskId: string;
+  readonly owner: Readonly<{ readonly participantId: string; readonly session: SessionRef }>;
+  readonly prompt: string;
+}>;
+
+async function deliverCollaborationAttempt(payload: unknown): Promise<{ ackId: string }> {
+  const attempt = payload as Partial<CollaborationAttemptPayload>;
+  const session = attempt.owner?.session;
+  if (session === undefined || attempt.prompt === undefined) return { ackId: '' };
+  return deliverRuntimePrompt(session, attempt.prompt);
+}
+
 const runtimeCollaborationPorts = createAppCollaborationPorts({
-  deliverAttempt: async (payload) => {
-    const record = payload as { session?: SessionRef; prompt?: string };
-    if (record.session === undefined || record.prompt === undefined) return { ackId: '' };
-    return deliverRuntimePrompt(record.session, record.prompt);
-  },
+  deliverAttempt: deliverCollaborationAttempt,
   deliverDelegation: async (payload) => {
     const record = payload as { session?: SessionRef; prompt?: string };
     if (record.session === undefined || record.prompt === undefined) return { ackId: '' };
