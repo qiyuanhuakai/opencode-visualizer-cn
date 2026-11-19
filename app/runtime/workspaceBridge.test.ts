@@ -57,7 +57,7 @@ describe('Bridge workspace surfaces', () => {
       } finally { await service.close(); }
     `], { timeout: 15000 });
     expect(stdout).toContain('DEFAULT_SHELL_AND_PROCESS_REMOVAL_PASS');
-  });
+  }, 20_000); // The child has a separate 15-second timeout covering PTY startup and teardown.
   it('pages directory entries and file bytes, rejecting changes and escaped symlinks', async () => {
     const { root, workspaceKey, client } = await setup();
     await mkdir(path.join(root, 'dir'));
