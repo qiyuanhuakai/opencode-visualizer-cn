@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { encodeFrame, parseBinding } from '../../shared/runtime/protocol.js';
 import { StoreError, collection, text } from './storage/storeProtocol.js';
 
@@ -38,4 +39,3 @@ export function createReplayLog({ store }) {
     },
   };
 }
-import { createHash } from 'node:crypto';

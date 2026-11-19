@@ -82,7 +82,11 @@ export function validateFrame(input) {
       integerValue(value.seq, 'seq');
       requireValue(value.seq > 0, 'seq');
       integerValue(value.entityRevision, 'entityRevision');
-      entityKeyValue(value.scope, 'scope');
+      // Durable store patches identify their entity with an opaque SHA-256 scope.
+      // Other event types carry a qualified workspace, repository or session key.
+      if (value.type !== 'entity.patch' || typeof value.scope !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(value.scope)) {
+        entityKeyValue(value.scope, 'scope');
+      }
       textValue(value.type, 'type');
       break;
     case 'snapshot':

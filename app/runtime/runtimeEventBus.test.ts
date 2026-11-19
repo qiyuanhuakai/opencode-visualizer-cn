@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseEnvironmentId } from '../../shared/runtime/identity.js';
+import { encodeSessionKey, parseEnvironmentId, parseHarnessInstanceId } from '../../shared/runtime/identity.js';
 import { createRuntimeStore } from '../../bridge/runtime/storage/runtimeStore.js';
 import { createRuntimeEventBus } from '../../bridge/runtime/eventBus.js';
 import { createRuntimeSnapshots } from '../../bridge/runtime/snapshots.js';
@@ -13,6 +13,8 @@ import { createEventObserver } from '../../bridge/runtime/eventObservers.js';
 const environmentId = parseEnvironmentId('11111111-1111-4111-8111-111111111111');
 const epoch = '33333333-3333-4333-8333-333333333333';
 const binding = { target: environmentId, epoch, generation: 1 };
+const harnessInstanceId = parseHarnessInstanceId('22222222-2222-4222-8222-222222222222');
+const sessionScope = (nativeSessionId: string) => encodeSessionKey({ environmentId, harnessInstanceId, nativeSessionId });
 async function fixture(run: (store: ReturnType<typeof createRuntimeStore>, bus: ReturnType<typeof createRuntimeEventBus>) => Promise<void>) {
   const directory = await mkdtemp(path.join(tmpdir(), 'runtime-events-'));
   const store = createRuntimeStore({ stateDirectory: directory, environmentId, ownerId: randomUUID(), epoch });
@@ -96,7 +98,7 @@ describe('durable runtime event bus', () => {
       expect(observer.state.bytes).toBe(16 * (65536 + 24));
       expect(() => observer.openChannel(5)).toThrow();
       expect(() => observer.sendBinary({ channelId: 1, offset: 4 * 65536, data: new Uint8Array(1) })).toThrow();
-      observer.push({ kind: 'event', version: 1, ...binding, seq: 1, entityRevision: 1, scope: 'approval', type: 'entity.patch', payload: { collection: 'interactions', key: 'pending', deleted: false } }, true);
+      observer.push({ kind: 'event', version: 1, ...binding, seq: 1, entityRevision: 1, scope: sessionScope('approval'), type: 'entity.patch', payload: { collection: 'interactions', key: 'pending', deleted: false } }, true);
       expect(observer.read()).toMatchObject({ kind: 'control' });
       expect(observer.state.consumed).toBe(0);
       expect(observer.read()).toMatchObject({ kind: 'event' });
@@ -136,7 +138,7 @@ describe('durable runtime event bus', () => {
   it('recovers explicitly when 257 distinct summaries overflow the observer queue', () => {
     const observer = createEventObserver({ binding, after: 0, isCurrent: () => true, onClose: () => {} });
     try {
-      for (let seq = 1; seq <= 257; seq++) observer.push({ kind: 'event', version: 1, ...binding, seq, entityRevision: seq, scope: String(seq), type: 'entity.patch', payload: { collection: 'session_summaries', key: String(seq), deleted: false } });
+      for (let seq = 1; seq <= 257; seq++) observer.push({ kind: 'event', version: 1, ...binding, seq, entityRevision: seq, scope: sessionScope(String(seq)), type: 'entity.patch', payload: { collection: 'session_summaries', key: String(seq), deleted: false } });
       expect(observer.read()).toMatchObject({ kind: 'replay_required', after: 0, through: 257, reason: 'observer_overflow' });
       expect(observer.state.bytes).toBe(0);
       observer.resume(256);
