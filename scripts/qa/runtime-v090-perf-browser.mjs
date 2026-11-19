@@ -101,17 +101,19 @@ export async function measureInteractions(page, target) {
   await search.fill(target.title);
   const searchStarted = await page.evaluate(() => performance.now());
   await search.press('Enter');
-  const searchComplete = page.getByTestId('search-summary').waitFor({ timeout: 120000 })
-    .then(() => page.evaluate(time => performance.now() - time, searchStarted));
-  void searchComplete.catch(() => undefined);
   const title = page.getByText(target.title, { exact: true });
   const result = page.getByTestId('search-result').filter({ has: title });
+  await result.waitFor({ timeout: 120000 });
+  const searchMs = await page.evaluate(time => performance.now() - time, searchStarted);
+  // Selecting can switch the visible sidebar pane. Capture the completion
+  // marker while the search results surface is still on screen.
+  await page.getByTestId('search-summary').waitFor({ timeout: 120000 });
+  const searchCompleteMs = await page.evaluate(time => performance.now() - time, searchStarted);
   const selectedAt = await result.evaluate(element => {
     const selectedAt = performance.now();
     element.click();
     return selectedAt;
-  }, undefined, { timeout: 120000 });
-  const searchMs = selectedAt - searchStarted;
+  });
   const row = { title: target.title, nativeSessionId: target.nativeSessionId, harness: target.source };
   await page.locator('textarea[role="combobox"]').waitFor({ timeout: 30000 });
   const selectionVisibleMs = await page.evaluate((time) => performance.now() - time, selectedAt);
@@ -131,7 +133,6 @@ export async function measureInteractions(page, target) {
     }
     return samples;
   });
-  const searchCompleteMs = await searchComplete;
   return { row, searchMs, searchCompleteMs, selectionVisibleMs, historyMs, expand };
 }
 
