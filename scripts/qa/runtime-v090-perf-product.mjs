@@ -5,7 +5,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { productionSource, sourceSnapshot, validateSources, writeJson } from './runtime-v090-evidence.mjs';
 import { buildApp, serveApp } from './runtime-v090-perf-app.mjs';
-import { connectApp, measureInteractions, measureTree, openBrowser } from './runtime-v090-perf-browser.mjs';
+import { connectApp, measureEventVisibility, measureInteractions, measureTree, openBrowser } from './runtime-v090-perf-browser.mjs';
 import { indexInventory, prepareFixture, repository, startBridge, startNative } from './runtime-v090-perf-harness.mjs';
 import { summaryAt } from '../../app/dev/runtime-v090/fixtures/inventory.mjs';
 import { SLO } from './runtime-v090-benchmark.mjs';
@@ -78,6 +78,8 @@ try {
     const warm = await connectApp(browser.page, web.origin, network.port);
     report.warmTree = await measureTree(browser.page, warm);
     report.warmInteractions = await measureInteractions(browser.page, historySample);
+    const eventVisibleMs = await measureEventVisibility(browser.page, native.descriptor.opencode, historySample.nativeSessionId);
+    report.eventVisible = { ms: eventVisibleMs, budgetMs: SLO.eventVisibleMs, passed: eventVisibleMs <= SLO.eventVisibleMs };
     report.renderer = await browser.heap();
     report.bridgeObservedRssPeakBytes = Math.max(rssPeak, bridge.rss().rssBytes);
     const label = count > 10000 ? '100k' : '10k';

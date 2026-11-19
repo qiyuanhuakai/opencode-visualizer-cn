@@ -134,3 +134,18 @@ export async function measureInteractions(page, target) {
   const searchCompleteMs = await searchComplete;
   return { row, searchMs, searchCompleteMs, selectionVisibleMs, historyMs, expand };
 }
+
+export async function measureEventVisibility(page, nativeOrigin, nativeSessionId) {
+  const title = 'Vis measured native title update';
+  const endpoint = new URL('/qa/event', nativeOrigin);
+  endpoint.searchParams.set('title', title);
+  const started = performance.now();
+  const response = await fetch(endpoint, { signal: AbortSignal.timeout(5000) });
+  if (!response.ok) throw new Error(`Native title update failed (HTTP ${response.status})`);
+  const updated = await response.json();
+  if (updated.sessionId !== nativeSessionId || updated.title !== title) {
+    throw new Error('Native fixture updated a different session');
+  }
+  await page.locator('.top-panel .selected-label').getByText(title, { exact: true }).waitFor({ timeout: 10000 });
+  return performance.now() - started;
+}
