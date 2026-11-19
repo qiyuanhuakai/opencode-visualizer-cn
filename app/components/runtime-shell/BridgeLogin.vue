@@ -10,8 +10,8 @@ const { t } = useI18n();
 </script>
 
 <template>
-  <form class="bridge-login" data-runtime-ui data-testid="bridge-login" @submit.prevent="$emit('connect')">
-    <h1>vis_bridge</h1>
+  <form class="bridge-login" data-runtime-ui data-testid="bridge-login" aria-labelledby="bridge-login-title" @submit.prevent="$emit('connect')">
+    <h1 id="bridge-login-title">vis_bridge</h1>
     <p>{{ t('app.runtimeConnection.description') }}</p>
     <label for="bridge-url">{{ rt("Bridge URL") }}</label>
     <input id="bridge-url" v-model="url" class="bridge-control" name="bridgeUrl" required spellcheck="false" autocomplete="url" placeholder="ws://127.0.0.1:4096/runtime" />
@@ -29,6 +29,5 @@ p, label { font-size: var(--type-sm); }
 p { color: var(--theme-login-text-muted, var(--theme-text-muted)); }
 input, button { border: 1px solid var(--theme-border-default); border-radius: var(--radius-control); padding: var(--space-2) var(--space-3); background: var(--theme-surface-panel); color: var(--theme-text-primary); font: inherit; }
 button { cursor: pointer; }
-button:hover { background: var(--theme-surface-hover); }
-.bridge-error { color: var(--theme-status-error); overflow-wrap: anywhere; }
+.bridge-error { color: var(--codex-status-danger, var(--theme-text-primary)); overflow-wrap: anywhere; }
 </style>

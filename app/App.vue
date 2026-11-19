@@ -512,8 +512,11 @@
       @close="isProjectPickerOpen = false"
       @select="handleProjectDirectorySelect"
     />
-    <dialog ref="harnessSettingsDialog" class="runtime-settings-dialog" @cancel.prevent="isHarnessSettingsOpen = false" @close="isHarnessSettingsOpen = false">
-      <header><h2>{{ t('app.runtimeBridgeMenu.agentSettings') }}</h2><button type="button" @click="isHarnessSettingsOpen = false">{{ t('floatingWindow.close') }}</button></header>
+    <dialog ref="harnessSettingsDialog" class="runtime-settings-dialog" data-runtime-ui aria-labelledby="runtime-settings-title" @cancel.prevent="isHarnessSettingsOpen = false" @close="isHarnessSettingsOpen = false">
+      <header>
+        <h2 id="runtime-settings-title">{{ t('app.runtimeBridgeMenu.agentSettings') }}</h2>
+        <button type="button" class="action-button" @click="isHarnessSettingsOpen = false">{{ t('floatingWindow.close') }}</button>
+      </header>
       <AgentInstanceSelector :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
       <HarnessSettings v-if="harnessInstanceScope" :harness-kind="harnessSettingsKind" :manifests="harnessManifests" :scope="harnessInstanceScope" :controls="harnessSettingsControls" :action-labels="harnessSettingsActions" @save="handleHarnessSettingsSave" />
     </dialog>
@@ -14460,8 +14463,40 @@ body {
 }
 
 
-.runtime-settings-dialog { width: min(640px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; padding: 20px; border: 1px solid var(--theme-border-default); border-radius: 12px; color: var(--theme-text-primary); background: var(--theme-modal-bg); }
-.runtime-settings-dialog::backdrop { background: var(--theme-surface-overlay); }
-.runtime-settings-dialog header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.runtime-settings-dialog header button { padding: 6px 12px; border-radius: 6px; background: var(--theme-surface-hover); }
+.runtime-settings-dialog {
+  width: min(640px, calc(100vw - 32px));
+  max-height: 85vh;
+  overflow: auto;
+  padding: var(--space-4);
+  border: 1px solid var(--theme-modal-border, var(--theme-border-default));
+  border-radius: 12px;
+  color: var(--theme-modal-text, var(--theme-text-primary));
+  background: var(--theme-modal-bg, var(--theme-surface-panel-elevated));
+  box-shadow: var(--theme-shadow-panel);
+}
+
+.runtime-settings-dialog::backdrop {
+  background: var(--theme-surface-overlay);
+}
+
+.runtime-settings-dialog header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.runtime-settings-dialog header h2 {
+  font-size: var(--type-heading);
+  font-weight: 600;
+}
+
+.runtime-settings-dialog header button {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
 </style>
