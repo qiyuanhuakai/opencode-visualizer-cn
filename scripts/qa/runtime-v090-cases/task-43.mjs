@@ -223,6 +223,23 @@ export const sourceFiles = [...new Set([
   'app/components/Dropdown.vue',
   'app/components/runtime/DiscoveryStatus.vue',
   'app/components/runtime/HarnessBadge.vue',
+  'app/components/runtime/RuntimePins.vue',
+  'app/composables/useRuntimePins.ts',
+  'app/locales/runtimeUi.ts',
+  'app/locales/runtimeUiArtifacts.ts',
+  'app/locales/runtimeUiCollaboration.ts',
+  'app/locales/runtimeUiCommon.ts',
+  'app/locales/runtimeUiFeedback.ts',
+  'app/locales/runtimeUiRemote.ts',
+  'app/locales/runtimeUiStates.ts',
+  'app/locales/runtimeUiThreads.ts',
+  'app/runtime/pinStore.ts',
+  // The runtime loader selects these files dynamically in the default checkout.
+  'scripts/qa/vendor/omowright/runtime/omowright/index.js',
+  'scripts/qa/vendor/omowright/runtime/omowright/manifest.json',
+  'scripts/qa/vendor/omowright/runtime/omowright/page-bundle.js',
+  'scripts/qa/vendor/omowright/scripts/browser-engine-guard.mjs',
+  'scripts/qa/vendor/omowright/scripts/omowright.mjs',
   'app/types/pin.ts',
   'app/types/session-tree.ts',
   // the closure of the two TypeScript modules the system harness ssrLoadModules
@@ -268,10 +285,8 @@ const WALK_SEEDS = Object.freeze([
  */
 const autoInventoried = (file) => file.startsWith('shared/runtime/') || file.includes('runtime-v090') || /^app\/runtime.*\.test\.ts$/.test(file) || file === 'package.json';
 /**
- * The static import / require closure of the seeds. TEXT-based by construction: a specifier built
- * at runtime is invisible to it, which is why the one dynamically-imported file the run loads from
- * OUTSIDE the worktree (the omowright browser skill both harnesses import) is declared explicitly
- * in C4 rather than discovered here.
+ * Walk local literal imports and requires. The dynamically selected default
+ * browser kernel is explicitly listed in sourceFiles.
  */
 function walkExecutedFiles(root) {
   const seen = new Set();
@@ -357,7 +372,6 @@ export async function run(context) {
       browserEntryRegistered: registered.has('app/dev/runtime-v090/task43.ts'),
       bothHarnessesRegistered: registered.has('scripts/qa/runtime-v090-system.mjs') && registered.has('scripts/qa/runtime-v090-faults.mjs'),
       thisCaseRegistered: registered.has('scripts/qa/runtime-v090-cases/task-43.mjs') && registered.has('scripts/qa/runtime-v090-cases/task-43-fixture.mjs'),
-      externalExecutedFiles: ['the omowright browser skill both harnesses import dynamically from outside the worktree (/home/qiyuaner/.codex/plugins/cache/sisyphuslabs/omo/5.1.27/skills/browser/scripts/omowright.mjs), which the runner cannot pin and which this walk cannot see because its specifier is a variable'],
     }, {
       executedFileCount: executed.size,
       registeredCount: registered.size,
@@ -368,7 +382,6 @@ export async function run(context) {
       browserEntryRegistered: true,
       bothHarnessesRegistered: true,
       thisCaseRegistered: true,
-      externalExecutedFiles: ['the omowright browser skill both harnesses import dynamically from outside the worktree (/home/qiyuaner/.codex/plugins/cache/sisyphuslabs/omo/5.1.27/skills/browser/scripts/omowright.mjs), which the runner cannot pin and which this walk cannot see because its specifier is a variable'],
     }, 'the static import/require walk over the case module, its fixture, the browser entry, both landed harnesses and the two migration modules the system harness loads through the case-owned Vite server, compared against the merged sourceFiles array and the runner own inventory rule');
 
     // ══════════════════════════════════════════════════════════════════════════════════════════
