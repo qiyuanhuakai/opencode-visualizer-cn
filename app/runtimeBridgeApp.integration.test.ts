@@ -71,7 +71,8 @@ it('opens the selected session as a Host Thread through the Bridge', async () =>
 }, 30000);
 
 it('loads DSH account status from the management instance while OpenCode owns the conversation', async () => {
-  const fixture = await mountRuntimeApp([], { dshAccount: { status: 'signed-in' } });
+  const dshAccount = { status: 'signed-in' };
+  const fixture = await mountRuntimeApp([], { dshAccount });
   await fixture.connect();
   await fixture.select('Session A');
   fixture.element.querySelector<HTMLButtonElement>('button[title="Status monitor"]')!.click();
@@ -86,6 +87,17 @@ it('loads DSH account status from the management instance while OpenCode owns th
   option!.click();
   await vi.waitFor(() => expect(monitor.textContent).toContain('Signed in'));
   expect(fixture.nativeQueries.filter(query => query.operation === 'dsh.ui.account.getState')).toEqual([
+    { operation: 'dsh.ui.account.getState' },
+  ]);
+  dshAccount.status = 'signed-out';
+  await vi.waitFor(() => {
+    const refresh = monitor.querySelector<HTMLButtonElement>('button.refresh-button');
+    expect(refresh?.disabled).toBe(false);
+    refresh!.click();
+  });
+  await vi.waitFor(() => expect(monitor.textContent).toContain('Signed out'));
+  expect(fixture.nativeQueries.filter(query => query.operation === 'dsh.ui.account.getState')).toEqual([
+    { operation: 'dsh.ui.account.getState' },
     { operation: 'dsh.ui.account.getState' },
   ]);
   expect(fixture.historyOpens.map(session => session.nativeSessionId)).toEqual(['session-a']);

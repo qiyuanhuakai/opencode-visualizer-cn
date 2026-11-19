@@ -614,6 +614,7 @@
       :harness-scope="harnessInstanceScope ?? undefined"
       :harness-manifests="harnessManifests"
       @close="isStatusMonitorOpen = false"
+      @refresh="managementDshStatusRefresh++"
     >
       <template #agent-selector>
         <AgentInstanceSelector v-if="harnessManifests.length" :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
@@ -11010,7 +11011,8 @@ const managementDshRpcClient = computed(() => {
   return manifest?.kind === 'dsh' && client ? createNativeDshRpc(client, manifest) : undefined;
 });
 const managementDshStatus = shallowRef<DshStatusSnapshot>();
-watch([managementDshRpcClient, isStatusMonitorOpen], async ([rpc, open], _previous, onCleanup) => {
+const managementDshStatusRefresh = ref(0);
+watch([managementDshRpcClient, isStatusMonitorOpen, managementDshStatusRefresh], async ([rpc, open], _previous, onCleanup) => {
   managementDshStatus.value = undefined;
   if (!rpc || !open) return;
   const accountOperation = managementManifest.value?.extensions.find(entry => entry.name === 'dsh.ui.account.getState');

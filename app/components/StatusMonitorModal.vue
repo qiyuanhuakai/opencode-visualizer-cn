@@ -251,7 +251,7 @@ const props = defineProps<{
   /** The harness manifests visible to this modal; only the target instance resolves. */
   harnessManifests?: readonly HarnessManifest[];
 }>();
-const emit = defineEmits<{ close: [] }>();
+const emit = defineEmits<{ close: []; refresh: [] }>();
 
 const { t, locale } = useI18n();
 const popoverRef = ref<HTMLDivElement | null>(null);
@@ -713,6 +713,7 @@ function finishRefresh(requestId: number, completedRefresh: Promise<void>) {
 }
 
 async function handleRefresh() {
+  emit('refresh');
   if (activeTab.value === 'token') void kimiAccountUsageRef.value?.refresh();
   if (activeTab.value === 'token') void accountUsageRef.value?.refresh();
   if (activeTab.value === 'acp') {
