@@ -1,7 +1,6 @@
 import { nextTick } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mountCodexApp, mountHistoryApp } from './test/appHarness';
-import { StorageKeys } from './utils/storageKeys';
+import { mountCodexApp } from './test/appHarness';
 
 const mountedApps: Array<{ readonly unmount: () => void }> = [];
 
@@ -36,42 +35,7 @@ async function enterAndSend(host: HTMLElement, text: string) {
   send?.click();
 }
 
-describe('App provider model and ACP archive binding', () => {
-  it('Given a ready real App, When ACP publishes an archived session, Then App projects the archived time into its live session state', async () => {
-    const fixture = await mountHistoryApp([]);
-    mountedApps.push(fixture);
-
-    fixture.setStoredBackendKind('acp');
-    fixture.dispatchStorageChange(StorageKeys.auth.acpAgentId, 'oh-my-pi');
-    await nextTick();
-    fixture.emitAcpEvent({
-      type: 'session.updated',
-      info: {
-        id: 'archived-acp-session',
-        title: 'Archived ACP session',
-        status: 'idle',
-        directory: '/repo',
-        time: { created: 10, updated: 20, archived: 30 },
-      },
-    });
-
-    await vi.waitFor(() =>
-      expect(fixture.readSetupBinding('serverState')).toMatchObject({
-        projects: {
-          acp: {
-            sandboxes: {
-              '/repo': {
-                sessions: {
-                  'archived-acp-session': { timeArchived: 30 },
-                },
-              },
-            },
-          },
-        },
-      }),
-    );
-  });
-
+describe('App Codex provider model binding', () => {
   it('Given a mounted Codex App with an openai thread, When the user sends with official then custom models through the composer, Then official reuses the openai thread while custom starts a fresh thread', async () => {
     const fixture = await mountCodexApp();
     mountedApps.push(fixture);

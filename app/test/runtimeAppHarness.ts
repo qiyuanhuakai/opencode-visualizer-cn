@@ -39,7 +39,7 @@ vi.mock('../composables/useGlobalEvents', () => ({ useGlobalEvents: () => ({
 type NativeHistory = Readonly<{ info: Readonly<Record<string, JsonValue>>; parts: readonly JsonValue[] }>;
 
 /** Real App + TCP/WebSocket + production Runtime/SQLite, controlled native harness boundary. */
-export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; bridgeToken?: string; additionalModelId?: string; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
+export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; bridgeToken?: string; additionalModelId?: string; archivedAcpSession?: boolean; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
   // Load the Node worker owner without Vite's browser asset URL rewriting.
   // The worker itself still runs the production module in a real subprocess.
   const requireNodeModule = createRequire(path.resolve(process.cwd(), 'package.json'));
@@ -71,7 +71,7 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
   const services = await createRuntimeServices({
     environmentId: randomUUID(), stateRoot: path.join(root, 'state'), role: 'local',
     roots: [{ root: directory, permissions: ['read', 'write', 'command', 'pty'] }],
-    config: { version: 1, nativeServices: { opencode: true, codex: false, 'kimi-web': false, dsh: options.dshAccount !== undefined }, acpAgents: [] },
+    config: { version: 1, nativeServices: { opencode: true, codex: false, 'kimi-web': false, dsh: options.dshAccount !== undefined }, acpAgents: options.archivedAcpSession ? [{ id: 'fixture-acp', name: 'Fixture ACP', enabled: true, command: process.execPath, args: [], env: {} }] : [] },
     nativeSupervisor: supervisor, acpManager: acp, runtime: { mutate: action => action() },
     factories: { opencode: async context => {
       const identity = { environmentId: parseEnvironmentId(context.environmentId), harnessInstanceId: parseHarnessInstanceId(context.harnessInstanceId), kind: 'opencode' as const };
@@ -114,6 +114,24 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
             };
           },
         }, native: Object.fromEntries(Object.entries(queries).map(([operation, value]) => [operation, input => { nativeQueries.push({ operation, ...(input.session ? { session: input.session } : {}) }); return value; }])) },
+      }, close: async () => {} };
+    }, acp: async context => {
+      const identity = { environmentId: parseEnvironmentId(context.environmentId), harnessInstanceId: parseHarnessInstanceId(context.harnessInstanceId), kind: 'acp' as const };
+      const empty = unavailableRegistration(identity, 'starting');
+      const nativeSessionId = 'archived-acp-session';
+      return { registration: {
+        manifest: { ...empty.manifest, core: { ...empty.manifest.core, inspect: { state: 'supported' }, listSessionPage: { state: 'supported' } } },
+        driver: { core: {
+          inspect: () => ({ state: 'ready', protocolVersion: 1 }),
+          listSessionPage: () => ({
+            items: [{
+              session: { environmentId: identity.environmentId, harnessInstanceId: identity.harnessInstanceId, nativeSessionId },
+              native: { sessionId: nativeSessionId, cwd: directory, title: 'Archived ACP session', _meta: { archived: true } },
+            }],
+            cursor: null,
+            status: 'complete',
+          }),
+        }, native: {} },
       }, close: async () => {} };
     }, dsh: async context => {
       const identity = { environmentId: parseEnvironmentId(context.environmentId), harnessInstanceId: parseHarnessInstanceId(context.harnessInstanceId), kind: 'dsh' as const };

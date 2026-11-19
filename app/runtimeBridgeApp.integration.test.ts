@@ -133,3 +133,20 @@ it('hides a slash-containing model from Bridge providers without changing the ac
   expect(fixture.nativeQueries.filter(query => query.operation === 'listProviders').length).toBeGreaterThan(providerQueries);
   expect(fixture.historyOpens).toHaveLength(historyCount);
 }, 15000);
+
+it('places archived ACP protocol sessions in the unified archived section', async () => {
+  const fixture = await mountRuntimeApp([], { archivedAcpSession: true });
+  await fixture.connect();
+  const archive = await vi.waitFor(() => {
+    const row = [...fixture.element.querySelectorAll('[role="treeitem"]')].find(item => item.textContent?.includes('Archived'));
+    expect(row, fixture.element.querySelector('[data-testid=unified-session-tree]')?.textContent).toBeTruthy();
+    return row!;
+  }, { timeout: 10000 });
+  expect(fixture.element.textContent).not.toContain('Archived ACP session');
+  archive.querySelector<HTMLElement>('[data-testid="row-toggle"]')!.click();
+  await vi.waitFor(() => {
+    const session = [...fixture.element.querySelectorAll('[role="treeitem"]')].find(item => item.textContent?.includes('Archived ACP session'));
+    expect(session).toBeTruthy();
+    expect(Number(session?.getAttribute('aria-level'))).toBeGreaterThan(Number(archive.getAttribute('aria-level')));
+  });
+}, 20000);
