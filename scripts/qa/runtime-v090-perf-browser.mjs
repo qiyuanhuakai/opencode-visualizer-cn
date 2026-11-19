@@ -106,12 +106,16 @@ export async function measureInteractions(page, selected) {
     if (candidate) { attempted.add(candidate.key); await page.locator(`[data-row-key=${JSON.stringify(candidate.key)}]`).click(); }
     return false;
   }, 'authorized native history session');
-  const row = await selected.evaluate((element) => ({ key: element.getAttribute('data-row-key'), title: element.querySelector('.unified-row-label')?.textContent, harness: element.getAttribute('data-harness') }));
-  const selectedAt = await page.evaluate((key) => {
-    const now = performance.now();
-    document.querySelector(`[data-row-key=${JSON.stringify(key)}]`).click();
-    return now;
-  }, row.key);
+  const { row, selectedAt } = await selected.evaluate(element => {
+    const row = {
+      key: element.getAttribute('data-row-key'),
+      title: element.querySelector('.unified-row-label')?.textContent,
+      harness: element.getAttribute('data-harness'),
+    };
+    const selectedAt = performance.now();
+    element.click();
+    return { row, selectedAt };
+  });
   await page.locator('textarea[role="combobox"]').waitFor({ timeout: 30000 });
   const selectionVisibleMs = await page.evaluate((time) => performance.now() - time, selectedAt);
   let historyMs = null;
