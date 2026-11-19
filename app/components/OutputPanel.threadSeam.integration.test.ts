@@ -114,8 +114,11 @@ async function mountThreadOutputPanel(): Promise<Mounted> {
         threadDraftText: '',
         threadHandoffEntries: [],
         threadLatestNativeEventId: '',
-        onRefreshNativeHistory: (payload: { participantId: string; session: SessionRef }) => {
-          this.refreshCalls.push(payload);
+        onLocateThreadSession: (session: SessionRef) => { this.state.locateSession(session); },
+        onBrowseThreadHistory: (participantId: string) => {
+          const session = this.state.sessionOfParticipant(participantId);
+          if (!session) throw new Error('Missing history participant session');
+          this.refreshCalls.push({ participantId, session });
           readCount.value += 1;
         },
       });

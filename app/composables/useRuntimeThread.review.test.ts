@@ -9,6 +9,7 @@
  * pins a behaviour that was actually observed before the fix.
  */
 import { createApp, defineComponent, h, nextTick, ref } from 'vue';
+import { createI18n } from 'vue-i18n';
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 
@@ -360,6 +361,7 @@ describe('participant picker identity', () => {
     }));
     const host = document.createElement('div');
     document.body.appendChild(host);
+    app.use(createI18n({ legacy: false, locale: 'en', messages: { en: {} }, missingWarn: false }));
     app.mount(host);
     await nextTick();
 
@@ -409,6 +411,7 @@ describe('participant picker identity', () => {
     }));
     const host = document.createElement('div');
     document.body.appendChild(host);
+    app.use(createI18n({ legacy: false, locale: 'en', messages: { en: {} }, missingWarn: false }));
     app.mount(host);
     await nextTick();
 
@@ -464,6 +467,7 @@ describe('evidence cache invalidation', () => {
     }));
     const host = document.createElement('div');
     document.body.appendChild(host);
+    app.use(createI18n({ legacy: false, locale: 'en', messages: { en: {} }, missingWarn: false }));
     app.mount(host);
     await nextTick();
     await tick();
@@ -514,6 +518,7 @@ describe('evidence cache invalidation', () => {
         } as never);
       },
     }));
+    app.use(createI18n({ legacy: false, locale: 'en', messages: { en: {} }, missingWarn: false }));
     app.mount(host);
     await nextTick();
     await tick();
@@ -573,6 +578,7 @@ describe('evidence cache invalidation', () => {
         } as never);
       },
     }));
+    app.use(createI18n({ legacy: false, locale: 'en', messages: { en: {} }, missingWarn: false }));
     app.mount(host);
     await nextTick();
     await tick();
