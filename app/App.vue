@@ -13377,9 +13377,13 @@ async function handleLogout() {
   persistComposerDraftForCurrentContext();
   await qualifiedDraftWrites;
   if (runtimeDraftFailure.value) return;
+  const bridgeConnected = runtimeConnectionOwner !== undefined;
+  bridgeLoginGeneration++;
+  bridgeLoginToken.value = '';
   stopRuntimeRecovery?.();
   runtimeOnline.value = false;
   runtimeConnectionOwner?.dispose();
+  runtimeConnectionOwner = undefined;
   runtimeSelectedDirectory.value = null;
   runtimePtyOwners.clear();
   runtimeActionClient.value = null;
@@ -13389,6 +13393,16 @@ async function handleLogout() {
   abortInitialization();
   initialQuery.projectId = '';
   initialQuery.sessionId = '';
+  if (bridgeConnected) {
+    selectedSessionId.value = '';
+    selectedProjectId.value = '';
+    harnessManifests.value = [];
+    managementHarnessInstanceId.value = null;
+    disposeShellWindows();
+    initErrorMessage.value = '';
+    connectionState.value = 'connecting';
+    return;
+  }
   if (activeBackendKind.value === 'acp') {
     selectedSessionId.value = '';
     selectedProjectId.value = '';
