@@ -31,6 +31,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Loads every registered final verifier from a clean temporary checkout at
+      # an arbitrary path and requires its declared dependencies to resolve
+      # there. A registration that references files this tree does not deliver
+      # fails here naming them, instead of dying at lane runtime with a bare
+      # ERR_MODULE_NOT_FOUND / ENOENT (the first F2/F3 delivery-gap class).
+      - name: Final-verifier clean-checkout smoke
+        run: node --test scripts/qa/runtime-v090-verifiers.test.mjs
+
       - name: Lint and type-check
         run: pnpm lint
 
