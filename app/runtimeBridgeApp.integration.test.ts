@@ -5,6 +5,9 @@ it('connects through Bridge login and renders selected native history over the a
   const fixture = await mountRuntimeApp([{ info: { id: 'message-from-backend', sessionID: 'session-a', role: 'user', time: { created: 101 } }, parts: [{ id: 'part-from-backend', messageID: 'message-from-backend', sessionID: 'session-a', type: 'text', text: 'History through the qualified Bridge boundary' }] }]);
   expect(fixture.element.querySelector('.app-login-backend')).toBeNull();
   await fixture.connect();
+  const inspections = fixture.frames.filter(frame => frame.direction === 'send'
+    && (frame.value as { method?: string }).method === 'runtime.inspect');
+  expect(inspections).toHaveLength(1);
   await fixture.select('Session A');
   await vi.waitFor(() => expect(fixture.element.textContent).toContain('History through the qualified Bridge boundary'), { timeout: 10000 });
   expect(fixture.historyOpens).toEqual([expect.objectContaining({ environmentId: fixture.environmentId, nativeSessionId: 'session-a' })]);

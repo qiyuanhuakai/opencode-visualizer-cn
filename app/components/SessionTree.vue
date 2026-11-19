@@ -62,6 +62,12 @@
           <Icon class="unified-spin" icon="lucide:loader-2" :width="12" :height="12" />
           {{ $t('runtime.sessionTree.waitingIndexView', 'Waiting for an index view…') }}
         </span>
+        <span v-if="searchState?.status === 'searching' && !searchState.waiting" class="unified-meta-loading" role="status" data-testid="search-pending">
+          {{ $t('runtime.sessionTree.searching') }}
+        </span>
+        <span v-if="searchState?.status === 'error'" class="unified-meta-error" role="alert" data-testid="search-error">
+          {{ $t('runtime.sessionTree.searchError') }}
+        </span>
         <span
           v-if="searchState && searchState.status === 'complete'"
           class="unified-meta-search"
@@ -70,7 +76,7 @@
           {{ searchState.matches.length }} / {{ searchState.totalMatched }} {{ $t('runtime.sessionTree.matches', 'matches') }} · {{ searchState.scanned }} {{ $t('runtime.sessionTree.scanned', 'scanned') }} · {{ searchState.pages }} {{ $t('runtime.sessionTree.pages', 'pages') }}
         </span>
       </div>
-      <ul v-if="searchState && searchState.status === 'complete' && searchState.matches.length" class="unified-search-results" data-testid="search-results">
+      <ul v-if="searchState?.matches.length" class="unified-search-results" data-testid="search-results">
         <li v-for="match in searchState.matches" :key="match.key">
           <button type="button" class="unified-search-result" data-testid="search-result" @click="emit('select-key', match.key)">
             <HarnessBadge class="unified-search-result-badge" :harness="match.harness" compact />

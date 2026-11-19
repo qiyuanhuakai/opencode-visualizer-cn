@@ -6700,9 +6700,11 @@ const ptyWindowOwner = usePtyWindowOwner({
   },
   cleanupSession: (ptyId: string, session: ShellSession, options: { readonly kill: boolean }) => {
     pendingShellFits.delete(ptyId);
+    // The runtime PTY socket dispatches close synchronously. Retire the
+    // renderer's ownership before those callbacks can act on this window.
+    shellSessionsByPtyId.delete(ptyId);
     session.socket?.close();
     session.terminal.dispose();
-    shellSessionsByPtyId.delete(ptyId);
     if (forgePtyId === ptyId) {
       forgePtyId = '';
       if (options.kill) storageRemove(StorageKeys.state.forgePtyId);
@@ -9914,8 +9916,8 @@ async function connectRuntimeBridge(): Promise<void> {
   runtimeConnectionOwner = owner;
   const reference = await owner.connect();
   if (runtimeConnectionOwner !== owner) return;
-  const inspection = await owner.client.inspect();
-  if (runtimeConnectionOwner !== owner) return;
+  const inspection = owner.inspection.value;
+  if (!inspection || owner.reference.value !== reference) throw new Error('Bridge connection changed.');
   bridgeReference.value = reference;
   harnessManifests.value = inspection.harnesses.map(entry => entry.manifest);
   runtimeWorkspaceKeys = inspection.targets.find(target => target.target === reference.expectedEnvironmentId)?.workspaceKeys ?? [];
@@ -9948,7 +9950,8 @@ async function connectRuntimeBridge(): Promise<void> {
       persistComposerDraftForCurrentContext();
       await qualifiedDraftWrites;
       if (runtimeDraftFailure.value || current !== recoveryGeneration || runtimeConnectionOwner !== owner) return;
-      const refreshed = await owner.client.inspect();
+      const refreshed = owner.inspection.value;
+      if (!refreshed || owner.reference.value !== verified) return;
       const target = pendingTarget ?? verified.expectedEnvironmentId;
       if (!target || !refreshed.targets.some(grant => grant.target === target)) {
         runtimeOnline.value = true;

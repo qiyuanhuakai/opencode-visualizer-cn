@@ -99,14 +99,21 @@ export async function measureTree(page, connected) {
 export async function measureInteractions(page, target) {
   const search = page.getByTestId('unified-search-input');
   await search.fill(target.title);
+  const searchStarted = await page.evaluate(() => performance.now());
   await search.press('Enter');
   const title = page.getByText(target.title, { exact: true });
   const result = page.getByTestId('search-result').filter({ has: title });
+  await result.waitFor({ timeout: 120000 });
+  const searchMs = await page.evaluate(time => performance.now() - time, searchStarted);
+  // Selecting can switch the visible sidebar pane. Capture the completion
+  // marker while the search results surface is still on screen.
+  await page.getByTestId('search-summary').waitFor({ timeout: 120000 });
+  const searchCompleteMs = await page.evaluate(time => performance.now() - time, searchStarted);
   const selectedAt = await result.evaluate(element => {
     const selectedAt = performance.now();
     element.click();
     return selectedAt;
-  }, undefined, { timeout: 30000 });
+  });
   const row = { title: target.title, nativeSessionId: target.nativeSessionId, harness: target.source };
   await page.locator('textarea[role="combobox"]').waitFor({ timeout: 30000 });
   const selectionVisibleMs = await page.evaluate((time) => performance.now() - time, selectedAt);
@@ -126,5 +133,37 @@ export async function measureInteractions(page, target) {
     }
     return samples;
   });
-  return { row, selectionVisibleMs, historyMs, expand };
+  return { row, searchMs, searchCompleteMs, selectionVisibleMs, historyMs, expand };
+}
+
+export async function measureEventVisibility(page, nativeOrigin, nativeSessionId) {
+  const title = 'Vis measured native title update';
+  const endpoint = new URL('/qa/event', nativeOrigin);
+  endpoint.searchParams.set('title', title);
+  await page.evaluate(expected => {
+    window.__visMeasuredTitle = new Promise(resolve => {
+      const observer = new MutationObserver(() => {
+        if (document.querySelector('.top-panel .selected-title')?.textContent?.trim() !== expected) return;
+        clearTimeout(timeout);
+        observer.disconnect();
+        resolve(performance.timeOrigin + performance.now());
+      });
+      const timeout = setTimeout(() => { observer.disconnect(); resolve(null); }, 10000);
+      observer.observe(document.body, { subtree: true, characterData: true, childList: true });
+    });
+  }, title);
+  const startedAt = Date.now();
+  const response = await fetch(endpoint, { signal: AbortSignal.timeout(5000) });
+  if (!response.ok) throw new Error(`Native title update failed (HTTP ${response.status})`);
+  const updated = await response.json();
+  if (updated.sessionId !== nativeSessionId || updated.title !== title) {
+    throw new Error('Native fixture updated a different session');
+  }
+  const visibleAt = await page.evaluate(async () => {
+    const time = await window.__visMeasuredTitle;
+    delete window.__visMeasuredTitle;
+    return time;
+  });
+  if (visibleAt === null) throw new Error('Native title update did not reach the selected session');
+  return visibleAt - startedAt;
 }

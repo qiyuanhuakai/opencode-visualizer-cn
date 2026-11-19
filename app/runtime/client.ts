@@ -307,10 +307,25 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
   }
   async function observe(target: EnvironmentId, options: RequestOptions & { readonly after: number; readonly onDelivery: (delivery: ObserverDelivery) => void | Promise<void>; readonly onDeliveries?: (deliveries: readonly ObserverDelivery[]) => Promise<void> }) {
     const attached = getTarget(target);
-    const { observerId } = await request(target, 'runtime.observer.open', { after: options.after }, options);
+    const selectionCurrent = () => !options.signal?.aborted && (options.selectionCurrent?.() ?? true);
+    requireValue(selectionCurrent(), 'request.selection', 'cancelled');
+    // Consume the server's allocation acknowledgement even if the view is cancelled.
+    const { observerId } = await request(target, 'runtime.observer.open', { after: options.after }, { onDrained: options.onDrained }).catch(error => {
+      if (error instanceof RuntimeRequestError && error.code === 'timeout' && current(attached)) connection.disconnect();
+      throw error;
+    });
     let closed = false;
     let reading = false;
-    const active = () => requireValue(!closed && current(attached) && (options.selectionCurrent?.() ?? true), 'observer.closed', 'reconcile_required');
+    async function close() {
+      if (closed) return;
+      closed = true;
+      if (current(attached)) await request(target, 'runtime.observer.close', { observerId });
+    }
+    if (!selectionCurrent()) {
+      await close();
+      throw new ProtocolError('cancelled', 'request.selection');
+    }
+    const active = () => requireValue(!closed && current(attached) && selectionCurrent(), 'observer.closed', 'reconcile_required');
     async function resume(after: number) {
       active();
       await request(target, 'runtime.observer.resume', { observerId, after }, options);
@@ -363,11 +378,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
         } finally { reading = false; }
       },
       resume,
-      async close() {
-        if (closed) return;
-        closed = true;
-        if (current(attached)) await request(target, 'runtime.observer.close', { observerId });
-      },
+      close,
     };
   }
   async function snapshot(target: EnvironmentId, collections: Collection | readonly Collection[], options: RequestOptions & { readonly onPage: (collection: Collection, page: Snapshot) => void | Promise<void>; readonly onDelivery?: (delivery: ObserverDelivery) => void | Promise<void>; readonly onDeliveries?: (deliveries: readonly ObserverDelivery[]) => Promise<void> }) {
@@ -377,19 +388,34 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     requireValue(names.length > 0 && names.length <= 5 && new Set(names).size === names.length, 'snapshot.collections');
     attached.paging = true;
     let first: Snapshot | undefined;
-    let observer: Awaited<ReturnType<typeof observe>> | undefined;
+    let openingObserver: ReturnType<typeof observe> | undefined;
+    const prefetched = new Map<Collection, Promise<Snapshot>>();
     let releaseView: (() => Promise<void>) | undefined;
     try {
       if (attached.indexSnapshot) await retireView(attached, attached.indexSnapshot.token);
       for (const collection of names) {
         let cursor: string | null = null;
         do {
-          const page: Snapshot = await request(target, 'runtime.snapshot', { collection, ...(first ? { token: first.token } : {}), cursor, limit: 200 }, options);
+          const ahead = cursor === null ? prefetched.get(collection) : undefined;
+          const page: Snapshot = await (ahead ?? request(target, 'runtime.snapshot', { collection, ...(first ? { token: first.token } : {}), cursor, limit: 200 }, options));
+          if (ahead) prefetched.delete(collection);
           if (!first) {
             first = page;
             releaseView = holdView(attached, page.token);
             await publishView(attached, page);
-            observer = await observe(target, { ...options, after: first.watermark, onDelivery: options.onDelivery ?? (() => {}) });
+            // Register at the captured watermark while the remaining pages
+            // are downloaded. Event reads still begin after snapshot commit.
+            openingObserver = observe(target, { ...options, after: first.watermark, onDelivery: options.onDelivery ?? (() => {}) });
+            void openingObserver.catch(() => undefined);
+            if (names.length >= 3) {
+              // Queue at most two independent first pages on this same token.
+              // Apply them in collection order so session rows see topology.
+              for (const nextCollection of names.slice(1, 3)) {
+                const pending = request(target, 'runtime.snapshot', { collection: nextCollection, token: page.token, cursor: null, limit: 200 }, options);
+                prefetched.set(nextCollection, pending);
+                void pending.catch(() => undefined);
+              }
+            }
           }
           requireValue(page.token === first.token && page.revision === first.revision && page.watermark === first.watermark && page.target === attached.hello.target && page.epoch === attached.hello.epoch && page.generation === attached.hello.generation, 'snapshot.atomic', 'replay_required');
           requireValue(page.expiresAt > Date.now() && (page.cursor === null || page.cursor !== cursor), 'snapshot.expired', 'replay_required');
@@ -398,13 +424,20 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
           cursor = page.cursor;
         } while (cursor !== null);
       }
-      requireValue(first !== undefined && observer !== undefined, 'snapshot.empty');
+      requireValue(first !== undefined && openingObserver !== undefined, 'snapshot.empty');
+      const observer = await openingObserver;
+      requireValue(current(attached) && (options.selectionCurrent?.() ?? true), 'snapshot.selection', 'reconcile_required');
       attached.state.acceptSnapshot(first, Date.now());
       return { token: first.token, revision: first.revision, watermark: first.watermark, observer };
     } catch (error) {
-      if (observer) await observer.close();
+      const observer = await openingObserver?.catch(() => undefined);
+      if (observer) await observer.close().catch(() => undefined);
       throw error;
-    } finally { attached.paging = false; await releaseView?.(); }
+    } finally {
+      await Promise.allSettled(prefetched.values());
+      attached.paging = false;
+      await releaseView?.();
+    }
   }
   /**
    * Page index collections WITHOUT opening an observer and WITHOUT taking the

@@ -1,5 +1,5 @@
-import { getCurrentScope, onScopeDispose, readonly, shallowRef } from 'vue';
-import type { PublicConnectionReference } from '../../shared/runtime/runtimeWire.js';
+import { getCurrentScope, onScopeDispose, readonly, shallowReadonly, shallowRef } from 'vue';
+import type { PublicConnectionReference, RuntimeInspection } from '../../shared/runtime/runtimeWire.js';
 import type { SessionRef } from '../../shared/runtime/identity.js';
 import { createRuntimeClient } from '../runtime/client';
 import { createRuntimeConnection, type RuntimeConnectionOptions, type RuntimeConnectionStatus } from '../runtime/connection';
@@ -12,6 +12,7 @@ export function useRuntimeConnection(options: RuntimeConnectionOptions & Readonl
   const client = createRuntimeClient({ connection });
   const status = shallowRef<RuntimeConnectionStatus>(connection.status);
   const reference = shallowRef<PublicConnectionReference | null>(null);
+  const inspection = shallowRef<RuntimeInspection | null>(null);
   const pendingSelection = options.selection ? createPendingSelection(options.selection) : undefined;
   const selection = shallowRef(pendingSelection?.state ?? null);
   let disposed = false;
@@ -23,12 +24,14 @@ export function useRuntimeConnection(options: RuntimeConnectionOptions & Readonl
     switch (event.kind) {
       case 'hello': {
         const current = ++revision;
+        inspection.value = null;
         reference.value = null;
         pendingSelection?.suspend(); selection.value = pendingSelection?.state ?? null;
-        verified = client.inspect().then(inspection => {
+        verified = client.inspect().then(currentInspection => {
           if (disposed || revision !== current || connection.status.generation !== event.generation || connection.status.state !== 'ready') throw new RuntimeConnectionError('cancelled');
-          const adopted = adoptConnectionReference(provenReference ?? selectedReference, event.hello, inspection);
+          const adopted = adoptConnectionReference(provenReference ?? selectedReference, event.hello, currentInspection);
           provenReference = adopted;
+          inspection.value = currentInspection;
           reference.value = adopted; return adopted;
         }).catch(error => {
           const safe = connectionError(error);
@@ -42,7 +45,7 @@ export function useRuntimeConnection(options: RuntimeConnectionOptions & Readonl
         break;
       }
       case 'disconnected':
-        revision += 1; reference.value = null; pendingSelection?.suspend(); selection.value = pendingSelection?.state ?? null;
+        revision += 1; inspection.value = null; reference.value = null; pendingSelection?.suspend(); selection.value = pendingSelection?.state ?? null;
         break;
       case 'error':
       case 'frame':
@@ -58,7 +61,7 @@ export function useRuntimeConnection(options: RuntimeConnectionOptions & Readonl
   }
   if (getCurrentScope()) onScopeDispose(dispose);
   return {
-    connection, client, status: readonly(status), reference: readonly(reference), selection: readonly(selection),
+    connection, client, status: readonly(status), reference: readonly(reference), inspection: shallowReadonly(inspection), selection: readonly(selection),
     async connect(): Promise<PublicConnectionReference> {
       const opening = connection.connect(); status.value = connection.status;
       await opening;
