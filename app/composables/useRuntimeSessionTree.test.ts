@@ -217,6 +217,23 @@ async function waitFor(predicate: () => boolean, timeout = 1000): Promise<void> 
   throw new Error('waitFor: condition not met before timeout');
 }
 
+it('reveals a first active session and respects a subsequent explicit collapse', async () => {
+  const client = new ReactiveClient();
+  seedTopology(client);
+  const key = sessionKey(0);
+  client.add('session_summaries', canonical(key, 1, summaryValue(0)));
+  const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV });
+  try {
+    await tree.start();
+    expect(tree.rows.value.some(row => row.key === key)).toBe(true);
+    tree.toggleExpand(tree.rows.value[0].key);
+    await tree.refresh();
+    expect(tree.rows.value.some(row => row.key === key)).toBe(false);
+  } finally {
+    await tree.dispose();
+  }
+});
+
 describe('useRuntimeSessionTree — selection clear on delete', () => {
   it('deleting the currently selected session clears selection exactly once (no recursion)', async () => {
     const client = new ReactiveClient();

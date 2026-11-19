@@ -348,6 +348,18 @@ export function flattenUnifiedTree(
   return rows;
 }
 
+function firstSessionBranch(nodes: readonly UnifiedTreeNode[], filter: ReadonlySet<SessionHarness>): string[] | null {
+  for (const node of nodes) {
+    if (node.kind === 'session') {
+      if (!node.session.archived && filter.has(node.session.harness)) return [];
+    } else if (node.kind !== 'native') {
+      const branch = firstSessionBranch(node.children, filter);
+      if (branch !== null) return [node.key, ...branch];
+    }
+  }
+  return null;
+}
+
 function matchesQuery(row: UnifiedSessionRow, query: string): boolean {
   const needle = query.trim().toLowerCase();
   if (!needle) return false;
@@ -423,6 +435,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   const started = shallowRef(false);
   const failure = shallowRef<ErrorCode | null>(null);
   let disposed = false;
+  let initialExpansionHandled = false;
   let unsubscribe: (() => void) | undefined;
   let readChain: Promise<unknown> = Promise.resolve();
   let searchGeneration = 0;
@@ -451,6 +464,13 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
         if (parsed) rows.push(parsed);
       }
       sessions.value = Object.freeze(rows);
+      if (!initialExpansionHandled && rows.length > 0) {
+        const branch = firstSessionBranch(tree.value, filterKinds.value);
+        if (branch !== null) {
+          initialExpansionHandled = true;
+          expanded.value = new Set(branch);
+        }
+      }
       viewLoaded.value = Math.max(view.loaded, rows.length);
     } finally {
       view.release();
@@ -692,6 +712,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     }
   }
   function toggleExpand(key: string): void {
+    initialExpansionHandled = true;
     const next = new Set(expanded.value);
     if (next.has(key)) next.delete(key);
     else next.add(key);
