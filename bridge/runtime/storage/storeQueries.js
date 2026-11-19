@@ -145,6 +145,14 @@ export function createQueries(db, binding) {
       });
     },
     get(params) { const row = db.prepare(`SELECT key,revision,length(CAST(value AS BLOB)) AS bytes,CASE WHEN length(CAST(value AS BLOB))<=65536 THEN value ELSE NULL END AS value FROM ${params.collection} WHERE environment=? AND key=?`).get(environment, params.key); return row ? item(row) : null; },
+    getMany(params) {
+      const placeholders = params.keys.map(() => '?').join(',');
+      return db.prepare(`
+        SELECT key,revision,length(CAST(value AS BLOB)) AS bytes,
+          CASE WHEN length(CAST(value AS BLOB))<=65536 THEN value ELSE NULL END AS value
+        FROM ${params.collection} WHERE environment=? AND key IN (${placeholders})
+      `).all(environment, ...params.keys).map(item);
+    },
     readChunk(params) {
       const header = params.token ? snapshotHeader(params) : undefined;
       const chunkColumns = 'revision,length(CAST(value AS BLOB)) AS bytes,substr(CAST(value AS BLOB),?,?) AS chunk';

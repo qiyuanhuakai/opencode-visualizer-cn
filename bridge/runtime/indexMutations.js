@@ -64,11 +64,13 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
       async function flush() {
       for (let attempt = 0; attempt < 8; attempt++) {
         scan.assertCurrent();
+        const priors = new Map((await store.getMany({ collection: 'session_summaries', keys: [...summaries.keys()] }))
+          .map(row => [row.key, row]));
+        scan.assertCurrent();
         const changes = [];
         let applied = 0;
         for (const [key, { summary, workspaceKey }] of summaries) {
-          const prior = await store.get({ collection: 'session_summaries', key });
-          scan.assertCurrent();
+          const prior = priors.get(key);
           if (prior && prior.value === null && prior.revision > scan.startRevision) continue;
           if (!prior?.value?._index?.seen?.includes(scan.id)) applied++;
           const seen = [...(prior?.value?._index?.seen ?? []).filter((id) => id !== scan.id), scan.id].slice(-8);

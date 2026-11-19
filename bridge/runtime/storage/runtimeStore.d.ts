@@ -25,6 +25,7 @@ export interface RuntimeStore {
   readIntent(params: { readonly intentId: string }): Promise<Ack | null>;
   getControl(params: { readonly collection: 'operations' | 'interactions'; readonly key: string }): Promise<Item | null>;
   get(params: { readonly collection: Collection; readonly key: string }): Promise<Item | null>;
+  getMany(params: { readonly collection: Collection; readonly keys: readonly string[] }): Promise<readonly Item[]>;
   page(params: PageOptions): Promise<Page>;
   snapshot(params: SnapshotOptions): Promise<Snapshot>;
   releaseSnapshot(params: { readonly token: string; readonly epoch: string }): Promise<{ readonly released: boolean }>;

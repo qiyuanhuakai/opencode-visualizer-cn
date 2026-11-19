@@ -57,6 +57,12 @@ export function parseRequest(method, input = {}) {
       }
       requireStore(params.changes.some(change => change.checkOnly !== true), 'changes');
       break;
+    case 'getMany':
+      collection(params.collection);
+      requireStore(Array.isArray(params.keys) && params.keys.length > 0 && params.keys.length <= 20
+        && new Set(params.keys).size === params.keys.length, 'batch_keys');
+      params.keys.forEach(text);
+      break;
     case 'get': case 'readChunk':
       collection(params.collection); text(params.key);
       if (params.token !== undefined) text(params.token);
