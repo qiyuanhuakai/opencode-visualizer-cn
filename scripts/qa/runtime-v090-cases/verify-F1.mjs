@@ -18,7 +18,7 @@
 // Every assertion carries the value the audit actually observed. Compliance
 // shortfalls are reported as findings (never silently passed); the verdict is
 // carried in `verdict`/`findings`/`requiredTaskRows` and in the DoneClaim.
-import { artifact } from '../runtime-v090-evidence.mjs';
+import { artifact, validateEvidence } from '../runtime-v090-evidence.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -353,6 +353,11 @@ function audit({ root, evidenceRoot, planPath }) {
       if (report.productionRevision !== revision) add('DOWNSTREAM-REVISION', 'blocking', 'task 48 Happy QA', `${file} productionRevision ${report.productionRevision} != final head`);
       const drifted = Object.entries(report.sourceHashes ?? {}).filter(([rel, hash]) => { const p = path.join(root, rel); return !existsSync(p) || sha256(p) !== hash; }).map(([rel]) => rel);
       if (drifted.length) add('DOWNSTREAM-SOURCE-HASH', 'blocking', 'task 48 Happy QA', `${file} source hashes drifted: ${drifted.slice(0, 3).join(', ')}`);
+      try {
+        validateEvidence(report, root);
+      } catch (error) {
+        add('DOWNSTREAM-RECEIPT', 'blocking', 'task 48 Happy QA', `${file} receipt or artifact verification failed: ${error.message}`);
+      }
     } else {
       add('DOWNSTREAM-UNBOUND', 'non-blocking', 'plan line 221 (task 6 ownership)', `${file} is a direct-script artifact with no runner productionRevision/sourceHashes binding`);
     }
@@ -401,7 +406,7 @@ export async function run(context) {
     const edgeViolations = result.findings.filter((f) => f.id === 'DEP-BLOCKER-DIVERGENT');
     const evidenceBindingViolations = result.findings.filter((f) => f.id === 'DEP-EVIDENCE-BINDING');
     const softDeliveryOrder = result.findings.filter((f) => f.id === 'DEP-DELIVERY-ORDER');
-    const downstreamGaps = result.findings.filter((f) => ['DOWNSTREAM-MISSING', 'DOWNSTREAM-STATUS', 'DOWNSTREAM-COUNT', 'DOWNSTREAM-REVISION', 'DOWNSTREAM-SOURCE-HASH'].includes(f.id));
+    const downstreamGaps = result.findings.filter((f) => ['DOWNSTREAM-MISSING', 'DOWNSTREAM-STATUS', 'DOWNSTREAM-RECEIPT', 'DOWNSTREAM-COUNT', 'DOWNSTREAM-REVISION', 'DOWNSTREAM-SOURCE-HASH'].includes(f.id));
     const wave9Gaps = result.findings.filter((f) => f.id === 'LEDGER-WAVE9-EVIDENCE');
     const wave9Bound = result.checks.wave9.filter((r) => r.resolved).map((r) => r.task);
     return {
