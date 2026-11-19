@@ -622,7 +622,7 @@ it('does not restore a terminal task from a delayed busy-send read', async () =>
       }
       return result;
     };
-    const rejected = core.send!({ ...context, params: { content, idempotencyKey: 'monitor-busy' } }).catch((error: unknown) => error);
+    const rejected = Promise.resolve(core.send!({ ...context, params: { content, idempotencyKey: 'monitor-busy' } })).catch((error: unknown) => error);
     expect(await Promise.race([readEntered.promise, rejected])).toBeUndefined();
     f.state.turn = { ...f.state.turn, state: 'completed' };
     f.send({ type: 'transcript.ops', session_id: session.nativeSessionId, payload: { agent_id: 'main', seq: ++f.state.seq, ops: [{ op: 'turn.upsert', turn: f.state.turn }] } });
