@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { request as httpRequest } from 'node:http';
+import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 import { readdirSync } from 'node:fs';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
+import { loadBrowserKernel } from '../runtime-v090-browser-kernel.mjs';
 import { encodeSessionKey } from '../../../shared/runtime/identity.js';
 import { artifact, digest, sourceSnapshot, writeJson } from '../runtime-v090-evidence.mjs';
 import { createFixture, alive } from './task-19-fixture.mjs';
@@ -17,7 +18,6 @@ import { assertPortReleased } from './task-17-native.mjs';
 const root = path.resolve(new URL('../../..', import.meta.url).pathname);
 const tree = directory => readdirSync(path.join(root, directory), { recursive: true, withFileTypes: true }).filter(entry => entry.isFile() && /\.(?:js|mjs|ts)$/.test(entry.name)).map(entry => path.relative(root, path.join(entry.parentPath, entry.name)));
 export const sourceFiles = [...tree('bridge'), ...tree('shared/runtime'), ...tree('app/runtime'), ...tree('scripts/qa'), 'app/composables/useRuntimeConnection.ts', 'app/composables/useCredentials.ts', 'app/dev/runtime-v090/index.html', 'app/dev/runtime-v090/task19.ts', 'vis_bridge.js'];
-const browserSkill = '/home/qiyuaner/.codex/plugins/cache/sisyphuslabs/omo/5.1.27/skills/browser/scripts/omowright.mjs';
 async function unauthorizedUpgrade(fixture) {
   fixture.register({ kind: 'unauthorized-upgrade-probe', url: fixture.url, token: 'deliberately invalid fixture token', teardown: 'owned HTTP request/socket destroyed after response' });
   const url = new URL(fixture.url); url.protocol = 'http:'; url.searchParams.set('token', 'wrong-private-bridge-token');
@@ -41,11 +41,35 @@ export async function run(context) {
   const check = (name, observed, expected) => { proof.checks.push({ name, observed, expected, passed: JSON.stringify(observed) === JSON.stringify(expected) }); persist(); assert.deepEqual(observed, expected, name); scenarios.push({ name, assertions: [{ name, observed, expected, passed: true }] }); console.log(`PASS ${name}`); };
   const fixture = await createFixture({ ...context, runDir, evidenceDir });
   let browser, page, electron;
+  let primaryError = null;
+  const diagnosticErrors = [];
+  const collectDiagnostic = async (name, collect) => {
+    try { await collect(); }
+    catch (error) { diagnosticErrors.push(error); console.error(`Task 19 ${name}: ${error.message}`); }
+  };
   try {
     fixture.register({ kind: 'Vite-planned', host: '127.0.0.1', teardown: 'server.close and exclusive port rebind' });
-    const vite = await createServer({ configFile: false, root: context.root, server: { host: '127.0.0.1', port: 0, strictPort: false }, logLevel: 'error' });
-    await vite.listen(); const port = vite.httpServer.address().port;
-    fixture.register({ kind: 'Vite-created', port }); fixture.own('Vite-server', async () => { await vite.close(); await assertPortReleased(port); return { port, exclusiveRebind: true }; });
+    const vite = await createServer({ configFile: false, root: context.root, server: { middlewareMode: true, hmr: false }, logLevel: 'error' });
+    fixture.own('Vite-middleware', () => vite.close());
+    const http = createHttpServer(vite.middlewares);
+    let port;
+    fixture.own('Vite-server', async () => {
+      if (!http.listening) return { listening: false };
+      const closed = new Promise((resolve, reject) => http.close(error => error ? reject(error) : resolve()));
+      http.closeAllConnections();
+      await closed;
+      await assertPortReleased(port);
+      return { port, exclusiveRebind: true };
+    });
+    await new Promise((resolve, reject) => {
+      http.once('error', reject);
+      http.listen(0, '127.0.0.1', () => {
+        http.removeListener('error', reject);
+        resolve();
+      });
+    });
+    port = http.address().port;
+    fixture.register({ kind: 'Vite-created', port });
     const baseUrl = `http://127.0.0.1:${port}/app/dev/runtime-v090/index.html`;
     const initial = fixture.sql(); proof.observations.initialSql = initial;
     const selected = initial.sessions.find(row => row.value?.session.nativeSessionId === fixture.native.opencode.sessions[0].id);
@@ -53,7 +77,9 @@ export async function run(context) {
     const profile = JSON.parse(await readFile(path.join(fixture.stateRoot, 'runtime/registrations/management-profile.json'), 'utf8')).id;
     const pageUrl = `${baseUrl}?task=19&runtimeProfile=${profile}&runtimeSession=${encodeSessionKey(selected.value.session)}`;
     proof.pageUrl = pageUrl;
-    const { omowright } = await (await import(browserSkill)).loadOmowright();
+    const { omowright, kernelSource, kernelPin } = await loadBrowserKernel();
+    proof.observations.browserKernel = { source: kernelSource, pin: kernelPin };
+    assert(kernelPin.verified, 'Task 19 requires a digest-verified browser kernel');
     const profileRoot = path.join(fixture.root, 'chromium-profile');
     fixture.register({ kind: 'Chromium-planned', executable: chromium.executablePath(), profile: profileRoot, teardown: 'owned browser.close; process exit; private root removal' });
     browser = await omowright.connectPipe({ browserPath: chromium.executablePath(), browserArgs: ['--headless', '--no-sandbox', '--disable-gpu', '--no-first-run', `--user-data-dir=${profileRoot}`], storageRoot: runDir });
@@ -142,7 +168,7 @@ export async function run(context) {
       check('malformed authority injection is rejected before durable mutation or native call', [malformed.rejected, malformed.code, fixture.secondarySql().operations.length], [true, 'unauthorized', mutationCount]);
       const unauthorized = await page.evaluate(input => window.task19.rawAuthorityProbe(input), { target: fixture.secondary.target, method: 'session.send', params: { harnessInstanceId: session.harnessInstanceId, session: { ...session, environmentId: randomUUID() }, args: { body: { parts: [{ type: 'text', text: 'Must never reach native service' }] } } }, idempotencyKey: 'foreign-session' });
       proof.observations.unauthorized = unauthorized;
-      const unauthorizedFrames = await page.evaluate(() => window.task19.state().trace.filter(row => row.kind === 'frame' && row.value.frame.kind === 'result' && row.value.frame.typedError?.code === 'unauthorized'));
+      const unauthorizedFrames = await page.evaluate(() => window.task19.state().trace.filter(row => row.kind === 'authority-probe-result' && row.value.code === 'unauthorized'));
       proof.observations.unauthorizedFrames = unauthorizedFrames;
       check('authenticated foreign session is rejected by actual Host with typed unauthorized and no durable operation', [unauthorized.rejected, unauthorized.code, fixture.secondarySql().operations.length, unauthorizedFrames.length, fixture.controlled.calls.filter(call => call.path.endsWith('/prompt_async')).length], [true, 'unauthorized', mutationCount, 1, 0]);
       const stale = await page.evaluate(input => window.task19.staleChannel(input), { ...uploadInput, prefix: 'stale.bin' });
@@ -179,7 +205,7 @@ export async function run(context) {
     for (const scheme of ['light', 'dark']) for (const width of [1440, 390]) {
       await omowright.emulate(page, { width, height: 900, deviceScaleFactor: 1, mobile: false, hasTouch: false });
       await page.cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] }, await page.resolveSessionId());
-      const filename = path.join(runDir, `browser-${scheme}-${width}.png`); await page.screenshot({ path: filename, fullPage: true }); artifacts.push(artifact(filename, 'screenshot'));
+      const filename = path.join(runDir, `browser-${scheme}-${width}.png`); await writeFile(filename, await page.screenshot({ fullPage: true })); artifacts.push(artifact(filename, 'screenshot'));
       check(`renderer ${scheme} ${width} has no horizontal overflow`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     }
     for (const index of [0, 1]) { const shot = await electron.screenshot(index, `electron-${index}.png`); artifacts.push(artifact(shot.path, 'screenshot')); }
@@ -188,11 +214,33 @@ export async function run(context) {
     proof.observations.finalSql = fixture.sql(); proof.observations.secondaryFinalSql = fixture.secondarySql();
     proof.observations.controlledNativeCalls = fixture.controlled.calls;
     check('dirty worktree source bytes and unrelated uncommitted paths are preserved', worktree(), sourceBefore);
-  } catch (error) { proof.failure = { message: error.message, stack: error.stack }; persist(); if (page) { writeJson(path.join(runDir, 'failure-dom.json'), await page.evaluate(() => ({ url: location.href, body: document.body.innerText, runtime: window.task19?.state() }))); await page.screenshot({ path: path.join(runDir, 'failure.png') }); } throw error; }
-  finally {
-    await fixture.close(); persist();
-    artifacts.push(artifact(path.join(runDir, 'proof.json'), 'real-renderer-runtime-proof'), artifact(path.join(runDir, 'resources.json'), 'resource-cleanup'), artifact(path.join(runDir, 'native-inventory.json'), 'installed-native-inventory'));
+  } catch (error) {
+    primaryError = error;
+    proof.failure = { message: error.message, stack: error.stack };
+    if (page) {
+      await collectDiagnostic('failure DOM', async () => {
+        const dom = await page.evaluate(() => ({ url: location.href, body: document.body.innerText, runtime: window.task19?.state() }));
+        writeJson(path.join(runDir, 'failure-dom.json'), dom);
+      });
+      await collectDiagnostic('failure screenshot', async () => {
+        await writeFile(path.join(runDir, 'failure.png'), await page.screenshot());
+      });
+    }
+  } finally {
+    await collectDiagnostic('fixture cleanup', () => fixture.close());
+    proof.diagnosticFailures = diagnosticErrors.map(error => ({ message: error.message, stack: error.stack }));
+    await collectDiagnostic('proof write', persist);
+    for (const [file, kind] of [
+      ['proof.json', 'real-renderer-runtime-proof'],
+      ['resources.json', 'resource-cleanup'],
+      ['native-inventory.json', 'installed-native-inventory'],
+      ['supported-native-packages.json', 'native-package-provenance'],
+    ]) {
+      await collectDiagnostic(kind, () => artifacts.push(artifact(path.join(runDir, file), kind)));
+    }
   }
+  if (primaryError) throw primaryError;
+  if (diagnosticErrors.length) throw new AggregateError(diagnosticErrors, 'Task 19 cleanup or evidence collection failed');
   const classMatchers = {
     malformed_input: /malformed authority|foreign environment/,
     prompt_injection: /untrusted native title/,
