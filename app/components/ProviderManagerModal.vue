@@ -684,6 +684,12 @@ function backend() {
   return props.nativeAdapter ?? getBackendAdapter(props.backendKind);
 }
 
+function captureProviderTarget(target: ReturnType<typeof backend>) {
+  const scope = props.nativeScope;
+  return () => scope ? props.nativeScope === scope && scope.isCurrent() : !props.nativeScope && backend() === target;
+}
+
+
 function requireBackendMethod<T>(method: T | undefined, name: string): T {
   if (!method)
     throw new Error(
@@ -747,6 +753,7 @@ type ModelVisibilityEntry = {
 const props = defineProps<{
   open: boolean;
   nativeAdapter?: Partial<BackendAdapter>;
+  nativeScope?: { readonly isCurrent: () => boolean };
   nativeKimiProvidersClient?: KimiWebProvidersClient;
   providers: ProviderInfo[];
   connectedProviderIds: string[];
@@ -944,12 +951,14 @@ watch(
   },
 );
 
-watch(() => props.nativeAdapter, () => {
+watch(() => props.nativeScope ?? backend(), () => {
   authMethods.value = {};
   busyProviderId.value = '';
   feedbackMessage.value = '';
   closeCustomProviderForm();
   resetCustomProviderForm();
+});
+watch([() => props.nativeScope, backend], () => {
   if (props.open) void fetchAuthMethods();
 });
 
@@ -1314,6 +1323,7 @@ function validateCustomProvider() {
 
 async function submitCustomProvider() {
   const target = backend();
+  const isCurrent = captureProviderTarget(target);
   const result = validateCustomProvider();
   if (!result) {
     customProviderErrors.value = {
@@ -1355,7 +1365,7 @@ async function submitCustomProvider() {
         [`vis.model_providers.${result.providerID}`]: { models: modelMetadata },
         ...providerEnablePatch,
       })) as ProviderConfigState;
-      if (backend() !== target) return;
+      if (!isCurrent()) return;
       emit('config-updated', nextConfig ?? {});
       emit('providers-changed');
       setFeedback(t('providerManager.messages.connected', { name: result.name }), 'success');
@@ -1367,7 +1377,7 @@ async function submitCustomProvider() {
       const setProviderAuth = requireBackendMethod(target.setProviderAuth, 'provider auth');
       await setProviderAuth(result.providerID, { type: 'api', key: result.key });
     }
-    if (backend() !== target) return;
+    if (!isCurrent()) return;
     const nextConfig = (await updateGlobalConfig({
       provider: {
         ...props.providerConfig?.provider,
@@ -1375,16 +1385,16 @@ async function submitCustomProvider() {
       },
       ...providerEnablePatch,
     })) as ProviderConfigState;
-    if (backend() !== target) return;
+    if (!isCurrent()) return;
     emit('config-updated', nextConfig ?? {});
     emit('providers-changed');
     setFeedback(t('providerManager.messages.connected', { name: result.name }), 'success');
     closeCustomProviderForm();
     resetCustomProviderForm();
   } catch (error) {
-    if (backend() === target) setFeedback(error instanceof Error ? error.message : String(error), 'error');
+    if (isCurrent()) setFeedback(error instanceof Error ? error.message : String(error), 'error');
   } finally {
-    if (backend() === target) busyProviderId.value = '';
+    if (isCurrent()) busyProviderId.value = '';
   }
 }
 
@@ -1455,6 +1465,7 @@ async function collectAuthPromptInputs(provider: ProviderInfo, method: ProviderA
 
 async function toggleProvider(providerId: string, nextEnabled: boolean) {
   const target = backend();
+  const isCurrent = captureProviderTarget(target);
   const provider = props.providers.find((item) => item.id === providerId);
   if (provider && isBackendManagedProvider(provider)) {
     setFeedback(t('providerManager.messages.backendManagedProvider'), 'info');
@@ -1469,7 +1480,7 @@ async function toggleProvider(providerId: string, nextEnabled: boolean) {
     const result = (await updateGlobalConfig(
       buildProviderDisabledPatch(props.providerConfig, providerId, nextEnabled),
     )) as ProviderConfigState;
-    if (backend() !== target) return;
+    if (!isCurrent()) return;
     emit('config-updated', result ?? {});
     setFeedback(
       nextEnabled
@@ -1478,9 +1489,9 @@ async function toggleProvider(providerId: string, nextEnabled: boolean) {
       'success',
     );
   } catch (error) {
-    if (backend() === target) setFeedback(error instanceof Error ? error.message : String(error), 'error');
+    if (isCurrent()) setFeedback(error instanceof Error ? error.message : String(error), 'error');
   } finally {
-    if (backend() === target) busyProviderId.value = '';
+    if (isCurrent()) busyProviderId.value = '';
   }
 }
 
@@ -1515,13 +1526,14 @@ function toggleModel(modelKey: string, nextEnabled: boolean) {
 
 async function connectProvider(provider: ProviderInfo) {
   const target = backend();
+  const isCurrent = captureProviderTarget(target);
   if (isDshBackend.value && props.dshRpcClient) { dshProviderManager.value?.openSettings(provider.id); return; }
   if (isBackendManagedProvider(provider)) {
     setFeedback(t('providerManager.messages.backendManagedProvider'), 'info');
     return;
   }
   const picked = await pickAuthMethod(provider.id);
-  if (!picked || backend() !== target) return;
+  if (!picked || !isCurrent()) return;
   busyProviderId.value = provider.id;
   try {
     if (picked.method.type === 'api') {
@@ -1532,18 +1544,18 @@ async function connectProvider(provider: ProviderInfo) {
             }),
           )
         : null;
-      if (!key || backend() !== target) return;
+      if (!key || !isCurrent()) return;
       const trimmedKey = key.trim();
       const setProviderAuth = requireBackendMethod(target.setProviderAuth, 'provider auth');
       await setProviderAuth(provider.id, { type: 'api', key: trimmedKey });
-      if (backend() !== target) return;
+      if (!isCurrent()) return;
       emit('providers-changed');
       setFeedback(t('providerManager.messages.connected', { name: provider.id }), 'success');
       return;
     }
 
     const inputs = await collectAuthPromptInputs(provider, picked.method);
-    if (!inputs || backend() !== target) return;
+    if (!inputs || !isCurrent()) return;
     const authorizeProviderOAuth = requireBackendMethod(
       target.authorizeProviderOAuth,
       'provider OAuth authorization',
@@ -1552,7 +1564,7 @@ async function connectProvider(provider: ProviderInfo) {
       method: picked.index,
       inputs,
     })) as ProviderAuthAuthorization;
-    if (backend() !== target) return;
+    if (!isCurrent()) return;
     if (authorization?.url) {
       window.open(authorization.url, '_blank', 'noopener,noreferrer');
     }
@@ -1563,7 +1575,7 @@ async function connectProvider(provider: ProviderInfo) {
               t('providerManager.prompts.pasteAuthCode', { providerId: provider.id }),
           )
         : null;
-      if (!code || backend() !== target) return;
+      if (!code || !isCurrent()) return;
       const completeProviderOAuth = requireBackendMethod(
         target.completeProviderOAuth,
         'provider OAuth completion',
@@ -1579,7 +1591,7 @@ async function connectProvider(provider: ProviderInfo) {
               t('providerManager.prompts.completeOAuth', { providerId: provider.id }),
           )
         : true;
-      if (!confirmed || backend() !== target) return;
+      if (!confirmed || !isCurrent()) return;
       const completeProviderOAuth = requireBackendMethod(
         target.completeProviderOAuth,
         'provider OAuth completion',
@@ -1588,18 +1600,19 @@ async function connectProvider(provider: ProviderInfo) {
         method: picked.index,
       });
     }
-    if (backend() !== target) return;
+    if (!isCurrent()) return;
     emit('providers-changed');
     setFeedback(t('providerManager.messages.connected', { name: provider.id }), 'success');
   } catch (error) {
-    if (backend() === target) setFeedback(error instanceof Error ? error.message : String(error), 'error');
+    if (isCurrent()) setFeedback(error instanceof Error ? error.message : String(error), 'error');
   } finally {
-    if (backend() === target) busyProviderId.value = '';
+    if (isCurrent()) busyProviderId.value = '';
   }
 }
 
 async function disconnectProvider(provider: ProviderInfo) {
   const target = backend();
+  const isCurrent = captureProviderTarget(target);
   if (isBackendManagedProvider(provider)) {
     setFeedback(t('providerManager.messages.backendManagedProvider'), 'info');
     return;
@@ -1609,7 +1622,7 @@ async function disconnectProvider(provider: ProviderInfo) {
   const confirmed = showConfirm
     ? await showConfirm(t('providerManager.confirm.disconnect', { providerId }))
     : true;
-  if (!confirmed || backend() !== target) return;
+  if (!confirmed || !isCurrent()) return;
   busyProviderId.value = providerId;
   try {
     if (isConfigBackedProvider(provider)) {
@@ -1619,11 +1632,11 @@ async function disconnectProvider(provider: ProviderInfo) {
       );
       const deleteProviderAuth = target.deleteProviderAuth;
       if (deleteProviderAuth) await deleteProviderAuth(providerId).catch(() => undefined);
-      if (backend() !== target) return;
+      if (!isCurrent()) return;
       const result = (await updateGlobalConfig(
         buildProviderDisabledPatch(props.providerConfig, providerId, false),
       )) as ProviderConfigState;
-      if (backend() !== target) return;
+      if (!isCurrent()) return;
       emit('config-updated', result ?? {});
     } else {
       const deleteProviderAuth = requireBackendMethod(
@@ -1632,13 +1645,13 @@ async function disconnectProvider(provider: ProviderInfo) {
       );
       await deleteProviderAuth(providerId);
     }
-    if (backend() !== target) return;
+    if (!isCurrent()) return;
     emit('providers-changed');
     setFeedback(t('providerManager.messages.disconnected', { providerId }), 'success');
   } catch (error) {
-    if (backend() === target) setFeedback(error instanceof Error ? error.message : String(error), 'error');
+    if (isCurrent()) setFeedback(error instanceof Error ? error.message : String(error), 'error');
   } finally {
-    if (backend() === target) busyProviderId.value = '';
+    if (isCurrent()) busyProviderId.value = '';
   }
 }
 </script>
