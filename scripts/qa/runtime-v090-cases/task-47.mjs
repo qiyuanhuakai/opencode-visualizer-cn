@@ -343,6 +343,21 @@ function readProfile(root, profile) {
   assert.equal(report.runs, 10, `${profile}.json did not run 10 times`);
   return report;
 }
+function datasetContract(dataset) {
+  const { worktrees, ...rest } = dataset;
+  const { seedReceipt, observed, latency, ...composition } = worktrees;
+  const { seedMs, ...seed } = seedReceipt;
+  const { enumerateMs, ...inventory } = observed;
+  const {
+    worktreeColdFirstPageP95Ms: coldMs,
+    worktreeWarmRepageP95Ms: warmMs,
+    worktreeNodeP95Ms: nodeMs,
+    ...sampling
+  } = latency;
+  assert.ok([seedMs, enumerateMs, coldMs, warmMs, nodeMs].every(value => Number.isFinite(value) && value >= 0),
+    'task-44 dataset receipt is missing a valid measured duration');
+  return { ...rest, worktrees: { ...composition, seedReceipt: seed, observed: inventory, latency: sampling } };
+}
 /**
  * Proves each frozen copy is the same kind of artifact the live task-44 lane currently produces:
  * identical task, profile, run count, pass status, dataset, and an identical threshold CONTRACT
@@ -358,7 +373,7 @@ function crossCheckFrozenCopies(root, frozen) {
     for (const key of ['task', 'profile', 'status', 'allPassed', 'runs']) {
       assert.equal(copy[key], live[key], `frozen ${profile}.json ${key} ${copy[key]} differs from the live report ${live[key]}`);
     }
-    assert.deepEqual(copy.dataset, live.dataset, `frozen ${profile}.json dataset differs from the live report`);
+    assert.deepEqual(datasetContract(copy.dataset), datasetContract(live.dataset), `frozen ${profile}.json dataset differs from the live report`);
     const contract = (report) => report.thresholds.map((entry) => [entry.name, entry.threshold, entry.unit, entry.passed]);
     assert.deepEqual(contract(copy), contract(live), `frozen ${profile}.json threshold contract differs from the live report`);
     assert.ok(copy.thresholds.every((entry) => entry.passed), `frozen ${profile}.json has a failing threshold`);

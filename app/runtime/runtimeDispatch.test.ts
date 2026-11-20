@@ -712,6 +712,46 @@ describe('runtime real WebSocket dispatch', () => {
     expect(refused).toBe(2);
     await observer.close();
   });
+  it('stops the Bridge while initial native index discovery waits on an in-flight page', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'vis-close-index-discovery-'));
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+    const configPath = path.join(root, 'bridge.json');
+    await writeFile(configPath, JSON.stringify({ ...config, nativeServices: { ...config.nativeServices, codex: true } }));
+    const trappedPage = gate();
+    const entered = Promise.withResolvers<void>();
+    let driverClosed = false;
+    const bridge = createBridgeRuntime({
+      stateRoot: root, configStore: createBridgeConfigStore({ configPath }),
+      nativeSupervisor: supervisor, acpManager: acp, localWorkspaceRoots: [{ root, permissions: ['read'] }],
+      runtimeDriverFactories: { codex: async context => {
+        const base = unavailableRegistration({ kind: 'codex', environmentId: parseEnvironmentId(context.environmentId),
+          harnessInstanceId: parseHarnessInstanceId(context.harnessInstanceId) }, 'starting');
+        return {
+          registration: {
+            manifest: { ...base.manifest, core: { ...base.manifest.core, listSessionPage: { state: 'supported' } } },
+            driver: { core: { ...base.driver.core, async listSessionPage() { entered.resolve(); await trappedPage.promise; return { items: [], cursor: null, completeness: 'complete' }; } }, native: {} },
+          },
+          async close() { driverClosed = true; trappedPage.release(); },
+        };
+      } },
+    });
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const host = await bridge.getRuntimeHost!();
+      await Promise.race([entered.promise, host.sourcesReady.then(() => { throw new Error('Bridge became ready before the held discovery page began'); })]);
+      const stopped = bridge.stop();
+      const result = await Promise.race([stopped.then(() => 'stopped'), new Promise(resolve => {
+        deadline = setTimeout(() => resolve('still waiting for discovery'), 1700);
+      })]);
+      expect(result).toBe('stopped');
+      expect(driverClosed).toBe(true);
+      expect(host.startupFailures).toEqual([]);
+    } finally {
+      clearTimeout(deadline);
+      trappedPage.release();
+      await bridge.stop();
+    }
+  });
   it('persists connection and harness identities across bridge restart while refreshing store epoch', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'vis-wire-restart-')); cleanups.push(() => rm(root, { recursive: true, force: true }));
     const configStore = createBridgeConfigStore({ configPath: path.join(root, 'bridge.json') });

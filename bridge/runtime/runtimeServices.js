@@ -84,8 +84,8 @@ export async function createRuntimeServices(options) {
       workspace, store, index, hostServices, remoteServices: options.remoteServices, snapshots: index.snapshots, events: index.events, registry: drivers.registry, acceptance, capabilities,
       authority: id => drivers.authority(id),
       grant: Object.freeze({ target: options.environmentId, role: options.role, capabilities, permissions, workspaceKeys: workspace.workspaces.map(entry => entry.key) }),
-      async start() {
-        if (options.role === 'manager') return;
+      async start({ signal } = {}) {
+        if (options.role === 'manager' || signal?.aborted) return;
         for (const manifest of drivers.registry.list()) await store.mutate({ intentId: randomUUID(), changes: [{ collection: 'harnesses', key: manifest.harnessInstanceId, value: { environmentId: manifest.environmentId, harnessInstanceId: manifest.harnessInstanceId, kind: manifest.kind, manifest } }] });
         for (let offset = 0; offset < workspace.workspaces.length; offset += 200) {
           for (let attempt = 0; attempt < 8; attempt++) {
@@ -104,7 +104,12 @@ export async function createRuntimeServices(options) {
             catch (error) { if (error?.code !== 'conflict' || attempt === 7) throw error; }
           }
         }
-        await drivers.start(index);
+        if (signal?.aborted) return;
+        const cancelDiscovery = () => index.stopDiscovery();
+        signal?.addEventListener('abort', cancelDiscovery, { once: true });
+        try { await drivers.start(index); }
+        finally { signal?.removeEventListener('abort', cancelDiscovery); }
+        if (signal?.aborted) return;
         await hostServices.restoreWriterHarnesses();
         capabilities.extensions.splice(0, capabilities.extensions.length, ...drivers.registry.list().flatMap(manifest => manifest.extensions.filter(extension => extension.support.state === 'supported').map(extension => ({ owner: extension.owner, name: extension.name, permission: extension.permission, schemaVersion: extension.schemaVersion, metadata: { scope: extension.scope } }))));
         if (!options.permissions) {
