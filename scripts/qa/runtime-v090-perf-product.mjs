@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { digest, writeJson } from './runtime-v090-evidence.mjs';
@@ -19,12 +19,23 @@ const rttMs = Number(values.rtt);
 if (!Number.isInteger(count) || count < 10 || count > 100000 || count % 5 !== 0 || !values.out || ![0, 100].includes(rttMs)) {
   throw new Error('Use --count 10..100000 (multiple of 5) --out <new evidence directory> [--rtt 0|100]');
 }
-const output = path.resolve(values.out);
-await mkdir(output);
+const requestedOutput = path.resolve(values.out);
+const output = path.join(await realpath(path.dirname(requestedOutput)), path.basename(requestedOutput));
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' });
+const checkout = await realpath(repository);
+const relativeOutput = path.relative(checkout, output);
+if (relativeOutput && relativeOutput !== '..' && !relativeOutput.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeOutput)) {
+  try {
+    git('check-ignore', '-q', '--', relativeOutput);
+  } catch (error) {
+    if (error.status !== 1) throw error;
+    throw new Error('--out must be outside the candidate checkout or under a Git-ignored directory such as .omo/');
+  }
+}
 const productionRevision = git('rev-parse', 'HEAD').trim();
 const { sourceHashes, identity: sourceIdentity } = committedPerfSource(repository, productionRevision);
 assertPerfCheckout(repository, productionRevision, sourceHashes);
+await mkdir(output);
 const report = {
   runId: randomUUID(),
   startedAt: new Date().toISOString(),
