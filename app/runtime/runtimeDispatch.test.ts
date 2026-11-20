@@ -634,7 +634,23 @@ describe('runtime real WebSocket dispatch', () => {
     expect(await connection.request('runtime.target.detach', { target: execution.services.target })).toMatchObject({ ok: true });
     expect(await connection.request('runtime.inspect', {}, hello)).toMatchObject({ ok: false, typedError: { code: 'unauthorized' } });
   });
-  it('keeps the renderer observer live through a manager forwarding to an older execution Bridge', async () => {
+  it('keeps hello and ordinary inspection compatible until the peer opts into indexed search', async () => {
+    const { connection } = await runtime();
+    const method = 'runtime.session.search';
+    const params = { query: 'absent', kinds: ['opencode'] };
+    expect(connection.hello.capabilities.methods).not.toContain(method);
+    const unnegotiated = await connection.request('runtime.inspect', {});
+    expect(unnegotiated.ok).toBe(true);
+    expect(JSON.stringify(unnegotiated)).not.toContain(method);
+    expect(await connection.request(method, params)).toMatchObject({ ok: false, typedError: { code: 'unsupported' } });
+    expect(await connection.request('runtime.snapshot', { collection: 'workspaces' })).toMatchObject({ ok: true });
+    const negotiated = await connection.request('runtime.inspect', { sessionSearch: true });
+    expect(negotiated.ok).toBe(true);
+    expect(JSON.stringify(negotiated)).toContain(method);
+    expect(await connection.request(method, params)).toMatchObject({ ok: true, result: { totalMatched: 0, items: [] } });
+  });
+
+  it.each([false, true])('keeps the renderer observer live through a managed execution Bridge (legacy search: %s)', async legacySearch => {
     const manager = await graph('manager'), execution = await graph('execution');
     const executionHost = createRuntimeHost({ environmentId: execution.services.target, role: 'execution', services: execution.services });
     executionHost.start();
@@ -648,8 +664,10 @@ describe('runtime real WebSocket dispatch', () => {
           const dispatcher = scoped.openRuntime(transport);
           if (!dispatcher) return null;
           return { ...dispatcher, async request(frame: Parameters<typeof dispatcher.request>[0]) {
-            if (frame.method === 'runtime.observer.read' && 'resolveSummary' in (frame.params as object)) {
-              refused++;
+            const oldSearchProbe = legacySearch && frame.method === 'runtime.inspect' && 'sessionSearch' in (frame.params as object);
+            const oldObserverOptions = frame.method === 'runtime.observer.read' && 'resolveSummary' in (frame.params as object);
+            if (oldSearchProbe || oldObserverOptions) {
+              if (oldObserverOptions) refused++;
               const { id, target, epoch, generation } = frame;
               transport.send({ version: 1, kind: 'result', id, target, epoch, generation,
                 ok: false, typedError: { code: 'invalid_request', message: 'invalid_request: fields' } });
@@ -710,10 +728,12 @@ describe('runtime real WebSocket dispatch', () => {
     }
     expect(delivered[1]).toBeGreaterThan(delivered[0]);
     expect(refused).toBe(2);
-    expect(renderer.supports(target, 'runtime.session.search')).toBe(true);
-    const search = await renderer.request(target, 'runtime.session.search', { query: 'still live', kinds: ['opencode', 'unknown'] });
-    expect(search).toMatchObject({ totalMatched: 1, cursor: null,
-      items: [{ collection: 'session_summaries', key, value: { title: 'Still live' } }] });
+    expect(renderer.supports(target, 'runtime.session.search')).toBe(!legacySearch);
+    if (!legacySearch) {
+      const search = await renderer.request(target, 'runtime.session.search', { query: 'still live', kinds: ['opencode', 'unknown'] });
+      expect(search).toMatchObject({ totalMatched: 1, cursor: null,
+        items: [{ collection: 'session_summaries', key, value: { title: 'Still live' } }] });
+    }
     await observer.close();
   });
   it('stops the Bridge while initial native index discovery waits on an in-flight page', async () => {

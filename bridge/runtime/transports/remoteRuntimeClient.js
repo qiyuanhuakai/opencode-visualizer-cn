@@ -54,7 +54,9 @@ export async function openRemoteRuntime({ endpoint, channel, environmentId, toke
             && frame.typedError.message === 'invalid_request: fields';
           const snapshotLimit = request.opensSnapshot && frame.typedError.code === 'conflict'
             && frame.typedError.message === 'conflict: runtime.store.snapshot_limit';
-          const field = snapshotLimit ? 'runtime.store.snapshot_limit' : legacyObserver ? 'fields' : 'remote.request';
+          const legacyInspection = request.sessionSearch && frame.typedError.code === 'invalid_request'
+            && frame.typedError.message === 'invalid_request: fields';
+          const field = snapshotLimit ? 'runtime.store.snapshot_limit' : legacyObserver || legacyInspection ? 'fields' : 'remote.request';
           request.reject(new ProtocolError(frame.typedError.code, field));
         }
       } else for (const listener of listeners) listener(frame);
@@ -67,6 +69,7 @@ export async function openRemoteRuntime({ endpoint, channel, environmentId, toke
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { pending.delete(id); reject(new ProtocolError('timeout', 'remote.request')); }, timeoutMs);
       pending.set(id, { resolve, reject, timer, method: frame.method, accepted, target: targetBinding.target,
+        sessionSearch: frame.method === 'runtime.inspect' && frame.params?.sessionSearch === true,
         opensSnapshot: frame.method === 'runtime.snapshot' && frame.params?.token === undefined,
         resolveSummary: frame.method === 'runtime.observer.read' && frame.params?.resolveSummary === true });
       try { socket.send(encodeFrame({ ...frame, version: 1, kind: 'request', id, target: targetBinding.target, epoch: targetBinding.epoch, generation: targetBinding.generation })); }
@@ -75,9 +78,16 @@ export async function openRemoteRuntime({ endpoint, channel, environmentId, toke
   }
   try {
     await ready;
-    const inspection = await request({ method: 'runtime.inspect', params: {} });
+    const inspection = await request({ method: 'runtime.inspect', params: { sessionSearch: true } }).catch(error => {
+      if (!(error instanceof ProtocolError) || error.code !== 'invalid_request' || error.field !== 'fields') throw error;
+      return request({ method: 'runtime.inspect', params: {} });
+    });
     const grant = inspection.targets.find(entry => entry.target === environmentId);
-    requireValue(grant && grant.capabilities.methods.every(method => hello.capabilities.methods.includes(method)), 'remote.grant', 'unauthorized');
+    requireValue(grant && grant.capabilities.methods.every(method => method === 'runtime.session.search' || hello.capabilities.methods.includes(method)), 'remote.grant', 'unauthorized');
+    if (grant.capabilities.methods.includes('runtime.session.search') && !hello.capabilities.methods.includes('runtime.session.search')) {
+      hello = { ...hello, capabilities: { ...hello.capabilities, methods: [...hello.capabilities.methods, 'runtime.session.search'] } };
+      bindings.set(hello.target, hello);
+    }
     const subscribe = (target, listener) => {
       const filtered = frame => { if (frame.kind === 'closed' || frame.kind === 'binary' || frame.target === target) listener(frame); };
       listeners.add(filtered); return () => listeners.delete(filtered);

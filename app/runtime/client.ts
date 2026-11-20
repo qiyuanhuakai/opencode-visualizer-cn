@@ -320,8 +320,8 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       current(attached) && sequence === inspectionSequence, 'inspection.superseded', 'reconcile_required',
     );
     bootstrapTree &&= attached.hello.capabilities.methods.includes('runtime.snapshot');
-    const result = await request(target, 'runtime.inspect', bootstrapTree ? { bootstrapTree: true, ...(typeof DecompressionStream === 'function' ? { bootstrapEncoding: 'gzip-inspection' } : {}) } : {}).catch(error => {
-      if (!bootstrapTree || !(error instanceof RuntimeRequestError) || error.code !== 'invalid_request'
+    const result = await request(target, 'runtime.inspect', { sessionSearch: true, ...(bootstrapTree ? { bootstrapTree: true, ...(typeof DecompressionStream === 'function' ? { bootstrapEncoding: 'gzip-inspection' } : {}) } : {}) }).catch(error => {
+      if (!(error instanceof RuntimeRequestError) || error.code !== 'invalid_request'
         || !['fields', 'wire.bootstrap_encoding'].includes(error.field)) throw error;
       requireCurrentInspection();
       return request(target, 'runtime.inspect', {});
@@ -635,7 +635,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
   }
   return {
     inspect, attach, detach, request, mutate, snapshot, readIndex, replay, observe,
-    supports(target: EnvironmentId, method: RuntimeMethod) { return getTarget(target).hello.capabilities.methods.includes(method); },
+    supports(target: EnvironmentId, method: RuntimeMethod) { return (grants.get(target)?.capabilities ?? getTarget(target).hello.capabilities).methods.includes(method); },
     subscribeChannel(channelId: number, listener: (chunk: BinaryChunk) => void) {
       requireValue(!binaryListeners.has(channelId), 'channel.duplicate', 'conflict');
       binaryListeners.set(channelId, listener);

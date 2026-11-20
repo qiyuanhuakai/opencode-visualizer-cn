@@ -42,6 +42,11 @@ describe('runtime indexed session search', () => {
       const views = await Promise.all([1, 2, 3].map(() => store.snapshot({ collection: 'harnesses' })));
       try {
         expect(await store.searchSessions(query)).toMatchObject({ totalMatched: 2 });
+        await store.mutate({ intentId: 'unrelated-operation', changes: [
+          { collection: 'operations', key: 'operation', value: { status: 'accepted' } },
+        ] });
+        expect(await store.searchSessions({ ...query, cursor: first.cursor!, revision: first.revision }))
+          .toMatchObject({ items: [{ key: 'row-1' }], cursor: null });
         await store.mutate({ intentId: 'invalidate-search', changes: [
           { collection: 'session_summaries', key: 'row-0', value: null },
         ] });

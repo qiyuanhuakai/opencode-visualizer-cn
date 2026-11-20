@@ -34,7 +34,12 @@ export function createQueries(db, binding) {
   function searchSessions(params) {
     return transaction(db, () => {
       binding.assertOwner();
-      const revision = meta().revision;
+      // Only changes to searchable summaries or their source mapping can
+      // invalidate a continuation. Deleted rows retain their mutation revision.
+      const revision = db.prepare(`SELECT max(
+        coalesce((SELECT max(revision) FROM session_summaries WHERE environment=?),0),
+        coalesce((SELECT max(revision) FROM harnesses WHERE environment=?),0)
+      ) AS revision`).get(environment, environment).revision;
       if (params.revision !== undefined && params.revision !== revision) throw new StoreError('replay_required', 'search_revision');
       const needle = params.query.trim().toLowerCase();
       const scope = `FROM session_summaries s

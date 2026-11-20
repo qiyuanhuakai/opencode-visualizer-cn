@@ -43,7 +43,7 @@ export interface RuntimeParams {
   readonly 'runtime.history.chunk': HistoryChunkParams;
   readonly 'runtime.history.read': HistoryReadParams;
   readonly 'runtime.history.close': HistoryCloseParams;
-  readonly 'runtime.inspect': { readonly bootstrapTree?: true; readonly bootstrapEncoding?: 'gzip' | 'gzip-inspection' };
+  readonly 'runtime.inspect': { readonly bootstrapTree?: true; readonly sessionSearch?: true; readonly bootstrapEncoding?: 'gzip' | 'gzip-inspection' };
   readonly 'runtime.target.attach': { readonly target: EnvironmentId };
   readonly 'runtime.target.detach': { readonly target: EnvironmentId };
   readonly 'runtime.session.search': { readonly query: string; readonly kinds: readonly string[]; readonly limit?: number; readonly cursor?: string; readonly revision?: number };

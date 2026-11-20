@@ -16,7 +16,7 @@ const fields = {
   'runtime.history.chunk': [['historyId', 'pageId', 'descriptorId', 'offset'], []],
   'runtime.history.read': [['historyId', 'after'], []],
   'runtime.history.close': [['historyId'], []],
-  'runtime.inspect': [[], ['bootstrapTree', 'bootstrapEncoding']],
+  'runtime.inspect': [[], ['bootstrapTree', 'bootstrapEncoding', 'sessionSearch']],
   'runtime.target.attach': [['target'], []], 'runtime.target.detach': [['target'], []],
   'runtime.session.search': [['query', 'kinds'], ['limit', 'cursor', 'revision']],
   'runtime.snapshot': [['collection'], ['token', 'cursor', 'limit']],
@@ -104,6 +104,7 @@ export function parseRuntimeParams(method, input) {
   if (method === 'runtime.observer.read' && value.resolveWorkspace !== undefined) {
     requireValue(value.resolveWorkspace === true && value.resolveSummary === true, 'wire.resolve_workspace');
   }
+  if (method === 'runtime.inspect' && value.sessionSearch !== undefined) requireValue(value.sessionSearch === true, 'wire.session_search');
   if (method === 'runtime.inspect' && value.bootstrapTree !== undefined) requireValue(value.bootstrapTree === true, 'wire.bootstrap_tree');
   if (method === 'runtime.inspect' && value.bootstrapEncoding !== undefined) {
     requireValue(value.bootstrapTree === true && ['gzip', 'gzip-inspection'].includes(value.bootstrapEncoding), 'wire.bootstrap_encoding');

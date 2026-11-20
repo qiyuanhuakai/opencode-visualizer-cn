@@ -186,7 +186,7 @@ describe('useRuntimeSessionTree over the real dispatch/client/connection/state',
   it('keeps live events flowing while a delayed full-index search is in flight', async () => {
     const entered = Promise.withResolvers<void>();
     const gate = Promise.withResolvers<void>();
-    const { tree, socket, services, target, root } = await treeFixture((base) => ({
+    const { tree, socket, services, client, target, root } = await treeFixture((base) => ({
       ...base,
       store: {
         ...base.store,
@@ -199,6 +199,7 @@ describe('useRuntimeSessionTree over the real dispatch/client/connection/state',
     }));
     const harnessInstanceId = services.registry.list()[0].harnessInstanceId;
     const harnessOf = (index: number) => ({ environmentId: target, harnessInstanceId, nativeSessionId: `live-${index}` } as const);
+    await client.inspect();
     // Seed the searchable row before starting the live observer.
     const seed = harnessOf(0);
     await services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key: encodeSessionKey(seed), value: summaryValue(target, harnessInstanceId, root, 0) }] });

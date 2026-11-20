@@ -177,11 +177,11 @@ class TreeWire extends EventTarget {
     switch (request.method) {
       case 'runtime.inspect':
         this.reply(request, { role: 'local', state: 'ready', subscribers: 1, topology: [], sources: [], connectionProfileId: String(PROFILE),
-          targets: [{ target: String(TARGET), role: 'execution', capabilities: parseCapabilities({ methods: Object.keys(RUNTIME_WIRE_METHODS), extensions: [] }), permissions: [], workspaceKeys: [] }],
+          targets: [{ target: String(TARGET), role: 'execution', capabilities: CAPABILITIES, permissions: [], workspaceKeys: [] }],
           harnesses: [], transports: { direct: true, ssh: false, slurm: false } });
         break;
       case 'runtime.target.attach':
-        this.reply(request, { hello: { kind: 'hello', version: 1, target: TARGET, epoch: 'epoch', generation: 1, instanceId: INSTANCE, capabilities: parseCapabilities({ methods: Object.keys(RUNTIME_WIRE_METHODS), extensions: [] }) }, grant: { target: String(TARGET), role: 'execution', capabilities: parseCapabilities({ methods: Object.keys(RUNTIME_WIRE_METHODS), extensions: [] }), permissions: [], workspaceKeys: [] } });
+        this.reply(request, { hello: { kind: 'hello', version: 1, target: TARGET, epoch: 'epoch', generation: 1, instanceId: INSTANCE, capabilities: CAPABILITIES }, grant: { target: String(TARGET), role: 'execution', capabilities: CAPABILITIES, permissions: [], workspaceKeys: [] } });
         break;
       case 'runtime.snapshot': {
         const name = request.params.collection;
@@ -231,7 +231,11 @@ class TreeWire extends EventTarget {
   }
 }
 
-const CAPABILITIES = parseCapabilities({ methods: Object.keys(RUNTIME_WIRE_METHODS), extensions: [] });
+// This fixture implements the snapshot fallback, including its progression and pagination.
+const CAPABILITIES = parseCapabilities({
+  methods: Object.keys(RUNTIME_WIRE_METHODS).filter(method => method !== 'runtime.session.search'),
+  extensions: [],
+});
 void CAPABILITIES;
 
 async function openTree(count: number): Promise<{ wire: TreeWire; client: ReturnType<typeof createRuntimeClient>; connection: ReturnType<typeof createRuntimeConnection> }> {
