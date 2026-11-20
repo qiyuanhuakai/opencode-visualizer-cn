@@ -62,8 +62,13 @@ export async function openBrowser(output, userDataDirectory = `${output}-profile
   await page.setViewportSize({ width: 1440, height: 1000 });
   const cdp = await context.newCDPSession(page);
   await cdp.send('Network.enable');
-  const wire = { frames: 0, bytes: 0, methods: {}, historySessions: [], errors: [], timeline: [], startup: {}, last: null };
+  const wire = { frames: 0, bytes: 0, methods: {}, historySessions: [], errors: [], timeline: [], startup: {}, titleEvent: null, last: null };
   const requests = new Map();
+  cdp.on('Network.requestWillBeSent', ({ request, timestamp }) => {
+    const url = new URL(request.url);
+    const title = url.pathname === '/qa/event' ? url.searchParams.get('title') : null;
+    if (title?.startsWith('Vis measured native title update ')) wire.titleEvent = { title, requestAt: timestamp };
+  });
   cdp.on('Network.webSocketFrameSent', ({ requestId, response }) => {
     try { const parsed = JSON.parse(response.payloadData); if (parsed.method) { wire.methods[parsed.method] = (wire.methods[parsed.method] ?? 0) + 1; requests.set(`${requestId}:${parsed.id}`, parsed.method);
       if (parsed.method === 'runtime.history.open' && parsed.params?.session && wire.historySessions.length < 64) {
@@ -74,7 +79,7 @@ export async function openBrowser(output, userDataDirectory = `${output}-profile
         startup.push({ at: Date.now(), sent: parsed.method, collection: parsed.params?.collection });
       } } } catch {}
   });
-  cdp.on('Network.webSocketFrameReceived', ({ requestId, response }) => {
+  cdp.on('Network.webSocketFrameReceived', ({ requestId, response, timestamp }) => {
     wire.frames++;
     wire.bytes += Buffer.byteLength(response.payloadData);
     const parsed = (() => { try { return JSON.parse(response.payloadData); } catch { return null; } })();
@@ -90,6 +95,12 @@ export async function openBrowser(output, userDataDirectory = `${output}-profile
     if (wire.timeline.length < 100 && ['runtime.inspect', 'runtime.snapshot'].includes(method)) wire.timeline.push({ at: Date.now(), method, collection: parsed.result?.items?.[0]?.collection, count: parsed.result?.items?.length, watermark: parsed.result?.watermark });
     const canonical = method === 'runtime.entity.resolve' ? parsed.result
       : method === 'runtime.observer.read' ? parsed.result?.canonical : undefined;
+    const trace = wire.titleEvent;
+    if (trace && trace.canonicalMs === undefined && canonical?.collection === 'session_summaries'
+      && canonical.value?.title === trace.title) {
+      trace.method = method;
+      trace.canonicalMs = (timestamp - trace.requestAt) * 1000;
+    }
     if (!wire.firstCanonicalSessionAt && canonical?.collection === 'session_summaries' && canonical.value) wire.firstCanonicalSessionAt = Date.now();
     if (parsed?.ok === false && wire.errors.length < 100) wire.errors.push({ id: parsed.id, ...parsed.typedError });
     if (parsed) wire.last = parsed;
