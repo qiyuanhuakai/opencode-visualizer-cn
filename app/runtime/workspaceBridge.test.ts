@@ -40,7 +40,7 @@ describe('Bridge workspace surfaces', () => {
         const client = service.connect({ target, epoch, generation: 1, subscriberId: randomUUID(), assertCurrent() {} });
         const pty = await client.ptys.create({ workspaceKey });
         client.ptys.subscribe(pty.ptyId);
-        client.ptys.write(pty.ptyId, "printf 'NATIVE_%s\\n' DEFAULT_SHELL_OK\\n");
+        client.ptys.write(pty.ptyId, "case $BASH_VERSION in ?*) printf 'NATIVE_%s\\n' DEFAULT_SHELL_OK;; esac\\n");
         let output = '';
         const deadline = Date.now() + 5000;
         while (!output.includes('NATIVE_DEFAULT_SHELL_OK') && Date.now() < deadline) {
@@ -55,7 +55,11 @@ describe('Bridge workspace surfaces', () => {
         assert.throws(() => process.kill(pty.pid, 0));
         console.log('DEFAULT_SHELL_AND_PROCESS_REMOVAL_PASS');
       } finally { await service.close(); }
-    `], { timeout: 15000 });
+    `], {
+      timeout: 15000,
+      // Exercise configured default-shell selection without loading the host user's startup files.
+      env: { ...process.env, SHELL: '/bin/bash', HOME: root, BASH_ENV: '', ENV: '' },
+    });
     expect(stdout).toContain('DEFAULT_SHELL_AND_PROCESS_REMOVAL_PASS');
   }, 20_000); // The child has a separate 15-second timeout covering PTY startup and teardown.
   it('pages directory entries and file bytes, rejecting changes and escaped symlinks', async () => {

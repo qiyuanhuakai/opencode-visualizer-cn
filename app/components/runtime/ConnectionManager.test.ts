@@ -461,7 +461,7 @@ describe('a password / OTP is never cached', () => {
     root.querySelector<HTMLButtonElement>('[data-testid="ssh-host-save"]')?.click();
     await nextTick();
     expect(saved).toHaveLength(0);
-    expect(root.querySelector('[data-testid="ssh-host-problems"]')?.textContent).toContain('transport.endpoint');
+    expect(root.querySelector('[data-testid="ssh-host-problems"]')?.textContent).toContain('A host or a bracketed host with a port.');
   });
 });
 // ---------------------------------------------------------------------------

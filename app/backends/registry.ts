@@ -1,10 +1,10 @@
 import { createOpenCodeAdapter } from './openCodeAdapter';
 import { createCodexAdapter } from './codex/codexAdapter';
 import { appendCodexBridgeToken } from './codex/bridgeUrl';
-import { createAcpAdapter } from './acp/acpAdapter';
+import { ACP_CAPABILITIES, createAcpAdapter } from './acp/acpAdapter';
 import { acpBridgeWebSocketUrl, normalizeAcpBridgeUrl } from './acp/bridgeUrl';
 import { createKimiWebAdapter, KIMI_WEB_CAPABILITIES } from './kimiWeb/kimiWebAdapter';
-import { createDshAdapter } from './dsh/dshAdapter';
+import { createDshAdapter, DSH_CAPABILITIES } from './dsh/dshAdapter';
 import type { BackendAdapter, BackendKind } from './types';
 import { StorageKeys, storageGet } from '../utils/storageKeys';
 import { deriveDshBridgeHttpUrl } from '../utils/dshRpc';
@@ -199,4 +199,12 @@ export function getBackendAdapter(kind: BackendKind) {
     throw new Error(`Backend adapter is not registered: ${kind}`);
   }
   return adapter;
+}
+
+/** UI policy for Runtime sessions whose transport is owned by vis_bridge. */
+export function getRuntimeBackendCapabilities(kind: BackendKind) {
+  if (kind === 'acp') return ACP_CAPABILITIES;
+  if (kind === 'kimi-web') return KIMI_WEB_CAPABILITIES;
+  if (kind === 'dsh') return DSH_CAPABILITIES;
+  return getBackendAdapter(kind).capabilities;
 }

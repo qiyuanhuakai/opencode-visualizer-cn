@@ -32,16 +32,10 @@
 //            these is recorded as not-run-by-this-case with its owning lane and reason named, so
 //            the ledger can never read a claim this case did not earn.
 //
-// WHY THE HAPPY LANE CANNOT CONTAIN THE SCENARIO CHECKER — MEASURED, NOT ASSERTED:
-//   scripts/qa/check-test-scenarios.mjs discovers the current test set by spawning
-//   `vitest list --json` (test-scenario-vitest.mjs:25-35). Measured on this tree, that discovery
-//   alone takes 143 seconds. The runner's worker receipt budget is a hard 180 seconds
-//   (scripts/qa/runtime-v090.mjs -> captureProcess, whose default timeout is 180000 ms); a
-//   task-48 worker that exceeded it was SIGTERMed at 180.1s and recorded interrupted:true, which
-//   is how the number was established rather than assumed. The plan's happy QA asks for the full
-//   vitest suite AND that checker in ONE invocation, so the checker leg is executed in the
-//   FAILURE lane — where nothing else competes for the budget — and the happy lane records it as
-//   not-run with this measured reason. The checker's own `--list FILE` fast path
+// Fresh test discovery executes the real Vitest configuration. Keep it beside
+// the scenario checker's negative controls so both use the same discovery
+// receipt. The happy lane covers the build gates and references the full run.
+// The checker's own `--list FILE` fast path
 //   (test-scenario-vitest.mjs:44) is then used for the negative controls so that several checker
 //   invocations fit inside one lane; the list it reads is a REAL fresh discovery of the current
 //   tree, never a derived or recorded one, and every row's file is asserted to exist.
@@ -90,6 +84,7 @@ import { artifact, sourceSnapshot } from '../runtime-v090-evidence.mjs';
 import { captureProcess } from '../runtime-v090-process.mjs';
 
 const TASK = 48;
+export const workerTimeoutMs = 600_000;
 const SCENARIO_MAP = 'docs/testing-scenario-map.json';
 const SCENARIO_CHECKER = 'scripts/qa/check-test-scenarios.mjs';
 const ARTIFACT_CHECK = 'scripts/qa/build-artifact-check.mjs';
@@ -344,8 +339,13 @@ export async function run(context) {
   let discovered = null;
   let checkerLegRan = false;
   if (lane === 'failure') {
-    const discovery = await runCommand(context, path.join(runDir, 'vitest-list-discovery.log'), [process.execPath, vitestEntry(), 'list', '--json']);
-    artifacts.push(artifact(discovery.log, 'vitest-list-discovery-log'));
+    const discovery = await runCommand(context, path.join(runDir, 'vitest-list-discovery.log'),
+      [process.execPath, vitestEntry(), 'list', '--json'], workerTimeoutMs - 60_000);
+    record('freshDiscoveryProcess', discovery.receipt);
+    if (discovery.text.length) artifacts.push(artifact(discovery.log, 'vitest-list-discovery-log'));
+    const { exitCode, signal, interrupted } = discovery.receipt;
+    assert(exitCode === 0 && signal === null && !interrupted,
+      `Vitest list failed (exit ${exitCode}, signal ${signal}, interrupted ${interrupted}); see ${discovery.log}`);
     discovered = extractJson(discovery.text, '[', ']');
     listPath = path.join(runDir, 'vitest-list.json');
     writeFileSync(listPath, `${JSON.stringify(discovered)}\n`, 'utf8');
@@ -382,7 +382,7 @@ export async function run(context) {
     artifacts.push(artifact(green.log, 'scenario-checker-fresh-log'));
     const greenJson = extractJson(green.text, '{', '}');
     record('scenarioCheckerFresh', greenJson);
-    check('the scenario checker is GREEN over a fresh discovery of the current tree: the real scripts/qa/check-test-scenarios.mjs exits 0 and reports ok:true with zero errors, the frozen baseline file and scenario counts intact, every oldId assignment covered, the whole discovered set audited with checkedList true, and no runnable test destination undiscovered — this is the plan happy-lane checker leg, executed in the failure lane because the happy lane cannot also contain the 143-second discovery inside the runner 180-second worker budget', {
+    check('the scenario checker is GREEN over a fresh discovery of the current tree: the real scripts/qa/check-test-scenarios.mjs exits 0 and reports ok:true with zero errors, the frozen baseline file and scenario counts intact, every oldId assignment covered, the whole discovered set audited with checkedList true, and no runnable test destination undiscovered — this is the plan happy-lane checker leg, executed in the failure lane so its negative controls all score the same fresh discovery', {
       exitCode: green.receipt.exitCode,
       signal: green.receipt.signal,
       ok: greenJson.ok === true,

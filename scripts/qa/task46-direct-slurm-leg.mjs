@@ -2,10 +2,9 @@
 // registered argv, and writes its report, its captured log and its own receipt file under
 // .omo/evidence/vis-v090/task-46/direct-slurm/<lane>/.
 //
-// Why: the QA runner's worker receipt budget is a hard 180000 ms and the Slurm driver measures
-// 137300 ms on this host, so a single registered invocation cannot contain it next to the SSH
-// driver (97500 ms happy / 115100 ms failure). This script is the auditable direct leg the
-// task-46 case module reads back and verifies.
+// The Slurm and SSH drivers provision the same isolated lab name. The Slurm
+// leg runs first so the Task 46 worker can verify its independent receipt
+// before it starts the SSH lab.
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -52,7 +51,7 @@ const receipt = {
   lane,
   surface: 'live-slurm',
   execution: 'direct (outside the QA runner)',
-  reason: `the runner worker receipt budget is a hard 180000 ms and this driver measures 137300 ms on this host, so a single registered invocation cannot contain it next to the SSH driver`,
+  reason: 'The isolated Slurm and SSH drivers provision the lab serially with independent receipts.',
   invocation: argv,
   invocationCwd: root,
   exitCode,

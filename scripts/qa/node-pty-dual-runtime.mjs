@@ -56,6 +56,7 @@
 
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -560,7 +561,7 @@ function parseArgs(argv) {
     runtimes: ['node', 'sea', 'electron'],
     ptyModuleDir: path.join(ROOT, 'node_modules', 'node-pty'),
     bridgeBinary: path.join(ROOT, 'dist-bridge', process.platform === 'win32' ? 'vis_bridge.exe' : 'vis_bridge'),
-    electronExecutable: defaultElectronExecutable(),
+    electronExecutable: undefined,
     stateDir: undefined,
     port: 23201,
     outDir: path.join(ROOT, '.omo', 'evidence', 'electron-major-upgrade', 'task-11'),
@@ -578,26 +579,18 @@ function parseArgs(argv) {
   }
   options.ptyModuleDir = path.resolve(options.ptyModuleDir);
   options.bridgeBinary = path.resolve(options.bridgeBinary);
-  options.electronExecutable = path.resolve(options.electronExecutable);
+  if (options.runtimes.includes('electron')) {
+    options.electronExecutable = path.resolve(options.electronExecutable ?? createRequire(import.meta.url)('electron'));
+    if (!existsSync(options.electronExecutable)) {
+      throw new Error('Electron runtime executable is missing: ' + options.electronExecutable);
+    }
+  }
   if (options.stateDir) options.stateDir = path.resolve(options.stateDir);
   options.outDir = path.resolve(options.outDir);
   for (const runtime of options.runtimes) {
     if (!['node', 'sea', 'electron'].includes(runtime)) throw new Error('Unknown runtime: ' + runtime);
   }
   return options;
-}
-
-function defaultElectronExecutable() {
-  const runtimeName = process.platform === 'win32' ? 'electron.exe' : 'electron';
-  const devBinary = path.join(ROOT, 'node_modules', 'electron', 'dist', runtimeName);
-  if (existsSync(devBinary)) return devBinary;
-  if (process.platform === 'darwin') {
-    return path.join(ROOT, 'dist-electron', 'mac', 'Vis.app', 'Contents', 'MacOS', 'Vis');
-  }
-  if (process.platform === 'win32') {
-    return path.join(ROOT, 'dist-electron', 'win-unpacked', 'vis.exe');
-  }
-  return path.join(ROOT, 'dist-electron', 'linux-unpacked', 'vis');
 }
 
 async function main() {

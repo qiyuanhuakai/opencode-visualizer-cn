@@ -20,7 +20,7 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -374,8 +374,9 @@ export async function startLab(options = {}) {
       '--hostname', LAB_NODES.ctrl.host,
       '-v', `${hosts}:/etc/hosts:ro`,
       '-v', `${setup}:/lab/lab-setup.sh:ro`,
+      '-v', `${workdir}:/lab-evidence`,
       options.image ?? LAB_IMAGE,
-      'bash', '/lab/lab-setup.sh',
+      'bash', '-c', 'bash /lab/lab-setup.sh >/lab-evidence/setup.log 2>&1; code=$?; echo "$code" > /lab-evidence/setup.exit; exit "$code"',
     ]);
     containerId = started.stdout.trim();
     assert(/^[0-9a-f]{12,64}$/.test(containerId), `docker run did not return a container id: ${started.stdout.trim()}`);
@@ -397,9 +398,17 @@ export async function startLab(options = {}) {
     setupChild.unref();
   }
   const lab = { runtime, workdir, containerId, setupChild, hostsFile: hosts, startedAt, markerPath, descriptor: null };
-  await awaitLabReady(lab, options.timeoutMs ?? 900000);
-  lab.descriptor = await readLabDescriptor(lab);
-  return lab;
+  try {
+    await awaitLabReady(lab, options.timeoutMs ?? 900000);
+    lab.descriptor = await readLabDescriptor(lab);
+    return lab;
+  } catch (error) {
+    const setupLog = path.join(workdir, 'setup.log');
+    const logTail = existsSync(setupLog) ? readFileSync(setupLog, 'utf8').slice(-8000).trim() : '';
+    await stopLab(lab);
+    if (logTail) throw new Error(`${error.message}\nIsolated lab setup log:\n${logTail}`, { cause: error });
+    throw error;
+  }
 }
 
 /**
@@ -412,6 +421,10 @@ export async function awaitLabReady(lab, timeoutMs, probe = execLab) {
   let last = '';
   let setupComplete = false;
   while (Date.now() < deadline) {
+    if (lab.runtime === 'docker' && lab.workdir) {
+      const exit = path.join(lab.workdir, 'setup.exit');
+      if (existsSync(exit)) throw new Error(`isolated lab setup exited before readiness (exit ${readFileSync(exit, 'utf8').trim()})`);
+    }
     const sinfo = await probe(lab, ['bash', '-c', 'sinfo -h -N -o "%N %t" 2>/dev/null | sort | tr "\\n" ";"']);
     last = sinfo.stdout.trim();
     const idle = (last.match(/idle/g) ?? []).length;

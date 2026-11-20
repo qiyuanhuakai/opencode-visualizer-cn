@@ -73,6 +73,8 @@ import { artifact, sourceSnapshot } from '../runtime-v090-evidence.mjs';
 import { captureProcess } from '../runtime-v090-process.mjs';
 
 const TASK = 45;
+// The packaged lane builds and exercises the SEA, installer and Electron artifacts.
+export const workerTimeoutMs = 600_000;
 const DRIVER = 'scripts/qa/runtime-v090-packaged.mjs';
 
 // The roster the plan's own QA text names for each lane, frozen so a dropped or renamed leg fails.
@@ -205,7 +207,7 @@ export async function run(context) {
   const invocation = [process.execPath, DRIVER, '--case', context.case, '--out-dir', outDir];
   const log = path.join(runDir, 'packaged-driver.log');
   record('invocation', { argv: invocation, cwd: context.root, outDir });
-  const receipt = await captureProcess(invocation, { root: context.root, log, timeoutMs: 3600000 });
+  const receipt = await captureProcess(invocation, { root: context.root, log, timeoutMs: workerTimeoutMs - 30_000 });
   const driverLog = existsSync(log) ? readFileSync(log, 'utf8') : '';
   artifacts.push(artifact(log, 'packaged-driver-log'));
   record('receipt', { exitCode: receipt.exitCode, signal: receipt.signal, interrupted: receipt.interrupted, startedAt: receipt.startedAt, finishedAt: receipt.finishedAt, logBytes: driverLog.length });
