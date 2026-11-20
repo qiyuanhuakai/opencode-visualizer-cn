@@ -34,7 +34,12 @@ type ProviderConfigState = {
   readonly model_providers?: Record<string, unknown>;
 };
 
-type MountedModalOptions = {
+type NativeProviderTarget = {
+  readonly nativeAdapter?: InstanceType<typeof ProviderManagerModal>['$props']['nativeAdapter'];
+  readonly nativeScope?: { readonly isCurrent: () => boolean };
+};
+
+type MountedModalOptions = NativeProviderTarget & {
   readonly dshRpcClient?: DshRpcClient;
   readonly backendKind?: BackendKind;
   readonly providers?: readonly ProviderInfo[];
@@ -55,6 +60,7 @@ type MountedModal = {
     readonly providersChanged: ReturnType<typeof vi.fn>;
     readonly selectModel: ReturnType<typeof vi.fn>;
   };
+  readonly setNativeTarget: (target: NativeProviderTarget) => Promise<void>;
   readonly setOpen: (open: boolean) => Promise<void>;
 };
 
@@ -123,6 +129,8 @@ export async function mountProviderManager(
     providerConfig: options.providerConfig ?? null,
     backendKind: options.backendKind ?? 'opencode',
     dshRpcClient: options.dshRpcClient,
+    nativeAdapter: options.nativeAdapter,
+    nativeScope: options.nativeScope,
   });
   const events = {
     configUpdated: vi.fn(),
@@ -150,6 +158,10 @@ export async function mountProviderManager(
     host,
     app,
     events,
+    setNativeTarget: async (target: NativeProviderTarget) => {
+      props.value = { ...props.value, ...target };
+      await flushUi();
+    },
     setOpen: async (open: boolean) => {
       props.value = { ...props.value, open };
       await flushUi();

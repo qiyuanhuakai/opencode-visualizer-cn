@@ -25,6 +25,9 @@ type TargetState = {
   applicationGeneration: number; fence?: EntityFence; observer?: Observer; running?: Promise<void>;
   pendingCollection: IndexCollection; visibleCaptured: boolean; events: number;
 };
+// Keep room in the entity cache for wire ingress, the next page and live updates.
+const visibleBytesLimit = 8 * 1024 * 1024;
+const retainedViewBytesLimit = 9 * 1024 * 1024;
 const emptyUsage = (): CacheUsage => ({ residentBytes: 0, reservedBytes: 0, entries: 0 });
 function record(value: JsonValue): value is Readonly<Record<string, JsonValue>> { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 function collection(value: JsonValue | undefined): value is IndexCollection { return INDEX_COLLECTIONS.some(name => name === value); }
@@ -63,14 +66,36 @@ export function createRuntimeState(options: RuntimeStateOptions) {
   let window: EntityLease[] = [];
   // Bounded one-page backfill source; never a server re-fetch, so refreshes cannot clone the project.
   let lookahead: EntityLease[] = [];
+  let windowFilled = false;
+  let lookaheadFilled = false;
   let generation = 0;
   let disposed = false;
   let disposing: Promise<void> | undefined;
   const notify = () => { for (const listener of listeners.keys()) listener(); };
-  const clearWindow = () => { for (const lease of window) lease.release(); window = []; for (const lease of lookahead) lease.release(); lookahead = []; };
+  const clearWindow = () => { for (const lease of window) lease.release(); window = []; for (const lease of lookahead) lease.release(); lookahead = []; windowFilled = false; lookaheadFilled = false; };
   const current = (entry: TargetState) => !disposed && !entry.controller.signal.aborted && targets.get(entry.target) === entry && entry.scope.isCurrent();
   const check = (entry: TargetState) => requireValue(current(entry), 'state.scope', 'cancelled');
   const address = (entry: TargetState, item: CanonicalEntity) => ({ profileId, target: entry.target, collection: item.collection, key: item.key });
+  const viewBytes = (view: readonly EntityLease[]) => view.reduce((bytes, lease) => bytes + lease.retainedBytes, 0);
+  function hold(view: EntityLease[], lease: EntityLease, index = view.length): boolean {
+    const fits = view.length < ENTITY_LIMITS.page
+      && (view !== window || viewBytes(window) + lease.retainedBytes <= visibleBytesLimit)
+      && viewBytes(window) + viewBytes(lookahead) + lease.retainedBytes <= retainedViewBytesLimit;
+    if (fits) view.splice(index, 0, lease);
+    return fits;
+  }
+  function retain(entry: TargetState, item: CanonicalEntity, fillWindow: boolean) {
+    if (lookaheadFilled && (!fillWindow || windowFilled)) return;
+    const lease = cache.get(address(entry, item));
+    if (!lease) return;
+    if (fillWindow && !windowFilled) {
+      if (hold(window, lease)) return;
+      windowFilled = true;
+    }
+    if (!lookaheadFilled && hold(lookahead, lease)) return;
+    lease.release();
+    lookaheadFilled = true;
+  }
   function progress(entry: TargetState, name: IndexCollection): Progress {
     const value = entry.progress.get(name); requireValue(value !== undefined, 'state.collection'); return value;
   }
@@ -95,7 +120,7 @@ export function createRuntimeState(options: RuntimeStateOptions) {
       const position = progress(entry, name); const offset = entry.request.offset ?? 0;
       const visibleCollection = visible?.target === entry.target && visible.collection === name;
       const startWindow = visibleCollection && !entry.visibleCaptured && position.loaded + page.items.length > offset;
-      const fillWindow = visibleCollection && (startWindow || (entry.request.sessionWindow && name === 'session_summaries'));
+      const fillWindow = visibleCollection && (startWindow || (entry.request.sessionWindow === true && name === 'session_summaries'));
       if (startWindow) clearWindow();
       for (let index = 0; index < page.items.length; index++) {
         const item = row(page.items[index], name);
@@ -103,11 +128,8 @@ export function createRuntimeState(options: RuntimeStateOptions) {
         const result = cache.admit({ ...item, address: address(entry, item), fence: entry.fence });
         requireValue(result !== 'budget', 'state.entity_budget', 'source_unavailable');
         if (result === 'applied') options.onCanonical?.(item);
-        if (fillWindow && window.length < ENTITY_LIMITS.page && position.loaded + index >= offset && item.value !== null) {
-          const lease = cache.get(address(entry, item)); requireValue(lease !== null, 'state.view_budget', 'source_unavailable'); window.push(lease);
-        } else if ((entry.visibleCaptured || startWindow) && visibleCollection
-          && position.loaded + index >= offset && lookahead.length < ENTITY_LIMITS.page && item.value !== null) {
-          const lease = cache.get(address(entry, item)); requireValue(lease !== null, 'state.view_budget', 'source_unavailable'); lookahead.push(lease);
+        if ((startWindow || entry.visibleCaptured) && visibleCollection && position.loaded + index >= offset && item.value !== null) {
+          retain(entry, item, fillWindow);
         }
       }
       if (startWindow) entry.visibleCaptured = true;
@@ -125,25 +147,26 @@ export function createRuntimeState(options: RuntimeStateOptions) {
     if (index >= 0) {
       window[index].release(); window.splice(index, 1);
       if (canonical.value !== null) {
-        const lease = cache.get(address(entry, canonical)); requireValue(lease !== null, 'state.view_budget', 'replay_required'); window.splice(index, 0, lease);
-      } else {
-        const backfill = lookahead.shift(); if (backfill !== undefined) window.splice(index, 0, backfill);
+        const lease = cache.get(address(entry, canonical));
+        if (lease && hold(window, lease, index)) return;
+        lease?.release();
       }
+      const backfill = lookahead.shift();
+      if (backfill && !hold(window, backfill, index)) lookahead.unshift(backfill);
       return;
     }
     const pending = lookahead.findIndex(lease => holds(lease, entry, canonical));
     if (pending >= 0) {
       lookahead[pending].release(); lookahead.splice(pending, 1);
       if (canonical.value !== null) {
-        const lease = cache.get(address(entry, canonical)); requireValue(lease !== null, 'state.view_budget', 'replay_required'); lookahead.splice(pending, 0, lease);
+        const lease = cache.get(address(entry, canonical));
+        if (lease && !hold(lookahead, lease, pending)) lease.release();
       }
       return;
     }
     if (canonical.value !== null) {
-      const lease = cache.get(address(entry, canonical)); requireValue(lease !== null, 'state.view_budget', 'replay_required');
-      if (window.length < ENTITY_LIMITS.page) window.push(lease);
-      else if (lookahead.length < ENTITY_LIMITS.page) lookahead.push(lease);
-      else lease.release();
+      const lease = cache.get(address(entry, canonical));
+      if (lease && !hold(window, lease) && !hold(lookahead, lease)) lease.release();
     }
   }
   async function deliver(entry: TargetState, delivery: ObserverDelivery, prefetched?: CanonicalEntity) {
@@ -221,7 +244,7 @@ export function createRuntimeState(options: RuntimeStateOptions) {
           publishPage(entry, name, page);
           // The visible page and its bounded local backfill are ready. The
           // rest of the inventory stays in the Bridge for search and child pages.
-          if (entry.request.sessionWindow && name === 'session_summaries' && visible?.target === entry.target && visible.collection === name && lookahead.length >= ENTITY_LIMITS.page) return false;
+          if (entry.request.sessionWindow && name === 'session_summaries' && visible?.target === entry.target && visible.collection === name && (lookaheadFilled || lookahead.length >= ENTITY_LIMITS.page)) return false;
         }, onDelivery: delivery => deliver(entry, delivery), onDeliveries: deliveries => deliverMany(entry, deliveries),
       });
       entry.observer = result.observer; check(entry);

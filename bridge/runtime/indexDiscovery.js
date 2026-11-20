@@ -27,7 +27,7 @@ export function createIndexDiscovery({ store, scheduler, mutations }) {
       async function run() {
         let count = 0;
         let authority;
-        for (let round = 0; round < 3; round++) {
+        rounds: for (let round = 0; round < 3; round++) {
           source.assertCurrent();
           authority = sourceAuthority(source.authority());
           const serial = source.serial();
@@ -60,6 +60,9 @@ export function createIndexDiscovery({ store, scheduler, mutations }) {
               state.pending = null;
               assertCurrent();
               cursor = page.cursor;
+              // Keep SQLite's absence fence and retry a scan whose native catalog changed.
+              if (source.identity.kind === 'opencode' && cursor === null && page.completeness === 'partial'
+                && ['opencode.store_changed', 'native-source-changed'].includes(page.reason)) continue rounds;
               if (cursor !== null) {
                 const hash = createHash('sha256').update(cursor).digest('hex');
                 if (cursors.has(hash) || cursors.size >= 10000) throw new StoreError('reconcile_required', 'index_cursor_cycle');

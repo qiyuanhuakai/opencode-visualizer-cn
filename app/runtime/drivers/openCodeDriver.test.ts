@@ -6,6 +6,11 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createOpenCodeStoreReader } from '../../../bridge/runtime/drivers/openCodeStoreReader.mjs';
 
+import { createIndexDiscovery } from '../../../bridge/runtime/indexDiscovery.js';
+import { createIndexMutations } from '../../../bridge/runtime/indexMutations.js';
+import { createWorkspaceCatalog } from '../../../bridge/runtime/workspaceCatalog.js';
+import { createDiscoveryScheduler } from '../../../bridge/runtime/discoveryScheduler.js';
+
 const temporary: string[] = [];
 afterEach(async () => { await Promise.all(temporary.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });
 async function nativeFixture() {
@@ -453,6 +458,85 @@ describe('OpenCode native selected-history producer over controlled raw HTTP', (
 });
 
 describe('OpenCode discovery fences', () => {
+  it.each([
+    { updated: 15, title: 'Delayed title', expected: 'Original' },
+    { updated: 25, title: 'New title', expected: 'New title' },
+  ])('finishes an in-flight scan with a title event at $updated', async ({ updated, title, expected }) => {
+    const provenance = { nativeVersion: '1.18.34', readOnly: true, summaryOnly: true, schemaVersion: 1 } as const;
+    const started = Promise.withResolvers<void>();
+    const page = Promise.withResolvers<{ items: typeof nativeSession[]; cursor: null; completeness: 'complete'; reason: string; provenance: typeof provenance }>();
+    const discovery = createOpenCodeDiscovery({
+      reader: { ready: Promise.resolve(provenance), page: () => { started.resolve(); return page.promise; }, close: async () => {} },
+      request: async () => [],
+      current: () => ({ epoch, processGeneration: 1, seq: 0 }),
+      assertCurrent: () => {},
+    });
+    const pending = discovery.listSessionPage();
+    await started.promise;
+    discovery.event({ epoch, processGeneration: 1, seq: 1, type: 'session.updated', session,
+      summary: { ...nativeSession, title, time: { ...nativeSession.time, updated } } });
+    page.resolve({ items: [nativeSession], cursor: null, completeness: 'complete', reason: 'native-store-eof', provenance });
+    expect(await pending).toMatchObject({ items: [{ summary: { title: expected } }], completeness: 'complete', reason: 'native-store-eof' });
+  });
+
+  it.each([false, true])('checks deferred updates against the next native page (scope change: %s)', async moves => {
+    const provenance = { nativeVersion: '1.18.34', readOnly: true, summaryOnly: true, schemaVersion: 1 } as const;
+    const later = { ...nativeSession, id: 'ses_second' };
+    const laterSession = { ...session, nativeSessionId: later.id };
+    const discovery = createOpenCodeDiscovery({
+      reader: { ready: Promise.resolve(provenance), close: async () => {}, async page({ cursor } = {}) {
+        return cursor ? { items: [later], cursor: null, completeness: 'complete', reason: 'native-store-eof', provenance }
+          : { items: [nativeSession], cursor: 'native-next', completeness: 'partial', reason: 'more-pages', provenance };
+      } },
+      request: async () => [],
+      current: () => ({ epoch, processGeneration: 1, seq: 0 }),
+      assertCurrent: () => {},
+    });
+    const first = await discovery.listSessionPage();
+    expect(first.cursor).toBeTruthy();
+    discovery.event({ epoch, processGeneration: 1, seq: 1, type: 'session.updated', session: laterSession,
+      summary: { ...later, directory: moves ? '/other-project' : later.directory, title: 'Updated', time: { ...later.time, updated: 25 } } });
+    discovery.event({ epoch, processGeneration: 1, seq: 2, type: 'session.updated', session: laterSession,
+      summary: { ...later, title: 'Late', time: { ...later.time, updated: 15 } } });
+    expect(await discovery.listSessionPage({ cursor: first.cursor })).toMatchObject({
+      items: [{ summary: { title: 'Updated' }, revision: 1 }], cursor: null,
+      completeness: moves ? 'partial' : 'complete', reason: moves ? 'native-source-changed' : 'native-store-eof',
+    });
+  });
+
+  it('recovers the runtime index when a real native rename changes the SQLite cursor revision', async () => {
+    const { db, databasePath } = await nativeFixture();
+    const reader = createOpenCodeStoreReader({ databasePath, nativeVersion: '1.18.34' });
+    const store = createRuntimeStore({ stateDirectory: path.join(path.dirname(databasePath), 'runtime'), environmentId, ownerId, epoch });
+    const authority = { epoch, processGeneration: 1 };
+    const native = createOpenCodeDiscovery({ reader, request: async () => [], current: () => ({ ...authority, seq: 1 }), assertCurrent() {} });
+    const catalog = createWorkspaceCatalog({ store, git: { async probe() { throw new Error('Native scan should defer Git probes'); } } });
+    const mutations = createIndexMutations({ store, catalog, resolveWorkspace: async ({ directory }) => ({
+      environmentId, canonicalPath: directory, pathPolicy: { platform: 'posix', caseSensitive: true, volumeId: 'fixture' },
+    }) });
+    const scheduler = createDiscoveryScheduler();
+    const discovery = createIndexDiscovery({ store, mutations, scheduler });
+    let restarts = 0;
+    try {
+      await store.ready;
+      const result = await discovery.discover({
+        identity: { kind: 'opencode', environmentId, harnessInstanceId },
+        authority: () => authority, serial: () => 0, assertCurrent() {},
+        async list({ cursor }) {
+          const page = await native.listSessionPage({ cursor: typeof cursor === 'string' ? cursor : null, limit: 200 });
+          if (cursor === null && ++restarts === 1) {
+            db.exec("UPDATE session SET title='Renamed via SQLite', time_updated=21 WHERE id='ses_00001'");
+          }
+          return { ...page, items: page.items.map(item => ({ ...item, session: { ...session, nativeSessionId: item.summary.id } })) };
+        },
+      });
+      expect(result, JSON.stringify(result)).toMatchObject({ status: 'complete', count: 1005 });
+      expect(restarts).toBe(2);
+      const key = encodeSessionKey({ ...session, nativeSessionId: 'ses_00001' });
+      expect(await store.get({ collection: 'session_summaries', key })).toMatchObject({ value: { title: 'Renamed via SQLite' } });
+    } finally { native.close(); await reader.close(); await store.close(); db.close(); }
+  });
+
   it('failure does not resurrect a deleted summary returned by an in-flight native snapshot', async () => {
     let finish: (value: { items: typeof nativeSession[]; cursor: null; completeness: 'complete'; reason: string; provenance: { nativeVersion: string; readOnly: true; summaryOnly: true; schemaVersion: number } }) => void = () => { throw new TypeError('not waiting'); };
     const page = new Promise<Parameters<typeof finish>[0]>((resolve) => { finish = resolve; });
