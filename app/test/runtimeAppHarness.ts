@@ -2,6 +2,7 @@ import { createApp, h, nextTick } from 'vue';
 import { onTestFinished, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -207,7 +208,17 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
   };
   const server = createVisBridgeServer(serverOptions);
   cleanups.push(async () => { await host.stop(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const listening = once(server, 'listening');
+      server.listen(0, '127.0.0.1');
+      await listening;
+      break;
+    } catch (error) {
+      // The loopback bind can fail before any app request is sent.
+      if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE' || attempt === 2) throw error;
+    }
+  }
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('No owned server port');
   const endpoint = `ws://127.0.0.1:${address.port}/runtime`;

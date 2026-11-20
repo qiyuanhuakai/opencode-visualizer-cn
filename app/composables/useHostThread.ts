@@ -40,6 +40,7 @@ export function createHostThreadState(getHost: () => HostClient | null) {
   let host: HostClient | null = null;
   let generation = 0;
   let sequence = 0;
+  let latestRefresh: Promise<void> | undefined;
   let pending = 0;
   let unsubscribe = () => {};
   let scheduled = false;
@@ -58,6 +59,27 @@ export function createHostThreadState(getHost: () => HostClient | null) {
     const id = threadId.value;
     if (!captured || !id || !current(captured, token)) return;
     const turn = ++sequence;
+    const reading = readThread(captured, token, id, turn);
+    latestRefresh = reading;
+    try {
+      await reading;
+    } catch (failure) {
+      if (turn === sequence) throw failure;
+    }
+    // A change event may supersede a user action's read before it publishes.
+    // Wait for the replacement before the caller uses the Thread summary.
+    while (current(captured, token) && latestRefresh && latestRefresh !== reading) {
+      const replacement: Promise<void> = latestRefresh;
+      try {
+        await replacement;
+      } catch (failure) {
+        if (replacement === latestRefresh) throw failure;
+      }
+      if (replacement === latestRefresh) break;
+    }
+  }
+
+  async function readThread(captured: HostClient, token: number, id: string, turn: number): Promise<void> {
     const selected = selectedSession.value;
     const target = targetSession.value;
     const resolve = (session: SessionRef | null) => session
@@ -106,12 +128,14 @@ export function createHostThreadState(getHost: () => HostClient | null) {
     const captured = host;
     const token = generation;
     if (!captured || !current(captured, token)) { error.value = 'Connect to this Thread’s Bridge before continuing.'; return; }
-    pending += 1;
-    busy.value = true;
-    if (!background) error.value = '';
+    if (!background) {
+      pending += 1;
+      busy.value = true;
+      error.value = '';
+    }
     try { await action(captured, token); }
     catch (failure) { if (token === generation && captured === host && (!background || !error.value)) error.value = failure instanceof Error ? failure.message : 'The Thread operation failed.'; }
-    finally { if (token === generation) { pending -= 1; busy.value = pending > 0; } }
+    finally { if (!background && token === generation) { pending -= 1; busy.value = pending > 0; } }
   }
 
   async function change(call: HostMutationCall): Promise<void> {
@@ -155,7 +179,7 @@ export function createHostThreadState(getHost: () => HostClient | null) {
     if (host?.isCurrent()) return;
     unsubscribe(); scheduled = false;
     const token = ++generation;
-    sequence++; pending = 0; busy.value = false;
+    sequence++; latestRefresh = undefined; pending = 0; busy.value = false;
     host = captured;
     owner.value = Object.freeze({ ...previous, host: captured, generation: token });
     subscribeHost(captured, token);
@@ -168,6 +192,7 @@ export function createHostThreadState(getHost: () => HostClient | null) {
     scheduled = false;
     generation += 1;
     sequence += 1;
+    latestRefresh = undefined;
     host = null;
     owner.value = null;
     repo = null;
