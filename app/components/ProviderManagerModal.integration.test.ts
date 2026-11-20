@@ -15,6 +15,29 @@ import {
 } from './providerManagerModal.test-helpers';
 
 describe('ProviderManagerModal integration contracts', () => {
+  it.each([false, true])('fences a pending provider toggle by Agent scope (Agent changed: %s)', async changed => {
+    const result = { disabled_providers: ['openai'] };
+    const pending = Promise.withResolvers<typeof result>();
+    const scope = { isCurrent: () => true };
+    const updateGlobalConfig = vi.fn(() => pending.promise);
+    const modal = await mountProviderManager({
+      nativeAdapter: { kind: 'opencode', updateGlobalConfig },
+      nativeScope: scope,
+      connectedProviderIds: ['openai'],
+      providers: [{ id: 'openai', models: {} }],
+    });
+    changeCheckbox(requireElement<HTMLInputElement>(modal.host, '.provider-toggle .toggle-input'), false);
+    expect(updateGlobalConfig).toHaveBeenCalledOnce();
+    await modal.setNativeTarget({
+      nativeAdapter: { kind: 'opencode', updateGlobalConfig: vi.fn() },
+      nativeScope: changed ? { isCurrent: () => true } : scope,
+    });
+    pending.resolve(result);
+    await flushUi();
+    if (changed) expect(modal.events.configUpdated).not.toHaveBeenCalled();
+    else expect(modal.events.configUpdated).toHaveBeenCalledExactlyOnceWith(result);
+  });
+
   it('keeps DSH runtime-managed provider credentials read-only', async () => {
     setProviderBackend(openCodeBackend());
     const { host } = await mountProviderManager({
