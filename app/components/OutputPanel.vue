@@ -99,6 +99,7 @@
           :draft-text="threadDraftText ?? ''"
           :handoff-entries="threadHandoffEntries ?? []"
           :available-sessions="threadAvailableSessions ?? []"
+          :find-sessions="threadFindSessions"
           :harness-labels="threadHarnessLabels"
           :fanout-enabled="true"
           :selected-session="threadState.selectedSession.value"
@@ -189,6 +190,7 @@ const props = defineProps<{
   threadPanelOpen?: boolean;
   threadDraftText?: string;
   threadHandoffEntries?: readonly unknown[];
+  threadFindSessions?: (query: string, signal: AbortSignal) => Promise<readonly { session: SessionRef; label: string; harness: string }[]>;
   threadAvailableSessions?: readonly { session: SessionRef; label: string; harness: string }[];
   isFollowing: boolean;
   statusText: string;

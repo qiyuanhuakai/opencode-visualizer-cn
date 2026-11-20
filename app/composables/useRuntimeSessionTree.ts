@@ -543,7 +543,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
    * cached view may predate sessions the query should match; paging the SAME
    * search leaves it unset so every page reads one consistent view.
    */
-  async function scanSearch(query: string, skip: number, signal: AbortSignal, accumulator: SearchScan, fresh: boolean, onWaiting?: () => void, onMatches?: () => void): Promise<void> {
+  async function scanSearch(query: string, skip: number, signal: AbortSignal, accumulator: SearchScan, fresh: boolean, onWaiting?: () => void, onMatches?: () => void, kinds = filterKinds.value): Promise<void> {
     const view = await client.readIndex(target, 'session_summaries', {
       fresh,
       signal,
@@ -558,7 +558,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
           if (!record || typeof record.key !== 'string') continue;
           const session = asRecord(record.value)?.session;
           const parsed = parseUnifiedSessionRow(record.key, record.value, kindById.get(asText(asRecord(session)?.harnessInstanceId, 64) ?? '') ?? 'unknown');
-          if (!parsed || !matchesQuery(parsed, query) || !filterKinds.value.has(parsed.harness)) continue;
+          if (!parsed || !matchesQuery(parsed, query) || !kinds.has(parsed.harness)) continue;
           accumulator.totalMatched += 1;
           if (accumulator.totalMatched > skip && accumulator.retained.length < SEARCH_LIMITS.maxRetained) accumulator.retained.push(parsed);
         }
@@ -567,6 +567,15 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     });
     lastIndexRevision = view.revision;
   }
+  async function findParticipantSessions(query: string, signal: AbortSignal): Promise<readonly UnifiedSessionRow[]> {
+    return serialize(async () => {
+      if (signal.aborted || disposed) return [];
+      const accumulator: SearchScan = { retained: [], totalMatched: 0, scanned: 0, pages: 0 };
+      await scanSearch(query, 0, signal, accumulator, true, undefined, undefined, new Set([...HARNESS_KINDS, 'unknown']));
+      return accumulator.retained;
+    });
+  }
+
   /** Full-index search: traverses every session_summaries page, not the LRU window. */
   async function searchAll(query: string): Promise<UnifiedSearchState> {
     const generation = ++searchGeneration;
@@ -759,7 +768,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     rows, tree, sessions, workspaces, harnesses, nativeChildren, childScans,
     viewStatus, viewLoaded, viewError, selection, usage, failure, started,
     expanded, toggleExpand, filterKinds, setFilterKinds,
-    search: searchAll, searchState: search, searchMore, loadMoreChildren, retrySource, retrying,
+    findParticipantSessions, search: searchAll, searchState: search, searchMore, loadMoreChildren, retrySource, retrying,
     select, selectByKey,
     state, indexWaiting,
   };

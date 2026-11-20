@@ -198,6 +198,7 @@
                     :thread-native-history="runtimeThreadNativeHistory"
                     @browse-thread-history="loadThreadNativeHistory"
                     :thread-available-sessions="runtimeThreadAvailableSessions"
+                    :thread-find-sessions="findThreadSessions"
                     :thread-harness-labels="runtimeThreadHarnessLabels"
                     @open-team-dispatch="openCollaborationPanel"
                     :project-name="currentProjectName"
@@ -10293,6 +10294,13 @@ const runtimeThreadHarnessLabels = computed(() => Object.fromEntries(harnessMani
 const runtimeThreadAvailableSessions = computed(() => [...new Map((unifiedSessionTree.value?.sessions.value ?? []).map(row => [row.key, {
   session: decodeSessionKey(row.key), label: row.title, harness: row.harness,
 }])).values()]);
+async function findThreadSessions(query: string, signal: AbortSignal) {
+  const tree = unifiedSessionTree.value;
+  if (!tree) return [];
+  const rows = await tree.findParticipantSessions(query, signal);
+  if (tree !== unifiedSessionTree.value || signal.aborted) return [];
+  return rows.map(row => ({ session: decodeSessionKey(row.key), label: row.title, harness: row.harness }));
+}
 const runtimeHandoffEntries = computed(() => messageInput.value.trim() ? [{
   class: 'goal', origin: { kind: 'host', commandId: `composer:${runtimeThreadState.threadId.value ?? ''}` },
   text: messageInput.value.slice(0, 8000),
