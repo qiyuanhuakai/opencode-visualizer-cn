@@ -683,6 +683,14 @@ describe('runtime real WebSocket dispatch', () => {
     await connection.connect();
     await renderer.inspect();
     await renderer.attach(target);
+    const holder = await client(executionHost);
+    const held = await Promise.all(Array.from({ length: 3 }, () => holder.request('runtime.snapshot', { collection: 'workspaces' })));
+    const last = held.at(-1);
+    if (!last?.ok || held.some(page => !page.ok)) throw new Error('Failed to occupy execution Bridge snapshot slots');
+    const token = (last.result as { token: string }).token;
+    await expect(renderer.request(target, 'runtime.snapshot', { collection: 'workspaces' }))
+      .rejects.toMatchObject({ code: 'conflict', field: 'runtime.store.snapshot_limit' });
+    expect(await holder.request('runtime.snapshot.release', { token })).toMatchObject({ ok: true });
     const session = parseSessionRef({ environmentId: target, harnessInstanceId: execution.services.registry.list()[0].harnessInstanceId, nativeSessionId: 'old-execution' });
     const key = encodeSessionKey(session);
     const delivered: number[] = [];

@@ -52,7 +52,10 @@ export async function openRemoteRuntime({ endpoint, channel, environmentId, toke
         else {
           const legacyObserver = request.resolveSummary && frame.typedError.code === 'invalid_request'
             && frame.typedError.message === 'invalid_request: fields';
-          request.reject(new ProtocolError(frame.typedError.code, legacyObserver ? 'fields' : 'remote.request'));
+          const snapshotLimit = request.opensSnapshot && frame.typedError.code === 'conflict'
+            && frame.typedError.message === 'conflict: runtime.store.snapshot_limit';
+          const field = snapshotLimit ? 'runtime.store.snapshot_limit' : legacyObserver ? 'fields' : 'remote.request';
+          request.reject(new ProtocolError(frame.typedError.code, field));
         }
       } else for (const listener of listeners) listener(frame);
     } catch (error) { fail(error); }
@@ -64,6 +67,7 @@ export async function openRemoteRuntime({ endpoint, channel, environmentId, toke
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { pending.delete(id); reject(new ProtocolError('timeout', 'remote.request')); }, timeoutMs);
       pending.set(id, { resolve, reject, timer, method: frame.method, accepted, target: targetBinding.target,
+        opensSnapshot: frame.method === 'runtime.snapshot' && frame.params?.token === undefined,
         resolveSummary: frame.method === 'runtime.observer.read' && frame.params?.resolveSummary === true });
       try { socket.send(encodeFrame({ ...frame, version: 1, kind: 'request', id, target: targetBinding.target, epoch: targetBinding.epoch, generation: targetBinding.generation })); }
       catch (error) { clearTimeout(timer); pending.delete(id); reject(error); }
