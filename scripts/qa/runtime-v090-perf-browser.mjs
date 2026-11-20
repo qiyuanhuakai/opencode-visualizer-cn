@@ -102,7 +102,8 @@ export async function openBrowser(output, userDataDirectory = `${output}-profile
     const trace = wire.titleEvent;
     if (trace && trace.canonicalMs === undefined && trace.observerFrames.length < 32 && method === 'runtime.observer.read') {
       trace.observerFrames.push({ direction: 'received', id: parsed.id, ms: (timestamp - trace.requestAt) * 1000,
-        kind: parsed.result?.kind, collection: parsed.result?.frame?.payload?.collection });
+        kind: parsed.result?.kind, collection: parsed.result?.frame?.payload?.collection,
+        reason: parsed.result?.reason, after: parsed.result?.after, through: parsed.result?.through });
     }
     if (trace && trace.canonicalMs === undefined && canonical?.collection === 'session_summaries'
       && canonical.value?.title === trace.title) {
