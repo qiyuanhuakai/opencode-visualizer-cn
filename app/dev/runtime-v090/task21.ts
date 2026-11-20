@@ -173,6 +173,7 @@ class TreeWire extends EventTarget {
     this.deliveries.push({ kind: 'event', frame: { version: 1, kind: 'event', target: TARGET, epoch: 'epoch', generation: 1, seq: this.seq, entityRevision: this.revision, scope: key, type: 'entity.patch', payload: { collection: 'session_summaries', key, deleted: true } } });
     return key;
   }
+  get failedSources(): readonly HarnessKind[] { return [...this.failures]; }
   failDiscovery(kind: HarnessKind): void {
     if (this.failures.has(kind)) return;
     this.failures.add(kind);
@@ -420,7 +421,7 @@ const api = {
       listCalls: Object.fromEntries(((window as AnyRecord).__task21Wire as TreeWire).listCalls),
       snapshots: Object.fromEntries(((window as AnyRecord).__task21Wire as TreeWire).snapshots),
       creates: ((window as AnyRecord).__task21Wire as TreeWire).creates,
-      failures: [...((window as AnyRecord).__task21Wire as TreeWire).failures],
+      failures: ((window as AnyRecord).__task21Wire as TreeWire).failedSources,
       failSummaries: ((window as AnyRecord).__task21Wire as TreeWire).failSummaries,
     },
   }),
