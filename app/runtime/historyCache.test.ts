@@ -28,6 +28,7 @@ class Wire extends EventTarget {
   readonly sent: Request[] = []; readonly queued: Request[] = [];
   readonly sessions = new Map<string, SessionRef>();
   waiter: ((request: Request) => void) | undefined;
+  archive: 'paged' | 'live-only' = 'paged';
   close() { this.readyState = 3; }
   send(data: string | Uint8Array) {
     if (typeof data !== 'string') throw new TypeError('JSON required');
@@ -48,7 +49,7 @@ class Wire extends EventTarget {
   error(request: Request) { this.frame({ version: 1, kind: 'result', target, epoch: 'epoch', generation: 1, id: request.id, ok: false, typedError: { code: 'source_unavailable', message: 'test fault' } }); }
   open(request: Request) {
     if (request.method !== 'runtime.history.open') throw new TypeError('Open required');
-    this.reply(request, { historyId: request.params.historyId, session: request.params.session, fence, capabilities: { archive: 'paged', recordStream: true, live: this.historyLive } });
+    this.reply(request, { historyId: request.params.historyId, session: request.params.session, fence, capabilities: { archive: this.archive, recordStream: true, live: this.historyLive } });
   }
   page(request: Request, options: { readonly items?: readonly HistoryItem[]; readonly document?: HistoryDescriptor; readonly cursor?: string; readonly completeness?: 'partial' | 'complete' | 'unsupported' } = {}) {
     if (request.method !== 'runtime.history.page') throw new TypeError('Page required');
@@ -62,8 +63,8 @@ class Wire extends EventTarget {
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); vi.useRealTimers(); });
 async function checkpoint() { for (let i = 0; i < 24; i++) await Promise.resolve(); }
-async function setup(live: 'invalidate' | 'unsupported' = 'invalidate') {
-  const wire = new Wire(); wire.historyLive = live; const created = Promise.withResolvers<void>();
+async function setup(live: 'invalidate' | 'unsupported' = 'invalidate', archive: 'paged' | 'live-only' = 'paged') {
+  const wire = new Wire(); wire.historyLive = live; wire.archive = archive; const created = Promise.withResolvers<void>();
   const connection = createRuntimeConnection({ reference: { url: 'ws://127.0.0.1:43210/runtime' }, resolveAuthentication: async () => ({}), createWebSocket: () => { created.resolve(); return wire; } });
   const client = createRuntimeClient({ connection });
   const scope = createSelectionScope({ client, profileId: profile });
@@ -216,6 +217,26 @@ describe('bounded selected history cache through production wire codecs', () => 
     // Then the backing allocation remains charged and intact until its lease is released.
     expect(Buffer.from(output.bytes)).toEqual(bytes); expect(cache.usage().residentBytes).toBeGreaterThanOrEqual(output.bytes.buffer.byteLength);
     output.release(); expect(cache.usage()).toEqual({ residentBytes: 0, reservedBytes: 0, entries: 0 });
+  });
+  it('keeps the live-only producer open and reads its next page with the same fence', async () => {
+    const { cache, wire, page } = await setup('invalidate', 'live-only');
+    const first = await page({ completeness: 'partial' });
+    first.release();
+    const poll = cache.poll();
+    const update = await wire.next();
+    if (update.method !== 'runtime.history.read') throw new TypeError('Poll required');
+    wire.reply(update, { historyId: update.params.historyId, fence, through: 1, changed: true, status: 'current' });
+    await poll;
+    await checkpoint();
+    expect(wire.sent.map(request => request.method)).toEqual(['runtime.history.open', 'runtime.history.page', 'runtime.history.read']);
+    const next = cache.page();
+    const request = await wire.next();
+    expect(request).toMatchObject({ method: 'runtime.history.page', params: { historyId: update.params.historyId } });
+    wire.page(request, { items: [{ kind: 'inline', recordId: 'reply', value: { text: 'live reply' } }], completeness: 'partial' });
+    const reply = await next;
+    expect(reply.value.items).toMatchObject([{ recordId: 'reply', value: { text: 'live reply' } }]);
+    reply.release();
+    await cache.dispose();
   });
   it('restarts only the selected history after an invalidation without native cancel or draft mutations', async () => {
     // Given a selected owner and one invalidation poll.
