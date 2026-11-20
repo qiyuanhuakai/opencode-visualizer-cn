@@ -311,7 +311,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     return management;
   }
   const bootstrapPages = new WeakMap<ReturnType<typeof getTarget>, readonly Snapshot[]>();
-  let inspectionSequence = 0;
+  let inspectionSequence = 0, appliedInspectionSequence = 0;
   async function inspect(bootstrapTree = false) {
     const target = managementTarget();
     const attached = getTarget(target);
@@ -345,10 +345,15 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     if (treeBootstrap && current(attached) && sequence !== inspectionSequence) {
       void retireView(attached, treeBootstrap[0].token).catch(() => undefined);
     }
-    requireCurrentInspection();
+    if (bootstrapTree || treeBootstrap || result.treeBootstrapGzip) requireCurrentInspection();
+    else requireValue(current(attached), 'inspection.superseded', 'reconcile_required');
     if (treeBootstrap) bootstrapPages.set(attached, treeBootstrap);
-    grants.clear();
-    for (const grant of inspection.targets) grants.set(grant.target, grant);
+    // Plain inspections return independently, but an older reply cannot roll back applied grants.
+    if (sequence > appliedInspectionSequence) {
+      appliedInspectionSequence = sequence;
+      grants.clear();
+      for (const grant of inspection.targets) grants.set(grant.target, grant);
+    }
     return inspection;
   }
   async function attach(target: EnvironmentId) {
