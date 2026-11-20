@@ -576,6 +576,28 @@ describe('runtime real WebSocket dispatch', () => {
     const next = await connection.request('runtime.observer.read', params);
     expect(next).toMatchObject({ ok: true, result: { kind: 'event', frame: { payload: { key: changes[2].key } } } });
   });
+  it('queues one opted-in observer read and returns both deliveries in sequence', async () => {
+    const { connection, services } = await runtime();
+    const snapshot = await connection.request('runtime.snapshot', { collection: 'session_summaries' });
+    if (!snapshot.ok) throw new Error('Snapshot unavailable');
+    const { watermark } = snapshot.result as { watermark: number };
+    const opened = await connection.request('runtime.observer.open', { after: watermark });
+    if (!opened.ok) throw new Error('Missing observer');
+    const params = { ...opened.result as object, resolveSummary: true, maxEvents: 2, queuedRead: true };
+    const first = connection.request('runtime.observer.read', params);
+    const second = connection.request('runtime.observer.read', params);
+    const third = await connection.request('runtime.observer.read', params);
+    expect(third).toMatchObject({ ok: false, typedError: { code: 'conflict' } });
+
+    for (const title of ['first', 'second']) {
+      const session = parseSessionRef({ environmentId: services.target, harnessInstanceId: services.registry.list()[0].harnessInstanceId, nativeSessionId: title });
+      await services.store.mutate({ intentId: randomUUID(), changes: [{
+        collection: 'session_summaries', key: encodeSessionKey(session), value: { session, title },
+      }] });
+      const reply = await (title === 'first' ? first : second);
+      expect(reply).toMatchObject({ ok: true, result: { kind: 'event', canonical: { value: { title } } } });
+    }
+  });
   it('returns ready canonical records before a slow batch tail has resolved', async () => {
     const { services } = await graph();
     const tail = gate();

@@ -23,7 +23,7 @@ const fields = {
   'runtime.snapshot.chunk': [['collection', 'key', 'revision', 'offset', 'token'], []],
   'runtime.snapshot.release': [['token'], []],
   'runtime.replay': [['after'], ['limit']], 'runtime.entity.resolve': [['event'], []],
-  'runtime.observer.open': [['after'], []], 'runtime.observer.read': [['observerId'], ['resolveSummary', 'resolveWorkspace', 'maxEvents']],
+  'runtime.observer.open': [['after'], []], 'runtime.observer.read': [['observerId'], ['resolveSummary', 'resolveWorkspace', 'maxEvents', 'queuedRead']],
   'runtime.observer.resume': [['observerId', 'after'], []], 'runtime.observer.close': [['observerId'], []],
   'runtime.channel.ack': [['channelId', 'offset', 'length'], []],
   'runtime.channel.finish': [['channelId'], []], 'runtime.channel.cancel': [['channelId'], []],
@@ -101,6 +101,7 @@ export function parseRuntimeParams(method, input) {
   for (const key of ['after', 'revision', 'offset', 'size']) if (value[key] !== undefined) integerValue(value[key], key);
   if (value.target !== undefined) parseEnvironmentId(value.target);
   if (method === 'runtime.observer.read' && value.maxEvents !== undefined) positive(value.maxEvents, 'observer.maxEvents', 16);
+  if (method === 'runtime.observer.read' && value.queuedRead !== undefined) requireValue(value.queuedRead === true && value.maxEvents > 1, 'wire.queued_read');
   if (method === 'runtime.observer.read' && value.resolveSummary !== undefined) requireValue(value.resolveSummary === true, 'wire.resolve_summary');
   if (method === 'runtime.observer.read' && value.resolveWorkspace !== undefined) {
     requireValue(value.resolveWorkspace === true && value.resolveSummary === true, 'wire.resolve_workspace');

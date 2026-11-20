@@ -15,6 +15,7 @@ const TREE_BOOTSTRAP_BUDGET_MS = 450;
 // A shorter lease leaves a full round trip between empty reads on remote
 // links. Keep an idle lease open below the shared 15-second request deadline.
 const INLINE_OBSERVER_WAIT_MS = 10_000;
+const QUEUED_OBSERVER_WAIT_MS = 5_000;
 const INLINE_BATCH_RESOLUTION_MS = 20;
 const publicKinds = new Set(['operation', 'acp-operation', 'opencode-instance-operation', 'opencode-cancellation', 'codex-instance-operation', 'codex-cancel-operation', 'kimi-instance', 'kimi-control', 'dsh-operation', 'interaction', 'acp-interaction']);
 function project(collection, row) {
@@ -357,10 +358,17 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
       case 'runtime.observer.read': case 'runtime.observer.resume': case 'runtime.observer.close': {
         indexAccess(entry); const observer = entry.observer; requireValue(observer?.id === params.observerId && observer.value, 'runtime.observer', 'unauthorized');
         if (frame.method === 'runtime.observer.read') {
-          requireValue(!observer.reading, 'runtime.observer_reading', 'conflict');
-          observer.reading = true;
+          const pendingReads = observer.pendingReads ?? 0;
+          requireValue(pendingReads < (params.queuedRead ? 2 : 1), 'runtime.observer_reading', 'conflict');
+          const previous = observer.readTail;
+          const turn = Promise.withResolvers();
+          observer.readTail = turn.promise;
+          observer.pendingReads = pendingReads + 1;
           try {
-            const delivery = await observer.value.waitRead(signal, params.resolveSummary ? INLINE_OBSERVER_WAIT_MS : undefined);
+            if (previous) await previous;
+            requireValue(entry.observer === observer, 'runtime.observer', 'reconcile_required');
+            const waitMs = params.queuedRead ? QUEUED_OBSERVER_WAIT_MS : params.resolveSummary ? INLINE_OBSERVER_WAIT_MS : undefined;
+            const delivery = await observer.value.waitRead(signal, waitMs);
             if (delivery?.kind !== 'event') return delivery;
             const events = [delivery];
             if (params.maxEvents > 1) {
@@ -393,7 +401,11 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
             }
             requireValue(entry.observer === observer, 'runtime.observer', 'reconcile_required');
             return resolved.length === 1 ? resolved[0] : { kind: 'events', events: resolved.slice() };
-          } finally { observer.reading = false; }
+          } finally {
+            observer.pendingReads--;
+            if (observer.readTail === turn.promise) observer.readTail = undefined;
+            turn.resolve();
+          }
         }
         if (frame.method === 'runtime.observer.resume') { observer.value.resume(params.after); return { resumed: true }; }
         observer.value.close(); entry.observer = null; return { closed: true };
