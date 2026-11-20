@@ -2,8 +2,9 @@
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createRuntimeStore } from '../../bridge/runtime/storage/runtimeStore.js';
 import { createSessionIndex } from '../../bridge/runtime/sessionIndex.js';
 import { createWorkspaceCatalog } from '../../bridge/runtime/workspaceCatalog.js';
@@ -24,14 +25,22 @@ function manifest(kind: HarnessKind): HarnessManifest {
 }
 async function fixture(list: (context: HarnessContext) => Promise<unknown>, run: (value: {
   index: ReturnType<typeof createSessionIndex>; store: ReturnType<typeof createRuntimeStore>; directories: string[]; generation: { value: number };
-}) => Promise<void>, kind: HarnessKind = 'codex', beforeResolve?: (directory: string) => Promise<void>) {
+}) => Promise<void>, kind: HarnessKind = 'codex', beforeResolve?: (directory: string) => Promise<void>, afterReplay?: () => Promise<void>) {
   const directory = await mkdtemp(path.join(tmpdir(), 'runtime-index-'));
   const store = createRuntimeStore({ stateDirectory: directory, environmentId, ownerId: randomUUID(), epoch });
   const registry = createHarnessRegistry();
   registry.register({ manifest: manifest(kind), driver: { core: { listSessionPage: list }, native: {} } });
   const directories: string[] = [];
   const generation = { value: 1 };
-  const index = createSessionIndex({ store, registry, catalog: createWorkspaceCatalog({ store, git: { async probe() { throw new Error('background Git probe'); } } }), resolveWorkspace: async ({ directory: canonicalPath }) => {
+  const indexStore = afterReplay ? {
+    ...store,
+    async replay(input: Parameters<typeof store.replay>[0]) {
+      const replay = await store.replay(input);
+      await afterReplay();
+      return replay;
+    },
+  } : store;
+  const index = createSessionIndex({ store: indexStore, registry, catalog: createWorkspaceCatalog({ store, git: { async probe() { throw new Error('background Git probe'); } } }), resolveWorkspace: async ({ directory: canonicalPath }) => {
     await beforeResolve?.(canonicalPath);
     directories.push(canonicalPath);
     return { environmentId, canonicalPath, pathPolicy: { platform: 'posix', caseSensitive: true, volumeId: 'test-volume' } };
@@ -248,6 +257,41 @@ describe('progressive native summary index', () => {
       expect((await store.inspect()).seq).toBeLessThan(1000000);
       expect(source.state.intake.sequence).toBe(1000000);
     }, 'opencode');
+  });
+  it('forwards a second index commit while the first commit replay is paused', async () => {
+    const captured = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const ref = session('commit-wakeup');
+    const summary = { directory: '/repo', title: 'Original', time: { updated: 1 } };
+    let holdReplay = false;
+    await fixture(async () => ({ items: [{ session: ref, summary }], cursor: null, completeness: 'complete' }), async ({ index, store }) => {
+      const source = await index.attach({ harnessInstanceId, authority: () => ({ epoch, processGeneration: 1 }), subscribe: false });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        await source.discover();
+        const { seq } = await store.inspect();
+        const observer = await index.events.connect({ target: environmentId, epoch, generation: 1 }, { after: seq, isCurrent: () => true });
+        while (index.events.state.polling) await nextTurn();
+        holdReplay = true;
+        expect(source.publish({ type: 'session.updated', session: ref, summary: { ...summary, title: 'First', time: { updated: 2 } } })).toBe(true);
+        await captured.promise;
+        expect(source.publish({ type: 'session.updated', session: ref, summary: { ...summary, title: 'Second', time: { updated: 3 } } })).toBe(true);
+        await source.flush();
+        release.resolve();
+        const signal = AbortSignal.timeout(1000);
+        await expect(observer.waitRead(signal)).resolves.toMatchObject({ kind: 'event', frame: { seq: seq + 1 } });
+        await expect(observer.waitRead(signal)).resolves.toMatchObject({ kind: 'event', frame: { seq: seq + 2 } });
+      } finally {
+        release.resolve();
+        vi.useRealTimers();
+      }
+    }, 'opencode', undefined, async () => {
+      if (holdReplay) {
+        holdReplay = false;
+        captured.resolve();
+        await release.promise;
+      }
+    });
   });
   it('updates an indexed OpenCode title without enumerating again and rescans a moved session', async () => {
     let lists = 0;
