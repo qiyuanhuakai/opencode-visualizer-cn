@@ -99,7 +99,8 @@ class TreeWire extends EventTarget {
   readonly methods = new Map<string, number>();
   readonly canonical = new Map<string, AnyRecord | null>();
   readonly deliveries: Array<AnyRecord | null> = [];
-  readonly failures = new Set<HarnessKind>();
+  private readonly failures = new Set<HarnessKind>();
+  private readonly harnessRevisions = new Map<HarnessKind, number>();
   readonly deleted = new Set<string>();
   readonly listCalls = new Map<string, number>();
   readonly snapshots = new Map<string, number>();
@@ -139,7 +140,7 @@ class TreeWire extends EventTarget {
   rowsOf(collection: string): AnyRecord[] {
     if (collection === 'harnesses') {
       return HARNESS_ORDER.map((kind) => ({
-        collection: 'harnesses', key: HARNESS_INSTANCES[kind], revision: 1,
+        collection: 'harnesses', key: HARNESS_INSTANCES[kind], revision: this.harnessRevisions.get(kind) ?? 1,
         value: this.failures.has(kind)
           ? { environmentId: TARGET, harnessInstanceId: HARNESS_INSTANCES[kind], kind, indexDiscovery: [{ scopeKey: '{}', status: 'partial', count: 0, reason: 'native_timeout' }] }
           : this.canonical.get(`harness:${kind}`),
@@ -172,16 +173,27 @@ class TreeWire extends EventTarget {
     this.deliveries.push({ kind: 'event', frame: { version: 1, kind: 'event', target: TARGET, epoch: 'epoch', generation: 1, seq: this.seq, entityRevision: this.revision, scope: key, type: 'entity.patch', payload: { collection: 'session_summaries', key, deleted: true } } });
     return key;
   }
-  clearFailures(): void { this.failures.clear(); }
+  get failedSources(): readonly HarnessKind[] { return [...this.failures]; }
+  failDiscovery(kind: HarnessKind): void {
+    if (this.failures.has(kind)) return;
+    this.failures.add(kind);
+    this.harnessRevisions.set(kind, ++this.revision);
+  }
+  private recoverDiscovery(kind: HarnessKind): void {
+    if (this.failures.delete(kind)) this.harnessRevisions.set(kind, ++this.revision);
+  }
+  clearFailures(): void {
+    for (const kind of this.failures) this.recoverDiscovery(kind);
+  }
   respond(request: AnyRecord) {
     switch (request.method) {
       case 'runtime.inspect':
         this.reply(request, { role: 'local', state: 'ready', subscribers: 1, topology: [], sources: [], connectionProfileId: String(PROFILE),
-          targets: [{ target: String(TARGET), role: 'execution', capabilities: parseCapabilities({ methods: Object.keys(RUNTIME_WIRE_METHODS), extensions: [] }), permissions: [], workspaceKeys: [] }],
+          targets: [{ target: String(TARGET), role: 'execution', capabilities: CAPABILITIES, permissions: [], workspaceKeys: [] }],
           harnesses: [], transports: { direct: true, ssh: false, slurm: false } });
         break;
       case 'runtime.target.attach':
-        this.reply(request, { hello: { kind: 'hello', version: 1, target: TARGET, epoch: 'epoch', generation: 1, instanceId: INSTANCE, capabilities: parseCapabilities({ methods: Object.keys(RUNTIME_WIRE_METHODS), extensions: [] }) }, grant: { target: String(TARGET), role: 'execution', capabilities: parseCapabilities({ methods: Object.keys(RUNTIME_WIRE_METHODS), extensions: [] }), permissions: [], workspaceKeys: [] } });
+        this.reply(request, { hello: { kind: 'hello', version: 1, target: TARGET, epoch: 'epoch', generation: 1, instanceId: INSTANCE, capabilities: CAPABILITIES }, grant: { target: String(TARGET), role: 'execution', capabilities: CAPABILITIES, permissions: [], workspaceKeys: [] } });
         break;
       case 'runtime.snapshot': {
         const name = request.params.collection;
@@ -201,6 +213,7 @@ class TreeWire extends EventTarget {
         });
         break;
       }
+      case 'runtime.snapshot.release': this.reply(request, { released: true }); break;
       case 'runtime.observer.open': {
         this.opened += 1;
         this.reply(request, { observerId: `observer-${this.opened}` });
@@ -221,7 +234,7 @@ class TreeWire extends EventTarget {
         const harnessInstanceId = String(request.params.harnessInstanceId);
         this.listCalls.set(harnessInstanceId, (this.listCalls.get(harnessInstanceId) ?? 0) + 1);
         const kind = HARNESS_ORDER.find((entry) => HARNESS_INSTANCES[entry] === harnessInstanceId);
-        if (kind) this.failures.delete(kind);
+        if (kind) this.recoverDiscovery(kind);
         this.reply(request, { items: [], cursor: null, completeness: 'complete' });
         break;
       }
@@ -231,7 +244,11 @@ class TreeWire extends EventTarget {
   }
 }
 
-const CAPABILITIES = parseCapabilities({ methods: Object.keys(RUNTIME_WIRE_METHODS), extensions: [] });
+// This fixture implements the snapshot fallback, including its progression and pagination.
+const CAPABILITIES = parseCapabilities({
+  methods: Object.keys(RUNTIME_WIRE_METHODS).filter(method => method !== 'runtime.session.search'),
+  extensions: [],
+});
 void CAPABILITIES;
 
 async function openTree(count: number): Promise<{ wire: TreeWire; client: ReturnType<typeof createRuntimeClient>; connection: ReturnType<typeof createRuntimeConnection> }> {
@@ -404,7 +421,7 @@ const api = {
       listCalls: Object.fromEntries(((window as AnyRecord).__task21Wire as TreeWire).listCalls),
       snapshots: Object.fromEntries(((window as AnyRecord).__task21Wire as TreeWire).snapshots),
       creates: ((window as AnyRecord).__task21Wire as TreeWire).creates,
-      failures: [...((window as AnyRecord).__task21Wire as TreeWire).failures],
+      failures: ((window as AnyRecord).__task21Wire as TreeWire).failedSources,
       failSummaries: ((window as AnyRecord).__task21Wire as TreeWire).failSummaries,
     },
   }),
@@ -458,14 +475,14 @@ const api = {
   },
   retryTarget: async () => { await tree.state.retry(TARGET); await nextTick(); return { viewStatus: tree.viewStatus.value, viewLoaded: tree.viewLoaded.value }; },
   failSource: async (kind: HarnessKind) => {
-    ((window as AnyRecord).__task21Wire as TreeWire).failures.add(kind);
+    ((window as AnyRecord).__task21Wire as TreeWire).failDiscovery(kind);
     await tree.refresh();
     await nextTick();
     return tree.harnesses.value.map((entry) => ({ kind: entry.kind, status: entry.status, reason: entry.reason }));
   },
   failAllSources: async () => {
     const wire = (window as AnyRecord).__task21Wire as TreeWire;
-    for (const kind of HARNESS_ORDER) wire.failures.add(kind);
+    for (const kind of HARNESS_ORDER) wire.failDiscovery(kind);
     await tree.refresh();
     await nextTick();
     return tree.harnesses.value.map((entry) => ({ kind: entry.kind, status: entry.status, reason: entry.reason }));

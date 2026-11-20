@@ -439,6 +439,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   let unsubscribe: (() => void) | undefined;
   let readChain: Promise<unknown> = Promise.resolve();
   let searchGeneration = 0;
+  let serverSearchRevision: number | undefined;
   let searchController: AbortController | undefined;
   // The revision of the most recent index view this composable read. It tells a child expand
   // whether the index has moved on since that parent was last scanned, without minting another
@@ -567,11 +568,24 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     });
     lastIndexRevision = view.revision;
   }
+  async function searchBridge(query: string, signal: AbortSignal, kinds: ReadonlySet<SessionHarness>, continuation?: { cursor: string; revision: number }) {
+    const page = await client.request(target, 'runtime.session.search', {
+      query, kinds: [...kinds], limit: SEARCH_LIMITS.maxRetained, ...continuation,
+    }, { signal });
+    const matches = page.items.flatMap(record => {
+      const id = asText(asRecord(asRecord(record.value)?.session)?.harnessInstanceId, 64) ?? '';
+      const row = parseUnifiedSessionRow(record.key, record.value, kindById.get(id) ?? 'unknown');
+      return row ? [row] : [];
+    });
+    return { page, matches: Object.freeze(matches) };
+  }
   async function findParticipantSessions(query: string, signal: AbortSignal): Promise<readonly UnifiedSessionRow[]> {
     return serialize(async () => {
       if (signal.aborted || disposed) return [];
       const accumulator: SearchScan = { retained: [], totalMatched: 0, scanned: 0, pages: 0 };
-      await scanSearch(query, 0, signal, accumulator, true, undefined, undefined, new Set([...HARNESS_KINDS, 'unknown']));
+      const kinds = new Set<SessionHarness>([...HARNESS_KINDS, 'unknown']);
+      if (client.supports?.(target, 'runtime.session.search')) return (await searchBridge(query, signal, kinds)).matches;
+      await scanSearch(query, 0, signal, accumulator, true, undefined, undefined, kinds);
       return accumulator.retained;
     });
   }
@@ -579,6 +593,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   /** Full-index search: traverses every session_summaries page, not the LRU window. */
   async function searchAll(query: string): Promise<UnifiedSearchState> {
     const generation = ++searchGeneration;
+    serverSearchRevision = undefined;
     searchController?.abort();
     const controller = new AbortController();
     searchController = controller;
@@ -591,6 +606,15 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
       if (generation !== searchGeneration) return search.value;
       const accumulator: SearchScan = { retained: [], totalMatched: 0, scanned: 0, pages: 0 };
       try {
+        if (client.supports?.(target, 'runtime.session.search')) {
+          const { page, matches } = await searchBridge(query, controller.signal, filterKinds.value);
+          if (generation !== searchGeneration) return search.value;
+          serverSearchRevision = page.revision;
+          const complete: UnifiedSearchState = { status: 'complete', query, scanned: page.scanned, pages: 1,
+            matches, totalMatched: page.totalMatched, hasMore: page.cursor !== null, cursor: page.cursor, error: null, waiting: false };
+          search.value = complete;
+          return complete;
+        }
         await scanSearch(query, 0, controller.signal, accumulator, true, () => {
           if (generation === searchGeneration) search.value = { ...search.value, status: 'searching', waiting: true };
         }, () => {
@@ -629,8 +653,9 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   async function searchMore(): Promise<UnifiedSearchState> {
     const current = search.value;
     if (current.status !== 'complete' || !current.hasMore || current.cursor === null) return current;
+    const continuation = serverSearchRevision === undefined ? undefined : { cursor: current.cursor, revision: serverSearchRevision };
     const skip = Number(current.cursor);
-    if (!Number.isSafeInteger(skip) || skip < 0) return current;
+    if (!continuation && (!Number.isSafeInteger(skip) || skip < 0)) return current;
     const query = current.query;
     const generation = searchGeneration;
     searchController?.abort();
@@ -640,6 +665,14 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     return serialize(async () => {
       const accumulator: SearchScan = { retained: [], totalMatched: 0, scanned: 0, pages: 0 };
       try {
+        if (continuation) {
+          const { page, matches } = await searchBridge(query, controller.signal, filterKinds.value, continuation);
+          if (generation !== searchGeneration) return search.value;
+          const complete: UnifiedSearchState = { ...current, status: 'complete', scanned: page.scanned, pages: current.pages + 1,
+            matches, totalMatched: page.totalMatched, hasMore: page.cursor !== null, cursor: page.cursor, error: null, waiting: false };
+          search.value = complete;
+          return complete;
+        }
         await scanSearch(query, skip, controller.signal, accumulator, false);
         if (generation !== searchGeneration) return search.value;
         const nextOffset = skip + accumulator.retained.length;

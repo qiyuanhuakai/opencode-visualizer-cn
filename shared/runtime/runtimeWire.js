@@ -16,8 +16,9 @@ const fields = {
   'runtime.history.chunk': [['historyId', 'pageId', 'descriptorId', 'offset'], []],
   'runtime.history.read': [['historyId', 'after'], []],
   'runtime.history.close': [['historyId'], []],
-  'runtime.inspect': [[], ['bootstrapTree', 'bootstrapEncoding']],
+  'runtime.inspect': [[], ['bootstrapTree', 'bootstrapEncoding', 'sessionSearch']],
   'runtime.target.attach': [['target'], []], 'runtime.target.detach': [['target'], []],
+  'runtime.session.search': [['query', 'kinds'], ['limit', 'cursor', 'revision']],
   'runtime.snapshot': [['collection'], ['token', 'cursor', 'limit']],
   'runtime.snapshot.chunk': [['collection', 'key', 'revision', 'offset', 'token'], []],
   'runtime.snapshot.release': [['token'], []],
@@ -103,15 +104,25 @@ export function parseRuntimeParams(method, input) {
   if (method === 'runtime.observer.read' && value.resolveWorkspace !== undefined) {
     requireValue(value.resolveWorkspace === true && value.resolveSummary === true, 'wire.resolve_workspace');
   }
+  if (method === 'runtime.inspect' && value.sessionSearch !== undefined) requireValue(value.sessionSearch === true, 'wire.session_search');
   if (method === 'runtime.inspect' && value.bootstrapTree !== undefined) requireValue(value.bootstrapTree === true, 'wire.bootstrap_tree');
   if (method === 'runtime.inspect' && value.bootstrapEncoding !== undefined) {
     requireValue(value.bootstrapTree === true && ['gzip', 'gzip-inspection'].includes(value.bootstrapEncoding), 'wire.bootstrap_encoding');
+  }
+  if (method === 'runtime.session.search') {
+    requireValue(typeof value.query === 'string' && value.query.length <= 4096, 'search.query');
+    requireValue(Array.isArray(value.kinds) && value.kinds.length <= 6
+      && new Set(value.kinds).size === value.kinds.length
+      && value.kinds.every(kind => ['opencode', 'codex', 'kimi-web', 'dsh', 'acp', 'unknown'].includes(kind)), 'search.kinds');
+    requireValue((value.cursor === undefined) === (value.revision === undefined)
+      && (value.cursor === undefined || (typeof value.cursor === 'string' && value.cursor.length > 0
+        && value.cursor.length <= 4096 && !value.cursor.includes('\0'))), 'search.cursor');
   }
   if (method === 'runtime.snapshot.release') textValue(value.token, 'token');
   if (method === 'runtime.interaction.read') { parseSessionRef(value.session); textValue(value.interactionId, 'interactionId'); }
   if (value.workspaceKey !== undefined) decodeWorkspaceKey(value.workspaceKey);
   if (value.collection !== undefined) collection(value.collection);
-  if (value.cursor != null) textValue(value.cursor, 'cursor');
+  if (value.cursor != null && method !== 'runtime.session.search') textValue(value.cursor, 'cursor');
   if (value.limit !== undefined) positive(value.limit, 'limit', 200);
   if (value.channelId !== undefined) positive(value.channelId, 'channelId', 0xffffffff);
   if (value.length !== undefined) validateChunk(value);
@@ -192,6 +203,18 @@ export function parseRuntimeResult(method, input) {
       objectFields(value.transports, ['direct', 'ssh', 'slurm']); requireValue(Object.values(value.transports).every(item => typeof item === 'boolean'), 'wire.transports');
       break;
     case 'runtime.target.attach': objectFields(value, ['hello', 'grant']); frame(value.hello, 'hello'); parseTargetGrant(value.grant); requireValue(value.hello.target === value.grant.target, 'wire.target'); break;
+    case 'runtime.session.search':
+      objectFields(value, ['revision', 'scanned', 'totalMatched', 'items', 'cursor']);
+      for (const key of ['revision', 'scanned', 'totalMatched']) integerValue(value[key], key);
+      requireValue(Array.isArray(value.items) && value.items.length <= 200
+        && value.totalMatched >= value.items.length && value.scanned >= value.totalMatched, 'search.items');
+      requireValue(value.cursor === null || (typeof value.cursor === 'string' && value.cursor.length <= 4096
+        && value.cursor.length > 0 && value.cursor === value.items.at(-1)?.key), 'search.cursor');
+      for (const row of value.items) {
+        requireValue(row?.collection === 'session_summaries', 'search.collection');
+        parseRuntimeResult('runtime.entity.resolve', row);
+      }
+      break;
     case 'runtime.snapshot': frame(value, 'snapshot'); break;
     case 'runtime.replay': frame(value, 'replay'); break;
     case 'runtime.observer.read':

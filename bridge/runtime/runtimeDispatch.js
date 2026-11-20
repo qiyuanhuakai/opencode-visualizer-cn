@@ -31,6 +31,13 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
   let remoteChannelSerial = 65536;
   const lifetime = new AbortController();
   let historyOwner;
+  let sessionSearch = false;
+  function advertisedGrant(grant) {
+    // Old peers reject unknown method names in hello and target grants.
+    return sessionSearch || !grant.capabilities.methods.includes('runtime.session.search') ? grant : {
+      ...grant, capabilities: { ...grant.capabilities, methods: grant.capabilities.methods.filter(method => method !== 'runtime.session.search') },
+    };
+  }
   let generation = binding.generation, active = true, normal = 0, reserved = 0, closing;
   function current() { requireValue(active, 'runtime.connection', 'reconcile_required'); assertCurrent(); }
   function grantFor(target) {
@@ -63,7 +70,7 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
     return entry;
   }
   attach(management.target, true);
-  function hello(entry) { return validateFrame({ version: 1, kind: 'hello', ...entry.binding, instanceId: entry.graph.instanceId, capabilities: entry.grant.capabilities }); }
+  function hello(entry) { return validateFrame({ version: 1, kind: 'hello', ...entry.binding, instanceId: entry.graph.instanceId, capabilities: advertisedGrant(entry.grant).capabilities }); }
   function match(frame) {
     current(); const entry = attached.get(frame.target);
     requireValue(entry, 'runtime.target', 'unauthorized'); entry.current();
@@ -229,7 +236,8 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
           }
         }
         for (const grant of management.remoteServices?.listTargets() ?? []) grantFor(grant.target);
-        const inspection = Promise.resolve(graph.inspect(inspect(), [...allowed.values()]));
+        if (params.sessionSearch === true) sessionSearch = true;
+        const inspection = Promise.resolve(graph.inspect(inspect(), [...allowed.values()].map(advertisedGrant)));
         if (!params.bootstrapTree || entry.treeBootstrapStarted || !entry.grant.capabilities.methods.includes('runtime.snapshot')
           || !graph.grant.workspaceKeys.every(key => entry.grant.workspaceKeys.includes(key))) return inspection;
         // Only the first opt-in inspection on this attachment owns a startup token.
@@ -291,7 +299,7 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
       }
       case 'runtime.target.attach': {
         requireValue(entry.graph === management, 'runtime.management', 'unauthorized');
-        const target = attach(params.target); return { hello: hello(target), grant: target.grant };
+        const target = attach(params.target); return { hello: hello(target), grant: advertisedGrant(target.grant) };
       }
       case 'runtime.target.detach': {
         requireValue(entry.graph === management && params.target !== management.target, 'runtime.management', 'unauthorized');
@@ -316,6 +324,11 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
         const currentAuthority = graph.authority(session.harnessInstanceId);
         requireValue(scope.epoch === currentAuthority.epoch && scope.processGeneration === currentAuthority.processGeneration, 'interaction.generation', 'reconcile_required');
         return { interactionId: params.interactionId, session, phase: row.value.phase, payload };
+      }
+      case 'runtime.session.search': {
+        indexAccess(entry);
+        const page = await entry.graph.store.searchSessions(params);
+        return { ...page, items: page.items.map(row => ({ ...row, collection: 'session_summaries' })) };
       }
       case 'runtime.snapshot': {
         indexAccess(entry); const page = await (await snapshots(entry)).page(params);
@@ -404,7 +417,8 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
       const priority = critical.has(frame.method);
       try {
         entry = match(frame); requireValue(!used.has(frame.id) && used.size < 65536, 'runtime.request_id', 'conflict'); used.add(frame.id);
-        requireValue(entry.grant.capabilities.methods.includes(frame.method), 'runtime.method', 'unsupported');
+        requireValue(entry.grant.capabilities.methods.includes(frame.method)
+          && (frame.method !== 'runtime.session.search' || sessionSearch), 'runtime.method', 'unsupported');
         reservedAdmission = normal >= 496;
         const reserveLimit = frame.method === 'runtime.history.close' || frame.method === 'session.cancel' || frame.method === 'interaction.respond' ? 16 : 12;
         requireValue(!reservedAdmission || (priority && reserved < reserveLimit), 'runtime.admission', 'source_unavailable');

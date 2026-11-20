@@ -27,6 +27,7 @@ export interface RuntimeStore {
   get(params: { readonly collection: Collection; readonly key: string }): Promise<Item | null>;
   getMany(params: { readonly collection: Collection; readonly keys: readonly string[] }): Promise<readonly Item[]>;
   page(params: PageOptions): Promise<Page>;
+  searchSessions(params: { readonly query: string; readonly kinds: readonly string[]; readonly limit?: number; readonly revision?: number; readonly cursor?: string }): Promise<Page & { readonly revision: number; readonly scanned: number; readonly totalMatched: number }>;
   snapshot(params: SnapshotOptions): Promise<Snapshot>;
   releaseSnapshot(params: { readonly token: string; readonly epoch: string }): Promise<{ readonly released: boolean }>;
   readChunk(params: { readonly collection: Collection; readonly key: string; readonly revision: number; readonly offset: number; readonly token?: string }): Promise<{ readonly revision: number; readonly bytes: number; readonly offset: number; readonly data: string; readonly nextOffset: number | null }>;

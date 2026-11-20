@@ -186,27 +186,21 @@ describe('useRuntimeSessionTree over the real dispatch/client/connection/state',
   it('keeps live events flowing while a delayed full-index search is in flight', async () => {
     const entered = Promise.withResolvers<void>();
     const gate = Promise.withResolvers<void>();
-    let gateOn = false;
-    const { tree, socket, services, target, root } = await treeFixture((base) => ({
+    const { tree, socket, services, client, target, root } = await treeFixture((base) => ({
       ...base,
-      snapshots: {
-        async connect(binding, isCurrent) {
-          const connection = await base.snapshots.connect(binding, isCurrent);
-          return {
-            ...connection,
-            async page(input) {
-              if (gateOn && input?.collection === 'session_summaries') { entered.resolve(); await gate.promise; }
-              return connection.page(input);
-            },
-          };
+      store: {
+        ...base.store,
+        async searchSessions(input) {
+          entered.resolve();
+          await gate.promise;
+          return base.store.searchSessions(input);
         },
       },
-    })    );
+    }));
     const harnessInstanceId = services.registry.list()[0].harnessInstanceId;
     const harnessOf = (index: number) => ({ environmentId: target, harnessInstanceId, nativeSessionId: `live-${index}` } as const);
-    // Seed the searchable row BEFORE start so it is inside the state's index
-    // view (the tree's readIndex shares that view rather than minting a fresh
-    // snapshot token per read against the bridge's tiny snapshot budget).
+    await client.inspect();
+    // Seed the searchable row before starting the live observer.
     const seed = harnessOf(0);
     await services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key: encodeSessionKey(seed), value: summaryValue(target, harnessInstanceId, root, 0) }] });
     await tree.start();
@@ -216,8 +210,7 @@ describe('useRuntimeSessionTree over the real dispatch/client/connection/state',
     await services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key: encodeSessionKey(first), value: summaryValue(target, harnessInstanceId, root, 1) }] });
     await waitFor(() => tree.sessions.value.some((row) => row.nativeSessionId === 'live-1'));
 
-    // Block the search's session_summaries index page, then start the search.
-    gateOn = true;
+    // Park the Bridge search at the store boundary.
     const searching = tree.search('live-0');
     await entered.promise;
 
@@ -227,7 +220,6 @@ describe('useRuntimeSessionTree over the real dispatch/client/connection/state',
     await services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'session_summaries', key: encodeSessionKey(second), value: summaryValue(target, harnessInstanceId, root, 2) }] });
     await waitFor(() => tree.sessions.value.some((row) => row.nativeSessionId === 'live-2'));
 
-    gateOn = false;
     gate.resolve();
     const result = await searching;
     expect(result.status, JSON.stringify({ error: result.error, failure: tree.failure.value, view: tree.viewStatus.value, errors: dispatchErrors(socket) })).toBe('complete');

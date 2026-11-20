@@ -190,11 +190,18 @@ export async function measureInteractions({ page, wire }, target) {
   await search.press('Enter');
   const title = page.getByText(target.title, { exact: true });
   const result = page.getByTestId('search-result').filter({ has: title });
-  await result.waitFor({ timeout: 120000 });
+  const searchError = page.getByTestId('search-error');
+  async function waitForSearch(locator) {
+    await locator.or(searchError).first().waitFor({ timeout: 120000 });
+    if (await searchError.isVisible()) {
+      throw new Error(`Runtime session search failed for ${JSON.stringify(target.title)}: ${await searchError.innerText()}`);
+    }
+  }
+  await waitForSearch(result);
   const searchMs = await page.evaluate(time => performance.now() - time, searchStarted);
   // Selecting can switch the visible sidebar pane. Capture the completion
   // marker while the search results surface is still on screen.
-  await page.getByTestId('search-summary').waitFor({ timeout: 120000 });
+  await waitForSearch(page.getByTestId('search-summary'));
   const searchCompleteMs = await page.evaluate(time => performance.now() - time, searchStarted);
   const row = { title: target.title, nativeSessionId: target.nativeSessionId, harness: target.source };
   const expectedHistory = row.harness === 'opencode' || row.harness === 'acp'

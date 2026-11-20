@@ -20,6 +20,48 @@ export function createQueries(db, binding) {
     const rows = db.prepare(`SELECT key,revision,length(CAST(value AS BLOB)) AS bytes,CASE WHEN length(CAST(value AS BLOB))<=65536 THEN value ELSE NULL END AS value FROM ${params.collection} WHERE environment=? AND key>? ORDER BY key LIMIT ?`).all(environment, params.cursor ?? '', limit + 1);
     return bounded(rows, limit);
   }
+  const searchLabels = new Map([['opencode', 'opencode'], ['codex', 'codex'], ['kimi-web', 'kimi web'],
+    ['dsh', 'dsh'], ['acp', 'acp'], ['unknown', 'unknown']]);
+  const validSearchText = (text, max) => typeof text === 'string' && text.length > 0
+    && text.length <= max && !text.includes('\0');
+  db.function('vis_session_matches', { deterministic: true }, (id, harnessId, title, directory, kind, needle) => {
+    if (!validSearchText(id, 2048) || !validSearchText(harnessId, 64)) return 0;
+    return id.toLowerCase().includes(needle)
+      || (validSearchText(title, 8192) && title.toLowerCase().includes(needle))
+      || (validSearchText(directory, 16384) && directory.toLowerCase().includes(needle))
+      || searchLabels.get(kind).includes(needle) ? 1 : 0;
+  });
+  function searchSessions(params) {
+    return transaction(db, () => {
+      binding.assertOwner();
+      // Only changes to searchable summaries or their source mapping can
+      // invalidate a continuation. Deleted rows retain their mutation revision.
+      const revision = db.prepare(`SELECT max(
+        coalesce((SELECT max(revision) FROM session_summaries WHERE environment=?),0),
+        coalesce((SELECT max(revision) FROM harnesses WHERE environment=?),0)
+      ) AS revision`).get(environment, environment).revision;
+      if (params.revision !== undefined && params.revision !== revision) throw new StoreError('replay_required', 'search_revision');
+      const needle = params.query.trim().toLowerCase();
+      const scope = `FROM session_summaries s
+        LEFT JOIN harnesses h ON h.environment=s.environment AND h.key=json_extract(s.value,'$.session.harnessInstanceId')
+        WHERE s.environment=?`;
+      const kind = `CASE WHEN json_extract(h.value,'$.kind') IN ('opencode','codex','kimi-web','dsh','acp')
+        THEN json_extract(h.value,'$.kind') ELSE 'unknown' END`;
+      const match = ` AND ${kind} IN (SELECT value FROM json_each(?))
+        AND vis_session_matches(json_extract(s.value,'$.session.nativeSessionId'),
+          json_extract(s.value,'$.session.harnessInstanceId'),json_extract(s.value,'$.title'),
+          json_extract(s.value,'$.directory'),${kind},?)`;
+      const filters = [environment, JSON.stringify(params.kinds), needle];
+      const scanned = db.prepare('SELECT count(*) AS count FROM session_summaries WHERE environment=?').get(environment).count;
+      if (!needle || params.kinds.length === 0) return { revision, scanned, totalMatched: 0, items: [], cursor: null };
+      const totalMatched = db.prepare('SELECT count(*) AS count '+scope+match).get(...filters).count;
+      const limit = params.limit ?? STORE_LIMITS.page;
+      const rows = db.prepare(`SELECT s.key,s.revision,length(CAST(s.value AS BLOB)) AS bytes,
+        CASE WHEN length(CAST(s.value AS BLOB))<=65536 THEN s.value ELSE NULL END AS value
+        ${scope}${match} AND s.key>? ORDER BY s.key LIMIT ?`).all(...filters, params.cursor ?? '', limit + 1);
+      return { revision, scanned, totalMatched, ...bounded(rows, limit) };
+    });
+  }
   function bounded(rows, limit) {
     const items = []; let bytes = 0;
     for (const row of rows.slice(0, limit)) {
@@ -136,7 +178,7 @@ export function createQueries(db, binding) {
     db.prepare('UPDATE runtime_meta SET floor=? WHERE environment=?').run(floor, environment);
   }
   return {
-    meta, page, snapshot, replay, trim, claimPriorStorage, activePriorSnapshots, preservePrior, discardPriorSnapshots,
+    meta, page, searchSessions, snapshot, replay, trim, claimPriorStorage, activePriorSnapshots, preservePrior, discardPriorSnapshots,
     releaseSnapshot(params) {
       return transaction(db, () => {
         binding.assertOwner();

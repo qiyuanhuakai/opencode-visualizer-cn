@@ -43,9 +43,10 @@ export interface RuntimeParams {
   readonly 'runtime.history.chunk': HistoryChunkParams;
   readonly 'runtime.history.read': HistoryReadParams;
   readonly 'runtime.history.close': HistoryCloseParams;
-  readonly 'runtime.inspect': { readonly bootstrapTree?: true; readonly bootstrapEncoding?: 'gzip' | 'gzip-inspection' };
+  readonly 'runtime.inspect': { readonly bootstrapTree?: true; readonly sessionSearch?: true; readonly bootstrapEncoding?: 'gzip' | 'gzip-inspection' };
   readonly 'runtime.target.attach': { readonly target: EnvironmentId };
   readonly 'runtime.target.detach': { readonly target: EnvironmentId };
+  readonly 'runtime.session.search': { readonly query: string; readonly kinds: readonly string[]; readonly limit?: number; readonly cursor?: string; readonly revision?: number };
   readonly 'runtime.snapshot': { readonly collection: IndexCollection; readonly token?: string; readonly cursor?: string | null; readonly limit?: number };
   readonly 'runtime.snapshot.chunk': { readonly collection: IndexCollection; readonly key: string; readonly revision: number; readonly offset: number; readonly token: string };
   readonly 'runtime.snapshot.release': { readonly token: string };
@@ -90,6 +91,7 @@ export interface RuntimeResults {
   readonly 'runtime.inspect': RuntimeInspection;
   readonly 'runtime.target.attach': { readonly hello: Hello; readonly grant: TargetGrant };
   readonly 'runtime.target.detach': { readonly detached: true };
+  readonly 'runtime.session.search': { readonly revision: number; readonly scanned: number; readonly totalMatched: number; readonly items: readonly CanonicalEntity[]; readonly cursor: string | null };
   readonly 'runtime.snapshot': Snapshot;
   readonly 'runtime.snapshot.chunk': { readonly revision: number; readonly bytes: number; readonly offset: number; readonly data: string; readonly nextOffset: number | null };
   readonly 'runtime.snapshot.release': { readonly released: boolean };
