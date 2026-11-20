@@ -381,6 +381,28 @@ describe('useRuntimeSessionTree — index view freshness (review round 613858028
     }
   });
 
+  it('finds participant sessions outside the visible window without changing the sidebar search', async () => {
+    const client = new ReactiveClient();
+    seedTopology(client);
+    const { history } = historySpy();
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV, history: history as never });
+    try {
+      await tree.start();
+      tree.setFilterKinds(['acp']);
+      const before = tree.searchState.value;
+      client.add('session_summaries', canonical(sessionKey(9), 2, titled(9, 'outside the sidebar')));
+      expect(tree.sessions.value.some(row => row.key === sessionKey(9))).toBe(false);
+
+      const matches = await tree.findParticipantSessions('outside the sidebar', new AbortController().signal);
+
+      expect(matches.map(row => row.key)).toEqual([sessionKey(9)]);
+      expect(tree.searchState.value).toBe(before);
+      expect([...tree.filterKinds.value]).toEqual(['acp']);
+    } finally {
+      await tree.dispose();
+    }
+  });
+
   it('an explicit refresh sees sessions added after the tree started', async () => {
     const client = new ReactiveClient();
     seedTopology(client);

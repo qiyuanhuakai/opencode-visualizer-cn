@@ -99,11 +99,16 @@
       </li>
     </ul>
 
-    <div v-if="availableSessions.length > 0" class="available-sources">
+    <div v-if="findSessions || shownSessions.length > 0" class="available-sources">
       <div class="section-title">{{ rt("Add a source to this thread") }}</div>
+      <form v-if="findSessions" class="participant-search" @submit.prevent="search">
+        <input v-model="query" type="search" data-testid="participant-search" :aria-label="rt('Search sessions to add')" :placeholder="rt('Search sessions to add')" @input="clearSearch" />
+        <button type="submit" class="action-button" :disabled="!query.trim() || searching">{{ rt('Search') }}</button>
+      </form>
+      <p v-if="searchStatus" class="available-hint" role="status">{{ searchStatus }}</p>
       <div class="available-list" role="group" :aria-label='rt("Available native sessions")'>
         <button
-          v-for="entry in availableSessions"
+          v-for="entry in shownSessions"
           :key="encodeSessionKey(entry.session)"
           type="button"
           class="action-button"
@@ -129,7 +134,7 @@
 <script setup lang="ts">
 import { useRuntimeUi } from '../../locales/runtimeUi';
 const { rt } = useRuntimeUi();
-import { computed } from 'vue';
+import { computed, onScopeDispose, ref, shallowRef } from 'vue';
 import { Icon } from '@iconify/vue';
 import type { ParticipantView } from '../../../bridge/runtime/threads/participantService.js';
 import type { SessionRef } from '../../../shared/runtime/identity.js';
@@ -144,6 +149,7 @@ const props = withDefaults(
     activeParticipantId?: string | null;
     /** Native sessions the session tree offers; already-joined ones are shown disabled. */
     availableSessions?: readonly AvailableSession[];
+    findSessions?: (query: string, signal: AbortSignal) => Promise<readonly AvailableSession[]>;
     /** harnessInstanceId → display label, supplied by the container's harness registry. */
     harnessLabels?: Readonly<Record<string, string>>;
     busy?: boolean;
@@ -159,6 +165,46 @@ const emit = defineEmits<{
   (event: 'join', session: SessionRef): void;
   (event: 'locate-session', session: SessionRef): void;
 }>();
+
+const query = ref('');
+const results = shallowRef<readonly AvailableSession[] | null>(null);
+const searching = ref(false);
+const failed = ref(false);
+let searchController: AbortController | undefined;
+const shownSessions = computed(() => results.value ?? props.availableSessions);
+const searchStatus = computed(() => {
+  if (searching.value) return rt('Searching sessions…');
+  if (failed.value) return rt('Session search failed');
+  if (results.value?.length === 0) return rt('No matching sessions');
+  return '';
+});
+
+function clearSearch() {
+  searchController?.abort();
+  results.value = null;
+  searching.value = false;
+  failed.value = false;
+}
+
+async function search() {
+  const text = query.value.trim();
+  if (!text || !props.findSessions) return;
+  clearSearch();
+  const controller = new AbortController();
+  searchController = controller;
+  searching.value = true;
+  results.value = [];
+  try {
+    const matches = await props.findSessions(text, controller.signal);
+    if (!controller.signal.aborted) results.value = matches;
+  } catch {
+    if (!controller.signal.aborted) failed.value = true;
+  } finally {
+    if (!controller.signal.aborted) searching.value = false;
+  }
+}
+
+onScopeDispose(clearSearch);
 
 const joinedKeys = computed(() => new Set(props.participants.map((participant) => encodeSessionKey(participant.session))));
 
@@ -347,6 +393,29 @@ function shortId(value: string): string {
 
 .mono {
   font-family: var(--app-monospace-font-family);
+}
+
+.participant-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.participant-search input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  padding: 5px 8px;
+  color: var(--theme-text-primary, #e2e8f0);
+  background: var(--theme-form-control-bg, var(--theme-surface-panel, #0f172a));
+  border: 1px solid var(--theme-form-control-border, var(--theme-border-default, #334155));
+  border-radius: 6px;
+  font: inherit;
+}
+
+.participant-search input:focus-visible {
+  outline: 2px solid var(--theme-accent, #60a5fa);
+  outline-offset: 1px;
 }
 
 .action-button {

@@ -104,10 +104,12 @@
 
       <ParticipantPicker
         v-if="variant === 'panel' && thread"
+        :key="thread.threadId"
         :participants="thread.participants"
         :targets="targets"
         :active-participant-id="thread.activeParticipantId"
         :available-sessions="availableSessions"
+        :find-sessions="findSessions"
         :harness-labels="harnessLabels"
         :busy="busy"
         @select-target="emit('select-target', $event)"
@@ -346,6 +348,7 @@ const props = withDefaults(
     /** Per-participant native histories, supplied by the container — never merged here. */
     nativeHistory?: readonly NativeHistoryGroup[];
     /** Native sessions the picker can offer (the session tree's rows). */
+    findSessions?: (query: string, signal: AbortSignal) => Promise<readonly { session: SessionRef; label: string; harness: string }[]>;
     availableSessions?: readonly { session: SessionRef; label: string; harness: string }[];
     /** harnessInstanceId → display label from the container's harness registry. */
     harnessLabels?: Readonly<Record<string, string>>;
