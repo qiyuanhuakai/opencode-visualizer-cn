@@ -9,16 +9,31 @@ export function createOpenCodeDiscovery({ reader, request, current, assertCurren
   let closed = false;
   const same = (left, right) => left.epoch === right.epoch && left.processGeneration === right.processGeneration;
   const partial = (reason, items = []) => ({ items, cursor: null, completeness: items.length ? 'partial' : 'unsupported', reason, retryable: true, ...current() });
+  function reconcileRow(scan, item) {
+    const overlay = scan.overlay.get(item.id);
+    if (!overlay) return { summary: item, revision: scan.seq };
+    scan.overlay.delete(item.id);
+    scan.bytes -= overlay.bytes;
+    const event = overlay.event;
+    if (event.type === 'session.deleted') return null;
+    const update = event.summary;
+    if (!update || update.time.updated <= item.time.updated) return { summary: item, revision: scan.seq };
+    if (update.projectID !== item.projectID || update.directory !== item.directory || update.parentID !== item.parentID
+      || update.time.archived !== item.time.archived) scan.invalid ??= 'native-source-changed';
+    return { summary: update, revision: event.seq };
+  }
   return {
     invalidate(reason) { failure = reason; for (const scan of scans.values()) scan.invalid = reason; },
     event(event) {
       if (!same(event, current())) return;
       for (const scan of scans.values()) {
-        scan.invalid = 'native-source-changed';
+        if (event.type !== 'session.updated' || !event.session || !event.summary) scan.invalid ??= 'native-source-changed';
         if (!event.session) continue;
         const key = event.session.nativeSessionId;
         const size = Buffer.byteLength(JSON.stringify(event));
         const previous = scan.overlay.get(key);
+        if (event.type === 'session.updated' && (previous?.event.type === 'session.deleted'
+          || (previous?.event.summary && event.summary && previous.event.summary.time.updated > event.summary.time.updated))) continue;
         scan.bytes += size - (previous?.bytes ?? 0);
         if (scan.bytes > OPEN_CODE_LIMITS.producer) { scan.invalid = 'native-buffer-overflow'; scan.overlay.clear(); scan.bytes = 0; failure = scan.invalid; continue; }
         scan.overlay.set(key, { event, bytes: size });
@@ -52,14 +67,15 @@ export function createOpenCodeDiscovery({ reader, request, current, assertCurren
           const item = summary(native);
           requireValue(!seen.has(item.id) && (scan.lastId === undefined || Buffer.compare(Buffer.from(item.id), Buffer.from(scan.lastId)) > 0), 'opencode.repeated_page', 'reconcile_required');
           seen.add(item.id);
-          const overlay = scan.overlay.get(item.id)?.event;
-          if (overlay?.type === 'session.deleted') continue;
-          items.push({ summary: overlay?.summary ?? item, revision: overlay?.seq ?? scan.seq });
+          const row = reconcileRow(scan, item);
+          if (row) items.push(row);
         }
         scan.lastId = page.items.at(-1)?.id ?? scan.lastId;
         requireValue(page.cursor === null || (page.cursor !== scan.nativeCursor && page.items.length > 0), 'opencode.repeated_cursor', 'reconcile_required');
         scan.nativeCursor = page.cursor;
-        const invalid = scan.invalid ?? failure;
+        // An update without a native row may have moved into or out of this scan's scope.
+        const unverified = page.cursor === null && scan.overlay.size > 0;
+        const invalid = scan.invalid ?? failure ?? (unverified ? 'native-source-changed' : null);
         const more = page.cursor !== null && !invalid;
         if (more) scan.expiresAt = Date.now() + 60000;
         else scans.delete(token);
@@ -68,7 +84,7 @@ export function createOpenCodeDiscovery({ reader, request, current, assertCurren
         if (!(error instanceof ProtocolError)) { scans.delete(token); throw error; }
         await assertCurrent();
         // No cursor semantics have been proven for /session. A finite sample remains explicitly partial.
-        if (params.cursor != null || scan.nativeCursor !== null) { scans.delete(token); return { ...partial(error.field), completeness: 'partial' }; }
+        if (error.field === 'opencode.store_changed' || params.cursor != null || scan.nativeCursor !== null) { scans.delete(token); return { ...partial(error.field), completeness: 'partial' }; }
         try {
           const rows = await request('/session', { query: { directory: scope.directory ?? '/', scope: 'project', limit } });
           await assertCurrent();
@@ -76,14 +92,14 @@ export function createOpenCodeDiscovery({ reader, request, current, assertCurren
           requireValue(Array.isArray(rows), 'opencode.session_list');
           const seen = new Set();
           const items = rows.slice(0, limit).map(summary).filter((row) => {
-            if (seen.has(row.id) || scan.overlay.get(row.id)?.event.type === 'session.deleted') return false;
+            if (seen.has(row.id)) return false;
             seen.add(row.id);
             return (scope.projectID === undefined || row.projectID === scope.projectID)
               && (scope.directory === undefined || row.directory === scope.directory)
               && (scope.parentID === undefined || row.parentID === scope.parentID)
               && (scope.roots !== true || row.parentID === undefined)
               && (scope.archived === undefined || Boolean(row.time.archived) === scope.archived);
-          }).map((row) => { const overlay = scan.overlay.get(row.id)?.event; return { summary: overlay?.summary ?? row, revision: overlay?.seq ?? generation.seq }; });
+          }).map(row => reconcileRow(scan, row)).filter(Boolean);
           return { ...partial(`api-enumeration-unproven:${error.field}`, items), completeness: 'partial' };
         } catch (apiError) {
           if (!(apiError instanceof ProtocolError)) throw apiError;
