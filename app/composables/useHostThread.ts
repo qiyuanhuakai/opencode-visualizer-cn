@@ -40,6 +40,10 @@ export function createHostThreadState(getHost: () => HostClient | null) {
   let host: HostClient | null = null;
   let generation = 0;
   let sequence = 0;
+  let latestRefresh: {
+    result: Promise<void>;
+    superseded: ReturnType<typeof Promise.withResolvers<void>>;
+  } | undefined;
   let pending = 0;
   let unsubscribe = () => {};
   let scheduled = false;
@@ -54,10 +58,28 @@ export function createHostThreadState(getHost: () => HostClient | null) {
     return captured === host && generation === token && captured.isCurrent();
   }
 
-  async function refresh(captured = host, token = generation): Promise<void> {
+  async function refresh(captured = host, token = generation, followReplacement = true): Promise<void> {
     const id = threadId.value;
     if (!captured || !id || !current(captured, token)) return;
     const turn = ++sequence;
+    latestRefresh?.superseded.resolve();
+    latestRefresh = {
+      result: readThread(captured, token, id, turn),
+      superseded: Promise.withResolvers<void>(),
+    };
+    // Opening must use the latest summary, even when a replaced request has not replied.
+    while (current(captured, token) && latestRefresh) {
+      const reading: NonNullable<typeof latestRefresh> = latestRefresh;
+      try {
+        await Promise.race([reading.result, reading.superseded.promise]);
+      } catch (failure) {
+        if (current(captured, token) && reading === latestRefresh) throw failure;
+      }
+      if (!followReplacement || reading === latestRefresh) return;
+    }
+  }
+
+  async function readThread(captured: HostClient, token: number, id: string, turn: number): Promise<void> {
     const selected = selectedSession.value;
     const target = targetSession.value;
     const resolve = (session: SessionRef | null) => session
@@ -106,12 +128,14 @@ export function createHostThreadState(getHost: () => HostClient | null) {
     const captured = host;
     const token = generation;
     if (!captured || !current(captured, token)) { error.value = 'Connect to this Thread’s Bridge before continuing.'; return; }
-    pending += 1;
-    busy.value = true;
-    if (!background) error.value = '';
+    if (!background) {
+      pending += 1;
+      busy.value = true;
+      error.value = '';
+    }
     try { await action(captured, token); }
     catch (failure) { if (token === generation && captured === host && (!background || !error.value)) error.value = failure instanceof Error ? failure.message : 'The Thread operation failed.'; }
-    finally { if (token === generation) { pending -= 1; busy.value = pending > 0; } }
+    finally { if (!background && token === generation) { pending -= 1; busy.value = pending > 0; } }
   }
 
   async function change(call: HostMutationCall): Promise<void> {
@@ -144,7 +168,7 @@ export function createHostThreadState(getHost: () => HostClient | null) {
       scheduled = true;
       queueMicrotask(() => {
         scheduled = false;
-        if (current(captured, token)) void run((captured, token) => refresh(captured, token), true);
+        if (current(captured, token)) void run((captured, token) => refresh(captured, token, false), true);
       });
     });
   }
@@ -155,7 +179,7 @@ export function createHostThreadState(getHost: () => HostClient | null) {
     if (host?.isCurrent()) return;
     unsubscribe(); scheduled = false;
     const token = ++generation;
-    sequence++; pending = 0; busy.value = false;
+    sequence++; latestRefresh?.superseded.resolve(); latestRefresh = undefined; pending = 0; busy.value = false;
     host = captured;
     owner.value = Object.freeze({ ...previous, host: captured, generation: token });
     subscribeHost(captured, token);
@@ -168,6 +192,8 @@ export function createHostThreadState(getHost: () => HostClient | null) {
     scheduled = false;
     generation += 1;
     sequence += 1;
+    latestRefresh?.superseded.resolve();
+    latestRefresh = undefined;
     host = null;
     owner.value = null;
     repo = null;
@@ -217,7 +243,7 @@ export function createHostThreadState(getHost: () => HostClient | null) {
     clearTarget: () => { targets.value = []; targetSession.value = null; },
     setSelectedSession: (session) => {
       selectedSession.value = session; resolvedSelected.value = null;
-      if (host && threadId.value) void run((captured, token) => refresh(captured, token), true);
+      if (host && threadId.value) void run((captured, token) => refresh(captured, token, false), true);
     },
     sessionOfParticipant: (participantId) => summary.value?.participants.find((participant) => participant.participantId === participantId)?.session ?? null,
     beginHandoff: async (input) => {
