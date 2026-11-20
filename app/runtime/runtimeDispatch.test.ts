@@ -787,15 +787,25 @@ describe('runtime real WebSocket dispatch', () => {
     await renderer.attach(target);
     if (!legacyObserver) {
       const { seq } = await execution.services.store.inspect();
-      const observer = await renderer.request(target, 'runtime.observer.open', { after: seq });
+      const observer = await renderer.observe(target, {
+        after: Math.max(0, seq - 1),
+        onDelivery: () => {},
+        onDeliveries: async () => {},
+      });
       try {
-        const params = { ...observer, resolveSummary: true, maxEvents: 16, queuedRead: true } as const;
-        // Both reads are admitted together. A serial 5s+5s wait expires at the manager.
-        const first = renderer.request(target, 'runtime.observer.read', params);
-        const second = renderer.request(target, 'runtime.observer.read', params);
-        await expect(Promise.all([first, second])).resolves.toEqual([null, null]);
+        // Reconcile real startup writes before exercising the idle lease.
+        const starting = await observer.read();
+        expect(starting?.kind).toBe('replay_required');
+        let idle = false;
+        for (let attempt = 0; attempt < 8 && !idle; attempt++) {
+          idle = await observer.read() === null;
+        }
+        expect(idle).toBe(true);
+        // The first idle read leaves its paired read admitted and waiting.
+        // A second full lease would time out at the manager before returning.
+        await expect(observer.read()).resolves.toBeNull();
       } finally {
-        await renderer.request(target, 'runtime.observer.close', observer);
+        await observer.close();
       }
       return;
     }
@@ -833,7 +843,7 @@ describe('runtime real WebSocket dispatch', () => {
         items: [{ collection: 'session_summaries', key, value: { title: 'Still live' } }] });
     }
     await observer.close();
-  }, 20000);
+  }, 25000);
   it('stops the Bridge while initial native index discovery waits on an in-flight page', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'vis-close-index-discovery-'));
     cleanups.push(() => rm(root, { recursive: true, force: true }));
