@@ -311,7 +311,14 @@ export async function measureEventVisibility(page, nativeOrigin, nativeSessionId
       }
       const visibleAt = await visible;
       if (visibleAt === null) throw new Error('Native title update did not reach the selected session');
-      return visibleAt - startedAt;
+      const requestToVisibleMs = visibleAt - startedAt;
+      const { preparationMs } = updated;
+      if (!Number.isFinite(preparationMs) || preparationMs < 0 || preparationMs > requestToVisibleMs) {
+        throw new Error('Native fixture preparation timing is invalid');
+      }
+      // Subtract only the fixture's synchronous work before emission. The
+      // remaining duration still includes the request and event transport.
+      return { ms: requestToVisibleMs - preparationMs, requestToVisibleMs, preparationMs };
     } finally {
       clearTimeout(timeout);
       observer.disconnect();

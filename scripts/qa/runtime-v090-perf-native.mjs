@@ -52,9 +52,11 @@ const server = createServer(async (request, response) => {
     const { wire } = opencode.find(({ summary }) => !summary.archived && !summary.parentId && summary.workspace);
     const title = url.searchParams.get('title') ?? 'Seed090 changed session';
     const updated = { ...wire, title, time: { ...wire.time, updated: Date.now() } };
+    const preparationStarted = performance.now();
     db.prepare('UPDATE session SET title=?,time_updated=? WHERE id=?').run(title, updated.time.updated, wire.id);
+    const preparationMs = performance.now() - preparationStarted;
     for (const stream of streams) stream.write(`data: ${JSON.stringify({ directory: wire.directory, payload: { type: 'session.updated', properties: { info: updated } } })}\n\n`);
-    return send({ sessionId: wire.id, title });
+    return send({ sessionId: wire.id, title, preparationMs });
   }
   if (url.pathname === '/qa/stats') return send({ calls, bytes, streams: streams.size, expected: expectedInventory(count) });
   if (url.pathname === '/session') return send(opencode.slice(0, Number(url.searchParams.get('limit') ?? 100)).map(({ wire }) => wire));
