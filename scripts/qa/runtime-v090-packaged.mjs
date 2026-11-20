@@ -955,7 +955,9 @@ async function runHappy(outDir, options) {
       recorder.observe('H12: qa:electron-storage output', storage.stdout.trim().split('\n').slice(-3));
 
       recorder.start('H13 pnpm qa:pty (node + sea + electron runtimes)');
-      const pty = await run('pnpm', [...PNPM, 'qa:pty'], { timeoutMs: 600000 });
+      const ptyEnv = { ...process.env };
+      delete ptyEnv.ELECTRON_OVERRIDE_DIST_PATH;
+      const pty = await run('pnpm', [...PNPM, 'qa:pty'], { env: ptyEnv, timeoutMs: 600000 });
       if (pty.status !== 0) console.error(`H13 PTY output:\n${`${pty.stdout}\n${pty.stderr}`.slice(-8000)}`);
       recorder.check('H13: pnpm qa:pty exit code', 0, pty.status);
       recorder.observe('H13: qa:pty output', pty.stdout.trim().split('\n').filter((line) => line.startsWith('VIS_PTY')).slice(-5));

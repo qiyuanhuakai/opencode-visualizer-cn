@@ -82,7 +82,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { artifact, productionSource, sourceSnapshot, validateSources, writeJson } from '../runtime-v090-evidence.mjs';
+import { artifact, performanceSourceFiles, productionSource, sourceSnapshot, validateSources, writeJson } from '../runtime-v090-evidence.mjs';
 import { createFixture } from './task-44-fixture.mjs';
 import {
   DATASET,
@@ -368,6 +368,7 @@ export async function run(context) {
     assert.equal(report.task, TASK, `${name} report is not a task-44 report`);
     assert.equal(report.profile, name, `${name} report names another profile`);
     assert.equal(report.productionRevision, auditedRevision, `${name} profile was measured on another revision`);
+    assert.deepEqual(Object.keys(report.sourceHashes ?? {}).sort(), performanceSourceFiles(context.root), `${name} profile source inventory mismatch`);
     validateSources(report.sourceHashes, context.root);
     assert.deepEqual(report.productionSource, productionSource(context.root, report.sourceHashes, auditedRevision), `${name} profile source snapshot mismatch`);
     const profile = { file, report };

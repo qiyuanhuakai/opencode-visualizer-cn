@@ -23,15 +23,8 @@
 // too. The split of WHERE each runs is the only concession, and it is measured rather than assumed.
 //
 // WHY THE SLURM DRIVER RUNS DIRECTLY AND NOT INSIDE THE REGISTERED INVOCATION — MEASURED:
-//   The runner's worker receipt budget is a HARD 180 seconds (scripts/qa/runtime-v090.mjs ->
-//   captureProcess, whose default timeout is 180000 ms). Measured on this host and this head:
-//     live-ssh   --case happy   =  97.5 s   (14 scenarios / 14 assertions, all passed)
-//     live-ssh   --case failure = 115.1 s   (21 scenarios / 21 assertions, all passed)
-//     live-slurm --case happy   = 137.3 s   (39 scenarios / 39 assertions, all passed)
-//   The two happy commands together are 232.8 s, so a single registered invocation cannot contain
-//   both: the worker would be SIGTERMed at 180 s and recorded interrupted:true, which is exactly
-//   how the earlier task-48 attempt failed and how these numbers were established. The dispatch
-//   also forbids launching anything in parallel in this worktree, so the drivers cannot overlap.
+//   The registered worker has 600 seconds and owns the SSH subprocess. Slurm runs
+//   separately so each isolated lab has an independent receipt and the labs cannot overlap.
 //   The Slurm driver therefore runs as a REAL direct process BEFORE the registered invocation, with
 //   the exact registered argv, its own real exit code, its own captured log and its own receipt
 //   file, all under .omo/evidence/vis-v090/task-46/direct-slurm/<lane>/; this case then reads that
@@ -181,15 +174,16 @@ async function runDriver(context, runDir, label, driver, args) {
 }
 
 /** Reads the directly-executed Slurm leg: its report, its log and its own receipt file. */
-function readDirectSlurmLeg(root, lane) {
+function readDirectSlurmLeg(root, lane, runDir) {
   const directory = path.join(root, SLURM_DIRECT_ROOT, lane);
   const reportPath = path.join(directory, 'slurm.json');
   const logPath = path.join(directory, 'slurm.log');
   const receiptPath = path.join(directory, 'slurm.receipt.json');
   for (const [label, file] of [['report', reportPath], ['log', logPath], ['receipt', receiptPath]]) {
-    assert(existsSync(file), `the directly-executed Slurm ${lane} leg wrote no ${label}: run \`node ${SLURM_DRIVER} --lab isolated --modes tcp,relay --case ${lane} --out ${reportPath}\` with its log and receipt alongside it, because the isolated SSH and Slurm labs are executed serially with independent receipts`);
+    assert(existsSync(file), `the directly-executed Slurm ${lane} leg wrote no ${label}: run \`node scripts/qa/task46-direct-slurm-leg.mjs ${lane}\` with its log and receipt alongside it, because the isolated SSH and Slurm labs are executed serially with independent receipts`);
   }
-  const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+  const receiptBytes = readFileSync(receiptPath);
+  const receipt = JSON.parse(receiptBytes.toString('utf8'));
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
   assert.equal(git('status', '--porcelain', '--untracked-files=no'), '', 'Slurm runner requires a clean tracked checkout');
   assert.equal(receipt.head, git('rev-parse', 'HEAD'), 'Slurm direct receipt belongs to a different candidate revision');
@@ -199,7 +193,20 @@ function readDirectSlurmLeg(root, lane) {
   const log = readFileSync(logPath);
   assert.equal(receipt.reportSha256, sha256(reportBytes), 'Slurm direct report digest mismatch');
   assert.equal(receipt.logSha256, sha256(log), 'Slurm direct log digest mismatch');
-  return { directory, reportPath, logPath, receiptPath, report: JSON.parse(reportBytes.toString('utf8')), logText: log.toString('utf8'), receipt };
+  const snapshot = path.join(runDir, 'slurm-direct');
+  mkdirSync(snapshot);
+  writeFileSync(path.join(snapshot, 'slurm.json'), reportBytes, { flag: 'wx' });
+  writeFileSync(path.join(snapshot, 'slurm.log'), log, { flag: 'wx' });
+  writeFileSync(path.join(snapshot, 'slurm.receipt.json'), receiptBytes, { flag: 'wx' });
+  return {
+    directory: snapshot,
+    reportPath: path.join(snapshot, 'slurm.json'),
+    logPath: path.join(snapshot, 'slurm.log'),
+    receiptPath: path.join(snapshot, 'slurm.receipt.json'),
+    report: JSON.parse(reportBytes.toString('utf8')),
+    logText: log.toString('utf8'),
+    receipt,
+  };
 }
 
 export async function run(context) {
@@ -229,10 +236,10 @@ export async function run(context) {
   const registeredBefore = sourceSnapshot(context.root, sourceFiles);
   const ownedBefore = sourceSnapshot(context.root, OWNED_FILES);
   const lane = context.case;
-  const slurm = readDirectSlurmLeg(context.root, lane);
+  const slurm = readDirectSlurmLeg(context.root, lane, runDir);
 
   // ── leg 1: the SSH driver, a REAL child process inside this registered invocation ────────────
-  const sshArgs = ['--isolated', '--case', lane];
+  const sshArgs = ['--isolated', '--case', lane, '--lab-timeout-ms', '420000'];
   record('invocation:ssh', [process.execPath, SSH_DRIVER, ...sshArgs]);
   const sshRun = await runDriver(context, runDir, 'ssh', SSH_DRIVER, sshArgs);
   record('sshExecution', {

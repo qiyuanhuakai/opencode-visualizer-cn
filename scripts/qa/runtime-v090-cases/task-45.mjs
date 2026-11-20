@@ -209,11 +209,11 @@ export async function run(context) {
   record('invocation', { argv: invocation, cwd: context.root, outDir });
   const receipt = await captureProcess(invocation, { root: context.root, log, timeoutMs: workerTimeoutMs - 30_000 });
   const driverLog = existsSync(log) ? readFileSync(log, 'utf8') : '';
-  artifacts.push(artifact(log, 'packaged-driver-log'));
   record('receipt', { exitCode: receipt.exitCode, signal: receipt.signal, interrupted: receipt.interrupted, startedAt: receipt.startedAt, finishedAt: receipt.finishedAt, logBytes: driverLog.length });
 
+  if (driverLog.length > 0) artifacts.push(artifact(log, 'packaged-driver-log'));
   const manifestPath = path.join(outDir, `${context.case}.json`);
-  assert(existsSync(manifestPath), `the packaged driver wrote no ${context.case}.json manifest; see ${log}`);
+  assert(existsSync(manifestPath), `the packaged driver wrote no ${context.case}.json manifest (exit ${receipt.exitCode}, signal ${receipt.signal}, interrupted ${receipt.interrupted}); see ${log}`);
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   artifacts.push(artifact(manifestPath, 'packaged-driver-manifest'));
   record('manifest', { schemaVersion: manifest.schemaVersion, scenario: manifest.scenario, status: manifest.status, scenarios: manifest.scenarios.length, assertionCount: manifest.assertionCount, host: manifest.host });

@@ -98,9 +98,8 @@ const resolveShort = (short) => { try { return git(FINAL, 'rev-parse', short); }
 // ------------------------------------------------------------------ audit core
 
 function taskEvidenceDir(task, evidenceRoot) {
-  const current = path.join(evidenceRoot, `task-${task}`);
-  if (task <= 19 && !existsSync(current)) return path.join(WORKTREES, `vis-v090-task-${task}`, '.omo/evidence/vis-v090', `task-${task}`);
-  return current;
+  if (task <= 19) return path.join(WORKTREES, `vis-v090-task-${task}`, '.omo/evidence/vis-v090', `task-${task}`);
+  return path.join(evidenceRoot, `task-${task}`);
 }
 
 function boundHead(task) {
@@ -386,7 +385,7 @@ function audit({ root, evidenceRoot, planPath }) {
   }
 
   // -- 6. task-19 historical correction and current behavior --------------------
-  const delivery = DELIVERY_HEADS[19];
+  const delivery = '49b5b8b620b7cc980a69459c66d9def5c62486a4';
   const task19 = Object.entries(TASK19_DELIVERY).map(([rel, expected]) => {
     try {
       const bytes = execFileSync('git', ['show', `${delivery}:${rel}`], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -395,8 +394,14 @@ function audit({ root, evidenceRoot, planPath }) {
       return { file: rel, match: false };
     }
   });
-  if (!deliveryHeads[19] || !contains(deliveryHeads[19], revision)) {
-    add('TASK19-CORRECTION-ANCESTRY', 'blocking', 'Task 19 registered corrections', 'the registered correction commit must be an ancestor of the candidate');
+  try {
+    git(root, 'cat-file', '-e', `${delivery}^{commit}`);
+    git(root, 'merge-base', '--is-ancestor', delivery, revision);
+  } catch (error) {
+    const reason = error.status === 1
+      ? 'the registered correction is not an ancestor'
+      : 'the candidate Git history could not verify the registered correction';
+    add('TASK19-CORRECTION-ANCESTRY', 'blocking', 'Task 19 registered corrections', reason);
   }
   for (const row of task19) if (!row.match) add('TASK19-CORRECTION-BYTES', 'blocking', 'Task 19 registered corrections', `${row.file} does not match the historical delivery blob`);
   for (const lane of ['happy', 'failure']) {

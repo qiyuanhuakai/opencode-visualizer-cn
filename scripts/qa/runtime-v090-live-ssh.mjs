@@ -31,7 +31,10 @@ export function parseArgs(argv) {
     if (argument === '--isolated') values.isolated = true;
     else if (argument === '--case') values.case = argv[++index];
     else if (argument === '--out') values.out = argv[++index];
-    else if (argument === '--runtime') values.runtime = argv[++index];
+    else if (argument === '--lab-timeout-ms') {
+      values.timeoutMs = Number(argv[++index]);
+      assert(Number.isSafeInteger(values.timeoutMs) && values.timeoutMs > 0, '--lab-timeout-ms must be a positive integer');
+    } else if (argument === '--runtime') values.runtime = argv[++index];
     else throw new Error(`Unknown argument: ${argument}`);
   }
   assert(values.isolated, '--isolated is required: this lane must never run against the production host');
