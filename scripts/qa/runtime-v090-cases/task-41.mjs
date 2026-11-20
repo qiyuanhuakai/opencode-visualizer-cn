@@ -390,12 +390,6 @@ export async function run(context) {
   const ownedFiles = [
     'scripts/qa/runtime-v090-cases/task-41.mjs',
     'scripts/qa/runtime-v090-cases/task-41-fixture.mjs',
-  'scripts/qa/runtime-v090-browser-kernel.mjs',
-  'scripts/qa/vendor/omowright/scripts/omowright.mjs',
-  'scripts/qa/vendor/omowright/scripts/browser-engine-guard.mjs',
-  'scripts/qa/vendor/omowright/runtime/omowright/manifest.json',
-  'scripts/qa/vendor/omowright/runtime/omowright/index.js',
-  'scripts/qa/vendor/omowright/runtime/omowright/page-bundle.js',
     'app/dev/runtime-v090/task41.ts',
   ];
   const sourceBefore = sourceSnapshot(context.root, ownedFiles);
