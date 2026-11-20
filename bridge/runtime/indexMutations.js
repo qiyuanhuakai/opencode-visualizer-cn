@@ -68,7 +68,7 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
     throw new StoreError('conflict', 'index_contention');
   }
   return {
-    async apply(scan, items) {
+    async apply(scan, items, { firstPage = false } = {}) {
       if (!Array.isArray(items) || items.length > 200) throw new StoreError('invalid_request', 'index_page_budget');
       const summaries = new Map();
       async function flush() {
@@ -99,11 +99,17 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
       }
       let applied = 0;
       const matching = items.filter(summary => matchesScope(summary, scan.scope));
-      for (let offset = 0; offset < matching.length; offset += 20) {
+      let offset = 0;
+      while (offset < matching.length) {
         scan.assertCurrent();
-        const chunk = matching.slice(offset, offset + 20), resolved = await workspaceBatch(scan, chunk);
+        // Make a small initial window visible without waiting for every root
+        // in the regular write batch.
+        const chunk = matching.slice(offset, offset + (firstPage && offset === 0 ? 4 : 20));
+        const resolved = await workspaceBatch(scan, chunk);
         for (const summary of chunk) summaries.set(encodeSessionKey(summary.session), { summary, workspaceKey: resolved.get(summary.directory) });
-        applied += await flush(); summaries.clear();
+        applied += await flush();
+        summaries.clear();
+        offset += chunk.length;
       }
       return applied;
     },
