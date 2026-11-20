@@ -24,13 +24,12 @@ export function createQueries(db, binding) {
     ['dsh', 'dsh'], ['acp', 'acp'], ['unknown', 'unknown']]);
   const validSearchText = (text, max) => typeof text === 'string' && text.length > 0
     && text.length <= max && !text.includes('\0');
-  db.function('vis_session_matches', { deterministic: true }, (value, kind, needle) => {
-    const row = JSON.parse(value);
-    const id = row?.session?.nativeSessionId;
-    if (!validSearchText(id, 2048) || !validSearchText(row.session.harnessInstanceId, 64)) return 0;
-    const title = validSearchText(row.title, 8192) ? row.title : id;
-    const directory = validSearchText(row.directory, 16384) ? row.directory : '';
-    return [title, id, directory, searchLabels.get(kind)].some(text => text?.toLowerCase().includes(needle)) ? 1 : 0;
+  db.function('vis_session_matches', { deterministic: true }, (id, harnessId, title, directory, kind, needle) => {
+    if (!validSearchText(id, 2048) || !validSearchText(harnessId, 64)) return 0;
+    return id.toLowerCase().includes(needle)
+      || (validSearchText(title, 8192) && title.toLowerCase().includes(needle))
+      || (validSearchText(directory, 16384) && directory.toLowerCase().includes(needle))
+      || searchLabels.get(kind).includes(needle) ? 1 : 0;
   });
   function searchSessions(params) {
     return transaction(db, () => {
@@ -43,7 +42,10 @@ export function createQueries(db, binding) {
         WHERE s.environment=?`;
       const kind = `CASE WHEN json_extract(h.value,'$.kind') IN ('opencode','codex','kimi-web','dsh','acp')
         THEN json_extract(h.value,'$.kind') ELSE 'unknown' END`;
-      const match = ` AND ${kind} IN (SELECT value FROM json_each(?)) AND vis_session_matches(s.value,${kind},?)`;
+      const match = ` AND ${kind} IN (SELECT value FROM json_each(?))
+        AND vis_session_matches(json_extract(s.value,'$.session.nativeSessionId'),
+          json_extract(s.value,'$.session.harnessInstanceId'),json_extract(s.value,'$.title'),
+          json_extract(s.value,'$.directory'),${kind},?)`;
       const filters = [environment, JSON.stringify(params.kinds), needle];
       const scanned = db.prepare('SELECT count(*) AS count FROM session_summaries WHERE environment=?').get(environment).count;
       if (!needle || params.kinds.length === 0) return { revision, scanned, totalMatched: 0, items: [], cursor: null };
