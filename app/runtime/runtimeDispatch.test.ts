@@ -710,6 +710,10 @@ describe('runtime real WebSocket dispatch', () => {
     }
     expect(delivered[1]).toBeGreaterThan(delivered[0]);
     expect(refused).toBe(2);
+    expect(renderer.supports(target, 'runtime.session.search')).toBe(true);
+    const search = await renderer.request(target, 'runtime.session.search', { query: 'still live', kinds: ['opencode', 'unknown'] });
+    expect(search).toMatchObject({ totalMatched: 1, cursor: null,
+      items: [{ collection: 'session_summaries', key, value: { title: 'Still live' } }] });
     await observer.close();
   });
   it('stops the Bridge while initial native index discovery waits on an in-flight page', async () => {
