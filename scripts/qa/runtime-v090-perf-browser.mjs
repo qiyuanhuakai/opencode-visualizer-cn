@@ -260,13 +260,24 @@ export async function measureInteractions({ page, wire }, target) {
       .find(session => session.nativeSessionId === target.nativeSessionId);
     if (!observedHistorySession) throw new Error('Renderer did not open history for the selected session');
   }
-  const expand = await page.evaluate(async () => {
-    const group = document.querySelector('[data-row-kind="section"],[data-row-kind="repo"]');
-    if (!group) return null;
+  const scroll = page.getByTestId('unified-scroll');
+  await scroll.evaluate(element => { element.scrollTop = 0; });
+  const group = scroll.locator('[data-row-kind="repo"][aria-expanded], [data-row-kind="section"][aria-expanded]').first();
+  await group.waitFor({ state: 'visible', timeout: 5000 });
+  const expand = await group.evaluate(async (element) => {
+    const key = element.getAttribute('data-row-key');
+    const selector = `[data-row-key="${CSS.escape(key)}"]`;
     const samples = [];
     for (let index = 0; index < 10; index++) {
-      const start = performance.now(); group.click();
+      const row = document.querySelector(selector);
+      const expanded = row?.getAttribute('aria-expanded');
+      if (expanded == null) throw new Error('Measured tree group disappeared');
+      const start = performance.now();
+      row.click();
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (document.querySelector(selector)?.getAttribute('aria-expanded') !== String(expanded === 'false')) {
+        throw new Error('Measured tree group did not toggle');
+      }
       samples.push(performance.now() - start);
     }
     return samples;
