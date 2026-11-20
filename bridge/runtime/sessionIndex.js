@@ -13,9 +13,8 @@ export function createSessionIndex({ store, registry, catalog, resolveWorkspace,
   const scheduler = createDiscoveryScheduler();
   const events = createRuntimeEventBus({ store });
   const snapshots = createRuntimeSnapshots({ store });
-  let eventWork = null;
   function nudgeEvents() {
-    if (!eventWork) eventWork = events.nudge().catch(() => {}).finally(() => { eventWork = null; });
+    void events.nudge().catch(() => {});
   }
   const mutations = createIndexMutations({ store, catalog, resolveWorkspace, onCommit: nudgeEvents });
   const discovery = createIndexDiscovery({ store, scheduler, mutations });

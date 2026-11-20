@@ -9,6 +9,7 @@ export function createRuntimeEventBus({ store, pollMs = 20 }) {
   const observers = new Set();
   let closed = false;
   let running = null;
+  let requested = false;
   let timer = null;
   let through = null;
   async function pump() {
@@ -34,11 +35,21 @@ export function createRuntimeEventBus({ store, pollMs = 20 }) {
   }
   function nudge() {
     if (closed) return Promise.resolve();
-    if (running) return running;
+    if (running) {
+      requested = true;
+      return running;
+    }
     if (timer !== null) clearTimeout(timer);
     running = pump().finally(() => {
       running = null;
-      if (!closed) { timer = setTimeout(() => { nudge().catch(() => {}); }, pollMs); timer.unref?.(); }
+      if (closed) return;
+      if (requested) {
+        // The current replay page may have observed a pre-commit watermark.
+        requested = false;
+        void nudge().catch(() => {});
+        return;
+      }
+      timer = setTimeout(() => { nudge().catch(() => {}); }, pollMs); timer.unref?.();
     });
     return running;
   }

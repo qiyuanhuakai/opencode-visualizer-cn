@@ -44,6 +44,45 @@ describe('durable runtime event bus', () => {
       observer.close();
     }
   });
+  it('reads again immediately when a commit nudges an in-flight replay of an older watermark', async () => {
+    await fixture(async (store) => {
+      const captured = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let pauseReplay = false;
+      const bus = createRuntimeEventBus({
+        pollMs: 1000,
+        store: {
+          ...store,
+          async replay(input) {
+            const reply = await store.replay(input);
+            if (pauseReplay) {
+              pauseReplay = false;
+              captured.resolve();
+              await release.promise;
+            }
+            return reply;
+          },
+        },
+      });
+      try {
+        const observer = await bus.connect(binding, { after: 0, isCurrent: () => true });
+        pauseReplay = true;
+        const reading = bus.nudge();
+        await captured.promise;
+        await store.mutate({ intentId: 'after-watermark', changes: [{
+          collection: 'session_summaries', key: sessionScope('after-watermark'), value: { title: 'Updated' },
+        }] });
+        void bus.nudge();
+        const delivery = observer.waitRead(undefined, 300);
+        release.resolve();
+        await reading;
+        await expect(delivery).resolves.toMatchObject({ kind: 'event', frame: { seq: 1 } });
+      } finally {
+        release.resolve();
+        await bus.close();
+      }
+    });
+  });
   it('preserves writes arriving during replay without rejecting a completed replay watermark', async () => {
     await fixture(async (store, bus) => {
       const observer = await bus.connect(binding, { after: 0, isCurrent: () => true });
