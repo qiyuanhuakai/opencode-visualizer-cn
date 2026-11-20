@@ -72,6 +72,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { createServer as createHttpServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import {
   chmod, lstat, mkdir, readdir, readFile, readlink, rm, stat, symlink, writeFile,
@@ -79,6 +80,7 @@ import {
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { createServer as createViteServer } from 'vite';
+import { loadBrowserKernel } from '../runtime-v090-browser-kernel.mjs';
 import { artifact, sourceSnapshot, writeJson } from '../runtime-v090-evidence.mjs';
 import { alive, assertPortReleased, createFixture, until } from './task-41-fixture.mjs';
 
@@ -110,7 +112,6 @@ import {
 } from '../../../shared/runtime/collaboration.js';
 import { ERROR_CODES, ProtocolError } from '../../../shared/runtime/capabilities.js';
 
-const browserSkill = '/home/qiyuaner/.codex/plugins/cache/sisyphuslabs/omo/5.1.27/skills/browser/scripts/omowright.mjs';
 const HEAP_BOUND = 256 * 1024 * 1024;
 const COMMIT = /^[0-9a-f]{40,64}$/;
 const HASH = /^[a-f0-9]{64}$/;
@@ -616,18 +617,34 @@ export async function run(context) {
       configFile: false,
       appType: 'custom',
       root: context.root,
-      server: { host: '127.0.0.1', port: 0, strictPort: false },
+      server: { middlewareMode: true, hmr: false },
       logLevel: 'error',
     });
     vite.middlewares.use('/qa41', (_request, response) => { response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(PAGE_HTML); });
-    await vite.listen();
-    const port = vite.httpServer.address().port;
+    const http = createHttpServer(vite.middlewares);
+    let port;
+    fixture.own('Vite-server', async () => {
+      try {
+        if (http.listening) await new Promise((resolve, reject) => http.close(error => error ? reject(error) : resolve()));
+      } finally {
+        await vite.close();
+      }
+      if (port !== undefined) await assertPortReleased(port);
+      return { port: port ?? null, exclusiveRebind: port !== undefined };
+    });
+    await new Promise((resolve, reject) => {
+      http.once('error', reject);
+      http.listen(0, '127.0.0.1', () => {
+        http.off('error', reject);
+        resolve();
+      });
+    });
+    port = http.address().port;
     fixture.register({ kind: 'Vite-created', port });
-    fixture.own('Vite-server', async () => { await vite.close(); await assertPortReleased(port); return { port, exclusiveRebind: true }; });
     const pageUrl = `http://127.0.0.1:${port}/qa41/`;
     record('pageUrl', pageUrl);
 
-    const { omowright } = await (await import(browserSkill)).loadOmowright();
+    const { omowright } = await loadBrowserKernel();
     const profileRoot = path.join(fixture.root, 'chromium-profile');
     fixture.register({ kind: 'Chromium-planned', executable: chromium.executablePath(), profile: profileRoot, teardown: 'owned browser.close; process exit; private root removal' });
     browser = await omowright.connectPipe({ browserPath: chromium.executablePath(), browserArgs: ['--headless', '--no-sandbox', '--disable-gpu', '--no-first-run', `--user-data-dir=${profileRoot}`], storageRoot: runDir, commandTimeoutMs: 180000 });
