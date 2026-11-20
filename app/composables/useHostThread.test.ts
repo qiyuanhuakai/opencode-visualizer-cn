@@ -15,6 +15,7 @@ it('retains its captured Host when the conversation Host changes and refuses wri
   const replacementRead = Promise.withResolvers<void>();
   const latestRead = Promise.withResolvers<void>();
   const backgroundRead = Promise.withResolvers<void>();
+  const notificationReads = Array.from({ length: 5 }, () => Promise.withResolvers<void>());
   let snapshotReads = 0;
   const page = (collection: string) => ({ offset: 0, limit: 50, counts: { [collection]: 0 } });
   const owner: HostClient = {
@@ -27,6 +28,7 @@ it('retains its captured Host when the conversation Host changes and refuses wri
         if (revision === 2) await replacementRead.promise;
         if (revision === 3) await latestRead.promise;
         if (revision === 4) await backgroundRead.promise;
+        await notificationReads[revision - 5]?.promise;
         return decode({ thread: { threadId, environmentId: target, repoKey: 'repo', revision, activeParticipantId: null, harnessInstanceIds: [harness], participants: [] } });
       }
       if (call.operation === 'participants') return decode({ participants: [], pagination: page('participants') });
@@ -66,6 +68,20 @@ it('retains its captured Host when the conversation Host changes and refuses wri
   expect(state.busy.value).toBe(false);
   backgroundRead.resolve();
   await vi.waitFor(() => expect(state.summary.value?.revision).toBe(4));
+  const race = vi.spyOn(Promise, 'race');
+  try {
+    for (const read of notificationReads) {
+      notifyChanged();
+      await Promise.resolve();
+      await Promise.resolve();
+      read.resolve();
+    }
+    expect(race).toHaveBeenCalledTimes(notificationReads.length);
+  } finally {
+    race.mockRestore();
+    for (const read of notificationReads) read.resolve();
+  }
+  await vi.waitFor(() => expect(state.summary.value?.revision).toBe(9));
   expect(state.error.value).toBe('');
   const captured = state.owner.value;
   expect(captured?.host).toBe(owner);

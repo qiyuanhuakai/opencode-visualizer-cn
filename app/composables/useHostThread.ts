@@ -58,7 +58,7 @@ export function createHostThreadState(getHost: () => HostClient | null) {
     return captured === host && generation === token && captured.isCurrent();
   }
 
-  async function refresh(captured = host, token = generation): Promise<void> {
+  async function refresh(captured = host, token = generation, followReplacement = true): Promise<void> {
     const id = threadId.value;
     if (!captured || !id || !current(captured, token)) return;
     const turn = ++sequence;
@@ -75,7 +75,7 @@ export function createHostThreadState(getHost: () => HostClient | null) {
       } catch (failure) {
         if (current(captured, token) && reading === latestRefresh) throw failure;
       }
-      if (reading === latestRefresh) return;
+      if (!followReplacement || reading === latestRefresh) return;
     }
   }
 
@@ -168,7 +168,7 @@ export function createHostThreadState(getHost: () => HostClient | null) {
       scheduled = true;
       queueMicrotask(() => {
         scheduled = false;
-        if (current(captured, token)) void run((captured, token) => refresh(captured, token), true);
+        if (current(captured, token)) void run((captured, token) => refresh(captured, token, false), true);
       });
     });
   }
@@ -243,7 +243,7 @@ export function createHostThreadState(getHost: () => HostClient | null) {
     clearTarget: () => { targets.value = []; targetSession.value = null; },
     setSelectedSession: (session) => {
       selectedSession.value = session; resolvedSelected.value = null;
-      if (host && threadId.value) void run((captured, token) => refresh(captured, token), true);
+      if (host && threadId.value) void run((captured, token) => refresh(captured, token, false), true);
     },
     sessionOfParticipant: (participantId) => summary.value?.participants.find((participant) => participant.participantId === participantId)?.session ?? null,
     beginHandoff: async (input) => {
