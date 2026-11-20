@@ -18,8 +18,10 @@ describe('closed runtime wire DTO validation', () => {
     expect(parseRuntimeParams('session.send', { harnessInstanceId, session, args: { content: [{ type: 'text', text: 'hello' }] } })).toMatchObject({ session });
   });
   it('keeps the allowed index surface and channel budgets bounded', () => {
-    // Includes the session-qualified interaction payload read used by approval cards.
-    expect(Object.keys(RUNTIME_WIRE_METHODS)).toHaveLength(42);
+    expect(Object.keys(RUNTIME_WIRE_METHODS)).toHaveLength(43);
+    expect(RUNTIME_WIRE_METHODS['runtime.session.search']).toBe('read');
+    expect(parseRuntimeParams('runtime.session.search', { query: 'hello', kinds: ['opencode'], limit: 200 })).toMatchObject({ query: 'hello' });
+    expect(() => parseRuntimeParams('runtime.session.search', { query: 'hello', kinds: ['opencode'], cursor: 'row' })).toThrow('search.cursor');
     expect(RUNTIME_WIRE_METHODS['runtime.interaction.read']).toBe('read');
     expect(parseRuntimeParams('runtime.interaction.read', { session, interactionId: 'approval-1' })).toEqual({ session, interactionId: 'approval-1' });
     expect(() => parseRuntimeParams('runtime.interaction.read', { session, interactionId: '' })).toThrow();
