@@ -34,14 +34,20 @@ export function useRuntimeConversation(options: { publish(entries: unknown[]): v
     if (!owner || !selected || !selectedKind || current !== revision || !selected.isCurrent()) return;
     try {
       if (!loading.value) {
+        const liveOnly = owner.liveOnly;
         const change = await owner.poll();
         if (current !== revision || !selected.isCurrent()) return;
-        if (change.changed || change.status === 'replay_required') {
-          await owner.select(selected);
-          if (current !== revision || !selected.isCurrent()) return;
+        if (change.status === 'replay_required' || (change.status === 'current' && change.changed)) {
+          if (!liveOnly || change.status === 'replay_required') {
+            await owner.select(selected);
+            if (current !== revision || !selected.isCurrent()) return;
+          }
           cursor = undefined;
-          entries.clear();
-          project = createNativeHistoryProjection(selectedKind, selected.selection.session.nativeSessionId);
+          // Live-only producers drain the existing stream. Earlier pages cannot be replayed.
+          if (!liveOnly) {
+            entries.clear();
+            project = createNativeHistoryProjection(selectedKind, selected.selection.session.nativeSessionId);
+          }
           await loadMore();
         }
       }
