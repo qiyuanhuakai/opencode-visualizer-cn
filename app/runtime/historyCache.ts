@@ -14,7 +14,7 @@ type PageEntry = { readonly value: HistoryPage; readonly memory: MemoryLease; re
 type Active = {
   readonly capture: SelectionCapture; readonly owner: HistoryOwner; readonly memory: MemoryLease;
   readonly work: Set<Promise<void>>; readonly removeAbort: () => void;
-  live: boolean; ready: boolean; liveInvalidation: boolean; reading: boolean; polling: boolean; after: number; closing?: Promise<void>;
+  live: boolean; ready: boolean; liveInvalidation: boolean; liveOnly: boolean; reading: boolean; polling: boolean; after: number; closing?: Promise<void>;
 };
 // 512KiB wire: <=1MiB UTF16, <=1MiB node/property storage (4096 nodes).
 // JSON.parse + protocol clone + history clone + temporary stringify/UTF8 +
@@ -98,13 +98,14 @@ export function createHistoryCache(source: HistorySource, budget: MemoryBudget) 
         const owner = source.open(capture);
         const onAbort = () => { if (active?.capture === capture) invalidate(); };
         capture.signal.addEventListener('abort', onAbort, { once: true });
-        const value: Active = { capture, owner, memory, work: new Set(), live: true, ready: false, liveInvalidation: false, reading: false, polling: false, after: 0,
+        const value: Active = { capture, owner, memory, work: new Set(), live: true, ready: false, liveInvalidation: false, liveOnly: false, reading: false, polling: false, after: 0,
           removeAbort: () => capture.signal.removeEventListener('abort', onAbort) };
         active = value; memory.commit();
         const opened = track(value, owner.ready, data, result => {
           if (current(value)) {
             value.ready = true;
             value.liveInvalidation = result.capabilities.live === 'invalidate';
+            value.liveOnly = result.capabilities.archive === 'live-only';
             status = { status: result.capabilities.archive === 'unsupported' ? 'unsupported' : 'partial', ...(result.reason ? { reason: result.reason } : {}) };
           }
           return result;
@@ -210,7 +211,7 @@ export function createHistoryCache(source: HistorySource, budget: MemoryBudget) 
     catch (error) { value.polling = false; throw error; }
     const result = operation.result.then(change => {
       requireValue(current(value), 'history.selection', 'cancelled'); value.after = change.through;
-      if (change.changed || change.status === 'replay_required') void select(value.capture);
+      if (change.status === 'replay_required' || (change.status === 'current' && change.changed && !value.liveOnly)) void select(value.capture);
       else if (change.status === 'source_unavailable') { status = { status: 'error', error: 'source_unavailable' }; retryAction = poll; }
       else {
         let completeness: 'partial' | 'complete' | 'unsupported' = 'partial';
@@ -226,6 +227,7 @@ export function createHistoryCache(source: HistorySource, budget: MemoryBudget) 
   return {
     select, invalidate, page, readChunk, poll,
     get canPoll(): boolean { return !!active && current(active) && active.ready && active.liveInvalidation; },
+    get liveOnly(): boolean { return active?.liveOnly === true; },
     get status(): HistoryStatus { return status; },
     get(pageId: string) { const entry = pages.get(pageId); return entry ? output(entry) : null; },
     retry() { requireValue(retryAction !== undefined, 'history.retry', 'invalid_request'); return retryAction(); },
