@@ -13,6 +13,7 @@ it('retains its captured Host when the conversation Host changes and refuses wri
   let notifyChanged = () => {};
   const firstRead = Promise.withResolvers<void>();
   const replacementRead = Promise.withResolvers<void>();
+  const latestRead = Promise.withResolvers<void>();
   const backgroundRead = Promise.withResolvers<void>();
   let snapshotReads = 0;
   const page = (collection: string) => ({ offset: 0, limit: 50, counts: { [collection]: 0 } });
@@ -24,7 +25,8 @@ it('retains its captured Host when the conversation Host changes and refuses wri
         const revision = ++snapshotReads;
         if (revision === 1) await firstRead.promise;
         if (revision === 2) await replacementRead.promise;
-        if (revision === 3) await backgroundRead.promise;
+        if (revision === 3) await latestRead.promise;
+        if (revision === 4) await backgroundRead.promise;
         return decode({ thread: { threadId, environmentId: target, repoKey: 'repo', revision, activeParticipantId: null, harnessInstanceIds: [harness], participants: [] } });
       }
       if (call.operation === 'participants') return decode({ participants: [], pagination: page('participants') });
@@ -48,15 +50,22 @@ it('retains its captured Host when the conversation Host changes and refuses wri
   await new Promise<void>(resolve => setTimeout(resolve, 0));
   expect(opened).toBe(false);
   expect(state.busy.value).toBe(true);
-  replacementRead.resolve();
-  await opening;
-  expect(state.summary.value?.revision).toBe(2);
-  expect(state.busy.value).toBe(false);
   notifyChanged();
   await vi.waitFor(() => expect(snapshotReads).toBe(3));
+  latestRead.resolve();
+  try {
+    await vi.waitFor(() => expect(opened).toBe(true));
+    expect(state.summary.value?.revision).toBe(3);
+    expect(state.busy.value).toBe(false);
+  } finally {
+    replacementRead.resolve();
+  }
+  await opening;
+  notifyChanged();
+  await vi.waitFor(() => expect(snapshotReads).toBe(4));
   expect(state.busy.value).toBe(false);
   backgroundRead.resolve();
-  await vi.waitFor(() => expect(state.summary.value?.revision).toBe(3));
+  await vi.waitFor(() => expect(state.summary.value?.revision).toBe(4));
   expect(state.error.value).toBe('');
   const captured = state.owner.value;
   expect(captured?.host).toBe(owner);

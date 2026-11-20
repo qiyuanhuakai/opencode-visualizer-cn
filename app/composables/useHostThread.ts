@@ -40,7 +40,10 @@ export function createHostThreadState(getHost: () => HostClient | null) {
   let host: HostClient | null = null;
   let generation = 0;
   let sequence = 0;
-  let latestRefresh: Promise<void> | undefined;
+  let latestRefresh: {
+    result: Promise<void>;
+    superseded: ReturnType<typeof Promise.withResolvers<void>>;
+  } | undefined;
   let pending = 0;
   let unsubscribe = () => {};
   let scheduled = false;
@@ -59,23 +62,20 @@ export function createHostThreadState(getHost: () => HostClient | null) {
     const id = threadId.value;
     if (!captured || !id || !current(captured, token)) return;
     const turn = ++sequence;
-    const reading = readThread(captured, token, id, turn);
-    latestRefresh = reading;
-    try {
-      await reading;
-    } catch (failure) {
-      if (turn === sequence) throw failure;
-    }
-    // A change event may supersede a user action's read before it publishes.
-    // Wait for the replacement before the caller uses the Thread summary.
-    while (current(captured, token) && latestRefresh && latestRefresh !== reading) {
-      const replacement: Promise<void> = latestRefresh;
+    latestRefresh?.superseded.resolve();
+    latestRefresh = {
+      result: readThread(captured, token, id, turn),
+      superseded: Promise.withResolvers<void>(),
+    };
+    // Opening must use the latest summary, even when a replaced request has not replied.
+    while (current(captured, token) && latestRefresh) {
+      const reading: NonNullable<typeof latestRefresh> = latestRefresh;
       try {
-        await replacement;
+        await Promise.race([reading.result, reading.superseded.promise]);
       } catch (failure) {
-        if (replacement === latestRefresh) throw failure;
+        if (current(captured, token) && reading === latestRefresh) throw failure;
       }
-      if (replacement === latestRefresh) break;
+      if (reading === latestRefresh) return;
     }
   }
 
@@ -179,7 +179,7 @@ export function createHostThreadState(getHost: () => HostClient | null) {
     if (host?.isCurrent()) return;
     unsubscribe(); scheduled = false;
     const token = ++generation;
-    sequence++; latestRefresh = undefined; pending = 0; busy.value = false;
+    sequence++; latestRefresh?.superseded.resolve(); latestRefresh = undefined; pending = 0; busy.value = false;
     host = captured;
     owner.value = Object.freeze({ ...previous, host: captured, generation: token });
     subscribeHost(captured, token);
@@ -192,6 +192,7 @@ export function createHostThreadState(getHost: () => HostClient | null) {
     scheduled = false;
     generation += 1;
     sequence += 1;
+    latestRefresh?.superseded.resolve();
     latestRefresh = undefined;
     host = null;
     owner.value = null;
