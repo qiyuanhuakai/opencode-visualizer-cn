@@ -125,6 +125,7 @@ export function createSessionIndex({ store, registry, catalog, resolveWorkspace,
     page(input = {}) { return store.page({ ...input, collection: 'session_summaries', limit: Math.min(input.limit ?? 100, 200) }); },
     probeWorkspace: (key, visibility) => catalog.probe(key, visibility),
     snapshots, events,
+    stopDiscovery() { scheduler.close(); },
     async close() {
       closed = true;
       scheduler.close();

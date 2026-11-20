@@ -26,6 +26,7 @@ export interface SessionIndex {
   probeWorkspace: WorkspaceCatalog['probe'];
   readonly snapshots: RuntimeSnapshots;
   readonly events: RuntimeEventBus;
+  stopDiscovery(): void;
   close(): Promise<void>;
   readonly state: { readonly sources: number; readonly discovery: number; readonly scheduler: DiscoveryScheduler['state']; readonly events: RuntimeEventBus['state']; readonly closed: boolean };
 }
