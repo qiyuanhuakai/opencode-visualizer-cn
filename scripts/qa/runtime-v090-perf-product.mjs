@@ -1,9 +1,10 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { productionSource, sourceSnapshot, validateSources, writeJson } from './runtime-v090-evidence.mjs';
+import { digest, productionSource, sourceSnapshot, validateSources, writeJson } from './runtime-v090-evidence.mjs';
 import { buildApp, serveApp } from './runtime-v090-perf-app.mjs';
 import { connectApp, measureEventVisibility, measureInteractions, measureTree, openBrowser } from './runtime-v090-perf-browser.mjs';
 import { indexInventory, prepareFixture, repository, startBridge, startNative } from './runtime-v090-perf-harness.mjs';
@@ -24,6 +25,8 @@ const productionRevision = git('rev-parse', 'HEAD').trim();
 const sourceFiles = git('ls-files', '-z', '--', 'app', 'bridge', 'shared', 'scripts/qa', 'public', 'vis_bridge.js', 'index.html', 'package.json', 'pnpm-lock.yaml', 'vite.config.ts').split('\0').filter(Boolean);
 const sourceHashes = sourceSnapshot(repository, sourceFiles);
 const report = {
+  runId: randomUUID(),
+  startedAt: new Date().toISOString(),
   measurementScope: 'single-sample-production-app-and-bridge',
   productionRevision,
   productionSource: productionSource(repository, sourceHashes, productionRevision),
@@ -145,6 +148,18 @@ try {
     report.cleanupOrEvidenceErrors = failures.map(result => String(result.reason));
     process.exitCode = 1;
   }
-  writeJson(path.join(output, 'report.json'), report);
+  const finishedAt = new Date().toISOString();
+  const reportPath = path.join(output, 'report.json');
+  writeJson(reportPath, report);
+  writeJson(path.join(output, 'run-receipt.json'), {
+    runId: report.runId,
+    startedAt: report.startedAt,
+    finishedAt,
+    productionRevision,
+    count,
+    rttMs,
+    exitCode: process.exitCode ?? 0,
+    reportSha256: digest(await readFile(reportPath)),
+  });
   console.log(report.status, path.join(output, 'report.json'));
 }
