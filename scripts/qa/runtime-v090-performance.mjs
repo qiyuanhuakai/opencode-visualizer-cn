@@ -15,7 +15,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { productionSource, sourceSnapshot, validateSources } from './runtime-v090-evidence.mjs';
+import { performanceSourceFiles, productionSource, sourceSnapshot, validateSources } from './runtime-v090-evidence.mjs';
 
 import {
   createStack,
@@ -200,7 +200,7 @@ async function run() {
   const root = fileURLToPath(new URL('../..', import.meta.url));
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
   const productionRevision = git('rev-parse', 'HEAD').trim();
-  const sourceFiles = git('ls-files', '-z', '--', 'app/runtime', 'app/dev/runtime-v090', 'shared/runtime', 'scripts/qa', 'package.json', 'pnpm-lock.yaml', 'vite.config.ts').split('\0').filter(Boolean);
+  const sourceFiles = performanceSourceFiles(root);
   const sourceHashes = sourceSnapshot(root, sourceFiles);
   const sourceIdentity = productionSource(root, sourceHashes, productionRevision);
   // --out is the profile report JSON file; supporting evidence (lifecycle, draft

@@ -53,7 +53,8 @@ async function execute(selector, root) {
   const invocation = [process.execPath, fileURLToPath(import.meta.url), ...process.argv.slice(2)];
   const temporaryRoot = await mkdtemp(path.join(tmpdir(), `vis-runtime-qa-owned-${process.pid}-`));
   try {
-  const receipt = await captureProcess(invocation, { root, log: `${selector.out}.log`, env: { ...process.env, VIS_RUNTIME_QA_WORKER: '1', VIS_RUNTIME_QA_RESULT: rawFile, VIS_RUNTIME_QA_TEMP: temporaryRoot } });
+  const timeoutMs = registered?.workerTimeoutMs;
+  const receipt = await captureProcess(invocation, { root, log: `${selector.out}.log`, timeoutMs, env: { ...process.env, VIS_RUNTIME_QA_WORKER: '1', VIS_RUNTIME_QA_RESULT: rawFile, VIS_RUNTIME_QA_TEMP: temporaryRoot } });
   const receiptPath = `${selector.out}.receipt.json`;
   writeJson(receiptPath, { ...receipt, selector, invocationCwd: process.cwd(), sourceHashes: sources, productionRevision, productionSource: sourceIdentity, reportSha256: existsSync(rawFile) ? digest(readFileSync(rawFile)) : null });
   assert(receipt.exitCode === 0 && receipt.signal === null && !receipt.interrupted, `scenario process failed; see ${receipt.log}`);

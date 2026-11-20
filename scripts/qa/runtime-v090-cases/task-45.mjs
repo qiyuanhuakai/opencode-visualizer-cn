@@ -73,6 +73,8 @@ import { artifact, sourceSnapshot } from '../runtime-v090-evidence.mjs';
 import { captureProcess } from '../runtime-v090-process.mjs';
 
 const TASK = 45;
+// The packaged lane builds and exercises the SEA, installer and Electron artifacts.
+export const workerTimeoutMs = 600_000;
 const DRIVER = 'scripts/qa/runtime-v090-packaged.mjs';
 
 // The roster the plan's own QA text names for each lane, frozen so a dropped or renamed leg fails.
@@ -205,13 +207,13 @@ export async function run(context) {
   const invocation = [process.execPath, DRIVER, '--case', context.case, '--out-dir', outDir];
   const log = path.join(runDir, 'packaged-driver.log');
   record('invocation', { argv: invocation, cwd: context.root, outDir });
-  const receipt = await captureProcess(invocation, { root: context.root, log, timeoutMs: 3600000 });
+  const receipt = await captureProcess(invocation, { root: context.root, log, timeoutMs: workerTimeoutMs - 30_000 });
   const driverLog = existsSync(log) ? readFileSync(log, 'utf8') : '';
-  artifacts.push(artifact(log, 'packaged-driver-log'));
   record('receipt', { exitCode: receipt.exitCode, signal: receipt.signal, interrupted: receipt.interrupted, startedAt: receipt.startedAt, finishedAt: receipt.finishedAt, logBytes: driverLog.length });
 
+  if (driverLog.length > 0) artifacts.push(artifact(log, 'packaged-driver-log'));
   const manifestPath = path.join(outDir, `${context.case}.json`);
-  assert(existsSync(manifestPath), `the packaged driver wrote no ${context.case}.json manifest; see ${log}`);
+  assert(existsSync(manifestPath), `the packaged driver wrote no ${context.case}.json manifest (exit ${receipt.exitCode}, signal ${receipt.signal}, interrupted ${receipt.interrupted}); see ${log}`);
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   artifacts.push(artifact(manifestPath, 'packaged-driver-manifest'));
   record('manifest', { schemaVersion: manifest.schemaVersion, scenario: manifest.scenario, status: manifest.status, scenarios: manifest.scenarios.length, assertionCount: manifest.assertionCount, host: manifest.host });

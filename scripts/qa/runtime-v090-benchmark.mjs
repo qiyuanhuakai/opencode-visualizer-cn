@@ -653,9 +653,18 @@ export async function createStack({ out, log = () => {} }) {
   const saveLifecycle = () => writeFile(path.join(out, 'lifecycle.json'), json(lifecycle));
   await saveLifecycle();
 
-  let vite; let server; let browser; let context; let page; let cdp;
+  let vite; let httpServer; let server; let browser; let context; let page; let cdp;
+  async function closeVite() {
+    try {
+      if (httpServer?.listening) {
+        await new Promise((resolve, reject) => httpServer.close(error => error ? reject(error) : resolve()));
+      }
+    } finally {
+      await vite?.close();
+    }
+  }
   try {
-    vite = await createServer({ configFile: false, appType: 'custom', root, logLevel: 'error', server: { host: '127.0.0.1', port: 0, strictPort: true } });
+    vite = await createServer({ configFile: false, appType: 'custom', root, logLevel: 'error', server: { middlewareMode: true, hmr: false } });
     vite.middlewares.use('/perf', (request, response, next) => {
       const requestUrl = request.url ?? '/';
       if (requestUrl === '/' || requestUrl === '') {
@@ -670,8 +679,17 @@ export async function createStack({ out, log = () => {} }) {
       }
       next();
     });
-    await vite.listen();
-    const origin = `http://127.0.0.1:${vite.httpServer.address().port}`;
+    // Bind once on loopback so the kernel reserves the ephemeral port for
+    // the actual fixture server throughout its lifetime.
+    httpServer = createHttpServer(vite.middlewares);
+    await new Promise((resolve, reject) => {
+      httpServer.once('error', reject);
+      httpServer.listen(0, '127.0.0.1', () => {
+        httpServer.off('error', reject);
+        resolve();
+      });
+    });
+    const origin = `http://127.0.0.1:${httpServer.address().port}`;
     lifecycle.ports.push(new URL(origin).port);
     await saveLifecycle();
     log('vite-listening', { origin });
@@ -710,7 +728,7 @@ export async function createStack({ out, log = () => {} }) {
         if (context) { await context.close().catch(() => {}); lifecycle.completed.push('close context'); }
         if (browser) { await browser.close().catch(() => {}); lifecycle.completed.push('close browser connection'); }
         if (server) { await server.close().catch(() => {}); lifecycle.completed.push('close browser server'); }
-        if (vite) { await vite.close().catch(() => {}); lifecycle.completed.push('close Vite'); }
+        if (vite) { await closeVite(); lifecycle.completed.push('close Vite'); }
         await saveLifecycle();
       },
     };
@@ -719,7 +737,7 @@ export async function createStack({ out, log = () => {} }) {
     if (context) await context.close().catch(() => {});
     if (browser) await browser.close().catch(() => {});
     if (server) await server.close().catch(() => {});
-    if (vite) await vite.close().catch(() => {});
+    if (vite) await closeVite().catch(() => {});
     await saveLifecycle();
     throw error;
   }

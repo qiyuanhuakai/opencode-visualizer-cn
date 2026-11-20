@@ -355,7 +355,10 @@ function audit({ root, evidenceRoot, planPath }) {
       add('DOWNSTREAM-MISSING', 'blocking', 'task 48 Happy QA', `downstream rerun report ${file} missing`);
       continue;
     }
-    if (report.status !== 'passed') add('DOWNSTREAM-STATUS', 'blocking', 'task 48 Happy QA', `${file} did not pass`);
+    // Task 45's raw recorder is deliberately verdict-free. Its wrapper regrades
+    // the assertions and artifacts, then binds this exact manifest by SHA-256.
+    const expectedStatus = artifactKind === 'packaged-driver-manifest' ? 'recorded' : 'passed';
+    if (report.status !== expectedStatus) add('DOWNSTREAM-STATUS', 'blocking', 'task 48 Happy QA', `${file} has status ${report.status}; expected ${expectedStatus}`);
     if (row.scenarios !== scenarios) add('DOWNSTREAM-COUNT', 'blocking', 'task 48 Happy QA', `${file} scenarios ${row.scenarios} != manifest ${scenarios}`);
     const receiptName = artifactKind ? `task-${task}-${lane}.json` : file;
     const receipt = artifactKind ? readJson(path.join(downstreamDir, receiptName)) : report;
@@ -381,12 +384,39 @@ function audit({ root, evidenceRoot, planPath }) {
     }
   }
 
-  // -- 6. task-19 correction bytes in the final tree ---------------------------
+  // -- 6. task-19 historical correction and current behavior --------------------
+  const delivery = '49b5b8b620b7cc980a69459c66d9def5c62486a4';
   const task19 = Object.entries(TASK19_DELIVERY).map(([rel, expected]) => {
-    const p = path.join(root, rel);
-    return { file: rel, match: existsSync(p) && sha256(p) === expected };
+    try {
+      const bytes = execFileSync('git', ['show', `${delivery}:${rel}`], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+      return { file: rel, match: createHash('sha256').update(bytes).digest('hex') === expected };
+    } catch {
+      return { file: rel, match: false };
+    }
   });
-  for (const row of task19) if (!row.match) add('TASK19-CORRECTION-BYTES', 'blocking', 'plan lines 404-405', `${row.file} does not match the delivered correction bytes`);
+  try {
+    git(root, 'cat-file', '-e', `${delivery}^{commit}`);
+    git(root, 'merge-base', '--is-ancestor', delivery, revision);
+  } catch (error) {
+    const reason = error.status === 1
+      ? 'the registered correction is not an ancestor'
+      : 'the candidate Git history could not verify the registered correction';
+    add('TASK19-CORRECTION-ANCESTRY', 'blocking', 'Task 19 registered corrections', reason);
+  }
+  for (const row of task19) if (!row.match) add('TASK19-CORRECTION-BYTES', 'blocking', 'Task 19 registered corrections', `${row.file} does not match the historical delivery blob`);
+  for (const lane of ['happy', 'failure']) {
+    const file = path.join(evidenceRoot, 'task-19', `${lane}.json`);
+    try {
+      const receipt = readJson(file);
+      assert(receipt, 'candidate receipt missing');
+      validateEvidence(receipt, root);
+      assert.equal(receipt.productionRevision, revision, 'candidate revision mismatch');
+      assert.equal(receipt.selector.task, 19, 'task mismatch');
+      assert.equal(receipt.selector.case, lane, 'case mismatch');
+    } catch (error) {
+      add('TASK19-CANDIDATE-RECEIPT', 'blocking', 'Task 19 registered invocations', `${lane}: ${error.message}`);
+    }
+  }
 
   // -- 7. contract surfaces + version ------------------------------------------
   const missingSurfaces = SURFACES.filter((rel) => !existsSync(path.join(root, rel)));
@@ -445,13 +475,13 @@ export async function run(context) {
           { name: 'every task happy.json binds a head that contains all of its blockers\' delivery heads — the task-20 evidence was re-captured at a head containing blocker 19 delivery head 49b5b8b62, so the evidence-binding defect the first pass recorded is closed and zero edges violate it', passed: evidenceBindingViolations.length === 0, observed: { bindings: evidenceBindingViolations.map((f) => f.detail) }, expected: { bindings: [] } },
           { name: 'frozen final digest matches the current tree — the digest was re-frozen over the final tree after every product change landed, so the post-freeze staleness the first pass recorded is closed (a stale digest is more dangerous than a missing one, so this row must be a MATCH, never a tolerated mismatch)', passed: result.checks.digestState === 'match', observed: { digestState: result.checks.digestState, digestObserved: result.checks.digestObserved }, expected: { digestState: 'match', digestObserved: result.checks.digestObserved } },
           { name: 'all nine downstream reports pass and bind to the candidate through the expected task and case, including packaged and live artifacts', passed: downstreamGaps.length === 0, observed: { reports: result.checks.downstream.map((d) => `${d.file}:${d.scenarios}/${d.expected}`), gaps: downstreamGaps.map((f) => `${f.id}: ${f.detail}`) }, expected: { reports: result.checks.downstream.map((d) => `${d.file}:${d.expected}/${d.expected}`), gaps: [] } },
-          { name: 'task-19 correction bytes (commit 49b5b8b62, native Windows CI green) are byte-identical in the final tree', passed: result.checks.task19.every((r) => r.match), observed: { matches: result.checks.task19.filter((r) => r.match).length, total: result.checks.task19.length }, expected: { matches: result.checks.task19.length, total: result.checks.task19.length } },
+          { name: 'task-19 historical correction bytes match the recorded delivery commit', passed: result.checks.task19.every((r) => r.match), observed: { matches: result.checks.task19.filter((r) => r.match).length, total: result.checks.task19.length }, expected: { matches: result.checks.task19.length, total: result.checks.task19.length } },
           { name: 'contract 1-16 delivery surfaces present and package version is 0.9.0-alpha.1', passed: result.checks.missingSurfaces.length === 0 && result.checks.packageVersion === '0.9.0-alpha.1', observed: { missingSurfaces: result.checks.missingSurfaces, packageVersion: result.checks.packageVersion }, expected: { missingSurfaces: [], packageVersion: '0.9.0-alpha.1' } },
           { name: 'every Wave-9 integration row 49-56 carries its lane evidence — the task-49-53 App.vue integration DoneClaim (rows 49/51/52/53), the task-50 seeding-and-scoring DoneClaim, the task-54 selector/verify-module DoneClaim, the F2 DoneClaim for row 55 and the task-56 ledger/re-freeze DoneClaim each exist and bind a real head on the final delivery line', passed: wave9Gaps.length === 0 && wave9Bound.length === 8, observed: { boundRows: wave9Bound, gaps: wave9Gaps.map((f) => f.detail) }, expected: { boundRows: [49, 50, 51, 52, 53, 54, 55, 56], gaps: [] } },
         ],
       }],
       artifacts: [
-        ...['final/revision-manifest.json', 'task-48-gate/DoneClaim.json'].map((file) => path.join(evidenceRoot, file)).filter(existsSync).map((file) => artifact(file, path.basename(file, '.json'))),
+        ...['final/revision-manifest.json', 'task-48-gate/DoneClaim.json', 'task-19/happy.json', 'task-19/failure.json'].map((file) => path.join(evidenceRoot, file)).filter(existsSync).map((file) => artifact(file, path.basename(file, '.json'))),
       ],
       versions: { audit: 'F1-plan-compliance', node: process.version },
     };

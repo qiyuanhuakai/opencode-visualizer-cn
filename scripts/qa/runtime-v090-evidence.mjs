@@ -5,6 +5,12 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 export const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+export function performanceSourceFiles(root) {
+  return execFileSync('git', [
+    'ls-files', '-z', '--', 'app/runtime', 'app/dev/runtime-v090',
+    'shared/runtime', 'scripts/qa', 'package.json', 'pnpm-lock.yaml', 'vite.config.ts',
+  ], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean).sort();
+}
 export function sourceSnapshot(root, files) {
   assert(Array.isArray(files) && files.length > 0, 'source inventory required');
   return Object.fromEntries(files.map((file) => {
