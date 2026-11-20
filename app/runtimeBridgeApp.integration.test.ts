@@ -247,6 +247,56 @@ it('publishes returned config in the Bridge provider panel without changing the 
   expect(fixture.historyOpens.at(-1)?.nativeSessionId).toBe('session-a');
 }, 15000);
 
+it('keeps a provider write receipt across a same-Agent manifest refresh and a delayed config read', async () => {
+  const writeStarted = Promise.withResolvers<void>(), finishWrite = Promise.withResolvers<void>();
+  const readStarted = Promise.withResolvers<void>(), finishRead = Promise.withResolvers<void>();
+  let holdRead = false;
+  const fixture = await mountRuntimeApp([], {
+    editableProvider: true,
+    beforeProviderWrite: async () => { writeStarted.resolve(); await finishWrite.promise; },
+    beforeProviderRead: async () => { if (holdRead) { readStarted.resolve(); await finishRead.promise; } },
+  });
+  try {
+    await fixture.connect();
+    await fixture.select('Session A');
+    await vi.waitFor(() => expect(fixture.historyOpens.at(-1)?.nativeSessionId).toBe('session-a'));
+    fixture.element.querySelector<HTMLButtonElement>('.provider-manager-button')!.click();
+    const toggle = await vi.waitFor(() => {
+      const input = fixture.element.querySelector<HTMLInputElement>('.provider-list-row .toggle-input');
+      expect(input?.checked).toBe(false);
+      return input!;
+    });
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    toggle.checked = false;
+    await writeStarted.promise;
+    holdRead = true;
+    const beforeRefresh = fixture.frames.length;
+    await fixture.select('Session B');
+    await readStarted.promise;
+    const refreshRequest = fixture.frames.slice(beforeRefresh).find(frame => frame.direction === 'send'
+      && (frame.value as { params?: { operation?: string } }).params?.operation === 'getGlobalConfig');
+    const refreshId = (refreshRequest?.value as { id?: string } | undefined)?.id;
+    expect(refreshId).toBeTruthy();
+    finishWrite.resolve();
+    const assertReceipt = () => {
+      expect(fixture.element.querySelector('.provider-manager-feedback.is-success')).toBeTruthy();
+      expect(fixture.element.querySelector<HTMLInputElement>('.provider-list-row .toggle-input')?.checked).toBe(true);
+    };
+    await vi.waitFor(assertReceipt);
+    finishRead.resolve();
+    await vi.waitFor(() => {
+      expect(fixture.frames.some(frame => frame.direction === 'receive'
+        && (frame.value as { id?: string; ok?: boolean }).id === refreshId
+        && (frame.value as { ok?: boolean }).ok === true)).toBe(true);
+    });
+    assertReceipt();
+  } finally {
+    finishWrite.resolve();
+    finishRead.resolve();
+  }
+}, 15000);
+
 it('places archived ACP protocol sessions in the unified archived section', async () => {
   const fixture = await mountRuntimeApp([], { archivedAcpSession: true });
   await fixture.connect();
