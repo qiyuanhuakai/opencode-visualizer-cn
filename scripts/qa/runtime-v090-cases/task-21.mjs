@@ -17,9 +17,10 @@
 // a summary-snapshot failure and session deletions so every scenario has a
 // deterministic numeric observable.
 import assert from 'node:assert/strict';
+import { createServer as createHttpServer } from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createServer } from 'vite';
 import vue from '@vitejs/plugin-vue';
@@ -27,7 +28,7 @@ import { chromium } from 'playwright';
 import { artifact, sourceSnapshot, writeJson } from '../runtime-v090-evidence.mjs';
 import { createFixture, alive, until, assertPortReleased } from './task-21-fixture.mjs';
 
-const browserSkill = '/home/qiyuaner/.codex/plugins/cache/sisyphuslabs/omo/5.1.27/skills/browser/scripts/omowright.mjs';
+import { loadBrowserKernel } from '../runtime-v090-browser-kernel.mjs';
 const SESSION_COUNT = 10000;
 const PAGE = 200;
 const DEEP_INDEX = 9500;
@@ -76,18 +77,37 @@ export async function run(context) {
   const record = (name, value) => { observations[name] = normalize(value); persist(); };
   const fixture = await createFixture({ ...context, runDir, evidenceDir });
   const sourceBefore = sourceSnapshot(context.root, sourceFiles);
+  const statusBefore = execFileSync('git', ['status', '--porcelain'], { cwd: context.root, encoding: 'utf8' });
   let browser; let page; let vite;
   try {
     fixture.register({ kind: 'Vite-planned', host: '127.0.0.1', teardown: 'server.close then exclusive port rebind' });
-    vite = await createServer({ configFile: false, appType: 'custom', root: context.root, plugins: [vue()], server: { host: '127.0.0.1', port: 0, strictPort: false }, logLevel: 'error' });
+    const http = createHttpServer();
+    vite = await createServer({ configFile: false, appType: 'custom', root: context.root, plugins: [vue()],
+      server: { middlewareMode: true, hmr: false, ws: { server: http } }, logLevel: 'error' });
+    http.on('request', vite.middlewares);
+    fixture.own('Vite-middleware', () => vite.close());
     vite.middlewares.use('/qa21', (_request, response) => { response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(PAGE_HTML); });
-    await vite.listen();
-    const port = vite.httpServer.address().port;
+    let port;
+    fixture.own('Vite-server', async () => {
+      if (!http.listening) return { listening: false };
+      const closed = new Promise((resolve, reject) => http.close(error => error ? reject(error) : resolve()));
+      http.closeAllConnections();
+      await closed;
+      await assertPortReleased(port);
+      return { port, exclusiveRebind: true };
+    });
+    await new Promise((resolve, reject) => {
+      http.once('error', reject);
+      http.listen(0, '127.0.0.1', () => {
+        http.removeListener('error', reject);
+        resolve();
+      });
+    });
+    port = http.address().port;
     fixture.register({ kind: 'Vite-created', port });
-    fixture.own('Vite-server', async () => { await vite.close(); await assertPortReleased(port); return { port, exclusiveRebind: true }; });
     const pageUrl = `http://127.0.0.1:${port}/qa21/`;
     record('pageUrl', pageUrl);
-    const { omowright } = await (await import(browserSkill)).loadOmowright();
+    const { omowright } = await loadBrowserKernel();
     const profileRoot = path.join(fixture.root, 'chromium-profile');
     fixture.register({ kind: 'Chromium-planned', executable: chromium.executablePath(), profile: profileRoot, teardown: 'owned browser.close; process exit; private root removal' });
     browser = await omowright.connectPipe({ browserPath: chromium.executablePath(), browserArgs: ['--headless', '--no-sandbox', '--disable-gpu', '--no-first-run', '--enable-precise-memory-info', '--js-flags=--expose-gc', `--user-data-dir=${profileRoot}`], storageRoot: runDir, commandTimeoutMs: 180000 });
@@ -205,7 +225,7 @@ export async function run(context) {
       await page.cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] }, await page.resolveSessionId());
       await evaluate(() => window.task21.keyboard([]));
       const filename = path.join(runDir, `ui-${scheme}-${width}.png`);
-      await page.screenshot({ path: filename, fullPage: true });
+      await writeFile(filename, await page.screenshot({ fullPage: true }));
       artifacts.push(artifact(filename, 'screenshot'));
       const measured = await evaluate(() => window.task21.state());
       record(`render-${scheme}-${width}`, { badges: [...new Set(measured.dom.harnessBadges)].sort(), horizontalOverflow: measured.dom.horizontalOverflow, domRows: measured.dom.domRows, expectedVirtualRows: measured.dom.expectedVirtualRows, worstLabelOverflow: measured.dom.worstLabelOverflow, worstRowOverflow: measured.dom.worstRowOverflow });
@@ -220,7 +240,7 @@ export async function run(context) {
     await omowright.emulate(page, { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false, hasTouch: false });
     await page.cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] }, await page.resolveSessionId());
     const themed = path.join(runDir, 'ui-imported-theme-1440.png');
-    await page.screenshot({ path: themed, fullPage: true });
+    await writeFile(themed, await page.screenshot({ fullPage: true }));
     artifacts.push(artifact(themed, 'screenshot'));
     const themedState = await evaluate(() => window.task21.state());
     record('importedThemeRender', { badges: [...new Set(themedState.dom.harnessBadges)].sort(), horizontalOverflow: themedState.dom.horizontalOverflow });
@@ -230,6 +250,8 @@ export async function run(context) {
 
     if (context.case === 'failure') {
       const failed = await evaluate(() => window.task21.failAllSources());
+      await evaluate(() => document.querySelector('.discovery-status-summary[aria-expanded="false"]')?.click());
+      await until(() => evaluate(() => document.querySelectorAll('[data-testid="source-retry"]').length === 5), 'expanded source retry controls');
       const failedState = await evaluate(() => window.task21.state());
       record('allSourcesFailed', { sources: failed, retryAffordances: failedState.dom.retryAffordances, viewStatus: failedState.viewStatus });
       check('when every source fails, each source shows an error affordance and a retry control', {
@@ -287,12 +309,12 @@ export async function run(context) {
     }
 
     const sourceAfter = sourceSnapshot(context.root, sourceFiles);
-    check('dirty worktree production sources are unchanged by the registered case', { status: execFileSync('git', ['status', '--porcelain'], { cwd: context.root, encoding: 'utf8' }).length > 0, unchanged: JSON.stringify(sourceAfter) === JSON.stringify(sourceBefore) }, { status: true, unchanged: true });
+    check('worktree status and production sources are unchanged by the registered case', { status: execFileSync('git', ['status', '--porcelain'], { cwd: context.root, encoding: 'utf8' }) === statusBefore, unchanged: JSON.stringify(sourceAfter) === JSON.stringify(sourceBefore) }, { status: true, unchanged: true });
   } catch (error) {
     proof.failure = { message: error.message, stack: error.stack };
     if (page) {
       proof.failureDom = await page.evaluate(() => ({ url: location.href, body: document.body.innerText.slice(0, 2000), errors: window.__task21Errors ?? [], task21: Boolean(window.task21) })).catch((value) => ({ unavailable: String(value) }));
-      await page.screenshot({ path: path.join(runDir, 'failure.png') }).catch(() => undefined);
+      await page.screenshot().then(bytes => writeFile(path.join(runDir, 'failure.png'), bytes)).catch(() => undefined);
     }
     persist();
     throw error;
