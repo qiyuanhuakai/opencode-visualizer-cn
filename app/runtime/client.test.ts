@@ -144,6 +144,27 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     socket.reply(released, { released: true });
     await expect(client.attach(other)).rejects.toMatchObject({ code: 'unauthorized' });
   });
+  it.each([false, true])('returns parallel plain inspections without rolling back grants (latest replies first: %s)', async latestFirst => {
+    const { client, socket } = await fixture();
+    const earlier = client.inspect();
+    const earlierResult = earlier.then(value => ({ value }), error => ({ error }));
+    const earlierRequest = await socket.next();
+    const newer = client.inspect();
+    const newerRequest = await socket.next();
+    const restricted = { ...inspection, targets: [grant()] };
+    if (latestFirst) {
+      socket.reply(newerRequest, restricted);
+      await expect(newer).resolves.toEqual(restricted);
+    }
+    socket.reply(earlierRequest, inspection);
+    const result = await earlierResult;
+    if (!latestFirst) {
+      socket.reply(newerRequest, restricted);
+      await expect(newer).resolves.toEqual(restricted);
+    }
+    expect(result).toEqual({ value: inspection });
+    await expect(client.attach(other)).rejects.toMatchObject({ code: 'unauthorized' });
+  });
   it('uses a refreshed source grant after startup and enforces later permission revocation on the same binding', async () => {
     const { client, socket } = await fixture();
     const query = { harnessInstanceId: harness, operation: 'listProviders', args: {} };
