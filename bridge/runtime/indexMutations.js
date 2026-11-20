@@ -68,7 +68,7 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
     throw new StoreError('conflict', 'index_contention');
   }
   return {
-    async apply(scan, items, { firstPage = false } = {}) {
+    async apply(scan, items, { firstPage = false, onBatchCommitted } = {}) {
       if (!Array.isArray(items) || items.length > 200) throw new StoreError('invalid_request', 'index_page_budget');
       const summaries = new Map();
       async function flush() {
@@ -107,7 +107,9 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
         const chunk = matching.slice(offset, offset + (firstPage && offset === 0 ? 4 : 20));
         const resolved = await workspaceBatch(scan, chunk);
         for (const summary of chunk) summaries.set(encodeSessionKey(summary.session), { summary, workspaceKey: resolved.get(summary.directory) });
-        applied += await flush();
+        const committed = await flush();
+        applied += committed;
+        onBatchCommitted?.(committed);
         summaries.clear();
         offset += chunk.length;
       }

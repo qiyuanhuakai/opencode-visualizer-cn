@@ -52,7 +52,10 @@ export function createIndexDiscovery({ store, scheduler, mutations }) {
                 const page = nativePage(source.identity, raw);
                 if (page.authority && !sameAuthority(authority, page.authority)) throw new StoreError('reconcile_required', 'index_page_generation');
                 const fencedScan = { ...scan, assertCurrent() { lease.assertCurrent(); assertCurrent(); } };
-                count += await mutations.apply(fencedScan, page.items, { firstPage: cursor === null });
+                await mutations.apply(fencedScan, page.items, {
+                  firstPage: cursor === null,
+                  onBatchCommitted: committed => { count += committed; },
+                });
                 return page;
               };
               state.pending = action;

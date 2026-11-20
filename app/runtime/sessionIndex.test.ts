@@ -106,6 +106,18 @@ describe('progressive native summary index', () => {
       await resume.promise;
     });
   });
+  it('reports the committed first batch when a later workspace in the same native page fails', async () => {
+    const items = Array.from({ length: 5 }, (_, index) => row(String(index), `/repo-${index}`));
+    await fixture(async () => ({ items, cursor: null, completeness: 'complete' }), async ({ index }) => {
+      const source = await index.attach({ harnessInstanceId, authority: () => ({ epoch, processGeneration: 1 }), subscribe: false });
+      expect(await source.discover()).toMatchObject({ status: 'partial', count: 4 });
+      expect((await index.page()).items).toHaveLength(4);
+      expect((await index.topology({ collection: 'harnesses' })).items[0]?.value)
+        .toMatchObject({ indexDiscovery: [{ status: 'partial', count: 4 }] });
+    }, 'codex', async directory => {
+      if (directory === '/repo-4') throw new Error('Directory disappeared during indexing');
+    });
+  });
   it('keeps ACP partial-null cursor honest and never deletes missing cached summaries', async () => {
     await fixture(async () => ({ items: [], cursor: null, status: 'partial', reason: 'native_session_list_bounded', epoch, processGeneration: 1 }), async ({ index, store }) => {
       const key = encodeSessionKey(session('cached'));
