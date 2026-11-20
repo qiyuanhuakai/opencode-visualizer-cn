@@ -261,7 +261,7 @@ describe('runtime common-watermark snapshots', () => {
       await rm(stateDirectory, { recursive: true, force: true });
     }
   });
-  it('discards only optional prior views to retry a normal write at the SQLite space limit', async () => {
+  it.each([1, 2])('recovers writes at the SQLite space limit with %s conflicting prior views', async count => {
     const stateDirectory = await mkdtemp(path.join(tmpdir(), 'runtime-prior-space-'));
     const options = { stateDirectory, environmentId, ownerId, epoch };
     const original = createRuntimeStore(options);
@@ -282,6 +282,7 @@ describe('runtime common-watermark snapshots', () => {
       capped = createRuntimeStore({ ...options, storageBudgetBytes: budget });
       await capped.ready;
       const view = await capped.snapshot({ collection: 'session_summaries' });
+      const second = count === 2 ? await capped.snapshot({ collection: 'session_summaries' }) : undefined;
       const other = await capped.snapshot({ collection: 'workspaces' });
       const mutation = { intentId: 'space-delete', changes: [{ collection: 'session_summaries' as const, key: 'large', value: null }] };
       const receipt = await capped.mutate(mutation);
@@ -289,6 +290,7 @@ describe('runtime common-watermark snapshots', () => {
       expect(await capped.mutate(mutation)).toEqual(receipt);
       expect(await capped.get({ collection: 'session_summaries', key: 'large' })).toMatchObject({ value: null });
       await expect(capped.snapshot({ collection: 'session_summaries', token: view.token })).rejects.toMatchObject({ code: 'replay_required' });
+      if (second) await expect(capped.snapshot({ collection: 'session_summaries', token: second.token })).rejects.toMatchObject({ code: 'replay_required' });
       expect((await capped.snapshot({ collection: 'workspaces', token: other.token })).items.map(row => row.key)).toEqual(['untouched']);
     } finally {
       await original.close();

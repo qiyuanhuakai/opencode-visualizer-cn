@@ -41,18 +41,19 @@ function initialize(input) {
   return { ...queries.meta(), owner: undefined, fence, epoch: options.epoch, locality, backupPath, pid: process.pid };
 }
 function mutate(params) {
-  const retainedTokens = new Set();
-  try {
-    return writeMutation(params, retainedTokens);
-  } catch (error) {
-    if (retainedTokens.size === 0 || storageError(error).reason !== 'disk_full') throw error;
-    // The mutation rolled back. Make only its optional prior views replayable,
-    // then retry the original intent once without those retention obligations.
-    transaction(db, () => {
-      assertOwner();
-      queries.discardPriorSnapshots(retainedTokens);
-    });
-    return writeMutation(params, new Set());
+  for (;;) {
+    const retainedTokens = new Set();
+    try {
+      return writeMutation(params, retainedTokens);
+    } catch (error) {
+      if (retainedTokens.size === 0 || storageError(error).reason !== 'disk_full') throw error;
+      // SQLite may fill before we reach the next view. Each retry drops at least
+      // one attempted view, and this synchronous request cannot admit new views.
+      transaction(db, () => {
+        assertOwner();
+        queries.discardPriorSnapshots(retainedTokens);
+      });
+    }
   }
 }
 function writeMutation(params, retainedTokens) {
