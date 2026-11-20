@@ -48,7 +48,7 @@ export function createEventObserver({ binding: input, after, isCurrent, onClose 
         wakeRead?.();
         if (normalBytes + controlBytes + binaryBytes > OBSERVER_LIMITS.bytes) recover('control_backpressure');
       }
-      if (recovery) return;
+      // Retain a bounded contiguous suffix while the consumer replays.
       if (normal.length >= OBSERVER_LIMITS.normalFrames || normalBytes + bytes > OBSERVER_LIMITS.normalBytes || normalBytes + controlBytes + binaryBytes + bytes > OBSERVER_LIMITS.bytes) { recover('observer_overflow'); return; }
       if (frame.payload?.collection === 'session_summaries' && normal.some((entry) => entry.scope === frame.scope)) { recover('summary_coalesced'); return; }
       normal.push({ encoded, bytes, scope: frame.scope, seq: frame.seq });
@@ -99,10 +99,19 @@ export function createEventObserver({ binding: input, after, isCurrent, onClose 
       check();
       if (!Number.isSafeInteger(afterReplay) || afterReplay < consumed) throw new StoreError('replay_required', 'observer_recovery_watermark');
       consumed = afterReplay;
-      recovery = afterReplay < through ? 'events_after_replay' : null;
+      const next = normal.findIndex(entry => entry.seq > afterReplay);
+      const coversTail = next >= 0 && normal[next].seq === afterReplay + 1 && normal.at(-1).seq === through;
+      if (coversTail) {
+        for (const entry of normal.splice(0, next)) normalBytes -= entry.bytes;
+      } else {
+        normal.length = 0;
+        normalBytes = 0;
+      }
+      recovery = afterReplay < through && !coversTail ? 'events_after_replay' : null;
       through = Math.max(through, afterReplay);
-      normal.length = control.length = 0;
-      normalBytes = controlBytes = 0;
+      control.length = 0;
+      controlBytes = 0;
+      wakeRead?.();
     },
     openChannel(channelId) { check(); protocol.openChannel(channelId); },
     sendBinary(input) {

@@ -56,10 +56,7 @@ describe('durable runtime event bus', () => {
       await store.mutate({ intentId: 'during-replay', changes: [{ collection: 'session_summaries', key: 'same-session', value: { title: 'new during replay' } }] });
       await bus.nudge();
       observer.resume(replay.through);
-      expect(observer.read()).toMatchObject({ kind: 'replay_required', after: 2, through: 3 });
-      const next = await bus.log.frame(binding, { after: replay.through });
-      expect(next.events.map(event => event.seq)).toEqual([3]);
-      observer.resume(next.through);
+      expect(observer.read()).toMatchObject({ kind: 'event', frame: { seq: 3, entityRevision: 3 } });
       expect(observer.read()).toBeNull();
       expect(() => observer.resume(2)).toThrow();
     });
