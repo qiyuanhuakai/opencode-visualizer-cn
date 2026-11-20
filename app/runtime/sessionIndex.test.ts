@@ -24,7 +24,7 @@ function manifest(kind: HarnessKind): HarnessManifest {
 }
 async function fixture(list: (context: HarnessContext) => Promise<unknown>, run: (value: {
   index: ReturnType<typeof createSessionIndex>; store: ReturnType<typeof createRuntimeStore>; directories: string[]; generation: { value: number };
-}) => Promise<void>, kind: HarnessKind = 'codex') {
+}) => Promise<void>, kind: HarnessKind = 'codex', beforeResolve?: (directory: string) => Promise<void>) {
   const directory = await mkdtemp(path.join(tmpdir(), 'runtime-index-'));
   const store = createRuntimeStore({ stateDirectory: directory, environmentId, ownerId: randomUUID(), epoch });
   const registry = createHarnessRegistry();
@@ -32,6 +32,7 @@ async function fixture(list: (context: HarnessContext) => Promise<unknown>, run:
   const directories: string[] = [];
   const generation = { value: 1 };
   const index = createSessionIndex({ store, registry, catalog: createWorkspaceCatalog({ store, git: { async probe() { throw new Error('background Git probe'); } } }), resolveWorkspace: async ({ directory: canonicalPath }) => {
+    await beforeResolve?.(canonicalPath);
     directories.push(canonicalPath);
     return { environmentId, canonicalPath, pathPolicy: { platform: 'posix', caseSensitive: true, volumeId: 'test-volume' } };
   } });
@@ -84,6 +85,37 @@ describe('progressive native summary index', () => {
         expect(directories).toEqual(['/repo', '/new-directory']);
         expect((await store.get({ collection: 'session_summaries', key: encodeSessionKey(session('second')) }))?.value).toMatchObject({ title: 'second', directory: '/new-directory' });
       } finally { release(); await work; }
+    });
+  });
+  it('publishes the first four summaries while a later root in the same native page is unresolved', async () => {
+    const blocked = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const items = Array.from({ length: 5 }, (_, index) => row(String(index), `/repo-${index}`));
+    await fixture(async () => ({ items, cursor: null, completeness: 'complete' }), async ({ index }) => {
+      const source = await index.attach({ harnessInstanceId, authority: () => ({ epoch, processGeneration: 1 }), subscribe: false });
+      const work = source.discover();
+      try {
+        await blocked.promise;
+        expect((await index.page()).items).toHaveLength(4);
+        expect((await index.topology({ collection: 'workspaces' })).items).toHaveLength(4);
+      } finally { resume.resolve(); await work; }
+      expect(await work).toMatchObject({ status: 'complete', count: 5 });
+    }, 'codex', async directory => {
+      if (directory !== '/repo-4') return;
+      blocked.resolve();
+      await resume.promise;
+    });
+  });
+  it('reports the committed first batch when a later workspace in the same native page fails', async () => {
+    const items = Array.from({ length: 5 }, (_, index) => row(String(index), `/repo-${index}`));
+    await fixture(async () => ({ items, cursor: null, completeness: 'complete' }), async ({ index }) => {
+      const source = await index.attach({ harnessInstanceId, authority: () => ({ epoch, processGeneration: 1 }), subscribe: false });
+      expect(await source.discover()).toMatchObject({ status: 'partial', count: 4 });
+      expect((await index.page()).items).toHaveLength(4);
+      expect((await index.topology({ collection: 'harnesses' })).items[0]?.value)
+        .toMatchObject({ indexDiscovery: [{ status: 'partial', count: 4 }] });
+    }, 'codex', async directory => {
+      if (directory === '/repo-4') throw new Error('Directory disappeared during indexing');
     });
   });
   it('keeps ACP partial-null cursor honest and never deletes missing cached summaries', async () => {

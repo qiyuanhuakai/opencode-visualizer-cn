@@ -1,4 +1,5 @@
 import { chromium } from 'playwright';
+import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { writeFile, mkdir, readFile, rm } from 'node:fs/promises';
@@ -61,19 +62,28 @@ export async function openBrowser(output, userDataDirectory = `${output}-profile
   await page.setViewportSize({ width: 1440, height: 1000 });
   const cdp = await context.newCDPSession(page);
   await cdp.send('Network.enable');
-  const wire = { frames: 0, bytes: 0, methods: {}, historySessions: [], errors: [], timeline: [], startup: {}, last: null };
+  const wire = { frames: 0, bytes: 0, methods: {}, historySessions: [], errors: [], timeline: [], startup: {}, titleEvent: null, last: null };
   const requests = new Map();
-  cdp.on('Network.webSocketFrameSent', ({ requestId, response }) => {
+  cdp.on('Network.requestWillBeSent', ({ request, timestamp }) => {
+    const url = new URL(request.url);
+    const title = url.pathname === '/qa/event' ? url.searchParams.get('title') : null;
+    if (title?.startsWith('Vis measured native title update ')) wire.titleEvent = { title, requestAt: timestamp, observerFrames: [] };
+  });
+  cdp.on('Network.webSocketFrameSent', ({ requestId, response, timestamp }) => {
     try { const parsed = JSON.parse(response.payloadData); if (parsed.method) { wire.methods[parsed.method] = (wire.methods[parsed.method] ?? 0) + 1; requests.set(`${requestId}:${parsed.id}`, parsed.method);
       if (parsed.method === 'runtime.history.open' && parsed.params?.session && wire.historySessions.length < 64) {
         wire.historySessions.push(parsed.params.session);
+      }
+      const trace = wire.titleEvent;
+      if (trace && trace.canonicalMs === undefined && trace.observerFrames.length < 32 && parsed.method === 'runtime.observer.read') {
+        trace.observerFrames.push({ direction: 'sent', id: parsed.id, ms: (timestamp - trace.requestAt) * 1000 });
       }
       const startup = wire.startup[requestId];
       if (startup?.length < 20 && ['runtime.inspect', 'runtime.snapshot'].includes(parsed.method)) {
         startup.push({ at: Date.now(), sent: parsed.method, collection: parsed.params?.collection });
       } } } catch {}
   });
-  cdp.on('Network.webSocketFrameReceived', ({ requestId, response }) => {
+  cdp.on('Network.webSocketFrameReceived', ({ requestId, response, timestamp }) => {
     wire.frames++;
     wire.bytes += Buffer.byteLength(response.payloadData);
     const parsed = (() => { try { return JSON.parse(response.payloadData); } catch { return null; } })();
@@ -89,6 +99,16 @@ export async function openBrowser(output, userDataDirectory = `${output}-profile
     if (wire.timeline.length < 100 && ['runtime.inspect', 'runtime.snapshot'].includes(method)) wire.timeline.push({ at: Date.now(), method, collection: parsed.result?.items?.[0]?.collection, count: parsed.result?.items?.length, watermark: parsed.result?.watermark });
     const canonical = method === 'runtime.entity.resolve' ? parsed.result
       : method === 'runtime.observer.read' ? parsed.result?.canonical : undefined;
+    const trace = wire.titleEvent;
+    if (trace && trace.canonicalMs === undefined && trace.observerFrames.length < 32 && method === 'runtime.observer.read') {
+      trace.observerFrames.push({ direction: 'received', id: parsed.id, ms: (timestamp - trace.requestAt) * 1000,
+        kind: parsed.result?.kind, collection: parsed.result?.frame?.payload?.collection });
+    }
+    if (trace && trace.canonicalMs === undefined && canonical?.collection === 'session_summaries'
+      && canonical.value?.title === trace.title) {
+      trace.method = method;
+      trace.canonicalMs = (timestamp - trace.requestAt) * 1000;
+    }
     if (!wire.firstCanonicalSessionAt && canonical?.collection === 'session_summaries' && canonical.value) wire.firstCanonicalSessionAt = Date.now();
     if (parsed?.ok === false && wire.errors.length < 100) wire.errors.push({ id: parsed.id, ...parsed.typedError });
     if (parsed) wire.last = parsed;
@@ -240,13 +260,24 @@ export async function measureInteractions({ page, wire }, target) {
       .find(session => session.nativeSessionId === target.nativeSessionId);
     if (!observedHistorySession) throw new Error('Renderer did not open history for the selected session');
   }
-  const expand = await page.evaluate(async () => {
-    const group = document.querySelector('[data-row-kind="section"],[data-row-kind="repo"]');
-    if (!group) return null;
+  const scroll = page.getByTestId('unified-scroll');
+  await scroll.evaluate(element => { element.scrollTop = 0; });
+  const group = scroll.locator('[data-row-kind="repo"][aria-expanded], [data-row-kind="section"][aria-expanded]').first();
+  await group.waitFor({ state: 'visible', timeout: 5000 });
+  const expand = await group.evaluate(async (element) => {
+    const key = element.getAttribute('data-row-key');
+    const selector = `[data-row-key="${CSS.escape(key)}"]`;
     const samples = [];
     for (let index = 0; index < 10; index++) {
-      const start = performance.now(); group.click();
+      const row = document.querySelector(selector);
+      const expanded = row?.getAttribute('aria-expanded');
+      if (expanded == null) throw new Error('Measured tree group disappeared');
+      const start = performance.now();
+      row.click();
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (document.querySelector(selector)?.getAttribute('aria-expanded') !== String(expanded === 'false')) {
+        throw new Error('Measured tree group did not toggle');
+      }
       samples.push(performance.now() - start);
     }
     return samples;
@@ -255,33 +286,42 @@ export async function measureInteractions({ page, wire }, target) {
 }
 
 export async function measureEventVisibility(page, nativeOrigin, nativeSessionId) {
-  const title = 'Vis measured native title update';
+  const title = `Vis measured native title update ${randomUUID()}`;
   const endpoint = new URL('/qa/event', nativeOrigin);
   endpoint.searchParams.set('title', title);
-  await page.evaluate(expected => {
-    window.__visMeasuredTitle = new Promise(resolve => {
-      const observer = new MutationObserver(() => {
-        if (document.querySelector('.top-panel .selected-title')?.textContent?.trim() !== expected) return;
-        clearTimeout(timeout);
-        observer.disconnect();
-        resolve(performance.timeOrigin + performance.now());
+  return page.evaluate(async ({ url, title, nativeSessionId }) => {
+    let timeout;
+    let observer;
+    const visible = new Promise(resolve => {
+      observer = new MutationObserver(() => {
+        if (document.querySelector('.top-panel .selected-title')?.textContent?.trim() === title) {
+          resolve(performance.now());
+        }
       });
-      const timeout = setTimeout(() => { observer.disconnect(); resolve(null); }, 10000);
+      timeout = setTimeout(() => resolve(null), 10000);
       observer.observe(document.body, { subtree: true, characterData: true, childList: true });
     });
-  }, title);
-  const startedAt = Date.now();
-  const response = await fetch(endpoint, { signal: AbortSignal.timeout(5000) });
-  if (!response.ok) throw new Error(`Native title update failed (HTTP ${response.status})`);
-  const updated = await response.json();
-  if (updated.sessionId !== nativeSessionId || updated.title !== title) {
-    throw new Error('Native fixture updated a different session');
-  }
-  const visibleAt = await page.evaluate(async () => {
-    const time = await window.__visMeasuredTitle;
-    delete window.__visMeasuredTitle;
-    return time;
-  });
-  if (visibleAt === null) throw new Error('Native title update did not reach the selected session');
-  return visibleAt - startedAt;
+    try {
+      const startedAt = performance.now();
+      const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      if (!response.ok) throw new Error(`Native title update failed (HTTP ${response.status})`);
+      const updated = await response.json();
+      if (updated.sessionId !== nativeSessionId || updated.title !== title) {
+        throw new Error('Native fixture updated a different session');
+      }
+      const visibleAt = await visible;
+      if (visibleAt === null) throw new Error('Native title update did not reach the selected session');
+      const requestToVisibleMs = visibleAt - startedAt;
+      const { preparationMs } = updated;
+      if (!Number.isFinite(preparationMs) || preparationMs < 0 || preparationMs > requestToVisibleMs) {
+        throw new Error('Native fixture preparation timing is invalid');
+      }
+      // Subtract only the fixture's synchronous work before emission. The
+      // remaining duration still includes the request and event transport.
+      return { ms: requestToVisibleMs - preparationMs, requestToVisibleMs, preparationMs };
+    } finally {
+      clearTimeout(timeout);
+      observer.disconnect();
+    }
+  }, { url: endpoint.href, title, nativeSessionId });
 }

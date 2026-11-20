@@ -11,7 +11,7 @@ import { createRuntimeChannels } from './runtimeChannels.js';
 
 const operations = { 'session.list': 'listSessionPage', 'session.get': 'getSession', 'session.history': 'readHistoryPage', 'session.create': 'createSession', 'session.send': 'send', 'session.cancel': 'cancel', 'interaction.respond': 'respondInteraction' };
 const critical = new Set(['runtime.history.close', 'session.cancel', 'interaction.respond', 'runtime.channel.ack', 'runtime.channel.cancel', 'runtime.pty.detach', 'runtime.observer.read', 'runtime.observer.resume', 'runtime.observer.close', 'runtime.target.detach']);
-const TREE_BOOTSTRAP_BUDGET_MS = 300;
+const TREE_BOOTSTRAP_BUDGET_MS = 450;
 // A shorter lease leaves a full round trip between empty reads on remote
 // links. Keep an idle lease open below the shared 15-second request deadline.
 const INLINE_OBSERVER_WAIT_MS = 10_000;

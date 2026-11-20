@@ -22,7 +22,7 @@ const databasePath = path.join(root, 'opencode.db');
 const db = new DatabaseSync(databasePath);
 db.exec('PRAGMA journal_mode=WAL; CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT, directory TEXT NOT NULL, title TEXT NOT NULL, version TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER); BEGIN');
 const insert = db.prepare('INSERT INTO session VALUES (?,?,?,?,?,?,?,?,?)');
-for (const { wire } of opencode) insert.run(wire.id, 'global', wire.parentID ?? null, wire.directory, wire.title, '1.18.34', wire.time.created, wire.time.updated, wire.time.archived ?? null);
+for (const { wire } of opencode) insert.run(wire.id, wire.projectID, wire.parentID ?? null, wire.directory, wire.title, '1.18.34', wire.time.created, wire.time.updated, wire.time.archived ?? null);
 db.exec('COMMIT');
 const streams = new Set();
 const heartbeat = setInterval(() => { for (const stream of streams) stream.write(': heartbeat\n\n'); }, 1000);
@@ -48,12 +48,15 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (url.pathname === '/qa/event') {
+    response.setHeader('Access-Control-Allow-Origin', '*');
     const { wire } = opencode.find(({ summary }) => !summary.archived && !summary.parentId && summary.workspace);
     const title = url.searchParams.get('title') ?? 'Seed090 changed session';
     const updated = { ...wire, title, time: { ...wire.time, updated: Date.now() } };
+    const preparationStarted = performance.now();
     db.prepare('UPDATE session SET title=?,time_updated=? WHERE id=?').run(title, updated.time.updated, wire.id);
+    const preparationMs = performance.now() - preparationStarted;
     for (const stream of streams) stream.write(`data: ${JSON.stringify({ directory: wire.directory, payload: { type: 'session.updated', properties: { info: updated } } })}\n\n`);
-    return send({ sessionId: wire.id, title });
+    return send({ sessionId: wire.id, title, preparationMs });
   }
   if (url.pathname === '/qa/stats') return send({ calls, bytes, streams: streams.size, expected: expectedInventory(count) });
   if (url.pathname === '/session') return send(opencode.slice(0, Number(url.searchParams.get('limit') ?? 100)).map(({ wire }) => wire));

@@ -450,7 +450,7 @@ describe('ACP session page buffers', () => {
       let written = 0;
       const rounds: number[] = [];
       const mutations: IndexMutations = {
-        async apply(scan, items) {
+        async apply(scan, items, { onBatchCommitted } = {}) {
           const started = performance.now();
           batches.push(items.length);
           for (let index = 0; index < items.length; index++) {
@@ -461,6 +461,7 @@ describe('ACP session page buffers', () => {
             scan.assertCurrent();
           }
           applied += items.length;
+          onBatchCommitted?.(items.length);
           rounds.push(performance.now() - started);
           return items.length;
         },

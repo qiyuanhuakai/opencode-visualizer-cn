@@ -24,13 +24,23 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
       if (resolved.has(directory)) continue;
       const cacheKey = JSON.stringify([scan.source.environmentId, scan.source.harnessInstanceId, scan.authority, directory]);
       if (workspaces.has(cacheKey)) { resolved.set(directory, workspaces.get(cacheKey)); continue; }
-      const workspace = await resolveWorkspace({ source: scan.source, directory });
-      scan.assertCurrent();
-      if (workspace.environmentId !== scan.source.environmentId) throw new StoreError('unauthorized', 'index_workspace_target');
-      pending.push({ directory, cacheKey, workspace });
+      pending.push({ directory, cacheKey });
       resolved.set(directory, null);
     }
-    const keys = await catalog.registerMany(pending.map(({ workspace }) => ({ workspace, harnessInstanceId: scan.source.harnessInstanceId, harness: scan.source.kind === 'kimi-web' ? 'kimi' : scan.source.kind })));
+    // The caller supplies at most twenty summaries. Resolve their distinct roots
+    // in small groups before making any catalog writes.
+    const authorized = [];
+    for (let offset = 0; offset < pending.length; offset += 4) {
+      scan.assertCurrent();
+      const batch = await Promise.all(pending.slice(offset, offset + 4).map(async ({ directory }) => {
+        const workspace = await resolveWorkspace({ source: scan.source, directory });
+        if (workspace.environmentId !== scan.source.environmentId) throw new StoreError('unauthorized', 'index_workspace_target');
+        return workspace;
+      }));
+      scan.assertCurrent();
+      authorized.push(...batch);
+    }
+    const keys = await catalog.registerMany(authorized.map(workspace => ({ workspace, harnessInstanceId: scan.source.harnessInstanceId, harness: scan.source.kind === 'kimi-web' ? 'kimi' : scan.source.kind })));
     scan.assertCurrent();
     pending.forEach(({ directory, cacheKey }, index) => {
       const key = keys[index];
@@ -58,7 +68,7 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
     throw new StoreError('conflict', 'index_contention');
   }
   return {
-    async apply(scan, items) {
+    async apply(scan, items, { firstPage = false, onBatchCommitted } = {}) {
       if (!Array.isArray(items) || items.length > 200) throw new StoreError('invalid_request', 'index_page_budget');
       const summaries = new Map();
       async function flush() {
@@ -89,11 +99,19 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
       }
       let applied = 0;
       const matching = items.filter(summary => matchesScope(summary, scan.scope));
-      for (let offset = 0; offset < matching.length; offset += 20) {
+      let offset = 0;
+      while (offset < matching.length) {
         scan.assertCurrent();
-        const chunk = matching.slice(offset, offset + 20), resolved = await workspaceBatch(scan, chunk);
+        // Make a small initial window visible without waiting for every root
+        // in the regular write batch.
+        const chunk = matching.slice(offset, offset + (firstPage && offset === 0 ? 4 : 20));
+        const resolved = await workspaceBatch(scan, chunk);
         for (const summary of chunk) summaries.set(encodeSessionKey(summary.session), { summary, workspaceKey: resolved.get(summary.directory) });
-        applied += await flush(); summaries.clear();
+        const committed = await flush();
+        applied += committed;
+        onBatchCommitted?.(committed);
+        summaries.clear();
+        offset += chunk.length;
       }
       return applied;
     },
