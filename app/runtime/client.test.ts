@@ -101,7 +101,7 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     socket.reply(legacy, inspection);
     await expect(inspected).resolves.toEqual(inspection);
   });
-  it('adopts three inspected pages in collection order and opens the observer at their watermark', async () => {
+  it('adopts inspected pages and prefetches metadata without waiting for the first metadata response', async () => {
     const { client, socket } = await fixture();
     const inspected = client.inspect(true);
     const page = { kind: 'snapshot', version: 1, target, epoch: hello.epoch, generation: hello.generation,
@@ -114,16 +114,22 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     });
     await expect(inspected).resolves.toEqual(inspection);
     const order: string[] = [];
-    const paging = client.snapshot(target, ['harnesses', 'workspaces', 'session_summaries'], {
+    const paging = client.snapshot(target, ['harnesses', 'workspaces', 'session_summaries', 'interactions', 'operations'], {
       initialSummaryLimit: 32,
       onPage(collection) { order.push(collection); },
     });
     const open = await socket.next();
     expect(open).toMatchObject({ method: 'runtime.observer.open', params: { after: 4 } });
+    const interactions = await socket.next();
+    const operations = await socket.next();
+    expect(interactions).toMatchObject({ method: 'runtime.snapshot', params: { collection: 'interactions', token: 'bootstrap' } });
+    expect(operations).toMatchObject({ method: 'runtime.snapshot', params: { collection: 'operations', token: 'bootstrap' } });
+    socket.reply(operations, page);
+    socket.reply(interactions, page);
     socket.reply(open, { observerId: 'observer' });
     await expect(paging).resolves.toMatchObject({ token: 'bootstrap', watermark: 4 });
-    expect(order).toEqual(['harnesses', 'workspaces', 'session_summaries']);
-    expect(socket.sent.map(frame => frame.method)).toEqual(['runtime.inspect', 'runtime.observer.open']);
+    expect(order).toEqual(['harnesses', 'workspaces', 'session_summaries', 'interactions', 'operations']);
+    expect(socket.sent.map(frame => frame.method)).toEqual(['runtime.inspect', 'runtime.observer.open', 'runtime.snapshot', 'runtime.snapshot']);
   });
   it('cannot replace grants with a compressed inspection superseded during decoding', async () => {
     const { client, socket } = await fixture();

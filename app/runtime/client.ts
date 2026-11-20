@@ -535,14 +535,14 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
             // are downloaded. Event reads still begin after snapshot commit.
             openingObserver = observe(target, { ...options, after: first.watermark, onDelivery: options.onDelivery ?? (() => {}) });
             void openingObserver.catch(() => undefined);
-            if (names.length >= 3 && prefetched.size === 0) {
-              // Queue at most two independent first pages on this same token.
-              // Apply them in collection order so session rows see topology.
-              for (const nextCollection of names.slice(1, 3)) {
-                const pending = request(target, 'runtime.snapshot', { collection: nextCollection, token: page.token, cursor: null, limit: limit(nextCollection, null) }, options);
-                prefetched.set(nextCollection, pending);
-                void pending.catch(() => undefined);
-              }
+            // Without a bootstrap, prefetch the remaining topology and summary
+            // pages. With one, those pages are already available, so queue the
+            // remaining metadata instead. Either path issues at most two reads.
+            const aheadNames = prefetched.size > 0 ? names.slice(3) : names.length >= 3 ? names.slice(1, 3) : [];
+            for (const nextCollection of aheadNames) {
+              const pending = request(target, 'runtime.snapshot', { collection: nextCollection, token: page.token, cursor: null, limit: limit(nextCollection, null) }, options);
+              prefetched.set(nextCollection, pending);
+              void pending.catch(() => undefined);
             }
           }
           requireValue(page.target === attached.hello.target && page.epoch === attached.hello.epoch
