@@ -200,6 +200,7 @@ function readDirectSlurmLeg(root, lane, runDir) {
   writeFileSync(path.join(snapshot, 'slurm.receipt.json'), receiptBytes, { flag: 'wx' });
   return {
     directory: snapshot,
+    directReportPath: reportPath,
     reportPath: path.join(snapshot, 'slurm.json'),
     logPath: path.join(snapshot, 'slurm.log'),
     receiptPath: path.join(snapshot, 'slurm.receipt.json'),
@@ -305,7 +306,7 @@ export async function run(context) {
   // ══════════════════════════════════════════════════════════════════════════════════════════
   // C1: the SSH child-process receipt is clean and the argv is the registered one
   // ══════════════════════════════════════════════════════════════════════════════════════════
-  check('the SSH driver ran as a real child process inside this registered invocation and exited cleanly: exit code 0, no terminating signal, not interrupted, driven by the exact argv the plan registers — `--isolated --case <lane>`', {
+  check('the SSH driver ran as a real child process inside this registered invocation and exited cleanly: exit code 0, no terminating signal, not interrupted, driven by the registered isolated lane and bounded startup argv', {
     exitCode: sshRun.receipt.exitCode,
     signal: sshRun.receipt.signal,
     interrupted: sshRun.receipt.interrupted,
@@ -329,7 +330,7 @@ export async function run(context) {
   const slurmDriverBytes = readFileSync(path.join(context.root, SLURM_DRIVER));
   // The registered argv for this lane, with the direct leg's own --out appended so the comparison
   // is against exactly what the direct process ran.
-  const slurmRegisteredArgv = [process.execPath, SLURM_DRIVER, ...slurmArgs, '--out', slurm.reportPath];
+  const slurmRegisteredArgv = [process.execPath, SLURM_DRIVER, ...slurmArgs, '--out', slurm.directReportPath];
   check('the Slurm driver leg is a real execution of the CURRENT bytes: it ran as a real direct process with the exact registered argv (--lab isolated --modes tcp,relay --case <lane> plus its own --out), its own receipt records exit 0 with no terminating signal and no interruption, and the sha256 of the driver file it executed equals the sha256 of the bytes registered in this case sourceFiles — so the merged report was produced by this tree, not by an older one', {
     directReportPath: path.relative(context.root, slurm.reportPath),
     directReceiptExitCode: slurm.receipt.exitCode,
