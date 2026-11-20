@@ -2409,7 +2409,7 @@ export async function run(context) {
     for (const width of [1440, 390]) {
       await omowright.emulate(page, { width, height: 900, deviceScaleFactor: 1, mobile: false, hasTouch: false });
       const filename = path.join(runDir, `qa41-${context.case}-${width}.png`);
-      await page.screenshot({ path: filename, fullPage: true });
+      await writeFile(filename, await page.screenshot({ type: 'png', fullPage: true }));
       artifacts.push(artifact(filename, 'screenshot'));
       const htmlPath = path.join(runDir, `qa41-${context.case}-${width}.html`);
       await writeFile(htmlPath, await page.content());
@@ -2499,7 +2499,7 @@ export async function run(context) {
     proof.failure = { message: error.message, stack: error.stack };
     if (page) {
       proof.failureDom = await page.evaluate(() => ({ url: location.href, body: document.body.innerText.slice(0, 2000), errors: window.__task41Errors ?? [], task41: Boolean(window.task41) })).catch((value) => ({ unavailable: String(value) }));
-      await page.screenshot({ path: path.join(runDir, 'failure.png') }).catch(() => undefined);
+      await page.screenshot({ type: 'png' }).then(bytes => writeFile(path.join(runDir, 'failure.png'), bytes)).catch(() => undefined);
     }
     persist();
     throw error;
