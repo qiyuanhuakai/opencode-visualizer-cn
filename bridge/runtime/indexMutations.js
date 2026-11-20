@@ -24,13 +24,23 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
       if (resolved.has(directory)) continue;
       const cacheKey = JSON.stringify([scan.source.environmentId, scan.source.harnessInstanceId, scan.authority, directory]);
       if (workspaces.has(cacheKey)) { resolved.set(directory, workspaces.get(cacheKey)); continue; }
-      const workspace = await resolveWorkspace({ source: scan.source, directory });
-      scan.assertCurrent();
-      if (workspace.environmentId !== scan.source.environmentId) throw new StoreError('unauthorized', 'index_workspace_target');
-      pending.push({ directory, cacheKey, workspace });
+      pending.push({ directory, cacheKey });
       resolved.set(directory, null);
     }
-    const keys = await catalog.registerMany(pending.map(({ workspace }) => ({ workspace, harnessInstanceId: scan.source.harnessInstanceId, harness: scan.source.kind === 'kimi-web' ? 'kimi' : scan.source.kind })));
+    // The caller supplies at most twenty summaries. Resolve their distinct roots
+    // in small groups before making any catalog writes.
+    const authorized = [];
+    for (let offset = 0; offset < pending.length; offset += 4) {
+      scan.assertCurrent();
+      const batch = await Promise.all(pending.slice(offset, offset + 4).map(async ({ directory }) => {
+        const workspace = await resolveWorkspace({ source: scan.source, directory });
+        if (workspace.environmentId !== scan.source.environmentId) throw new StoreError('unauthorized', 'index_workspace_target');
+        return workspace;
+      }));
+      scan.assertCurrent();
+      authorized.push(...batch);
+    }
+    const keys = await catalog.registerMany(authorized.map(workspace => ({ workspace, harnessInstanceId: scan.source.harnessInstanceId, harness: scan.source.kind === 'kimi-web' ? 'kimi' : scan.source.kind })));
     scan.assertCurrent();
     pending.forEach(({ directory, cacheKey }, index) => {
       const key = keys[index];
