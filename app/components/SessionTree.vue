@@ -16,8 +16,15 @@
           />
         </div>
         <Dropdown class="unified-filter" :auto-close="false" :aria-label="$t('runtime.sessionTree.filterSources', 'Filter sources')">
-          <template #trigger>
-            <button type="button" class="unified-filter-trigger" data-testid="source-filter">
+          <template #trigger="{ toggle, expanded }">
+            <button
+              type="button"
+              class="unified-filter-trigger"
+              data-testid="source-filter"
+              :aria-label="`${$t('runtime.sessionTree.filterSources', 'Filter sources')}: ${filterLabel}`"
+              :aria-expanded="expanded"
+              @click.stop="toggle"
+            >
               <Icon icon="lucide:filter" :width="12" :height="12" />
               <span class="unified-filter-label">{{ filterLabel }}</span>
               <Icon icon="lucide:chevron-down" :width="12" :height="12" />

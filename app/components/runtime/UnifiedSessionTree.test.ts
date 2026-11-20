@@ -244,6 +244,20 @@ const mounted: Array<{ unmount(): void }> = [];
 afterEach(() => { for (const entry of mounted.splice(0)) entry.unmount(); document.body.innerHTML = ''; });
 
 describe('task 21 — unified session tree acceptance', () => {
+
+  it('opens the source filter and applies changes from the harness checkboxes', async () => {
+    const view = await mountTree({ treeRows: [] });
+    mounted.push(view);
+    const trigger = view.root.querySelector<HTMLButtonElement>('[data-testid=source-filter]')!;
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    trigger.click();
+    await nextTick();
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    const kimi = view.root.querySelector<HTMLInputElement>('label[data-kind="kimi-web"] input')!;
+    kimi.click();
+    expect(view.emitted.get('filter-change')).toEqual([[...HARNESS_KINDS.filter(kind => kind !== 'kimi-web'), 'unknown']]);
+  });
+
   it('keeps the next-page control focusable while loading and ignores duplicate activations', async () => {
     const searchState = reactive<{ -readonly [Key in keyof UnifiedSearchState]: UnifiedSearchState[Key] }>({ status: 'complete', query: 'title', matches: [], totalMatched: 500, hasMore: true, cursor: '200', scanned: 500, pages: 3, error: null, waiting: false });
     const view = await mountTree({ treeRows: [], searchState });

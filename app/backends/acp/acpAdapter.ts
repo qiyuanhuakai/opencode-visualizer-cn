@@ -21,7 +21,7 @@ import {
   type OmpExtension,
 } from './ompExtensions';
 
-const baseCapabilities: BackendCapabilities = {
+export const ACP_CAPABILITIES: BackendCapabilities = {
   projects: false,
   worktrees: false,
   sessions: true,
@@ -75,7 +75,7 @@ const OMP_FALLBACK_COMMANDS = [
 
 export class AcpAdapter implements BackendAdapter {
   readonly kind = 'acp' as const;
-  readonly capabilities = { ...baseCapabilities };
+  readonly capabilities = { ...ACP_CAPABILITIES };
   private readonly acp: AcpClient;
   private readonly workspace: AcpWorkspaceClient;
   private readonly archive: ReturnType<typeof createAcpSessionArchive>;

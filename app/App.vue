@@ -994,6 +994,7 @@ import {
   disconnectDshBackend as disconnectDshBackendAdapter,
   configureOpenCodeBackend,
   getBackendAdapter,
+  getRuntimeBackendCapabilities,
 } from './backends/registry';
 import { AcpAdapter } from './backends/acp/acpAdapter';
 import {
@@ -4825,11 +4826,10 @@ function handleModelVisibilityUpdate(next: ModelVisibilityEntry[]) {
 
 async function fetchGlobalProviderConfig() {
   const request = providerConfigRequestFence.start();
-  const activeBackend = getBackendAdapter(request.backend);
   try {
+    const activeBackend = backend();
     const getGlobalConfig = requireBackendMethod(activeBackend.getGlobalConfig, 'global config');
-    const native = selectedRuntimeNativeAdapter();
-    const data = (await (native ? requireBackendMethod(native.getGlobalConfig, 'native global config')() : getGlobalConfig())) as ProviderConfigState;
+    const data = (await getGlobalConfig()) as ProviderConfigState;
     if (!providerConfigRequestFence.isCurrent(request)) return;
     providerConfig.value = data ?? null;
     if (
@@ -5703,15 +5703,13 @@ async function fetchProviders(force = false) {
   if ((!force && providersLoading.value) || (!force && providersLoaded.value)) return;
   const request = providersRequestFence.start();
   providerLoadingOwner = request.generation;
-  const activeBackend = getBackendAdapter(request.backend);
   providersLoading.value = true;
   if (force) providersLoaded.value = false;
   providersFetchCount.value += 1;
   log('providers fetch start', providersFetchCount.value);
   try {
-    const listProviders = requireBackendMethod(activeBackend.listProviders, 'providers');
-    const native = selectedRuntimeNativeFacade();
-    const data = (await (native ? requireBackendMethod(selectedRuntimeNativeAdapter()?.listProviders, 'native providers')() : listProviders())) as ProviderResponse;
+    const listProviders = requireBackendMethod(backend().listProviders, 'providers');
+    const data = (await listProviders()) as ProviderResponse;
     if (!providersRequestFence.isCurrent(request)) return;
     providerDefaults.value = data.default ?? {};
     providers.value = Array.isArray(data.all) ? data.all : [];
@@ -9832,12 +9830,12 @@ function backend() {
   if (runtimeActionClient.value) {
     const native = selectedRuntimeNativeAdapter() ?? {};
     const context = findWorkspaceContext(activeDirectory.value || undefined);
-    if (!context) return capturedBackend(activeBackendKind.value, getBackendAdapter(activeBackendKind.value).capabilities, native, {});
+    if (!context) return capturedBackend(activeBackendKind.value, activeBackendCapabilities.value, native, {});
     const files = createWorkspaceFiles(context.client, context.target, context.workspaceKey);
     const selected = runtimeSelectedSessionRef.value;
     const filePath = (directory: string, path: string) => path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
       ? path : `${directory.replace(/[\\/]$/, '')}/${path}`;
-    return capturedBackend(activeBackendKind.value, getBackendAdapter(activeBackendKind.value).capabilities, native, {
+    return capturedBackend(activeBackendKind.value, activeBackendCapabilities.value, native, {
       getPathInfo: () => files.info(),
       getVcsInfo: () => selected && selected.environmentId === context.target
         ? createHostClient(context.client, context.target).read({ domain: 'thread', operation: 'repository', args: { session: selected } }, value => value)
@@ -10561,7 +10559,9 @@ function selectedWorkspacePty(directory?: string): WorkspacePty {
 }
 
 const activeBackendCapabilities = computed(
-  () => getBackendAdapter(activeBackendKind.value).capabilities,
+  () => runtimeActionClient.value
+    ? getRuntimeBackendCapabilities(activeBackendKind.value)
+    : getBackendAdapter(activeBackendKind.value).capabilities,
 );
 
 const projectPickerHomePath = computed(() =>
