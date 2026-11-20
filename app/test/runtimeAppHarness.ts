@@ -42,7 +42,7 @@ vi.mock('../composables/useGlobalEvents', () => ({ useGlobalEvents: () => ({
 type NativeHistory = Readonly<{ info: Readonly<Record<string, JsonValue>>; parts: readonly JsonValue[] }>;
 
 /** Real App + TCP/WebSocket + production Runtime/SQLite, controlled native harness boundary. */
-export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; bridgeToken?: string; additionalModelId?: string; editableProvider?: boolean; beforeProviderWrite?: () => Promise<void>; beforeProviderRead?: () => Promise<void>; archivedAcpSession?: boolean; secondWorktree?: boolean; codexFactory?: RuntimeDriverFactory; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
+export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; bridgeToken?: string; managedBridge?: boolean; additionalModelId?: string; editableProvider?: boolean; beforeProviderWrite?: () => Promise<void>; beforeProviderRead?: () => Promise<void>; archivedAcpSession?: boolean; secondWorktree?: boolean; codexFactory?: RuntimeDriverFactory; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
   // Load the Node worker owner without Vite's browser asset URL rewriting.
   // The worker itself still runs the production module in a real subprocess.
   const requireNodeModule = createRequire(path.resolve(process.cwd(), 'package.json'));
@@ -74,8 +74,13 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
   const nativeQueries: Array<{ operation: string; session?: SessionRef }> = [];
   const supervisor = { start: async () => [], stop: async () => {}, getStatus: () => [] };
   const acp = { reconcile: async () => [], stopAll: async () => {}, getStatus: () => [], attach() { throw new Error('ACP disabled'); } };
+  const stateRoot = path.join(root, 'state');
+  const role = options.managedBridge ? 'manager' : 'local';
+  const { createRemoteServices } = requireNodeModule('./bridge/runtime/remoteServices.js') as typeof import('../../bridge/runtime/remoteServices.js');
+  const remoteServices = options.managedBridge ? createRemoteServices({ stateRoot }) : undefined;
+  if (remoteServices) cleanups.push(() => remoteServices.close());
   const services = await createRuntimeServices({
-    environmentId: randomUUID(), stateRoot: path.join(root, 'state'), role: 'local',
+    environmentId: randomUUID(), stateRoot, role, remoteServices,
     roots: [...new Set([directory, secondDirectory])].map(root => ({ root, permissions: ['read', 'write', 'command', 'pty'] })),
     config: { version: 1, nativeServices: { opencode: true, codex: Boolean(options.codexFactory), 'kimi-web': false, dsh: options.dshAccount !== undefined }, acpAgents: options.archivedAcpSession ? [{ id: 'fixture-acp', name: 'Fixture ACP', enabled: true, command: process.execPath, args: [], env: {} }] : [] },
     nativeSupervisor: supervisor, acpManager: acp, runtime: { mutate: action => action() },
@@ -192,11 +197,15 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
   });
   cleanups.push(() => services.close());
   await services.start();
-  const host = createRuntimeHost({ environmentId: services.target, role: 'local', services });
+  const host = createRuntimeHost({ environmentId: services.target, role, services });
   cleanups.push(() => host.stop());
   host.start();
   const bridge = createBridgeRuntime({ nativeSupervisor: supervisor, acpManager: acp });
-  const server = createVisBridgeServer({ host: '127.0.0.1', path: '/codex', target: 'ws://127.0.0.1:1', bridgeToken: options.bridgeToken, runtime: { ...bridge, getRuntimeHost: async () => host } });
+  const serverOptions = {
+    host: '127.0.0.1', path: '/codex', target: 'ws://127.0.0.1:1', bridgeToken: options.bridgeToken,
+    remoteServices, profilePath: path.join(stateRoot, 'profiles.json'), runtime: { ...bridge, getRuntimeHost: async () => host },
+  };
+  const server = createVisBridgeServer(serverOptions);
   cleanups.push(async () => { await host.stop(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();

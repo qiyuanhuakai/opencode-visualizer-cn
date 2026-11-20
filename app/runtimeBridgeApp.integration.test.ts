@@ -1,6 +1,17 @@
 import { expect, it, vi } from 'vitest';
 import { mountRuntimeApp } from './test/runtimeAppHarness';
 
+it('loads the managed transport capabilities in the first dialog after Bridge login', async () => {
+  const fixture = await mountRuntimeApp([], { managedBridge: true });
+  await fixture.submitBridgeLogin();
+  await vi.waitFor(() => {
+    const dialog = fixture.element.querySelector('[data-testid="connection-manager"]');
+    expect(dialog?.querySelector('[data-capability=managed-bridge]')?.getAttribute('data-state'),
+      dialog?.querySelector('[role=alert]')?.textContent ?? '').toBe('supported');
+    expect(dialog?.querySelector('[data-capability=direct]')?.getAttribute('data-state')).toBe('supported');
+  }, { timeout: 5000 });
+}, 15000);
+
 it('connects through Bridge login and renders selected native history over the actual runtime wire', async () => {
   const fixture = await mountRuntimeApp([{ info: { id: 'message-from-backend', sessionID: 'session-a', role: 'user', time: { created: 101 } }, parts: [{ id: 'part-from-backend', messageID: 'message-from-backend', sessionID: 'session-a', type: 'text', text: 'History through the qualified Bridge boundary' }] }]);
   expect(fixture.element.querySelector('.app-login-backend')).toBeNull();
