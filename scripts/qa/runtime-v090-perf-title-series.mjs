@@ -2,9 +2,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { digest, writeJson } from './runtime-v090-evidence.mjs';
 import { SLO, nearestRankP95 } from './runtime-v090-benchmark.mjs';
+import { committedPerfSource } from './runtime-v090-perf-source.mjs';
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
@@ -14,6 +16,8 @@ assert(values.out, '--out is required');
 assert.match(values.revision ?? '', /^[a-f0-9]{40}$/, '--revision must identify the candidate');
 assert.equal(positionals.length, 10, 'ten independent production reports are required');
 
+const root = fileURLToPath(new URL('../../', import.meta.url));
+const committed = committedPerfSource(root, values.revision);
 const samples = positionals.map(file => {
   const bytes = readFileSync(file);
   const report = JSON.parse(bytes);
@@ -30,6 +34,8 @@ const samples = positionals.map(file => {
   assert.equal(report.productionSource?.baseRevision, report.productionRevision, 'source identity must match the revision');
   assert.match(report.productionSource?.contentSha256, /^[a-f0-9]{64}$/, 'source digest required');
   assert.equal(report.productionRevision, values.revision, 'production report belongs to another candidate');
+  assert.deepEqual(report.productionSource, committed.identity, 'source digest differs from the candidate Git blobs');
+  assert.deepEqual(report.sourceHashes, committed.sourceHashes, 'source inventory differs from the candidate Git blobs');
   assert.match(report.runId ?? '', /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/, 'production run ID required');
   const receiptFile = path.join(path.dirname(file), 'run-receipt.json');
   const receiptBytes = readFileSync(receiptFile);

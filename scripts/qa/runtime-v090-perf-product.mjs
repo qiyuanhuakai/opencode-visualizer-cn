@@ -4,13 +4,14 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { digest, productionSource, sourceSnapshot, validateSources, writeJson } from './runtime-v090-evidence.mjs';
+import { digest, writeJson } from './runtime-v090-evidence.mjs';
 import { buildApp, serveApp } from './runtime-v090-perf-app.mjs';
 import { connectApp, measureEventVisibility, measureInteractions, measureTree, openBrowser } from './runtime-v090-perf-browser.mjs';
 import { indexInventory, prepareFixture, repository, startBridge, startNative } from './runtime-v090-perf-harness.mjs';
 import { summaryAt } from '../../app/dev/runtime-v090/fixtures/inventory.mjs';
 import { SLO } from './runtime-v090-benchmark.mjs';
 import { shapeRuntimeNetwork } from './runtime-v090-perf-network.mjs';
+import { assertPerfCheckout, committedPerfSource } from './runtime-v090-perf-source.mjs';
 
 const { values } = parseArgs({ options: { count: { type: 'string' }, out: { type: 'string' }, rtt: { type: 'string', default: '0' } } });
 const count = Number(values.count);
@@ -22,14 +23,14 @@ const output = path.resolve(values.out);
 await mkdir(output);
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' });
 const productionRevision = git('rev-parse', 'HEAD').trim();
-const sourceFiles = git('ls-files', '-z', '--', 'app', 'bridge', 'shared', 'scripts/qa', 'public', 'vis_bridge.js', 'index.html', 'package.json', 'pnpm-lock.yaml', 'vite.config.ts').split('\0').filter(Boolean);
-const sourceHashes = sourceSnapshot(repository, sourceFiles);
+const { sourceHashes, identity: sourceIdentity } = committedPerfSource(repository, productionRevision);
+assertPerfCheckout(repository, productionRevision, sourceHashes);
 const report = {
   runId: randomUUID(),
   startedAt: new Date().toISOString(),
   measurementScope: 'single-sample-production-app-and-bridge',
   productionRevision,
-  productionSource: productionSource(repository, sourceHashes, productionRevision),
+  productionSource: sourceIdentity,
   sourceHashes,
   count,
   rttMs,
@@ -138,8 +139,7 @@ try {
     }
   }
   try {
-    validateSources(sourceHashes, repository);
-    if (git('rev-parse', 'HEAD').trim() !== productionRevision) throw new Error('Benchmark revision changed');
+    assertPerfCheckout(repository, productionRevision, sourceHashes);
   } catch (error) {
     failures.push({ reason: error });
   }
