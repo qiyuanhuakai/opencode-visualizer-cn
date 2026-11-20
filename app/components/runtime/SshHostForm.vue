@@ -199,6 +199,12 @@ function submit() {
     emit('save', draft);
   } catch (error) {
     const field = error instanceof Error && 'field' in error ? String((error as ProtocolError).field) : 'profile';
+    if (field === 'transport.endpoint') {
+      problems.value = [props.transportKind === 'slurm'
+        ? 'Use the current login host name or localhost.'
+        : 'A host or a bracketed host with a port. No user, password, query or fragment.'];
+      return;
+    }
     problems.value = [`${field}: ${error instanceof Error ? error.message : 'invalid profile'}`];
   }
 }
