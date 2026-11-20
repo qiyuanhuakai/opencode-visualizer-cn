@@ -5,8 +5,9 @@ export type ObserverDelivery = { readonly kind: 'event' | 'control'; readonly fr
 export interface EventObserver {
   readonly binding: Binding;
   push(frame: RuntimeEvent, priority?: boolean): void;
-  recover(reason: string): void;
+  recover(reason: string, highWater?: number): void;
   read(): ObserverDelivery | null;
+  drainEvents(limit: number, bytes: number): readonly { readonly kind: 'event'; readonly frame: RuntimeEvent }[];
   waitRead(signal?: AbortSignal, waitMs?: number): Promise<ObserverDelivery | null>;
   resume(afterReplay: number): void;
   openChannel(channelId: number): void;

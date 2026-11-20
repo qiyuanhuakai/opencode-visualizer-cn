@@ -15,6 +15,7 @@ const TREE_BOOTSTRAP_BUDGET_MS = 450;
 // A shorter lease leaves a full round trip between empty reads on remote
 // links. Keep an idle lease open below the shared 15-second request deadline.
 const INLINE_OBSERVER_WAIT_MS = 10_000;
+const INLINE_BATCH_RESOLUTION_MS = 20;
 const publicKinds = new Set(['operation', 'acp-operation', 'opencode-instance-operation', 'opencode-cancellation', 'codex-instance-operation', 'codex-cancel-operation', 'kimi-instance', 'kimi-control', 'dsh-operation', 'interaction', 'acp-interaction']);
 function project(collection, row) {
   if (!['operations', 'interactions'].includes(collection)) return row;
@@ -367,19 +368,31 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
               events.push(...observer.value.drainEvents(params.maxEvents - 1, reserve));
             }
             let canonicalBudget = 512 * 1024;
-            const resolved = await Promise.all(events.map(async item => {
+            const resolved = events.slice();
+            const pending = Promise.all(events.map(async (item, index) => {
               const collection = item.frame.payload?.collection;
               if (!params.resolveSummary || item.frame.type !== 'entity.patch'
-                || (collection !== 'session_summaries' && !(params.resolveWorkspace && collection === 'workspaces'))) return item;
+                || (collection !== 'session_summaries' && !(params.resolveWorkspace && collection === 'workspaces'))) return;
               const canonical = await resolveEntity(entry, item.frame).catch(() => undefined);
-              if (!canonical) return item;
+              if (!canonical) return;
               const bytes = Buffer.byteLength(JSON.stringify(canonical));
-              if (bytes > canonicalBudget) return item;
+              if (bytes > canonicalBudget) return;
               canonicalBudget -= bytes;
-              return { ...item, canonical };
+              resolved[index] = { ...item, canonical };
             }));
+            if (events.length === 1) {
+              await pending;
+            } else {
+              // Send the ordered patches even when some inline lookups are slow.
+              let timer;
+              try {
+                await Promise.race([pending, new Promise(resolve => {
+                  timer = setTimeout(resolve, INLINE_BATCH_RESOLUTION_MS);
+                })]);
+              } finally { clearTimeout(timer); }
+            }
             requireValue(entry.observer === observer, 'runtime.observer', 'reconcile_required');
-            return resolved.length === 1 ? resolved[0] : { kind: 'events', events: resolved };
+            return resolved.length === 1 ? resolved[0] : { kind: 'events', events: resolved.slice() };
           } finally { observer.reading = false; }
         }
         if (frame.method === 'runtime.observer.resume') { observer.value.resume(params.after); return { resumed: true }; }

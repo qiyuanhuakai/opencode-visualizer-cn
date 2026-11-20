@@ -22,7 +22,8 @@ export function createEventObserver({ binding: input, after, isCurrent, onClose 
   function check() {
     if (closed || !isCurrent()) throw new StoreError('replay_required', 'observer_generation');
   }
-  function recover(reason) {
+  function recover(reason, highWater = through) {
+    through = Math.max(through, highWater);
     recovery = reason;
     normal.length = 0;
     normalBytes = 0;

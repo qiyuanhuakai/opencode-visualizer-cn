@@ -565,7 +565,7 @@ describe('runtime real WebSocket dispatch', () => {
     if (!opened.ok) throw new Error('Missing observer');
     const changes = ['one', 'two', 'three'].map(title => {
       const session = parseSessionRef({ environmentId: services.target, harnessInstanceId: services.registry.list()[0].harnessInstanceId, nativeSessionId: title });
-      return { collection: 'session_summaries', key: encodeSessionKey(session), value: { session, title } };
+      return { collection: 'session_summaries' as const, key: encodeSessionKey(session), value: { session, title } };
     });
     await services.store.mutate({ intentId: randomUUID(), changes });
     const params = opened.result as object;
@@ -575,6 +575,44 @@ describe('runtime real WebSocket dispatch', () => {
     })) } });
     const next = await connection.request('runtime.observer.read', params);
     expect(next).toMatchObject({ ok: true, result: { kind: 'event', frame: { payload: { key: changes[2].key } } } });
+  });
+  it('returns ready canonical records before a slow batch tail has resolved', async () => {
+    const { services } = await graph();
+    const tail = gate();
+    const changes = ['fast', 'slow'].map(title => {
+      const session = parseSessionRef({ environmentId: services.target, harnessInstanceId: services.registry.list()[0].harnessInstanceId, nativeSessionId: title });
+      return { collection: 'session_summaries' as const, key: encodeSessionKey(session), value: { session, title } };
+    });
+    const [first, last] = changes;
+    const log = services.events.log;
+    const started = Promise.withResolvers<void>();
+    const delayedLog = { ...log, async resolve(patch: Parameters<typeof log.resolve>[0]) {
+      const row = await log.resolve(patch);
+      if (patch.key === last.key) {
+        started.resolve();
+        await tail.promise;
+      }
+      return row;
+    } };
+    const host = createRuntimeHost({ environmentId: services.target, role: 'local', services: { ...services, events: { ...services.events, log: delayedLog } } });
+    host.start();
+    cleanups.push(() => host.stop());
+    try {
+      const connection = await client(host);
+      const snapshot = await connection.request('runtime.snapshot', { collection: 'session_summaries' });
+      if (!snapshot.ok) throw new Error('Snapshot unavailable');
+      const opened = await connection.request('runtime.observer.open', { after: (snapshot.result as { watermark: number }).watermark });
+      if (!opened.ok) throw new Error('Missing observer');
+      await services.store.mutate({ intentId: randomUUID(), changes });
+      const reading = connection.request('runtime.observer.read', { ...opened.result as object, resolveSummary: true, maxEvents: 2 });
+      await started.promise;
+      const reply = await reading;
+      expect(reply).toMatchObject({ ok: true, result: { kind: 'events', events: [
+        { kind: 'event', frame: { payload: { key: first.key } }, canonical: { key: first.key, value: first.value } },
+        { kind: 'event', frame: { payload: { key: last.key } } },
+      ] } });
+      if (reply.ok) expect(reply.result).not.toHaveProperty('events.1.canonical');
+    } finally { tail.release(); }
   });
   it('attaches workspace metadata only for a consumer that opted in', async () => {
     const { connection, services } = await runtime();
