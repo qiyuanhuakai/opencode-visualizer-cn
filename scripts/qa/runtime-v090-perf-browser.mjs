@@ -67,12 +67,16 @@ export async function openBrowser(output, userDataDirectory = `${output}-profile
   cdp.on('Network.requestWillBeSent', ({ request, timestamp }) => {
     const url = new URL(request.url);
     const title = url.pathname === '/qa/event' ? url.searchParams.get('title') : null;
-    if (title?.startsWith('Vis measured native title update ')) wire.titleEvent = { title, requestAt: timestamp };
+    if (title?.startsWith('Vis measured native title update ')) wire.titleEvent = { title, requestAt: timestamp, observerFrames: [] };
   });
-  cdp.on('Network.webSocketFrameSent', ({ requestId, response }) => {
+  cdp.on('Network.webSocketFrameSent', ({ requestId, response, timestamp }) => {
     try { const parsed = JSON.parse(response.payloadData); if (parsed.method) { wire.methods[parsed.method] = (wire.methods[parsed.method] ?? 0) + 1; requests.set(`${requestId}:${parsed.id}`, parsed.method);
       if (parsed.method === 'runtime.history.open' && parsed.params?.session && wire.historySessions.length < 64) {
         wire.historySessions.push(parsed.params.session);
+      }
+      const trace = wire.titleEvent;
+      if (trace && trace.canonicalMs === undefined && trace.observerFrames.length < 32 && parsed.method === 'runtime.observer.read') {
+        trace.observerFrames.push({ direction: 'sent', id: parsed.id, ms: (timestamp - trace.requestAt) * 1000 });
       }
       const startup = wire.startup[requestId];
       if (startup?.length < 20 && ['runtime.inspect', 'runtime.snapshot'].includes(parsed.method)) {
@@ -96,6 +100,10 @@ export async function openBrowser(output, userDataDirectory = `${output}-profile
     const canonical = method === 'runtime.entity.resolve' ? parsed.result
       : method === 'runtime.observer.read' ? parsed.result?.canonical : undefined;
     const trace = wire.titleEvent;
+    if (trace && trace.canonicalMs === undefined && trace.observerFrames.length < 32 && method === 'runtime.observer.read') {
+      trace.observerFrames.push({ direction: 'received', id: parsed.id, ms: (timestamp - trace.requestAt) * 1000,
+        kind: parsed.result?.kind, collection: parsed.result?.frame?.payload?.collection });
+    }
     if (trace && trace.canonicalMs === undefined && canonical?.collection === 'session_summaries'
       && canonical.value?.title === trace.title) {
       trace.method = method;
