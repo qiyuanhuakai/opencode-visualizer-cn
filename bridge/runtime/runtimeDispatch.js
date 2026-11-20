@@ -12,7 +12,9 @@ import { createRuntimeChannels } from './runtimeChannels.js';
 const operations = { 'session.list': 'listSessionPage', 'session.get': 'getSession', 'session.history': 'readHistoryPage', 'session.create': 'createSession', 'session.send': 'send', 'session.cancel': 'cancel', 'interaction.respond': 'respondInteraction' };
 const critical = new Set(['runtime.history.close', 'session.cancel', 'interaction.respond', 'runtime.channel.ack', 'runtime.channel.cancel', 'runtime.pty.detach', 'runtime.observer.read', 'runtime.observer.resume', 'runtime.observer.close', 'runtime.target.detach']);
 const TREE_BOOTSTRAP_BUDGET_MS = 300;
-const INLINE_OBSERVER_WAIT_MS = 2_000;
+// A shorter lease leaves a full round trip between empty reads on remote
+// links. Keep an idle lease open below the shared 15-second request deadline.
+const INLINE_OBSERVER_WAIT_MS = 10_000;
 const publicKinds = new Set(['operation', 'acp-operation', 'opencode-instance-operation', 'opencode-cancellation', 'codex-instance-operation', 'codex-cancel-operation', 'kimi-instance', 'kimi-control', 'dsh-operation', 'interaction', 'acp-interaction']);
 function project(collection, row) {
   if (!['operations', 'interactions'].includes(collection)) return row;
@@ -342,7 +344,9 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
           observer.reading = true;
           try {
             const delivery = await observer.value.waitRead(signal, params.resolveSummary ? INLINE_OBSERVER_WAIT_MS : undefined);
-            if (!params.resolveSummary || delivery?.kind !== 'event' || delivery.frame.payload?.collection !== 'session_summaries') return delivery;
+            if (!params.resolveSummary || delivery?.kind !== 'event' || delivery.frame.type !== 'entity.patch') return delivery;
+            const collection = delivery.frame.payload?.collection;
+            if (collection !== 'session_summaries' && !(params.resolveWorkspace && collection === 'workspaces')) return delivery;
             const canonical = await resolveEntity(entry, delivery.frame).catch(() => undefined);
             requireValue(entry.observer === observer, 'runtime.observer', 'reconcile_required');
             return canonical ? { ...delivery, canonical } : delivery;

@@ -59,7 +59,7 @@ const server = createServer(async (request, response) => {
   if (url.pathname === '/session') return send(opencode.slice(0, Number(url.searchParams.get('limit') ?? 100)).map(({ wire }) => wire));
   const sessionId = decodeURIComponent(url.pathname.split('/')[2] ?? '');
   if (url.pathname.endsWith('/message')) {
-    return send([{ info: { id: 'seed-message', sessionID: sessionId, role: 'user', time: { created: 1 } }, parts: [{ id: 'seed-part', sessionID: sessionId, messageID: 'seed-message', type: 'text', text: 'Seed090 selected native history.' }] }]);
+    return send([{ info: { id: 'seed-message', sessionID: sessionId, role: 'user', time: { created: 1 } }, parts: [{ id: 'seed-part', sessionID: sessionId, messageID: 'seed-message', type: 'text', text: `Seed090 native history for ${sessionId}.` }] }]);
   }
   if (url.pathname.startsWith('/session/')) return send(opencode.find(({ wire }) => wire.id === sessionId)?.wire ?? {});
   if (url.pathname === '/project') return send([]);

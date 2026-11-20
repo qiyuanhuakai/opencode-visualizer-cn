@@ -52,7 +52,7 @@ export interface RuntimeParams {
   readonly 'runtime.replay': { readonly after: number; readonly limit?: number };
   readonly 'runtime.entity.resolve': { readonly event: RuntimeEvent };
   readonly 'runtime.observer.open': { readonly after: number };
-  readonly 'runtime.observer.read': ObserverRef & { readonly resolveSummary?: true };
+  readonly 'runtime.observer.read': ObserverRef & { readonly resolveSummary?: true; readonly resolveWorkspace?: true };
   readonly 'runtime.observer.resume': ObserverRef & { readonly after: number };
   readonly 'runtime.observer.close': ObserverRef;
   readonly 'runtime.channel.open': { readonly service: 'file'; readonly workspaceKey: WorkspaceKey; readonly path: string; readonly size: number; readonly sha256: string; readonly replace?: boolean } | { readonly service: 'pty'; readonly ptyId: string };

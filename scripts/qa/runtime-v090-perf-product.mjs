@@ -1,15 +1,17 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { productionSource, sourceSnapshot, validateSources, writeJson } from './runtime-v090-evidence.mjs';
+import { digest, writeJson } from './runtime-v090-evidence.mjs';
 import { buildApp, serveApp } from './runtime-v090-perf-app.mjs';
 import { connectApp, measureEventVisibility, measureInteractions, measureTree, openBrowser } from './runtime-v090-perf-browser.mjs';
 import { indexInventory, prepareFixture, repository, startBridge, startNative } from './runtime-v090-perf-harness.mjs';
 import { summaryAt } from '../../app/dev/runtime-v090/fixtures/inventory.mjs';
 import { SLO } from './runtime-v090-benchmark.mjs';
 import { shapeRuntimeNetwork } from './runtime-v090-perf-network.mjs';
+import { assertPerfCheckout, committedPerfSource } from './runtime-v090-perf-source.mjs';
 
 const { values } = parseArgs({ options: { count: { type: 'string' }, out: { type: 'string' }, rtt: { type: 'string', default: '0' } } });
 const count = Number(values.count);
@@ -17,16 +19,29 @@ const rttMs = Number(values.rtt);
 if (!Number.isInteger(count) || count < 10 || count > 100000 || count % 5 !== 0 || !values.out || ![0, 100].includes(rttMs)) {
   throw new Error('Use --count 10..100000 (multiple of 5) --out <new evidence directory> [--rtt 0|100]');
 }
-const output = path.resolve(values.out);
-await mkdir(output);
+const requestedOutput = path.resolve(values.out);
+const output = path.join(await realpath(path.dirname(requestedOutput)), path.basename(requestedOutput));
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' });
+const checkout = await realpath(repository);
+const relativeOutput = path.relative(checkout, output);
+if (relativeOutput && relativeOutput !== '..' && !relativeOutput.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeOutput)) {
+  try {
+    git('check-ignore', '-q', '--', relativeOutput);
+  } catch (error) {
+    if (error.status !== 1) throw error;
+    throw new Error('--out must be outside the candidate checkout or under a Git-ignored directory such as .omo/');
+  }
+}
 const productionRevision = git('rev-parse', 'HEAD').trim();
-const sourceFiles = git('ls-files', '-z', '--', 'app', 'bridge', 'shared', 'scripts/qa', 'public', 'vis_bridge.js', 'index.html', 'package.json', 'pnpm-lock.yaml', 'vite.config.ts').split('\0').filter(Boolean);
-const sourceHashes = sourceSnapshot(repository, sourceFiles);
+const { sourceHashes, identity: sourceIdentity } = committedPerfSource(repository, productionRevision);
+assertPerfCheckout(repository, productionRevision, sourceHashes);
+await mkdir(output);
 const report = {
+  runId: randomUUID(),
+  startedAt: new Date().toISOString(),
   measurementScope: 'single-sample-production-app-and-bridge',
   productionRevision,
-  productionSource: productionSource(repository, sourceHashes, productionRevision),
+  productionSource: sourceIdentity,
   sourceHashes,
   count,
   rttMs,
@@ -73,13 +88,13 @@ try {
     report.tree = await measureTree(browser.page, connected);
     report.index = await bridge.indexed();
     const historySample = { ...summaryAt(5), title: 'Vis measured native history session' };
-    report.interactions = await measureInteractions(browser.page, historySample);
+    report.interactions = await measureInteractions(browser, historySample);
     // Keep the browser profile and populated Bridge. Reconnect through the
     // normal entry form so the warm measurement still traverses the real wire.
     const warm = await connectApp(browser.page, web.origin, network.port);
     report.warmConnection = warm;
     report.warmTree = await measureTree(browser.page, warm);
-    report.warmInteractions = await measureInteractions(browser.page, historySample);
+    report.warmInteractions = await measureInteractions(browser, historySample);
     const eventVisibleMs = await measureEventVisibility(browser.page, native.descriptor.opencode, historySample.nativeSessionId);
     report.eventVisible = { ms: eventVisibleMs, budgetMs: SLO.eventVisibleMs, passed: eventVisibleMs <= SLO.eventVisibleMs };
     report.renderer = await browser.heap();
@@ -135,8 +150,7 @@ try {
     }
   }
   try {
-    validateSources(sourceHashes, repository);
-    if (git('rev-parse', 'HEAD').trim() !== productionRevision) throw new Error('Benchmark revision changed');
+    assertPerfCheckout(repository, productionRevision, sourceHashes);
   } catch (error) {
     failures.push({ reason: error });
   }
@@ -145,6 +159,18 @@ try {
     report.cleanupOrEvidenceErrors = failures.map(result => String(result.reason));
     process.exitCode = 1;
   }
-  writeJson(path.join(output, 'report.json'), report);
+  const finishedAt = new Date().toISOString();
+  const reportPath = path.join(output, 'report.json');
+  writeJson(reportPath, report);
+  writeJson(path.join(output, 'run-receipt.json'), {
+    runId: report.runId,
+    startedAt: report.startedAt,
+    finishedAt,
+    productionRevision,
+    count,
+    rttMs,
+    exitCode: process.exitCode ?? 0,
+    reportSha256: digest(await readFile(reportPath)),
+  });
   console.log(report.status, path.join(output, 'report.json'));
 }

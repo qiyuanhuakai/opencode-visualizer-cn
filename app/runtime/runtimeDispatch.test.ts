@@ -556,6 +556,28 @@ describe('runtime real WebSocket dispatch', () => {
       else expect(result.result).not.toHaveProperty('canonical');
     }
   });
+  it('attaches workspace metadata only for a consumer that opted in', async () => {
+    const { connection, services } = await runtime();
+    const { key } = services.workspace.workspaces[0];
+    const row = await services.store.get({ collection: 'workspaces', key });
+    if (!row?.value || typeof row.value !== 'object' || Array.isArray(row.value)) throw new Error('Missing workspace record');
+    const snapshot = await connection.request('runtime.snapshot', { collection: 'workspaces' });
+    if (!snapshot.ok) throw new Error('Snapshot unavailable');
+    const opened = await connection.request('runtime.observer.open', { after: (snapshot.result as { watermark: number }).watermark });
+    if (!opened.ok) throw new Error('Missing observer');
+    for (const resolveWorkspace of [undefined, true]) {
+      const value = { ...row.value, orphan: resolveWorkspace === true };
+      const pending = connection.request('runtime.observer.read', {
+        ...opened.result as object, resolveSummary: true, ...(resolveWorkspace ? { resolveWorkspace } : {}),
+      });
+      await services.store.mutate({ intentId: randomUUID(), changes: [{ collection: 'workspaces', key, value }] });
+      const result = await pending;
+      expect(result).toMatchObject({ ok: true, result: { kind: 'event', frame: { payload: { key, collection: 'workspaces' } } } });
+      if (!result.ok) throw new Error('Observer read failed');
+      if (resolveWorkspace) expect(result.result).toMatchObject({ canonical: { collection: 'workspaces', key, value } });
+      else expect(result.result).not.toHaveProperty('canonical');
+    }
+  });
   it('enforces trusted permission grants before file and native invocation', async () => {
     const { services } = await graph();
     const host = createRuntimeHost({ environmentId: services.target, role: 'local', services, grants: [{ ...services.grant, permissions: ['runtime:read'] }] }); host.start(); cleanups.push(() => host.stop());
@@ -679,7 +701,7 @@ describe('runtime real WebSocket dispatch', () => {
       expect(delivered).toHaveLength(index + 1);
     }
     expect(delivered[1]).toBeGreaterThan(delivered[0]);
-    expect(refused).toBe(1);
+    expect(refused).toBe(2);
     await observer.close();
   });
   it('persists connection and harness identities across bridge restart while refreshing store epoch', async () => {
