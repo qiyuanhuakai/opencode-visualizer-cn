@@ -603,6 +603,31 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     await expect(client.request(target, 'session.get', { ...native, session: { ...native.session, environmentId: other } })).rejects.toMatchObject({ code: 'unauthorized' });
     expect(socket.sent).toHaveLength(0);
   });
+  it('recovers a first snapshot page after the prior socket releases its view', async () => {
+    const { client, socket } = await fixture();
+    const pending = client.snapshot(target, 'workspaces', { onPage: () => {} });
+    const first = await socket.next();
+    socket.frame({ version: 1, kind: 'result', target, epoch: first.epoch, generation: first.generation, id: first.id, ok: false, typedError: { code: 'conflict', message: 'conflict: runtime.store.snapshot_limit' } });
+    const retry = await socket.next();
+    expect(retry.method).toBe('runtime.snapshot');
+    expect(retry.id).not.toBe(first.id);
+    socket.reply(retry, { version: 1, kind: 'snapshot', target, epoch: 'epoch', generation: 1, token: 'snapshot', revision: 1, watermark: 0, expiresAt: Date.now() + 10000, items: [], cursor: null });
+    const observer = await socket.next();
+    expect(observer.method).toBe('runtime.observer.open');
+    socket.reply(observer, { observerId: 'observer' });
+    await expect(pending).resolves.toMatchObject({ token: 'snapshot' });
+  });
+  it('bounds retries when all snapshot slots remain occupied', async () => {
+    const { client, socket } = await fixture();
+    const pending = client.snapshot(target, 'workspaces', { onPage: () => {} });
+    const refused = expect(pending).rejects.toMatchObject({ code: 'conflict', field: 'runtime.store.snapshot_limit' });
+    for (let i = 0; i < 4; i++) {
+      const request = await socket.next();
+      socket.frame({ version: 1, kind: 'result', target, epoch: request.epoch, generation: request.generation, id: request.id, ok: false, typedError: { code: 'conflict', message: 'conflict: runtime.store.snapshot_limit' } });
+    }
+    await refused;
+    expect(socket.sent.filter(frame => frame.method === 'runtime.snapshot')).toHaveLength(4);
+  });
   it('rejects expired atomic snapshots and closes their pending observer', async () => {
     const { client, socket } = await fixture();
     const snapshot = client.snapshot(target, 'workspaces', { onPage: () => {} });

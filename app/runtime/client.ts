@@ -486,6 +486,22 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
     attached.paging = true;
     const limit = (collection: Collection, cursor: string | null) =>
       collection === 'session_summaries' && cursor === null ? options.initialSummaryLimit ?? 200 : 200;
+    const readFirstPage = async (collection: Collection): Promise<Snapshot> => {
+      // A replacement socket can become ready before the peer finishes
+      // dropping the previous socket's view from the shared snapshot cap.
+      const delays = [25, 50, 100];
+      for (let attempt = 0; ; attempt++) {
+        requireValue(current(attached), 'request.generation', 'reconcile_required');
+        requireValue(!options.signal?.aborted && (options.selectionCurrent?.() ?? true), 'request.selection', 'cancelled');
+        try {
+          return await request(target, 'runtime.snapshot', { collection, cursor: null, limit: limit(collection, null) }, options);
+        } catch (error) {
+          if (!(error instanceof RuntimeRequestError) || error.code !== 'conflict' ||
+            error.field !== 'runtime.store.snapshot_limit' || attempt === delays.length) throw error;
+          await new Promise<void>(resolve => setTimeout(resolve, delays[attempt]));
+        }
+      }
+    };
     let first: Snapshot | undefined;
     let openingObserver: ReturnType<typeof observe> | undefined;
     const prefetched = new Map<Collection, Promise<Snapshot>>();
@@ -502,7 +518,9 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
         let cursor: string | null = null;
         do {
           const ahead = cursor === null ? prefetched.get(collection) : undefined;
-          const page: Snapshot = await (ahead ?? request(target, 'runtime.snapshot', { collection, ...(first ? { token: first.token } : {}), cursor, limit: limit(collection, cursor) }, options));
+          const page: Snapshot = await (ahead ?? (first
+            ? request(target, 'runtime.snapshot', { collection, token: first.token, cursor, limit: limit(collection, cursor) }, options)
+            : readFirstPage(collection)));
           if (ahead) prefetched.delete(collection);
           if (!first) {
             first = page;

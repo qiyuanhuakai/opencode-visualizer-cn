@@ -30,9 +30,8 @@
 //         units/flags), because the task-44 lane re-measures periodically and the measured values
 //         legitimately drift between runs.
 //     H5  the upgrade steps backup → bind → import → verify → cutover are complete and ordered.
-//     H6  the five platform limitations are stated.
-//     H7  the migration is described as in progress (task 48's legacy-routing retirement has
-//         landed; App.vue not wired).
+//     H6  the outstanding platform limitations are stated.
+//     H7  cutover requires successful verification and retains a rollback path.
 //     H8  the five backend-specific docs are preserved.
 //     H9  the task states in docs/collaboration.md equal the REAL TASK_STATES imported from
 //         shared/runtime/collaboration.js (the array parseTaskState enforces), so neither an
@@ -317,7 +316,7 @@ const PERFORMANCE_ROWS = Object.freeze([
 ]);
 const CONFIG_STATEMENTS = Object.freeze([
   '真实 headless Chromium', '真实 IndexedDB', '无 store mock', '10 次独立运行', 'nearest-rank p95',
-  '额外 RSS', '空 renderer 基线', 'store-substrate', '`App.vue` 尚未接入', '只对上述配置与数据集成立', '不得外推',
+  '额外 RSS', '空 renderer 基线', 'store-substrate', '不挂载 `App.vue`', '只对上述配置与数据集成立', '不得外推',
   // The dataset-composition disclosure (re-gate R1, re-bound by task 56): migration-v090.md's own
   // composition wording is the strongest form in the doc set, and H11's worktree-claim scan does not
   // read this file, so H4 guards the statement itself. The statement inverted when task 50 seeded
@@ -434,7 +433,7 @@ const WORKTREE_CLAIM_DOCS = Object.freeze(['README.md', 'RoadMap.md', 'CHANGELOG
  * The checker binds to the delivered literal, exactly like every other checker in this case binds
  * to the delivered bytes rather than to a remembered earlier phrasing.
  */
-const MIGRATION_STATUS = '迁移状态：部分完成';
+const MIGRATION_STATUS = '未全绿不得 cutover';
 const SEEDED_AND_GRADED = /已播种并已评分|seeded and graded/iu;
 const MEASURED_CONFIGURATION = /store-substrate/u;
 
@@ -878,11 +877,8 @@ function checkUpgradeSteps(migrationDocText) {
 
 /** Platform-limitation checker: the five disclosed limitations must be stated. */
 const PLATFORM_LIMITATIONS = Object.freeze([
-  '也没有声称任何 Windows 或 macOS 安装包产物',
-  '真实 GitHub-release 更新下载+校验路径',
-  '只在 Linux 实测',
-  '没有物理 GPU',
-  '只在 CI 工作流',
+  'GitHub Release 的在线更新下载与校验、Slurm 物理 GPU 仍需独立验收',
+  '隔离 Slurm 环境以 generic GRES 测试资源分配和预留',
 ]);
 function checkPlatformLimitations(migrationDocText) {
   const missing = PLATFORM_LIMITATIONS.filter((limitation) => !migrationDocText.includes(limitation));
@@ -893,7 +889,7 @@ function checkPlatformLimitations(migrationDocText) {
 /** Migration-status checker: the migration must be described as in progress, not complete. */
 function checkMigrationInProgress(migrationDocText) {
   assert.ok(!/迁移(?:状态)?[：:]?\s*(?:已经|已)?完成/u.test(migrationDocText), 'migration-v090.md claims the migration is complete');
-  for (const required of [MIGRATION_STATUS, 'task 48', '`App.vue` 尚未接入新运行时']) {
+  for (const required of [MIGRATION_STATUS, '保留旧来源只读副本与回退路径']) {
     assert.ok(migrationDocText.includes(required), `migration-v090.md must state "${required}"`);
   }
   return { status: 'in-progress' };
@@ -1025,12 +1021,12 @@ export async function run(context) {
         'docs/migration-v090.md section 10 parsed for the five ordered steps with bodies');
       const limitations = checkPlatformLimitations(migrationDoc);
       writeJson(path.join(runDir, 'platform-limitations.json'), limitations);
-      check('H6: the five platform limitations are stated', limitations, { limitations: PLATFORM_LIMITATIONS.length },
+      check('H6: the outstanding platform limitations are stated', limitations, { limitations: PLATFORM_LIMITATIONS.length },
         'docs/migration-v090.md section 9 checked for each disclosed limitation');
       const status = checkMigrationInProgress(migrationDoc);
       writeJson(path.join(runDir, 'migration-status.json'), status);
-      check('H7: the migration is described as in progress', status, { status: 'in-progress' },
-        'docs/migration-v090.md carries the migration-status statement (in progress, partially complete), names task 48, and claims no completion');
+      check('H7: cutover requires successful verification and a rollback path', status, { status: 'in-progress' },
+        'docs/migration-v090.md conditions cutover on verified migration and preserves the rollback path');
 
       // H8: the five backend-specific docs are preserved.
       const preserved = BACKEND_DOCS.map((file) => ({ file, bytes: statBytes(path.join(root, file)) }));
@@ -1162,16 +1158,14 @@ export async function run(context) {
 
       // F7: a platform limitation silently dropped.
       await rejection('F7: a dropped platform limitation is rejected', () => {
-        checkPlatformLimitations(migrationDoc.replace('4. **没有物理 GPU**：GRES 经 Slurm 真实 generic-GRES 记账演练（两个真实设备文件使 slurmd 真实报告 `gpu:2`），无真实 NVIDIA 设备。', '4. GPU 支持完整。'));
-      }, 'migration-v090.md is missing platform limitations: 没有物理 GPU', 'the platform limitation checker over a controlled copy that claims GPU support');
+        const limitation = PLATFORM_LIMITATIONS[0];
+        checkPlatformLimitations(migrationDoc.replace(limitation, 'GPU 支持完整'));
+      }, `migration-v090.md is missing platform limitations: ${PLATFORM_LIMITATIONS[0]}`, 'the platform limitation checker over a controlled copy that claims GPU support');
 
-      // F8: a doc claiming the migration is complete.
-      // F8: a doc claiming the migration is complete. The mutation targets the delivered status
-      // line whatever its current wording, so the negative control stays valid across a reword.
-      const statusLine = migrationDoc.split('\n').find((line) => line.startsWith(`**${MIGRATION_STATUS}`));
-      assert.ok(statusLine, 'migration-v090.md has no migration-status line to mutate');
+      // F8: replace the cutover condition with an unconditional completion claim.
+      assert.ok(migrationDoc.includes(MIGRATION_STATUS), 'migration-v090.md has no cutover condition to mutate');
       await rejection('F8: a doc claiming the migration is complete is rejected', () => {
-        checkMigrationInProgress(migrationDoc.replace(statusLine, statusLine.replace(MIGRATION_STATUS, '迁移状态：已完成')));
+        checkMigrationInProgress(migrationDoc.replace(MIGRATION_STATUS, '迁移状态：已完成'));
       }, 'migration-v090.md claims the migration is complete', 'the migration status checker over a controlled complete-claim copy');
 
       // F9/F10: a plausible-but-invented task state and a plausible-but-invented delivery rung.
@@ -1319,7 +1313,7 @@ export async function run(context) {
     artifacts,
     versions: { node: process.version, package: JSON.parse(packageText).version },
     cleanup: { temporaryRoot, removed: proof.cleanupRemoved },
-    evidenceBoundary: `This case checks the DELIVERED DOCUMENTATION and version/packaging bytes of task 47 only. The happy lane re-derives every doc claim from landed evidence (the task-23 measured capability sets in .omo/evidence/vis-v090/task-23/happy.json, the frozen task-44 report copies in .omo/evidence/vis-v090/task-47/performance-reports/ each cross-checked against the live task-44 report contract) or from the product modules themselves (OPEN_CODE_VERSION, CODEX_PROFILE, the TASK_STATES array of shared/runtime/collaboration.js, the HANDOFF_LADDER array of bridge/runtime/threads/handoffService.js, the frozen DATASET export of scripts/qa/runtime-v090-benchmark.mjs, the EVIDENCE_PAGE_BYTES/MAX_EVIDENCE_PAGE_BYTES/CHECKPOINT_MAX_BYTES/CHECKPOINT_MAX_ESTIMATED_TOKENS constants and the EVIDENCE_TOOLS descriptors of shared/runtime/context.js, the DEFAULT_TIMELINE_PAGE_LIMIT/MAX_TIMELINE_PAGE_LIMIT constants of bridge/runtime/threads/timelineProjection.js, the COLLABORATION_BUDGETS object of shared/runtime/collaboration.js, the MAILBOX_LIMITS object of bridge/runtime/collaboration/mailbox.js, the ARTIFACT_LIMITS object of bridge/runtime/collaboration/artifactStore.js, the nine-value LIMITS object of shared/runtime/protocol.js, the INSPECTION_STATES array of shared/runtime/harnessContract.js, electron/updateTransport.js verifyAsset, electron/updatePolicy.js sha256FromDigest, scripts/qa/build-artifact-check.mjs over a real production build, a real pnpm --lockfile-only resolution, and the real vis_bridge.js CLI in an isolated fixture). The five UI-TREE render metrics remain graded at the store-substrate level because App.vue is not yet wired to the runtime; this case claims nothing about running-app rendering. No product test suite is run, no browser UI is driven, no live SSH/Slurm run is performed (task 46 owns it), no platform installer is built (the only build is the repo's own Linux web production build), and NO PASS verdict is authored here. The failure lane drives the SAME checkers over controlled negative copies built inside the case-owned run directory and asserts the real rejection messages; no delivered file, lockfile, budget file or evidence file is modified.`,
+    evidenceBoundary: `This case checks the DELIVERED DOCUMENTATION and version/packaging bytes of task 47 only. The happy lane re-derives every doc claim from landed evidence (the task-23 measured capability sets in .omo/evidence/vis-v090/task-23/happy.json, the frozen task-44 report copies in .omo/evidence/vis-v090/task-47/performance-reports/ each cross-checked against the live task-44 report contract) or from the product modules themselves (OPEN_CODE_VERSION, CODEX_PROFILE, the TASK_STATES array of shared/runtime/collaboration.js, the HANDOFF_LADDER array of bridge/runtime/threads/handoffService.js, the frozen DATASET export of scripts/qa/runtime-v090-benchmark.mjs, the EVIDENCE_PAGE_BYTES/MAX_EVIDENCE_PAGE_BYTES/CHECKPOINT_MAX_BYTES/CHECKPOINT_MAX_ESTIMATED_TOKENS constants and the EVIDENCE_TOOLS descriptors of shared/runtime/context.js, the DEFAULT_TIMELINE_PAGE_LIMIT/MAX_TIMELINE_PAGE_LIMIT constants of bridge/runtime/threads/timelineProjection.js, the COLLABORATION_BUDGETS object of shared/runtime/collaboration.js, the MAILBOX_LIMITS object of bridge/runtime/collaboration/mailbox.js, the ARTIFACT_LIMITS object of bridge/runtime/collaboration/artifactStore.js, the nine-value LIMITS object of shared/runtime/protocol.js, the INSPECTION_STATES array of shared/runtime/harnessContract.js, electron/updateTransport.js verifyAsset, electron/updatePolicy.js sha256FromDigest, scripts/qa/build-artifact-check.mjs over a real production build, a real pnpm --lockfile-only resolution, and the real vis_bridge.js CLI in an isolated fixture). The five UI-TREE render metrics remain graded at the store-substrate level because the storage fixture does not mount App.vue; this case claims nothing about running-app rendering. No product test suite is run, no browser UI is driven, no live SSH/Slurm run is performed (task 46 owns it), no platform installer is built (the only build is the repo's own Linux web production build), and NO PASS verdict is authored here. The failure lane drives the SAME checkers over controlled negative copies built inside the case-owned run directory and asserts the real rejection messages; no delivered file, lockfile, budget file or evidence file is modified.`,
   };
 }
 

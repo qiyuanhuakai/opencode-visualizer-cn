@@ -1,49 +1,12 @@
-// F4 final verifier — ideal-state fidelity (plan Final verification wave, task 54 deliverable).
-//
-// Registration contract (scripts/qa/runtime-v090.mjs): a non-empty sourceFiles array and a
-// run(context) returning a JSON-serialisable result whose scenarios each carry assertions with
-// observed === expected. Task 54 taught parseSelector to accept `--verify FN --case happy|
-// failure` alongside the bare `--verify FN` form, so the lane is context.case when present and
-// the registered output name otherwise.
-//
-// HAPPY case — the plan's stated substance: "将八行join最终产物hash". This module performs the
-// eight-row join itself (the checker the F4 lane authored as .omo/evidence/vis-v090/final/
-// F4-join.mjs is ported here so the registered invocation runs it inside the runner): every
-// evidence path cited by the plan's Success criteria table is resolved, hashed (sha256 + byte
-// size) and classified, and a QA manifest counts as a proof only when its status is a passing
-// value. Tasks 1-19 were delivered in their own worktrees, so a path absent from the integration
-// evidence root is resolved in the owning task worktree before being declared missing — the
-// worktree fallback applies to the LIVE root only, so a deletion inside a negative COPY is
-// detectable. The checker verdict (PASS = no cited proof missing) is NOT the fidelity verdict:
-// per the plan the checker only guards against missing evidence, while the per-IS reviewer
-// adjudication (which rows are MET and which fall short, with the shortfall rows) is the F4
-// lane's recorded judgment, carried here in `fidelityVerdict` / `perIsEvaluation`.
-//
-// FAILURE case — the plan's stated substance: "failure在副本删除任一IS证明...必须拒绝". A
-// self-contained copy of the cited evidence set is built under the runner's temporary root, and
-// five isolated deletions/corruptions (a task-44 profile report, the F3 artifact, a task-43
-// manifest, the whole task-37 evidence directory, and a corrupted stress-report status) each
-// flip the owning row to INCOMPLETE and keep the verdict at REJECT with the exact missing entry.
-// After each mutation the copy is restored from the live bytes and the join returns to its
-// baseline, proving the rejection was caused by the deletion and not by a broken copy; the live
-// tree's join outcome is re-checked at the end to prove the live evidence was never touched.
-//
-// EXPECTED VALUES are frozen literals: the row/path counts transcribed from the plan's Success
-// criteria table, the PASSING status set, and the exact missing-entry strings the join emits.
-// The join's per-artifact sha256 values are observations recorded inside the observed blocks;
-// the load-bearing checks are the structural counts, the completeness verdict and the rejection
-// entries.
-//
-// Boundaries: this module writes nothing inside any evidence tree (the negative copy lives under
-// the runner's temporary root and is removed with the run); it edits no product, test, runner or
-// other lane's case file; the plan file itself is read-only to this lane, so the eight rows are
-// transcribed here verbatim with their plan line numbers.
+// F4 joins the plan citations and the reviewer assessment for the current
+// candidate. The negative lane checks that missing plan evidence is detected.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { artifact } from '../runtime-v090-evidence.mjs';
+import { artifact, validateEvidence } from '../runtime-v090-evidence.mjs';
 
 export const sourceFiles = [
   'scripts/qa/runtime-v090.mjs',
@@ -131,12 +94,19 @@ function runJoin(root, evidenceRoot) {
   return { label: root === evidenceRoot ? 'live' : 'negative-copy', verdict: allComplete ? 'PASS' : 'REJECT', rows, missing, generatedAt: new Date().toISOString() };
 }
 
+export function assertFinalVerifierReceipt(receipt, root, revision, verifier) {
+  validateEvidence(receipt, root);
+  assert.equal(receipt.productionRevision, revision, `${verifier} belongs to a different candidate`);
+  assert.equal(receipt.selector.verify, verifier, `expected a ${verifier} receipt`);
+  assert.equal(receipt.selector.case, 'happy', `${verifier} requires an explicit --case happy receipt`);
+}
+
 export async function run(context) {
   assert(context.verify === 'F4', 'this module is the F4 verifier registration');
   const lane = context.case ?? (/F4-negative/.test(path.basename(context.out)) ? 'failure' : 'happy');
   assert(['happy', 'failure'].includes(lane), 'unknown F4 lane');
   const root = context.root;
-  const evidenceRoot = path.join(root, '.omo/evidence/vis-v090');
+  const evidenceRoot = context.evidenceRoot ?? path.join(root, '.omo/evidence/vis-v090');
   const detailDir = path.join(root, '.omo/evidence/vis-v090/task-54/verify-F4');
   mkdirSync(detailDir, { recursive: true });
   const scenarios = [];
@@ -150,44 +120,50 @@ export async function run(context) {
   };
 
   if (lane === 'happy') {
+    const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+    const revision = git('rev-parse', 'HEAD');
+    const tree = git('rev-parse', 'HEAD^{tree}');
+    assert.equal(git('status', '--porcelain', '--untracked-files=no'), '', 'F4 requires the tracked candidate checkout');
+    const assessmentPath = path.join(evidenceRoot, 'final', 'F4-assessment.json');
+    const assessment = JSON.parse(readFileSync(assessmentPath, 'utf8'));
+    check('the assessment binds the current candidate', { revision: assessment.productionRevision, tree: assessment.productionTree }, { revision, tree }, assessmentPath);
+    artifacts.push(artifact(assessmentPath, 'f4-reviewer-assessment'));
+    for (const verifier of ['F1', 'F2', 'F3']) {
+      const file = path.join(evidenceRoot, 'final', `${verifier}.json`);
+      const receipt = JSON.parse(readFileSync(file, 'utf8'));
+      assertFinalVerifierReceipt(receipt, root, revision, verifier);
+      check(`the candidate has a genuine ${verifier} happy receipt`, { revision: receipt.productionRevision, verifier: receipt.selector.verify, lane: receipt.selector.case }, { revision, verifier, lane: 'happy' }, file);
+      artifacts.push(artifact(file, 'f4-final-verifier'));
+    }
+    assert.equal(typeof assessment.reviewer, 'string', 'reviewer identity required');
+    assert(assessment.reviewer.trim(), 'reviewer identity required');
+    assert.deepEqual(assessment.rows.map((row) => row.id).sort(), ROWS.map((row) => row.is), 'review must cover all eight IS rows');
+    for (const row of assessment.rows) {
+      assert(typeof row.finding === 'string' && row.finding.trim(), `${row.id} requires a reviewer finding`);
+      assert(Array.isArray(row.proofs) && row.proofs.length > 0, `${row.id} requires release proof files`);
+      const expected = ROWS.find((entry) => entry.is === row.id).paths.filter((file) => !file.startsWith('final/'));
+      let covered = false;
+      for (const proof of row.proofs) {
+        assert(typeof proof.path === 'string' && !path.isAbsolute(proof.path), `${row.id} requires an evidence-relative path`);
+        const file = path.resolve(evidenceRoot, proof.path);
+        assert(!path.relative(evidenceRoot, file).startsWith('..'), `${row.id} proof is outside the evidence root`);
+        const relative = path.relative(evidenceRoot, file).split(path.sep).join('/');
+        covered ||= expected.some((citation) => citation.endsWith('/') ? relative.startsWith(citation) : relative === citation);
+        assert(statSync(file).isFile(), `${row.id} requires a proof file`);
+        const bound = artifact(file, 'f4-reviewed-proof');
+        assert.equal(bound.sha256, proof.sha256, `${row.id} proof digest mismatch: ${proof.path}`);
+        artifacts.push(bound);
+      }
+      assert(covered, `${row.id} requires a file from its own plan citations`);
+      check(`${row.id} meets the plan in the reviewer assessment`, row.verdict, 'met', assessmentPath);
+    }
     const join = runJoin(evidenceRoot, evidenceRoot);
     const fileProofs = join.rows.flatMap((row) => row.proofs).filter((proof) => proof.kind === 'manifest');
     check('the join table is the plan\'s Success criteria table exactly: eight IS rows, every cited path present in the table with no invented or dropped citation', { rows: ROWS.length, uniquePaths: UNIQUE_PATHS.length, totalCitations: TOTAL_CITATIONS, rowIds: ROWS.map((row) => row.is) }, { rows: 8, uniquePaths: 43, totalCitations: 52, rowIds: ['IS-1', 'IS-2', 'IS-3', 'IS-4', 'IS-5', 'IS-6', 'IS-7', 'IS-8'] }, PLAN_LINE);
     check('every cited proof resolves and passes on the live tree: all 43 cited paths exist (a task lane\'s path resolves in its own worktree when absent from the integration root), every QA manifest among them carries a passing status, and the join verdict is therefore PASS with no missing entry', { verdict: join.verdict, missing: join.missing, rowsComplete: join.rows.filter((row) => row.rowComplete).length, rowsIncomplete: join.rows.filter((row) => !row.rowComplete).map((row) => row.is), fileProofs: fileProofs.length, directoryProofs: join.rows.flatMap((row) => row.proofs).filter((proof) => proof.kind === 'directory').length }, { verdict: 'PASS', missing: [], rowsComplete: 8, rowsIncomplete: [], fileProofs: fileProofs.length, directoryProofs: join.rows.flatMap((row) => row.proofs).filter((proof) => proof.kind === 'directory').length }, 'the eight-row join over the live evidence tree: every path resolved, hashed and status-classified');
     check('every file proof carries its sha256 and byte size, so the join binds the eight rows to the final artifact hashes and not to bare paths; the 16 file citations resolve to exactly the 11 distinct files the frozen table names (final/F3.json is cited by five rows, final/F2.json and the task-13/14 happy manifests by two each), and no two distinct files share a hash', { fileProofsWithHash: fileProofs.every((proof) => typeof proof.sha256 === 'string' && /^[0-9a-f]{64}$/.test(proof.sha256)), fileProofsWithBytes: fileProofs.every((proof) => Number.isInteger(proof.bytes) && proof.bytes > 0), fileCitations: fileProofs.length, distinctHashes: new Set(fileProofs.map((proof) => proof.sha256)).size, distinctFilePaths: UNIQUE_PATHS.filter((rel) => !rel.endsWith('/')).length }, { fileProofsWithHash: true, fileProofsWithBytes: true, fileCitations: 16, distinctHashes: 11, distinctFilePaths: 11 }, 'sha256 + byte size recorded for every file proof in the join, with the distinct-hash count equal to the distinct file paths the frozen Success-criteria table names');
 
-    // The per-IS reviewer adjudication carried by the registered invocation. This literal was
-    // the PRE-WAVE-9 first-pass judgment ("NOT ALL EIGHT IS ROWS MET", short IS-1/IS-2/IS-3/
-    // IS-7/IS-8, rootCause "the running application is not wired to the unified runtime ... /
-    // the plan-prescribed 200-worktree/five-category composition was never seeded or graded").
-    // Every clause of it is false at this head, and it contradicted the lane's own
-    // final/F4-DoneClaim.json at the SAME head e7f33e6be. Rewritten from source and from the
-    // landed F4 evidence, each field citing where it came from.
-    const perIsEvaluation = {
-      recordedBy: 'final/F4-DoneClaim.json (the F4 lane\'s reviewer adjudication, head e7f33e6be) and final-wave-rerun/F4-DoneClaim.json (this round\'s per-IS judgements and f4OwnFindingsStatus)',
-      verdict: 'ALL EIGHT IS ROWS MET ON THE DELIVERED BEHAVIOR - IS-2 honestly-partial on the layer of the tree numbers and on the user-facing "progressively available" property; IS-1/IS-3/IS-4/IS-5/IS-7/IS-8 met on the delivered behaviour with the F3-currency qualification; no row is short',
-      met: ['IS-1', 'IS-2 (honestly-partial on layer and on the user-facing property)', 'IS-3', 'IS-4', 'IS-5', 'IS-6', 'IS-7', 'IS-8'],
-      short: [],
-      perIs: {
-        'IS-1': 'MET on the delivered behaviour - app/App.vue:9923-9948 builds useRuntimeSessionTree from runtimeActionClient + runtimeEnvironmentId over the live /runtime transport and the sidebar renders the unified rows. Qualification (row 61): satisfied at this head - F3 re-ran here and the cited final/F3.json is the post-wiring artifact (passed, exitCode 0, 20 scenarios at e7f33e6be) carrying the running App.vue-over-/runtime evidence in its own verdictDetail; see rows.',
-        'IS-2': 'HONESTLY-PARTIAL - task 50 seeded the plan-prescribed 200-worktree / five-category composition into a real IndexedDB (vis-runtime-perf-tree) inside a real headless Chromium, enumerated it fully with independent Node-side digests and graded every dimension (dataset.worktrees {prescribed:200, seeded:200, graded:true}; 24 threshold rows all passing in standard, stress and network100ms). The partial is the layer: the tree numbers are graded at the store-substrate level because no browser-side product store carries worktree topology in that harness, and IS-2\'s "progressively available" is a user-perceived property that no running-app rendering was captured to prove. The stale clause "never seeded or graded" is false at this head.',
-        'IS-3': 'MET on the delivered behaviour - the /runtime transport is live and runtimeSelectedSessionRef prefers the unified tree\'s own SessionRef. Qualification (row 61): the same F3-currency dependency, now satisfied at this head - final/F3.json re-ran post-wiring at e7f33e6be; see rows.',
-        'IS-4': 'MET (re-judged on the new tree: the full app/ suite is green and the task-24 registered invocations are head-bound). Qualification (row 61): the same F3-currency dependency, now satisfied at this head - final/F3.json re-ran post-wiring at e7f33e6be; see rows.',
-        'IS-5': 'MET. Qualification (row 61): the same F3-currency dependency, now satisfied at this head - final/F3.json re-ran post-wiring at e7f33e6be; see rows.',
-        'IS-6': 'MET.',
-        'IS-7': 'MET on the delivered behaviour - app/App.vue:10117 provides RUNTIME_THREAD_STATE_KEY over the composed task-31/34 thread and handoff ports. Qualification (row 61): the same F3-currency dependency, now satisfied at this head - final/F3.json re-ran post-wiring at e7f33e6be; see rows.',
-        'IS-8': 'MET on the delivered behaviour - app/App.vue:10161 provides RUNTIME_COLLABORATION_STATE_KEY over the composed task-37/38/39 ports and :934 lazily mounts CollaborationPanel. Qualification (row 61): the same final/F2.json / final/F3.json currency dependency, now satisfied at this head - final/F3.json re-ran post-wiring at e7f33e6be; see rows.',
-      },
-      rootCause: 'the first-pass shortfalls this literal used to record are closed by delivered code and delivered evidence, not by assertion: the tasks 49-53 wiring in app/App.vue over a real /runtime transport (:9923-9948 the unified session tree, :10117 the thread state, :10161 the collaboration state, :934 the lazy CollaborationPanel mount) closed IS-1/IS-3/IS-7/IS-8, and task 50 seeding and grading the plan-prescribed 200-worktree / five-category composition closed IS-2. No row is left open - 61 (F3 currency) is closed at this head because F3 re-ran on this tree; see rows.',
-      rows: {
-        '61': 'CLOSED at this head - F3 re-ran on this tree and the cited final/F3.json is the current post-wiring artifact, not a first-pass capture: mtime 10-17 19:57, 78059 bytes, status "passed", exitCode 0, 20 scenarios, with productionRevision and head both e7f33e6be18d7affcf80abf63c04d7787ea73a6b and verdict "PASS WITH FINDINGS". Its own verdictDetail supplies the running-app evidence: "the real running App.vue over a real /runtime WebSocket to a real bridge (real hello, real snapshot/observer frames, 8 harnesses, 10-11 real sessions)", beside the real packaged Electron binary over its own registered CDP address, the real 0.9.0-alpha vis_bridge on a node-free PATH, and real sshd plus slurmctld and two slurmd; the final-wave-rerun happy leg re-executed green at the same head (F3-happy-rerun3.json: passed, exitCode 0, 20/20 scenarios, every screenshot a distinct non-trivial capture, every live and runner-bound F3 report green at its frozen scenario count). The three product findings F3 surfaces (F3-P2-1 subscription ordering, F3-P2-2 probeWorkspace never called, F3-P2-3 static node:module import blanking pnpm dev) were closed by the Wave-10 fixes in this tree - F3 surfaces them, it does not close them. The landed final-wave-rerun/F4-DoneClaim.json f4OwnFindingsStatus.row61_f3Currency recorded STILL OPEN; that entry predates the F3 re-run at this head and is superseded by the artifact above.',
-        '62': 'SPURIOUS - dismissed. task-50/teeth-proof.txt measured at 17 LIE: blocks over 56 lines with all three SLO-latency lies present (warm 600ms vs SLO 500, cold 1200ms vs SLO 1000, node 150ms vs SLO 100), so the first-pass claim of "14 blocks / 3 missing" is false and the row has nothing to close (f4OwnFindingsStatus.row62_teethGap, finding F4-TEETH-GAP-FINDING-IS-FALSE-AT-THIS-HEAD).',
-        '63': 'CLOSED at this head - the proof rule at verify-F4.mjs:123 requires parseError === null && status !== null && PASSING.has(status), and MUTATIONS (lines 214-215) registers both the deleted-status-key and the unparseable-manifest classes; the failure lane rejects all 7 mutations.',
-        '64': 'CLOSED at this head per the delivered bytes - app/App.vue:10077-10099 binds a delivery to the GIVEN session (selected is a three-part equality over environmentId / harnessInstanceId / nativeSessionId; binding = selected ? ambient : Object.freeze({ profileId: ambient.profileId, session: given })), so deliverFanout / deliverAttempt / deliverDelegation no longer answer {ackId: \'\'} for a participant that is not the currently selected session. The landed f4OwnFindingsStatus.row64_fanoutToNonSelectedParticipant recorded STILL OPEN (matching F2\'s APP-1); that entry predates the fix landing in the working tree and is superseded by the source.',
-      },
-      notVerified: 'no running-app walk was performed by this lane and none is claimed - F3\'s live walk could not attach to a runtime. The wiring is proven by the delivered bytes and the app/ test suite, not by a user-visible capture of the integrated app.',
-      checkerScope: 'this module\'s PASS means no cited proof is missing; it is not a fidelity verdict — per the plan the checker only guards against missing evidence',
-    };
+    const perIsEvaluation = assessment;
     const report = { lane: 'happy', join: { verdict: join.verdict, missing: join.missing, rows: join.rows.map((row) => ({ is: row.is, complete: row.rowComplete, proofs: row.proofs.map((proof) => ({ path: proof.path, present: proof.present, proof: proof.proof, kind: proof.kind ?? null, status: proof.status ?? null, sha256: proof.sha256, bytes: proof.bytes, origin: proof.origin })) })) }, perIsEvaluation };
     writeFileSync(path.join(detailDir, 'happy-join.json'), `${JSON.stringify(report, null, 2)}\n`);
     artifacts.push(artifact(path.join(detailDir, 'happy-join.json'), 'f4-happy-join'));

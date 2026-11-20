@@ -10,8 +10,14 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = '/home/qiyuaner/apps/vis_app/vis-wt/vis-v090-task-20';
+const root = fileURLToPath(new URL('../..', import.meta.url));
+const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const head = git('rev-parse', 'HEAD');
+const tree = git('rev-parse', 'HEAD^{tree}');
+if (git('status', '--porcelain', '--untracked-files=no')) throw new Error('Slurm direct lane requires a clean tracked checkout');
 const DRIVER = 'scripts/qa/runtime-v090-live-slurm.mjs';
 const lane = process.argv[2];
 if (!['happy', 'failure'].includes(lane)) throw new Error('usage: node <this> happy|failure');
@@ -22,6 +28,7 @@ const out = path.join(directory, 'slurm.json');
 const log = path.join(directory, 'slurm.log');
 const receiptPath = path.join(directory, 'slurm.receipt.json');
 const argv = [process.execPath, DRIVER, '--lab', 'isolated', '--modes', 'tcp,relay', '--case', lane, '--out', out];
+const driverSha256 = sha256(readFileSync(path.join(root, DRIVER)));
 const startedAt = new Date().toISOString();
 const started = Date.now();
 let exitCode = 0;
@@ -36,7 +43,9 @@ try {
 }
 const finishedAt = new Date().toISOString();
 writeFileSync(log, stream, 'utf8');
-const driverBytes = readFileSync(path.join(root, DRIVER));
+if (git('rev-parse', 'HEAD') !== head || git('status', '--porcelain', '--untracked-files=no') || sha256(readFileSync(path.join(root, DRIVER))) !== driverSha256) {
+  throw new Error('Slurm candidate changed during execution');
+}
 const receipt = {
   schemaVersion: 1,
   task: 46,
@@ -57,8 +66,11 @@ const receipt = {
   report: path.relative(root, out),
   reportExists: existsSync(out),
   driver: DRIVER,
-  driverSha256: createHash('sha256').update(driverBytes).digest('hex'),
-  head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
+  driverSha256,
+  reportSha256: existsSync(out) ? sha256(readFileSync(out)) : null,
+  logSha256: sha256(readFileSync(log)),
+  head,
+  tree,
 };
 writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
 console.log(`SLURM_${lane.toUpperCase()} exit=${exitCode} durationMs=${receipt.durationMs} report=${receipt.reportExists} driverSha256=${receipt.driverSha256.slice(0, 12)}`);

@@ -5,6 +5,7 @@ import { parseRuntimeSelection } from '../../runtime/pendingSelection';
 import { parseEnvironmentId, parseSessionRef, parseConnectionProfileId, decodeWorkspaceKey, encodeWorkspaceKey } from '../../../shared/runtime/identity.js';
 import { parseRuntimeParams } from '../../../shared/runtime/runtimeWire.js';
 import type { RuntimeMutationMethod } from '../../../shared/runtime/runtimeWire.js';
+import { decodeFrame } from '../../../shared/runtime/protocol.js';
 import type { Snapshot, Result } from '../../../shared/runtime/protocol.js';
 
 type Start = Readonly<{ url: string; token: string; expectedEnvironmentId?: string; profileId?: string }>;
@@ -27,6 +28,7 @@ let runtime: ReturnType<typeof useRuntimeConnection> | undefined;
 let channels: ReturnType<typeof createRuntimeChannels> | undefined;
 let scope: ReturnType<typeof effectScope> | undefined;
 let socketCount = 0;
+let observedSocket: WebSocket | undefined;
 let helloCount = 0;
 const observers = new Map<string, Observer>();
 function record(kind: string, value: unknown) {
@@ -43,7 +45,7 @@ async function stop() {
   channels?.dispose();
   runtime?.dispose();
   scope?.stop();
-  runtime = undefined; channels = undefined; scope = undefined;
+  runtime = undefined; channels = undefined; scope = undefined; observedSocket = undefined;
   statusNode.textContent = 'Disconnected';
   record('disposed', { socketCount, helloCount });
 }
@@ -57,7 +59,7 @@ async function start(input: Start) {
     reference: { url: input.url, ...(input.expectedEnvironmentId ? { expectedEnvironmentId: parseEnvironmentId(input.expectedEnvironmentId) } : {}), ...(input.profileId ? { profileId: parseConnectionProfileId(input.profileId) } : {}) },
     ...(selection ? { selection } : {}),
     resolveAuthentication: async () => authentication,
-    createWebSocket(url) { socketCount += 1; return new WebSocket(url); },
+    createWebSocket(url) { socketCount += 1; observedSocket = new WebSocket(url); return observedSocket; },
   }));
   if (!runtime) throw new Error('QA scope did not create a runtime');
   runtime.connection.subscribe(event => {
@@ -157,18 +159,37 @@ export const task19 = {
     const { runtime } = ready();
     const binding = runtime.client.scope(parseEnvironmentId(input.target)).binding;
     const id = `task19-auth-${crypto.randomUUID()}`;
-    let unsubscribe = () => {};
+    const socket = observedSocket;
+    if (!socket) throw new Error('QA runtime socket is unavailable');
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let observeResult: (event: MessageEvent) => void = () => {};
+    let observeClose: () => void = () => {};
     try {
       const result = await new Promise<Result>((resolve, reject) => {
         timer = setTimeout(() => reject(new Error('Raw authority probe deadline')), 5000);
-        unsubscribe = runtime.connection.subscribe(event => {
-          if (event.kind === 'frame' && event.frame.kind === 'result' && event.frame.id === id) resolve(event.frame);
-        });
+        // The production observer discards results for IDs it did not issue.
+        // Passively read this fixture's own WebSocket to verify the host reply.
+        observeResult = event => {
+          if (typeof event.data !== 'string') return;
+          try {
+            const frame = decodeFrame(event.data);
+            if (frame.kind === 'result' && frame.id === id && frame.target === binding.target
+              && frame.epoch === binding.epoch && frame.generation === binding.generation) resolve(frame);
+          } catch (error) { reject(error); }
+        };
+        observeClose = () => reject(new Error('Runtime socket closed during authority check'));
+        socket.addEventListener('message', observeResult);
+        socket.addEventListener('close', observeClose);
         runtime.connection.send({ version: 1, kind: 'request', ...binding, id, method: input.method, params: parseRuntimeParams(input.method, input.params), idempotencyKey: input.idempotencyKey });
       });
-      return { rejected: !result.ok, code: result.ok ? null : result.typedError.code, result };
-    } finally { clearTimeout(timer); unsubscribe(); }
+      const response = result.ok ? { rejected: false, code: null } : { rejected: true, code: result.typedError.code };
+      record('authority-probe-result', response);
+      return response;
+    } finally {
+      clearTimeout(timer);
+      socket.removeEventListener('message', observeResult);
+      socket.removeEventListener('close', observeClose);
+    }
   },
   async unsupported(target: string) {
     try { await snapshot(target); return { rejected: false, code: null, selection: toRaw(ready().runtime.selection.value) }; }

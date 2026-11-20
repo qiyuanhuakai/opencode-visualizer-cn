@@ -100,18 +100,30 @@ export async function createFixture(context) {
     for (const item of packages) {
       const directory = path.join(binaryRoot, item.key), tarball = path.join(binaryRoot, `${item.key}.tgz`);
       register({ kind: 'official-package-download', directory, tarball, name: item.name, version: item.version, teardown: 'private binaries removal' });
-      const metadataResponse = await fetch(`https://registry.npmjs.org/${item.name}/${item.version}`, { signal: AbortSignal.timeout(15000) }); assert(metadataResponse.ok);
+      const packageId = `${item.name}@${item.version}`;
+      const metadataResponse = await fetch(`https://registry.npmjs.org/${item.name}/${item.version}`, { signal: AbortSignal.timeout(15000) }); assert(metadataResponse.ok, `${packageId} metadata: HTTP ${metadataResponse.status}`);
       const metadata = await metadataResponse.json(); assert.equal(metadata.version, item.version);
-      const response = await fetch(metadata.dist.tarball, { signal: AbortSignal.timeout(15000) }); assert(response.ok);
-      const bytes = Buffer.from(await response.arrayBuffer());
-      const integrity = `sha512-${createHash('sha512').update(bytes).digest('base64')}`; assert.equal(integrity, metadata.dist.integrity);
+      const cacheRoot = process.env.VIS_TASK19_NATIVE_PACKAGE_CACHE;
+      let bytes;
+      if (cacheRoot) {
+        bytes = await readFile(path.join(cacheRoot, `${item.key}.tgz`));
+      } else {
+        try {
+          const response = await fetch(metadata.dist.tarball, { signal: AbortSignal.timeout(90000) });
+          assert(response.ok, `HTTP ${response.status}`);
+          bytes = Buffer.from(await response.arrayBuffer());
+        } catch (error) {
+          throw new Error(`Unable to download the official ${packageId} tarball: ${error.message}`, { cause: error });
+        }
+      }
+      const integrity = `sha512-${createHash('sha512').update(bytes).digest('base64')}`; assert.equal(integrity, metadata.dist.integrity, `${packageId} tarball integrity`);
       await writeFile(tarball, bytes, { mode: 0o600 }); await mkdir(directory);
       const command = ['tar', '-xzf', tarball, '-C', directory]; register({ kind: 'package-extraction-planned', command, teardown: 'wait actual exit and remove private extraction' });
       const extraction = spawn(command[0], command.slice(1), { stdio: ['ignore', 'ignore', 'pipe'] }); register({ kind: 'package-extraction-created', pid: extraction.pid });
       const [code, signal] = await once(extraction, 'exit'); assert.equal(code, 0); assert.equal(signal, null);
       const candidates = readdirSync(directory, { recursive: true, withFileTypes: true }).filter(entry => entry.isFile() && entry.name === item.key).map(entry => path.join(entry.parentPath, entry.name));
       assert.equal(candidates.length, 1, 'Official platform package has one exact executable');
-      item.path = candidates[0]; item.receipt = { name: metadata.name, version: metadata.version, dist: metadata.dist, tarballSha256: digest(bytes), executable: item.path, executableSha256: digest(await readFile(item.path)), extraction: { command, pid: extraction.pid, code, signal } };
+      item.path = candidates[0]; item.receipt = { name: metadata.name, version: metadata.version, dist: metadata.dist, tarballSha256: digest(bytes), tarballSource: cacheRoot ? 'verified-local-cache' : 'npm-registry', executable: item.path, executableSha256: digest(await readFile(item.path)), extraction: { command, pid: extraction.pid, code, signal } };
     }
     writeJson(path.join(context.runDir, 'supported-native-packages.json'), packages.map(item => item.receipt));
     const opencodeBinary = packages.find(item => item.key === 'opencode').path;
@@ -206,6 +218,18 @@ export async function createFixture(context) {
     const peerPort = await listen(versionPeer); register({ kind: 'version-peer-created', port: peerPort });
     own('version-peer', async () => { for (const socket of peerSockets) socket.destroy(); await closeServer(versionPeer); await assertPortReleased(peerPort); return { port: peerPort, exclusiveRebind: true }; });
     return { root, stateRoot, secondaryRoot, workspace, controlled, controlledSession, secondary, manager, writeCompletion, host, token, url: `ws://127.0.0.1:${port}/runtime`, versionUrl: `ws://127.0.0.1:${peerPort}/runtime`, native, resources, register, own, close, sql: () => sql(stateRoot), secondarySql: () => sql(secondaryRoot) };
-  } catch (error) { writeJson(path.join(context.runDir, 'fixture-failure.json'), { message: error.message, stack: error.stack, factoryErrors }); await close(); throw error; }
+  } catch (error) {
+    try {
+      writeJson(path.join(context.runDir, 'fixture-failure.json'), { message: error.message, stack: error.stack, factoryErrors });
+    } catch (reportError) {
+      console.error(`Task 19 fixture failure report: ${reportError.message}`);
+    }
+    try {
+      await close();
+    } catch (cleanupError) {
+      console.error(`Task 19 fixture cleanup after initialization failure: ${cleanupError.message}`);
+    }
+    throw error;
+  }
 }
 function processReceipt(pid, [code, signal]) { return { pid, code, signal, absent: !alive(pid) }; }
