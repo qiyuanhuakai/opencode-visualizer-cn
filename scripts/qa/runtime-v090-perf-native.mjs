@@ -48,6 +48,7 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (url.pathname === '/qa/event') {
+    response.setHeader('Access-Control-Allow-Origin', '*');
     const { wire } = opencode.find(({ summary }) => !summary.archived && !summary.parentId && summary.workspace);
     const title = url.searchParams.get('title') ?? 'Seed090 changed session';
     const updated = { ...wire, title, time: { ...wire.time, updated: Date.now() } };

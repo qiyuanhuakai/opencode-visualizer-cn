@@ -96,7 +96,7 @@ try {
     report.warmTree = await measureTree(browser.page, warm);
     report.warmInteractions = await measureInteractions(browser, historySample);
     const eventVisibleMs = await measureEventVisibility(browser.page, native.descriptor.opencode, historySample.nativeSessionId);
-    report.eventVisible = { ms: eventVisibleMs, budgetMs: SLO.eventVisibleMs, passed: eventVisibleMs <= SLO.eventVisibleMs };
+    report.eventVisible = { ms: eventVisibleMs, budgetMs: SLO.eventVisibleMs, passed: Number.isFinite(eventVisibleMs) && eventVisibleMs >= 0 && eventVisibleMs <= SLO.eventVisibleMs };
     report.renderer = await browser.heap();
     report.bridgeObservedRssPeakBytes = Math.max(rssPeak, bridge.rss().rssBytes);
     const label = count > 10000 ? '100k' : '10k';

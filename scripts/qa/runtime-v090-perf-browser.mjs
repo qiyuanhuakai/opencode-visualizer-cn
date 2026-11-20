@@ -1,4 +1,5 @@
 import { chromium } from 'playwright';
+import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { writeFile, mkdir, readFile, rm } from 'node:fs/promises';
@@ -255,33 +256,35 @@ export async function measureInteractions({ page, wire }, target) {
 }
 
 export async function measureEventVisibility(page, nativeOrigin, nativeSessionId) {
-  const title = 'Vis measured native title update';
+  const title = `Vis measured native title update ${randomUUID()}`;
   const endpoint = new URL('/qa/event', nativeOrigin);
   endpoint.searchParams.set('title', title);
-  await page.evaluate(expected => {
-    window.__visMeasuredTitle = new Promise(resolve => {
-      const observer = new MutationObserver(() => {
-        if (document.querySelector('.top-panel .selected-title')?.textContent?.trim() !== expected) return;
-        clearTimeout(timeout);
-        observer.disconnect();
-        resolve(performance.timeOrigin + performance.now());
+  return page.evaluate(async ({ url, title, nativeSessionId }) => {
+    let timeout;
+    let observer;
+    const visible = new Promise(resolve => {
+      observer = new MutationObserver(() => {
+        if (document.querySelector('.top-panel .selected-title')?.textContent?.trim() === title) {
+          resolve(performance.now());
+        }
       });
-      const timeout = setTimeout(() => { observer.disconnect(); resolve(null); }, 10000);
+      timeout = setTimeout(() => resolve(null), 10000);
       observer.observe(document.body, { subtree: true, characterData: true, childList: true });
     });
-  }, title);
-  const startedAt = Date.now();
-  const response = await fetch(endpoint, { signal: AbortSignal.timeout(5000) });
-  if (!response.ok) throw new Error(`Native title update failed (HTTP ${response.status})`);
-  const updated = await response.json();
-  if (updated.sessionId !== nativeSessionId || updated.title !== title) {
-    throw new Error('Native fixture updated a different session');
-  }
-  const visibleAt = await page.evaluate(async () => {
-    const time = await window.__visMeasuredTitle;
-    delete window.__visMeasuredTitle;
-    return time;
-  });
-  if (visibleAt === null) throw new Error('Native title update did not reach the selected session');
-  return visibleAt - startedAt;
+    try {
+      const startedAt = performance.now();
+      const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      if (!response.ok) throw new Error(`Native title update failed (HTTP ${response.status})`);
+      const updated = await response.json();
+      if (updated.sessionId !== nativeSessionId || updated.title !== title) {
+        throw new Error('Native fixture updated a different session');
+      }
+      const visibleAt = await visible;
+      if (visibleAt === null) throw new Error('Native title update did not reach the selected session');
+      return visibleAt - startedAt;
+    } finally {
+      clearTimeout(timeout);
+      observer.disconnect();
+    }
+  }, { url: endpoint.href, title, nativeSessionId });
 }
