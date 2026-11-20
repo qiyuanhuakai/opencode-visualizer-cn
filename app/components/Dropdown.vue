@@ -5,7 +5,7 @@
     :class="{ 'is-open': isActive, 'is-disabled': props.disabled }"
     :style="rootStyle"
   >
-    <slot name="trigger">
+    <slot name="trigger" :toggle="toggle" :expanded="isActive">
       <button
         type="button"
         class="ui-dropdown-button"
