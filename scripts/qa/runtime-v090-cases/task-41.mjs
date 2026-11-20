@@ -80,7 +80,7 @@ import {
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { createServer as createViteServer } from 'vite';
-import { loadBrowserKernel } from '../runtime-v090-browser-kernel.mjs';
+import { loadBrowserKernel, VENDORED_KERNEL_ROOT } from '../runtime-v090-browser-kernel.mjs';
 import { artifact, sourceSnapshot, writeJson } from '../runtime-v090-evidence.mjs';
 import { alive, assertPortReleased, createFixture, until } from './task-41-fixture.mjs';
 
@@ -304,6 +304,12 @@ export const sourceFiles = [...new Set([
   'app/dev/runtime-v090/task41.ts',
   'scripts/qa/runtime-v090-cases/task-41.mjs',
   'scripts/qa/runtime-v090-cases/task-41-fixture.mjs',
+  'scripts/qa/runtime-v090-browser-kernel.mjs',
+  'scripts/qa/vendor/omowright/scripts/omowright.mjs',
+  'scripts/qa/vendor/omowright/scripts/browser-engine-guard.mjs',
+  'scripts/qa/vendor/omowright/runtime/omowright/manifest.json',
+  'scripts/qa/vendor/omowright/runtime/omowright/index.js',
+  'scripts/qa/vendor/omowright/runtime/omowright/page-bundle.js',
   'scripts/qa/runtime-v090-evidence.mjs', 'scripts/qa/runtime-v090.mjs',
   'package.json',
 ])];
@@ -384,6 +390,12 @@ export async function run(context) {
   const ownedFiles = [
     'scripts/qa/runtime-v090-cases/task-41.mjs',
     'scripts/qa/runtime-v090-cases/task-41-fixture.mjs',
+  'scripts/qa/runtime-v090-browser-kernel.mjs',
+  'scripts/qa/vendor/omowright/scripts/omowright.mjs',
+  'scripts/qa/vendor/omowright/scripts/browser-engine-guard.mjs',
+  'scripts/qa/vendor/omowright/runtime/omowright/manifest.json',
+  'scripts/qa/vendor/omowright/runtime/omowright/index.js',
+  'scripts/qa/vendor/omowright/runtime/omowright/page-bundle.js',
     'app/dev/runtime-v090/task41.ts',
   ];
   const sourceBefore = sourceSnapshot(context.root, ownedFiles);
@@ -644,7 +656,12 @@ export async function run(context) {
     const pageUrl = `http://127.0.0.1:${port}/qa41/`;
     record('pageUrl', pageUrl);
 
-    const { omowright } = await loadBrowserKernel();
+    const kernel = await loadBrowserKernel({ ...process.env, VIS_BROWSER_KERNEL: undefined, OMOWRIGHT_ROOT: undefined });
+    assert.equal(kernel.kernelSource, 'vendored');
+    assert.equal(kernel.kernelPin.verified, true);
+    assert.equal(kernel.entry, path.join(VENDORED_KERNEL_ROOT, 'runtime/omowright/index.js'));
+    record('browserKernel', { entry: path.relative(context.root, kernel.entry), source: kernel.kernelSource, pin: kernel.kernelPin });
+    const { omowright } = kernel;
     const profileRoot = path.join(fixture.root, 'chromium-profile');
     fixture.register({ kind: 'Chromium-planned', executable: chromium.executablePath(), profile: profileRoot, teardown: 'owned browser.close; process exit; private root removal' });
     browser = await omowright.connectPipe({ browserPath: chromium.executablePath(), browserArgs: ['--headless', '--no-sandbox', '--disable-gpu', '--no-first-run', `--user-data-dir=${profileRoot}`], storageRoot: runDir, commandTimeoutMs: 180000 });
