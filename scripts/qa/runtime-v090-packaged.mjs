@@ -956,6 +956,7 @@ async function runHappy(outDir, options) {
 
       recorder.start('H13 pnpm qa:pty (node + sea + electron runtimes)');
       const pty = await run('pnpm', [...PNPM, 'qa:pty'], { timeoutMs: 600000 });
+      if (pty.status !== 0) console.error(`H13 PTY output:\n${`${pty.stdout}\n${pty.stderr}`.slice(-8000)}`);
       recorder.check('H13: pnpm qa:pty exit code', 0, pty.status);
       recorder.observe('H13: qa:pty output', pty.stdout.trim().split('\n').filter((line) => line.startsWith('VIS_PTY')).slice(-5));
       const matrix = path.join(ROOT, '.omo', 'evidence', 'electron-major-upgrade', 'task-11', 'local-matrix.json');
