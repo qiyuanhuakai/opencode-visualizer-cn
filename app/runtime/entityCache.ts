@@ -55,8 +55,8 @@ export const ENTITY_LIMITS = { entries: 2000, bytes: 16 * 1024 * 1024, page: 200
 export type EntityAddress = Readonly<{ profileId: ConnectionProfileId; target: EnvironmentId; collection: IndexCollection; key: string }>;
 export type EntityFence = Readonly<{ binding: Binding; localGeneration: number; snapshotRevision: number; snapshotWatermark: number; applicationGeneration: number }>;
 export type CachedEntity = Readonly<{ address: EntityAddress; revision: number; value?: JsonValue; chunked?: boolean; bytes?: number }>;
-export type EntityLease = Readonly<{ entity: CachedEntity; release(): void }>;
-type Entry = { readonly entity: CachedEntity; readonly lease: MemoryLease; references: number; retained: boolean };
+export type EntityLease = Readonly<{ entity: CachedEntity; retainedBytes: number; release(): void }>;
+type Entry = { readonly entity: CachedEntity; readonly lease: MemoryLease; readonly bytes: number; references: number; retained: boolean };
 type Admission = CachedEntity & Readonly<{ fence: EntityFence }>;
 
 export function estimateRetainedBytes(value: JsonValue, ceiling = ENTITY_LIMITS.bytes): number {
@@ -117,7 +117,7 @@ export function createEntityCache({ budget }: Readonly<{ budget: MemoryBudget }>
     const entity: CachedEntity = Object.freeze({ address: Object.freeze({ ...input.address }), revision: input.revision,
       ...(input.value === undefined ? {} : { value: input.value }),
       ...(input.chunked === undefined ? {} : { chunked: input.chunked }), ...(input.bytes === undefined ? {} : { bytes: input.bytes }) });
-    lease.commit(); entries.set(key, { entity, lease, references: 0, retained: true });
+    lease.commit(); entries.set(key, { entity, lease, bytes, references: 0, retained: true });
     return 'applied';
   }
   return {
@@ -139,7 +139,7 @@ export function createEntityCache({ budget }: Readonly<{ budget: MemoryBudget }>
       lease.commit(); entry.references++; entries.delete(key); entries.set(key, entry);
       let released = false;
       return {
-        entity: entry.entity,
+        entity: entry.entity, retainedBytes: entry.bytes + 256,
         release() {
           if (released) return;
           released = true; entry.references--; lease.release();

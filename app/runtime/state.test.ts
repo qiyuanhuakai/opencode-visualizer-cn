@@ -168,6 +168,28 @@ describe('runtime state through production client and frame codecs', () => {
     await vi.advanceTimersByTimeAsync(25);
     expect(read(state).items.find(item => item.key === key)?.value).toMatchObject({ title: 'incoming after window' });
   });
+  it('opens a usable session window when legal long summaries exceed the lookahead budget', async () => {
+    const { state, wire } = await fixture(500);
+    wire.summaryPageLimit = 14;
+    for (let index = 0; index < 500; index++) {
+      const identity = session(index), key = encodeSessionKey(identity);
+      wire.canonical.set(key, { collection: 'session_summaries', key, revision: index + 1,
+        value: { session: identity, title: 'x'.repeat(8192), directory: '/' + 'd'.repeat(16383) } });
+    }
+    await state.start(target, { collection: 'session_summaries', visible: true, sessionWindow: true });
+    expect(read(state)).toMatchObject({ status: 'partial', error: undefined });
+    const initial = read(state).items;
+    expect(initial.length).toBeGreaterThan(100);
+    expect(initial.length).toBeLessThan(200);
+    const usage = state.usage().entities;
+    expect(usage.residentBytes + usage.reservedBytes).toBeLessThanOrEqual(16 * 1024 * 1024);
+    wire.event(0, null);
+    await vi.advanceTimersByTimeAsync(25);
+    const view = read(state);
+    expect(view.items).toHaveLength(initial.length);
+    expect(view.items.some(item => item.key === encodeSessionKey(session(initial.length)))).toBe(true);
+  });
+
   it('retains backfill across byte-limited summary pages', async () => {
     const { state, wire } = await fixture(250);
     wire.summaryPageLimit = 62;
