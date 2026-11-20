@@ -42,7 +42,7 @@ vi.mock('../composables/useGlobalEvents', () => ({ useGlobalEvents: () => ({
 type NativeHistory = Readonly<{ info: Readonly<Record<string, JsonValue>>; parts: readonly JsonValue[] }>;
 
 /** Real App + TCP/WebSocket + production Runtime/SQLite, controlled native harness boundary. */
-export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; bridgeToken?: string; additionalModelId?: string; editableProvider?: boolean; archivedAcpSession?: boolean; secondWorktree?: boolean; codexFactory?: RuntimeDriverFactory; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
+export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; bridgeToken?: string; additionalModelId?: string; editableProvider?: boolean; beforeProviderWrite?: () => Promise<void>; beforeProviderRead?: () => Promise<void>; archivedAcpSession?: boolean; secondWorktree?: boolean; codexFactory?: RuntimeDriverFactory; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
   // Load the Node worker owner without Vite's browser asset URL rewriting.
   // The worker itself still runs the production module in a real subprocess.
   const requireNodeModule = createRequire(path.resolve(process.cwd(), 'package.json'));
@@ -131,7 +131,11 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
           },
         }, native: Object.fromEntries(Object.entries(queries).map(([operation, value]) => [operation, async input => {
           nativeQueries.push({ operation, ...(input.session ? { session: input.session } : {}) });
-          if (operation === 'getGlobalConfig') return config;
+          if (operation === 'getGlobalConfig') {
+            const read = config;
+            await options.beforeProviderRead?.();
+            return read;
+          }
           if (operation === 'updateGlobalConfig' && editableConfig) {
             const params = input.params;
             if (!params || typeof params !== 'object' || Array.isArray(params)) throw new Error('Fixture config parameters required');
@@ -142,6 +146,7 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
             const changes = patch as Readonly<Record<string, JsonValue>>;
             const accepted = await editableConfig.accept({ idempotencyKey, method: operation, payload: changes });
             return editableConfig.execute(accepted.operationId, async () => {
+              await options.beforeProviderWrite?.();
               config = { ...config, ...changes };
               return config;
             });

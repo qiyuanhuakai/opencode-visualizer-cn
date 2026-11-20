@@ -595,13 +595,14 @@
       :provider-config="managementProviderConfig"
       :backend-kind="managementManifest?.kind ?? activeBackendKind"
       :native-adapter="managementNativeAdapter ?? undefined"
+      :native-scope="managementAgentScope ?? undefined"
       :native-kimi-providers-client="managementKimiProviders ?? undefined"
       :dsh-rpc-client="managementDshRpcClient"
       :harness-scope="harnessInstanceScope ?? undefined"
       :harness-manifests="harnessManifests"
       @close="isProviderManagerOpen = false"
       @update:model-visibility="handleModelVisibilityUpdate"
-      @config-updated="managementProviderConfig = $event"
+      @config-updated="applyManagementProviderConfig"
       @providers-changed="refreshManagementProviders"
       @open-acp-auth-terminal="openAcpAuthTerminal"
     >
@@ -802,7 +803,7 @@ import { useFileTree, type FileNode } from './composables/useFileTree';
 import { useForgeAuxiliary } from './composables/useForgeAuxiliary';
 import { usePtyOneshot } from './composables/usePtyOneshot';
 import { decideWorkspaceCapability } from './composables/useWorkspaceCapability';
-import { type RuntimeClient } from './runtime/client';
+import { type RuntimeClient, type RuntimeScope } from './runtime/client';
 import type { RuntimeActionClient } from './composables/useRuntimeSessionActions';
 import { useRuntimeConversation } from './composables/useRuntimeConversation';
 import { useRuntimeConnection } from './composables/useRuntimeConnection';
@@ -11081,6 +11082,16 @@ watch([runtimeKimiSessionClient, activeBackendKind, connectionState], async ([na
     }
   }
 });
+type ManagementAgentScope = RuntimeScope & { readonly client: RuntimeClient; readonly harness: HarnessManifest['harnessInstanceId'] };
+const managementAgentScope = computed<ManagementAgentScope | null>(previous => {
+  const manifest = managementManifest.value, client = runtimeActionClient.value;
+  if (!runtimeOnline.value || !manifest || !client) return null;
+  const { environmentId, harnessInstanceId } = manifest;
+  if (previous?.client === client && previous.harness === harnessInstanceId &&
+    previous.binding.target === environmentId && previous.isCurrent()) return previous;
+  try { return { ...client.scope(environmentId), client, harness: harnessInstanceId }; }
+  catch { return null; }
+});
 const managementNativeAdapter = computed(() => {
   const manifest = managementManifest.value;
   const client = runtimeActionClient.value;
@@ -11118,27 +11129,41 @@ const managementProviders = ref<ProviderInfo[]>([]);
 const managementConnectedProviders = ref<string[]>([]);
 const managementProviderConfig = ref<ProviderConfigState | null>(null);
 let managementProviderRevision = 0;
-async function refreshManagementProviders() {
-  const revision = ++managementProviderRevision;
-  const adapter = managementNativeAdapter.value;
+let managementProviderConfigRevision = 0;
+function applyManagementProviderConfig(config: ProviderConfigState) {
+  managementProviderConfigRevision++;
+  managementProviderConfig.value = config;
+}
+watch(managementAgentScope, () => {
+  managementProviderRevision++;
   managementProviders.value = [];
   managementConnectedProviders.value = [];
   managementProviderConfig.value = null;
-  if (!adapter) return;
+});
+async function refreshManagementProviders() {
+  const revision = ++managementProviderRevision;
+  const configRevision = managementProviderConfigRevision;
+  const scope = managementAgentScope.value;
+  const adapter = managementNativeAdapter.value;
+  if (!scope || !adapter) return;
   const [providersResult, configResult] = await Promise.allSettled([
     adapter.listProviders?.(), adapter.getGlobalConfig?.(),
   ]);
-  if (revision !== managementProviderRevision || adapter !== managementNativeAdapter.value) return;
+  if (revision !== managementProviderRevision || scope !== managementAgentScope.value || !scope.isCurrent()) return;
   if (providersResult.status === 'fulfilled' && providersResult.value) {
     const data = providersResult.value as ProviderResponse;
     managementProviders.value = Array.isArray(data.all) ? data.all : [];
     managementConnectedProviders.value = Array.isArray(data.connected) ? data.connected : [];
   }
-  if (configResult.status === 'fulfilled' && configResult.value) managementProviderConfig.value = configResult.value as ProviderConfigState;
+  if (configRevision === managementProviderConfigRevision && configResult.status === 'fulfilled' && configResult.value) {
+    managementProviderConfig.value = configResult.value as ProviderConfigState;
+  }
 }
 watch(managementNativeAdapter, adapter => {
   managementCodexApi.disconnectTransport();
   if (adapter instanceof CodexAdapter) managementCodexApi.attachRuntimeAdapter(adapter, '');
+});
+watch([managementNativeAdapter, managementAgentScope], () => {
   if (isProviderManagerOpen.value) void refreshManagementProviders();
 });
 watch(isProviderManagerOpen, open => { if (open) void refreshManagementProviders(); });
