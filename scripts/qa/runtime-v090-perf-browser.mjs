@@ -278,6 +278,11 @@ export async function measureInteractions({ page, wire }, target) {
       .find(session => session.nativeSessionId === target.nativeSessionId);
     if (!observedHistorySession) throw new Error('Renderer did not open history for the selected session');
   }
+  // History selection starts from search. Clear that independent UI state
+  // before measuring interaction on the normal virtualized tree.
+  await search.fill('');
+  await search.press('Enter');
+  await page.getByTestId('search-results').waitFor({ state: 'hidden', timeout: 5000 });
   const scroll = page.getByTestId('unified-scroll');
   await scroll.evaluate(element => { element.scrollTop = 0; });
   const group = scroll.locator('[data-row-kind="repo"][aria-expanded], [data-row-kind="section"][aria-expanded]').first();
@@ -294,7 +299,8 @@ export async function measureInteractions({ page, wire }, target) {
       row.click();
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       if (document.querySelector(selector)?.getAttribute('aria-expanded') !== String(expanded === 'false')) {
-        throw new Error('Measured tree group did not toggle');
+        const currentRow = document.querySelector(selector);
+        throw new Error(`Measured tree group did not toggle: iteration=${index} kind=${row.getAttribute('data-row-kind')} previous=${expanded} current=${currentRow?.getAttribute('aria-expanded')} sameNode=${row === currentRow}`);
       }
       samples.push(performance.now() - start);
     }
