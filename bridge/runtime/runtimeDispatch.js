@@ -187,6 +187,9 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
       if (frame.method === 'runtime.inspect' && result.treeBootstrap) return { ...result, treeBootstrap: result.treeBootstrap.map(rebind) };
       if (frame.method === 'runtime.snapshot') return rebind(result);
       if (frame.method === 'runtime.replay') return { ...rebind(result), events: result.events.map(rebind) };
+      if (frame.method === 'runtime.observer.read' && result?.kind === 'events') {
+        return { ...result, events: result.events.map(delivery => ({ ...delivery, frame: rebind(delivery.frame) })) };
+      }
       if (frame.method === 'runtime.observer.read' && result && ['event', 'control'].includes(result.kind)) return { ...result, frame: rebind(result.frame) };
       if (frame.method === 'runtime.channel.open') {
         requireValue(remoteChannelSerial < 0xffffffff, 'runtime.remote_channels', 'source_unavailable');
@@ -357,12 +360,26 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
           observer.reading = true;
           try {
             const delivery = await observer.value.waitRead(signal, params.resolveSummary ? INLINE_OBSERVER_WAIT_MS : undefined);
-            if (!params.resolveSummary || delivery?.kind !== 'event' || delivery.frame.type !== 'entity.patch') return delivery;
-            const collection = delivery.frame.payload?.collection;
-            if (collection !== 'session_summaries' && !(params.resolveWorkspace && collection === 'workspaces')) return delivery;
-            const canonical = await resolveEntity(entry, delivery.frame).catch(() => undefined);
+            if (delivery?.kind !== 'event') return delivery;
+            const events = [delivery];
+            if (params.maxEvents > 1) {
+              const reserve = 256 * 1024 - Buffer.byteLength(JSON.stringify(delivery));
+              events.push(...observer.value.drainEvents(params.maxEvents - 1, reserve));
+            }
+            let canonicalBudget = 512 * 1024;
+            const resolved = await Promise.all(events.map(async item => {
+              const collection = item.frame.payload?.collection;
+              if (!params.resolveSummary || item.frame.type !== 'entity.patch'
+                || (collection !== 'session_summaries' && !(params.resolveWorkspace && collection === 'workspaces'))) return item;
+              const canonical = await resolveEntity(entry, item.frame).catch(() => undefined);
+              if (!canonical) return item;
+              const bytes = Buffer.byteLength(JSON.stringify(canonical));
+              if (bytes > canonicalBudget) return item;
+              canonicalBudget -= bytes;
+              return { ...item, canonical };
+            }));
             requireValue(entry.observer === observer, 'runtime.observer', 'reconcile_required');
-            return canonical ? { ...delivery, canonical } : delivery;
+            return resolved.length === 1 ? resolved[0] : { kind: 'events', events: resolved };
           } finally { observer.reading = false; }
         }
         if (frame.method === 'runtime.observer.resume') { observer.value.resume(params.after); return { resumed: true }; }

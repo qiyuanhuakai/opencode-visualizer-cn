@@ -556,6 +556,26 @@ describe('runtime real WebSocket dispatch', () => {
       else expect(result.result).not.toHaveProperty('canonical');
     }
   });
+  it('returns queued events in bounded sequence batches only for opted-in reads', async () => {
+    const { connection, services } = await runtime();
+    const snapshot = await connection.request('runtime.snapshot', { collection: 'session_summaries' });
+    if (!snapshot.ok) throw new Error('Snapshot unavailable');
+    const { watermark } = snapshot.result as { watermark: number };
+    const opened = await connection.request('runtime.observer.open', { after: watermark });
+    if (!opened.ok) throw new Error('Missing observer');
+    const changes = ['one', 'two', 'three'].map(title => {
+      const session = parseSessionRef({ environmentId: services.target, harnessInstanceId: services.registry.list()[0].harnessInstanceId, nativeSessionId: title });
+      return { collection: 'session_summaries', key: encodeSessionKey(session), value: { session, title } };
+    });
+    await services.store.mutate({ intentId: randomUUID(), changes });
+    const params = opened.result as object;
+    const batch = await connection.request('runtime.observer.read', { ...params, resolveSummary: true, maxEvents: 2 });
+    expect(batch).toMatchObject({ ok: true, result: { kind: 'events', events: changes.slice(0, 2).map(({ key, value }) => ({
+      kind: 'event', frame: { payload: { key } }, canonical: { key, value },
+    })) } });
+    const next = await connection.request('runtime.observer.read', params);
+    expect(next).toMatchObject({ ok: true, result: { kind: 'event', frame: { payload: { key: changes[2].key } } } });
+  });
   it('attaches workspace metadata only for a consumer that opted in', async () => {
     const { connection, services } = await runtime();
     const { key } = services.workspace.workspaces[0];
@@ -727,7 +747,7 @@ describe('runtime real WebSocket dispatch', () => {
       expect(delivered).toHaveLength(index + 1);
     }
     expect(delivered[1]).toBeGreaterThan(delivered[0]);
-    expect(refused).toBe(2);
+    expect(refused).toBe(3);
     expect(renderer.supports(target, 'runtime.session.search')).toBe(!legacySearch);
     if (!legacySearch) {
       const search = await renderer.request(target, 'runtime.session.search', { query: 'still live', kinds: ['opencode', 'unknown'] });

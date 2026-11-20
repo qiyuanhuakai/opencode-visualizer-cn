@@ -73,6 +73,15 @@ export function createEventObserver({ binding: input, after, isCurrent, onClose 
       const chunk = bulk.shift();
       return chunk ? { kind: 'binary', ...chunk } : null;
     },
+    drainEvents(limit, bytes) {
+      check();
+      const events = [];
+      while (!recovery && control.length === 0 && events.length < limit && normal[0]?.bytes <= bytes) {
+        bytes -= normal[0].bytes;
+        events.push(observer.read());
+      }
+      return events;
+    },
     async waitRead(signal, waitMs = 250) {
       if (wakeRead) throw new StoreError('conflict', 'observer_read_pending');
       if (signal?.aborted) throw new StoreError('cancelled', 'observer_read_aborted');

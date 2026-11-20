@@ -53,7 +53,7 @@ export interface RuntimeParams {
   readonly 'runtime.replay': { readonly after: number; readonly limit?: number };
   readonly 'runtime.entity.resolve': { readonly event: RuntimeEvent };
   readonly 'runtime.observer.open': { readonly after: number };
-  readonly 'runtime.observer.read': ObserverRef & { readonly resolveSummary?: true; readonly resolveWorkspace?: true };
+  readonly 'runtime.observer.read': ObserverRef & { readonly resolveSummary?: true; readonly resolveWorkspace?: true; readonly maxEvents?: number };
   readonly 'runtime.observer.resume': ObserverRef & { readonly after: number };
   readonly 'runtime.observer.close': ObserverRef;
   readonly 'runtime.channel.open': { readonly service: 'file'; readonly workspaceKey: WorkspaceKey; readonly path: string; readonly size: number; readonly sha256: string; readonly replace?: boolean } | { readonly service: 'pty'; readonly ptyId: string };
@@ -98,7 +98,7 @@ export interface RuntimeResults {
   readonly 'runtime.replay': Replay;
   readonly 'runtime.entity.resolve': CanonicalEntity;
   readonly 'runtime.observer.open': ObserverRef;
-  readonly 'runtime.observer.read': ObserverDelivery;
+  readonly 'runtime.observer.read': ObserverDelivery | { readonly kind: 'events'; readonly events: readonly Extract<ObserverDelivery, { kind: 'event' }>[] };
   readonly 'runtime.observer.resume': { readonly resumed: true };
   readonly 'runtime.observer.close': { readonly closed: true };
   readonly 'runtime.channel.open': ChannelDescriptor;

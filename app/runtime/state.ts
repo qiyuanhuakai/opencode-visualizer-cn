@@ -216,6 +216,7 @@ export function createRuntimeState(options: RuntimeStateOptions) {
     try {
       const results = await Promise.allSettled(deliveries.map(delivery => {
         if (delivery?.kind !== 'event' || delivery.frame.type !== 'entity.patch' || !record(delivery.frame.payload) || !collection(delivery.frame.payload.collection)) return Promise.resolve(undefined);
+        if (delivery.canonical) return Promise.resolve(delivery.canonical);
         return client.request(entry.target, 'runtime.entity.resolve', { event: delivery.frame }, { signal: entry.controller.signal, selectionCurrent: () => current(entry) && entry.applicationGeneration === applicationGeneration });
       }));
       check(entry);

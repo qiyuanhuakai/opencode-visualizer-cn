@@ -16,7 +16,7 @@ export type RequestMethod = Exclude<RuntimeMethod, MutationMethod>;
 export type RequestOptions = { readonly signal?: AbortSignal; readonly selectionCurrent?: () => boolean; readonly onDrained?: () => void };
 export type RuntimeScope = { readonly binding: Binding; readonly generation: number; readonly isCurrent: () => boolean };
 type Collection = RuntimeParams['runtime.snapshot']['collection'];
-type Target = { readonly hello: Hello; readonly state: ProtocolState; readonly generation: number; paging: boolean; observerResolution?: 'workspaces' | 'summaries' | 'legacy'; indexSnapshot?: Readonly<{ token: string; revision: number; watermark: number; expiresAt: number }> };
+type Target = { readonly hello: Hello; readonly state: ProtocolState; readonly generation: number; paging: boolean; observerBatch?: boolean; observerResolution?: 'workspaces' | 'summaries' | 'legacy'; indexSnapshot?: Readonly<{ token: string; revision: number; watermark: number; expiresAt: number }> };
 type Pending = {
   readonly target: Target; readonly method: RuntimeMethod; readonly current: () => boolean;
   readonly slot: 'normal' | 'reserved';
@@ -446,10 +446,12 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
         requireValue(!reading && !attached.paging, 'observer.busy', 'conflict');
         reading = true;
         try {
-          const fetchDelivery = async (): Promise<ObserverDelivery> => {
+          const fetchDelivery = async (): Promise<RuntimeResults['runtime.observer.read']> => {
             const resolution = attached.observerResolution ?? 'workspaces';
+            const batch = attached.observerBatch !== false && resolution !== 'legacy';
             const params = {
               observerId,
+              ...(batch ? { maxEvents: 16 } : {}),
               ...(resolution === 'legacy' ? {} : { resolveSummary: true as const }),
               ...(resolution === 'workspaces' ? { resolveWorkspace: true as const } : {}),
             };
@@ -458,7 +460,8 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
               if (resolution === 'legacy' || !(error instanceof RuntimeRequestError)
                 || error.code !== 'invalid_request' || error.field !== 'fields') throw error;
               // Older Bridges reject optional fields before advancing the observer.
-              attached.observerResolution = resolution === 'workspaces' ? 'summaries' : 'legacy';
+              if (batch) attached.observerBatch = false;
+              else attached.observerResolution = resolution === 'workspaces' ? 'summaries' : 'legacy';
               return fetchDelivery();
             }
           };
@@ -466,6 +469,16 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
           active();
           if (delivery === null) return null;
           switch (delivery.kind) {
+            case 'events': {
+              for (const item of delivery.events) attached.state.receive(item.frame);
+              for (let offset = 0; offset < delivery.events.length; offset += 4) {
+                const items = delivery.events.slice(offset, offset + 4);
+                if (options.onDeliveries) await options.onDeliveries(items);
+                else for (const item of items) await options.onDelivery(item);
+                for (const item of items) for (const listener of deliveryListeners) listener(target, item);
+              }
+              return delivery.events.at(-1)!;
+            }
             case 'event': attached.state.receive(delivery.frame); break;
             case 'control':
               requireValue(delivery.frame.target === target && delivery.frame.epoch === attached.hello.epoch && delivery.frame.generation === attached.hello.generation, 'control.binding', 'reconcile_required');
