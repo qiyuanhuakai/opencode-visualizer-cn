@@ -346,12 +346,15 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     const observer = await opening;
     const reading = observer.read();
     const extended = await socket.next();
-    expect(extended.params).toEqual({ observerId: 'observer', resolveSummary: true, resolveWorkspace: true });
+    expect(extended.params).toEqual({ observerId: 'observer', maxEvents: 16, resolveSummary: true, resolveWorkspace: true });
     const rejectOptions = (request: typeof extended) => socket.frame({
       version: 1, kind: 'result', target, epoch: request.epoch, generation: request.generation,
       id: request.id, ok: false, typedError: { code: 'invalid_request', message: 'invalid_request: fields' },
     });
     rejectOptions(extended);
+    const unbatched = await socket.next();
+    expect(unbatched.params).toEqual({ observerId: 'observer', resolveSummary: true, resolveWorkspace: true });
+    rejectOptions(unbatched);
     let supported = await socket.next();
     expect(supported.params).toEqual({ observerId: 'observer', resolveSummary: true });
     if (!summaries) {

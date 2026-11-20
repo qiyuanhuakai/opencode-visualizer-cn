@@ -214,14 +214,15 @@ export function createRuntimeState(options: RuntimeStateOptions) {
     }
     const applicationGeneration = entry.applicationGeneration;
     try {
-      const results = await Promise.allSettled(deliveries.map(delivery => {
-        if (delivery?.kind !== 'event' || delivery.frame.type !== 'entity.patch' || !record(delivery.frame.payload) || !collection(delivery.frame.payload.collection)) return Promise.resolve(undefined);
+      const lookups = deliveries.map(async delivery => {
+        if (delivery?.kind !== 'event' || delivery.frame.type !== 'entity.patch' || !record(delivery.frame.payload) || !collection(delivery.frame.payload.collection)) return undefined;
+        if (delivery.canonical) return delivery.canonical;
         return client.request(entry.target, 'runtime.entity.resolve', { event: delivery.frame }, { signal: entry.controller.signal, selectionCurrent: () => current(entry) && entry.applicationGeneration === applicationGeneration });
-      }));
-      check(entry);
-      requireValue(entry.applicationGeneration === applicationGeneration, 'state.application', 'reconcile_required');
+      }).map(lookup => Promise.allSettled([lookup]));
       for (let index = 0; index < deliveries.length; index++) {
-        const result = results[index];
+        const [result] = await lookups[index];
+        check(entry);
+        requireValue(entry.applicationGeneration === applicationGeneration, 'state.application', 'reconcile_required');
         if (result.status === 'rejected') throw result.reason;
         await deliver(entry, deliveries[index], result.value);
       }

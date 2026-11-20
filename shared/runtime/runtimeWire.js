@@ -23,7 +23,7 @@ const fields = {
   'runtime.snapshot.chunk': [['collection', 'key', 'revision', 'offset', 'token'], []],
   'runtime.snapshot.release': [['token'], []],
   'runtime.replay': [['after'], ['limit']], 'runtime.entity.resolve': [['event'], []],
-  'runtime.observer.open': [['after'], []], 'runtime.observer.read': [['observerId'], ['resolveSummary', 'resolveWorkspace']],
+  'runtime.observer.open': [['after'], []], 'runtime.observer.read': [['observerId'], ['resolveSummary', 'resolveWorkspace', 'maxEvents']],
   'runtime.observer.resume': [['observerId', 'after'], []], 'runtime.observer.close': [['observerId'], []],
   'runtime.channel.ack': [['channelId', 'offset', 'length'], []],
   'runtime.channel.finish': [['channelId'], []], 'runtime.channel.cancel': [['channelId'], []],
@@ -100,6 +100,7 @@ export function parseRuntimeParams(method, input) {
   if (value.key !== undefined) requireValue(typeof value.key === 'string' && value.key.length > 0 && value.key.length <= 4096 && !value.key.includes('\0'), 'wire.key');
   for (const key of ['after', 'revision', 'offset', 'size']) if (value[key] !== undefined) integerValue(value[key], key);
   if (value.target !== undefined) parseEnvironmentId(value.target);
+  if (method === 'runtime.observer.read' && value.maxEvents !== undefined) positive(value.maxEvents, 'observer.maxEvents', 16);
   if (method === 'runtime.observer.read' && value.resolveSummary !== undefined) requireValue(value.resolveSummary === true, 'wire.resolve_summary');
   if (method === 'runtime.observer.read' && value.resolveWorkspace !== undefined) {
     requireValue(value.resolveWorkspace === true && value.resolveSummary === true, 'wire.resolve_workspace');
@@ -234,6 +235,15 @@ export function parseRuntimeResult(method, input) {
           }
           break;
         }
+        case 'events':
+          objectFields(value, ['kind', 'events']);
+          requireValue(Array.isArray(value.events) && value.events.length > 1 && value.events.length <= 16, 'wire.observer_batch');
+          for (const [index, delivery] of value.events.entries()) {
+            requireValue(delivery?.kind === 'event', 'wire.observer_batch');
+            parseRuntimeResult('runtime.observer.read', delivery);
+            if (index > 0) requireValue(delivery.frame.seq === value.events[index - 1].frame.seq + 1, 'wire.observer_batch_order');
+          }
+          break;
         case 'replay_required': objectFields(value, ['kind', 'after', 'through', 'reason']); integerValue(value.after, 'after'); integerValue(value.through, 'through'); requireValue(value.through >= value.after, 'through'); textValue(value.reason, 'reason'); break;
         case 'binary': objectFields(value, ['kind', 'channelId', 'offset', 'length']); validateChunk({ channelId: value.channelId, offset: value.offset, length: value.length }); break;
         default: throw new ProtocolError('invalid_request', 'wire.delivery');

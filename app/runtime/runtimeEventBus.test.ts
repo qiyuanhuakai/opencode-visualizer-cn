@@ -56,12 +56,25 @@ describe('durable runtime event bus', () => {
       await store.mutate({ intentId: 'during-replay', changes: [{ collection: 'session_summaries', key: 'same-session', value: { title: 'new during replay' } }] });
       await bus.nudge();
       observer.resume(replay.through);
-      expect(observer.read()).toMatchObject({ kind: 'replay_required', after: 2, through: 3 });
-      const next = await bus.log.frame(binding, { after: replay.through });
-      expect(next.events.map(event => event.seq)).toEqual([3]);
-      observer.resume(next.through);
+      expect(observer.read()).toMatchObject({ kind: 'event', frame: { seq: 3, entityRevision: 3 } });
       expect(observer.read()).toBeNull();
       expect(() => observer.resume(2)).toThrow();
+    });
+  });
+  it('reports the full initial catch-up watermark when durable events span multiple replay pages', async () => {
+    await fixture(async (store, bus) => {
+      await store.mutate({ intentId: 'initial-backlog', changes: Array.from({ length: 150 }, (_, index) => ({
+        collection: 'session_summaries' as const, key: sessionScope(String(index)), value: { title: String(index) },
+      })) });
+      const observer = await bus.connect(binding, { after: 0, isCurrent: () => true });
+      const hint = observer.read();
+      expect(hint).toEqual({ kind: 'replay_required', reason: 'initial_replay', after: 0, through: 150 });
+      const first = await bus.log.frame(binding, { after: 0 });
+      expect(first.through).toBe(100);
+      const second = await bus.log.frame(binding, { after: first.through });
+      expect(second.through).toBe(150);
+      observer.resume(second.through);
+      expect(observer.read()).toBeNull();
     });
   });
   it('caps simultaneous observer admissions at64 and rejects ahead-of-store cursors', async () => {

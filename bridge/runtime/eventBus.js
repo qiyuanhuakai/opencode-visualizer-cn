@@ -56,7 +56,7 @@ export function createRuntimeEventBus({ store, pollMs = 20 }) {
       let observer;
       observer = createEventObserver({ binding, after, isCurrent, onClose: () => observers.delete(observer) });
       observers.add(observer);
-      if (after !== through) observer.recover('initial_replay');
+      if (after !== through) observer.recover('initial_replay', through);
       return observer;
     },
     nudge,
