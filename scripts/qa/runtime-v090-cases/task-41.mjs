@@ -1469,7 +1469,7 @@ export async function run(context) {
             approvalCount: 1,
             approvalReadBackEquals: true,
             reviewSurface: [
-              'INTEGRATION_REVIEW_LIMITS', 'approval', 'approvals', 'approve', 'close', 'create', 'review', 'reviews', 'state',
+              'INTEGRATION_REVIEW_LIMITS', 'approval', 'approvals', 'approve', 'close', 'create', 'exportApprovals', 'exportReviews', 'restoreApprovals', 'restoreReviews', 'review', 'reviews', 'state',
             ],
             surfaceHasNoRebindMember: true,
             refusedNoWait: {
@@ -1678,8 +1678,8 @@ export async function run(context) {
             lockStaleGrant: { code: 'conflict', field: 'repository_lock_not_held' },
             dirtyOperational: { code: 'conflict', inFrozenTable: true, fieldShape: true },
             surfaces: {
-              integration: ['INTEGRATION_LIMITS', 'close', 'integrate', 'operation', 'operations', 'state'],
-              review: ['INTEGRATION_REVIEW_LIMITS', 'approval', 'approvals', 'approve', 'close', 'create', 'review', 'reviews', 'state'],
+              integration: ['INTEGRATION_LIMITS', 'close', 'exportRecords', 'integrate', 'operation', 'operations', 'restoreRecords', 'state'],
+              review: ['INTEGRATION_REVIEW_LIMITS', 'approval', 'approvals', 'approve', 'close', 'create', 'exportApprovals', 'exportReviews', 'restoreApprovals', 'restoreReviews', 'review', 'reviews', 'state'],
               locks: ['REPOSITORY_LOCK_LIMITS', 'acquire', 'close', 'grants', 'held', 'release', 'state'],
               integrationHasNoMutationMember: true,
             },
@@ -2252,7 +2252,7 @@ export async function run(context) {
               targetAfterTargetHeadIsCommit: true,
             },
             stdinLimitationHonoured: {
-              serviceSurface: ['INTEGRATION_LIMITS', 'close', 'integrate', 'operation', 'operations', 'state'],
+              serviceSurface: ['INTEGRATION_LIMITS', 'close', 'exportRecords', 'integrate', 'operation', 'operations', 'restoreRecords', 'state'],
               surfaceHasNoStdinMember: true,
               maxTestOutputBytes: 2097152,
               maxTestOutputBytesIsTwoMiB: true,
@@ -2375,7 +2375,7 @@ export async function run(context) {
               remotesWereEmpty: true,
             },
             surface: {
-              members: ['INTEGRATION_LIMITS', 'close', 'integrate', 'operation', 'operations', 'state'],
+              members: ['INTEGRATION_LIMITS', 'close', 'exportRecords', 'integrate', 'operation', 'operations', 'restoreRecords', 'state'],
               hasNoMutationMember: true,
             },
             tempCleaned: {
