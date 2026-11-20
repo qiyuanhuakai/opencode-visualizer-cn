@@ -317,6 +317,11 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
         requireValue(scope.epoch === currentAuthority.epoch && scope.processGeneration === currentAuthority.processGeneration, 'interaction.generation', 'reconcile_required');
         return { interactionId: params.interactionId, session, phase: row.value.phase, payload };
       }
+      case 'runtime.session.search': {
+        indexAccess(entry);
+        const page = await entry.graph.store.searchSessions(params);
+        return { ...page, items: page.items.map(row => ({ ...row, collection: 'session_summaries' })) };
+      }
       case 'runtime.snapshot': {
         indexAccess(entry); const page = await (await snapshots(entry)).page(params);
         return { ...page, items: page.items.map(row => { const item = project(params.collection, row); return item && { ...item, collection: params.collection }; }).filter(Boolean) };

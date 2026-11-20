@@ -18,6 +18,42 @@ async function withStore(run: (store: ReturnType<typeof createRuntimeStore>, dir
   finally { await store.close(); await rm(directory, { recursive: true, force: true }); }
 }
 
+describe('runtime indexed session search', () => {
+  it('matches across the full index, filters sources and fences paged results without taking snapshot slots', async () => {
+    await withStore(async store => {
+      await store.mutate({ intentId: 'seed-search', changes: [
+        { collection: 'harnesses', key: 'open', value: { kind: 'opencode' } },
+        { collection: 'harnesses', key: 'kimi', value: { kind: 'kimi-web' } },
+        ...['open', 'open', 'kimi'].map((harnessInstanceId, index) => ({
+          collection: 'session_summaries' as const, key: `row-${index}`,
+          value: { session: { harnessInstanceId, nativeSessionId: `native-${index}` },
+            title: index === 2 ? 'Épreuve native' : 'Ordinary', directory: '/fixture' },
+        })),
+      ] });
+      const query = { query: 'openCode', kinds: ['opencode'], limit: 1 };
+      const first = await store.searchSessions(query);
+      expect(first).toMatchObject({ scanned: 3, totalMatched: 2, items: [{ key: 'row-0' }], cursor: 'row-0' });
+      expect(await store.searchSessions({ ...query, cursor: first.cursor!, revision: first.revision }))
+        .toMatchObject({ items: [{ key: 'row-1' }], cursor: null });
+      expect(await store.searchSessions({ query: 'ÉPREUVE', kinds: ['kimi-web'] }))
+        .toMatchObject({ totalMatched: 1, items: [{ key: 'row-2' }] });
+      expect(await store.searchSessions({ query: 'ÉPREUVE', kinds: ['opencode'] }))
+        .toMatchObject({ totalMatched: 0, items: [] });
+      const views = await Promise.all([1, 2, 3].map(() => store.snapshot({ collection: 'harnesses' })));
+      try {
+        expect(await store.searchSessions(query)).toMatchObject({ totalMatched: 2 });
+        await store.mutate({ intentId: 'invalidate-search', changes: [
+          { collection: 'session_summaries', key: 'row-0', value: null },
+        ] });
+        await expect(store.searchSessions({ ...query, cursor: first.cursor!, revision: first.revision }))
+          .rejects.toMatchObject({ code: 'replay_required', reason: 'search_revision' });
+      } finally {
+        await Promise.all(views.map(view => store.releaseSnapshot({ epoch, token: view.token })));
+      }
+    });
+  });
+});
+
 describe('runtime common-watermark snapshots', () => {
   it('releases only a connection-owned token and admits repeated fresh views within the original quota', async () => {
     await withStore(async store => {

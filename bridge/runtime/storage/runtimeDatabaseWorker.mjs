@@ -110,6 +110,7 @@ process.on('message', (message) => {
       case 'page': result = queries.page(params); break;
       case 'readChunk': result = queries.readChunk(params); break;
       case 'snapshot': result = queries.snapshot(params); break;
+      case 'searchSessions': result = queries.searchSessions(params); break;
       case 'releaseSnapshot': result = queries.releaseSnapshot(params); break;
       case 'replay': result = queries.replay(params); break;
       case 'inspect': result = { ...queries.meta(), owner: undefined, fence, locality, backupPath, pid: process.pid }; break;

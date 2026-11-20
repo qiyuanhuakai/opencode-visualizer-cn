@@ -8,7 +8,7 @@ export class ProtocolError extends TypeError {
   constructor(code: ErrorCode, field: string);
 }
 export type Method = 'runtime.history.open' | 'runtime.history.page' | 'runtime.history.chunk' | 'runtime.history.read' | 'runtime.history.close' | 'runtime.inspect' | 'runtime.snapshot' | 'runtime.replay'
-  | 'runtime.target.attach' | 'runtime.target.detach' | 'runtime.snapshot.chunk' | 'runtime.snapshot.release' | 'runtime.entity.resolve'
+  | 'runtime.session.search' | 'runtime.target.attach' | 'runtime.target.detach' | 'runtime.snapshot.chunk' | 'runtime.snapshot.release' | 'runtime.entity.resolve'
   | 'runtime.observer.open' | 'runtime.observer.read' | 'runtime.observer.resume' | 'runtime.observer.close'
   | 'runtime.channel.open' | 'runtime.channel.ack' | 'runtime.channel.finish' | 'runtime.channel.cancel'
   | 'runtime.pty.create' | 'runtime.pty.read' | 'runtime.pty.write' | 'runtime.pty.resize' | 'runtime.pty.detach' | 'runtime.pty.remove'

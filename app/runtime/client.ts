@@ -635,6 +635,7 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
   }
   return {
     inspect, attach, detach, request, mutate, snapshot, readIndex, replay, observe,
+    supports(target: EnvironmentId, method: RuntimeMethod) { return getTarget(target).hello.capabilities.methods.includes(method); },
     subscribeChannel(channelId: number, listener: (chunk: BinaryChunk) => void) {
       requireValue(!binaryListeners.has(channelId), 'channel.duplicate', 'conflict');
       binaryListeners.set(channelId, listener);

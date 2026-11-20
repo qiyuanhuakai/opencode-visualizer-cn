@@ -71,6 +71,17 @@ export function parseRequest(method, input = {}) {
         requireStore(Number.isSafeInteger(params.offset) && params.offset >= 0, 'offset');
       }
       break;
+    case 'searchSessions':
+      requireStore(typeof params.query === 'string' && params.query.length <= 4096, 'search_query');
+      requireStore(Array.isArray(params.kinds) && params.kinds.length <= 6
+        && new Set(params.kinds).size === params.kinds.length
+        && params.kinds.every(kind => ['opencode', 'codex', 'kimi-web', 'dsh', 'acp', 'unknown'].includes(kind)), 'search_kinds');
+      if (params.limit !== undefined) requireStore(Number.isInteger(params.limit) && params.limit > 0 && params.limit <= STORE_LIMITS.maxPage, 'limit');
+      if (params.cursor !== undefined) {
+        text(params.cursor);
+        requireStore(Number.isSafeInteger(params.revision) && params.revision >= 0, 'search_revision');
+      } else requireStore(params.revision === undefined, 'search_revision');
+      break;
     case 'page': case 'snapshot':
       collection(params.collection);
       if (params.collections !== undefined) {

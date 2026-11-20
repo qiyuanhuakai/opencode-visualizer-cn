@@ -88,6 +88,7 @@ export function createRuntimeStore(input) {
     getControl: (params) => dispatch('getControl', params, true),
     get: (params) => dispatch('get', params),
     getMany: (params) => dispatch('getMany', params), page: (params) => dispatch('page', params),
+    searchSessions: (params) => dispatch('searchSessions', params),
     snapshot: (params) => dispatch('snapshot', params), replay: (params) => dispatch('replay', params), readChunk: (params) => dispatch('readChunk', params),
     releaseSnapshot: (params) => dispatch('releaseSnapshot', params, true),
     inspect: () => dispatch('inspect', {}, true),
