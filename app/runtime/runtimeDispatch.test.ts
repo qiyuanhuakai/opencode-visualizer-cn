@@ -576,6 +576,28 @@ describe('runtime real WebSocket dispatch', () => {
     const next = await connection.request('runtime.observer.read', params);
     expect(next).toMatchObject({ ok: true, result: { kind: 'event', frame: { payload: { key: changes[2].key } } } });
   });
+  it('queues one opted-in observer read and returns both deliveries in sequence', async () => {
+    const { connection, services } = await runtime();
+    const snapshot = await connection.request('runtime.snapshot', { collection: 'session_summaries' });
+    if (!snapshot.ok) throw new Error('Snapshot unavailable');
+    const { watermark } = snapshot.result as { watermark: number };
+    const opened = await connection.request('runtime.observer.open', { after: watermark });
+    if (!opened.ok) throw new Error('Missing observer');
+    const params = { ...opened.result as object, resolveSummary: true, maxEvents: 2, queuedRead: true };
+    const first = connection.request('runtime.observer.read', params);
+    const second = connection.request('runtime.observer.read', params);
+    const third = await connection.request('runtime.observer.read', params);
+    expect(third).toMatchObject({ ok: false, typedError: { code: 'conflict' } });
+
+    for (const title of ['first', 'second']) {
+      const session = parseSessionRef({ environmentId: services.target, harnessInstanceId: services.registry.list()[0].harnessInstanceId, nativeSessionId: title });
+      await services.store.mutate({ intentId: randomUUID(), changes: [{
+        collection: 'session_summaries', key: encodeSessionKey(session), value: { session, title },
+      }] });
+      const reply = await (title === 'first' ? first : second);
+      expect(reply).toMatchObject({ ok: true, result: { kind: 'event', canonical: { value: { title } } } });
+    }
+  });
   it('returns ready canonical records before a slow batch tail has resolved', async () => {
     const { services } = await graph();
     const tail = gate();
@@ -708,7 +730,11 @@ describe('runtime real WebSocket dispatch', () => {
     expect(await connection.request(method, params)).toMatchObject({ ok: true, result: { totalMatched: 0, items: [] } });
   });
 
-  it.each([false, true])('keeps the renderer observer live through a managed execution Bridge (legacy search: %s)', async legacySearch => {
+  it.each([
+    { legacySearch: false, legacyObserver: true },
+    { legacySearch: true, legacyObserver: true },
+    { legacySearch: false, legacyObserver: false },
+  ])('keeps the renderer observer live through a managed execution Bridge ($legacySearch, $legacyObserver)', async ({ legacySearch, legacyObserver }) => {
     const manager = await graph('manager'), execution = await graph('execution');
     const executionHost = createRuntimeHost({ environmentId: execution.services.target, role: 'execution', services: execution.services });
     executionHost.start();
@@ -723,7 +749,7 @@ describe('runtime real WebSocket dispatch', () => {
           if (!dispatcher) return null;
           return { ...dispatcher, async request(frame: Parameters<typeof dispatcher.request>[0]) {
             const oldSearchProbe = legacySearch && frame.method === 'runtime.inspect' && 'sessionSearch' in (frame.params as object);
-            const oldObserverOptions = frame.method === 'runtime.observer.read' && 'resolveSummary' in (frame.params as object);
+            const oldObserverOptions = legacyObserver && frame.method === 'runtime.observer.read' && 'resolveSummary' in (frame.params as object);
             if (oldSearchProbe || oldObserverOptions) {
               if (oldObserverOptions) refused++;
               const { id, target, epoch, generation } = frame;
@@ -759,6 +785,30 @@ describe('runtime real WebSocket dispatch', () => {
     await connection.connect();
     await renderer.inspect();
     await renderer.attach(target);
+    if (!legacyObserver) {
+      const { seq } = await execution.services.store.inspect();
+      const observer = await renderer.observe(target, {
+        after: Math.max(0, seq - 1),
+        onDelivery: () => {},
+        onDeliveries: async () => {},
+      });
+      try {
+        // Reconcile real startup writes before exercising the idle lease.
+        const starting = await observer.read();
+        expect(starting?.kind).toBe('replay_required');
+        let idle = false;
+        for (let attempt = 0; attempt < 8 && !idle; attempt++) {
+          idle = await observer.read() === null;
+        }
+        expect(idle).toBe(true);
+        // The first idle read leaves its paired read admitted and waiting.
+        // A second full lease would time out at the manager before returning.
+        await expect(observer.read()).resolves.toBeNull();
+      } finally {
+        await observer.close();
+      }
+      return;
+    }
     const holder = await client(executionHost);
     const held = await Promise.all(Array.from({ length: 3 }, () => holder.request('runtime.snapshot', { collection: 'workspaces' })));
     const last = held.at(-1);
@@ -793,7 +843,7 @@ describe('runtime real WebSocket dispatch', () => {
         items: [{ collection: 'session_summaries', key, value: { title: 'Still live' } }] });
     }
     await observer.close();
-  });
+  }, 25000);
   it('stops the Bridge while initial native index discovery waits on an in-flight page', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'vis-close-index-discovery-'));
     cleanups.push(() => rm(root, { recursive: true, force: true }));

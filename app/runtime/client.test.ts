@@ -339,6 +339,42 @@ describe('RuntimeClient production connection with fault-injected wire', () => {
     const ordered = observer.read(); socket.reply(await socket.next(), { kind: 'event', frame: event(1) }); await ordered;
     expect(received).toEqual([4, 1]);
   });
+  it('starts queued network reads before applying the first buffered batch', async () => {
+    const { client, socket } = await fixture();
+    const applying = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const received: number[] = [];
+    const opening = client.observe(target, {
+      after: 0,
+      onDelivery: delivery => { if (delivery?.kind === 'event') received.push(delivery.frame.seq); },
+      async onDeliveries(items) {
+        applying.resolve();
+        await release.promise;
+        for (const item of items) if (item?.kind === 'event') received.push(item.frame.seq);
+      },
+    });
+    socket.reply(await socket.next(), { observerId: 'observer' });
+    const observer = await opening;
+    const reading = observer.read();
+    const probe = await socket.next();
+    expect(probe.params).toMatchObject({ queuedRead: true, maxEvents: 16 });
+    socket.reply(probe, { kind: 'events', events: [1, 2].map(seq => ({ kind: 'event', frame: event(seq) })) });
+    await applying.promise;
+    const firstQueued = await socket.next();
+    const secondQueued = await socket.next();
+    expect(firstQueued.params).toMatchObject({ queuedRead: true });
+    expect(secondQueued.params).toMatchObject({ queuedRead: true });
+    socket.reply(firstQueued, { kind: 'event', frame: event(3) });
+    socket.reply(secondQueued, null);
+    expect(received).toEqual([]);
+    release.resolve();
+    await reading;
+    const buffered = observer.read();
+    const nextQueued = await socket.next();
+    socket.reply(nextQueued, null);
+    await buffered;
+    expect(received).toEqual([1, 2, 3]);
+  });
   it.each([true, false])('falls back to supported observer options when an older Bridge rejects workspace resolution (summary support: %s)', async (summaries) => {
     const { client, socket } = await fixture();
     const opening = client.observe(target, { after: 0, onDelivery: () => {} });

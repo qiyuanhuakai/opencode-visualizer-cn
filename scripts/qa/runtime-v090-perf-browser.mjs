@@ -64,16 +64,22 @@ export async function openBrowser(output, userDataDirectory = `${output}-profile
   await cdp.send('Network.enable');
   const wire = { frames: 0, bytes: 0, methods: {}, historySessions: [], errors: [], timeline: [], startup: {}, titleEvent: null, last: null };
   const requests = new Map();
+  const observerPending = new Map();
   cdp.on('Network.requestWillBeSent', ({ request, timestamp }) => {
     const url = new URL(request.url);
     const title = url.pathname === '/qa/event' ? url.searchParams.get('title') : null;
-    if (title?.startsWith('Vis measured native title update ')) wire.titleEvent = { title, requestAt: timestamp, observerFrames: [] };
+    if (title?.startsWith('Vis measured native title update ')) wire.titleEvent = {
+      title, requestAt: timestamp, observerFrames: [...observerPending.values()].map(frame => ({
+        direction: 'sent', id: frame.id, ms: (frame.timestamp - timestamp) * 1000,
+      })),
+    };
   });
   cdp.on('Network.webSocketFrameSent', ({ requestId, response, timestamp }) => {
     try { const parsed = JSON.parse(response.payloadData); if (parsed.method) { wire.methods[parsed.method] = (wire.methods[parsed.method] ?? 0) + 1; requests.set(`${requestId}:${parsed.id}`, parsed.method);
       if (parsed.method === 'runtime.history.open' && parsed.params?.session && wire.historySessions.length < 64) {
         wire.historySessions.push(parsed.params.session);
       }
+      if (parsed.method === 'runtime.observer.read') observerPending.set(`${requestId}:${parsed.id}`, { id: parsed.id, timestamp });
       const trace = wire.titleEvent;
       if (trace && trace.canonicalMs === undefined && trace.observerFrames.length < 32 && parsed.method === 'runtime.observer.read') {
         trace.observerFrames.push({ direction: 'sent', id: parsed.id, ms: (timestamp - trace.requestAt) * 1000 });
@@ -89,7 +95,7 @@ export async function openBrowser(output, userDataDirectory = `${output}-profile
     const parsed = (() => { try { return JSON.parse(response.payloadData); } catch { return null; } })();
     const key = parsed?.id ? `${requestId}:${parsed.id}` : undefined;
     const method = key ? requests.get(key) : undefined;
-    if (key) requests.delete(key);
+    if (key) { requests.delete(key); observerPending.delete(key); }
     if (parsed?.kind === 'hello') wire.startup[requestId] = [{ at: Date.now(), received: 'hello' }];
     if (wire.startup[requestId]?.length < 20 && ['runtime.inspect', 'runtime.snapshot'].includes(method)) {
       wire.startup[requestId].push({
@@ -104,7 +110,10 @@ export async function openBrowser(output, userDataDirectory = `${output}-profile
     if (trace && trace.canonicalMs === undefined && trace.observerFrames.length < 32 && method === 'runtime.observer.read') {
       trace.observerFrames.push({ direction: 'received', id: parsed.id, ms: (timestamp - trace.requestAt) * 1000,
         kind: parsed.result?.kind, collection: parsed.result?.frame?.payload?.collection,
-        reason: parsed.result?.reason, after: parsed.result?.after, through: parsed.result?.through });
+        reason: parsed.result?.reason, after: parsed.result?.after, through: parsed.result?.through,
+        events: parsed.result?.events?.map(event => ({
+          collection: event.frame.payload?.collection, seq: event.frame.seq, inline: Boolean(event.canonical),
+        })), seq: parsed.result?.frame?.seq, bytes: Buffer.byteLength(response.payloadData) });
     }
     if (trace && trace.canonicalMs === undefined && canonical?.collection === 'session_summaries'
       && canonical.value?.title === trace.title) {
@@ -269,6 +278,11 @@ export async function measureInteractions({ page, wire }, target) {
       .find(session => session.nativeSessionId === target.nativeSessionId);
     if (!observedHistorySession) throw new Error('Renderer did not open history for the selected session');
   }
+  // History selection starts from search. Clear that independent UI state
+  // before measuring interaction on the normal virtualized tree.
+  await search.fill('');
+  await search.press('Enter');
+  await page.getByTestId('search-results').waitFor({ state: 'hidden', timeout: 5000 });
   const scroll = page.getByTestId('unified-scroll');
   await scroll.evaluate(element => { element.scrollTop = 0; });
   const group = scroll.locator('[data-row-kind="repo"][aria-expanded], [data-row-kind="section"][aria-expanded]').first();
@@ -285,7 +299,8 @@ export async function measureInteractions({ page, wire }, target) {
       row.click();
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       if (document.querySelector(selector)?.getAttribute('aria-expanded') !== String(expanded === 'false')) {
-        throw new Error('Measured tree group did not toggle');
+        const currentRow = document.querySelector(selector);
+        throw new Error(`Measured tree group did not toggle: iteration=${index} kind=${row.getAttribute('data-row-kind')} previous=${expanded} current=${currentRow?.getAttribute('aria-expanded')} sameNode=${row === currentRow}`);
       }
       samples.push(performance.now() - start);
     }

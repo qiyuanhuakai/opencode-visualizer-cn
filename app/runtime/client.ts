@@ -16,7 +16,7 @@ export type RequestMethod = Exclude<RuntimeMethod, MutationMethod>;
 export type RequestOptions = { readonly signal?: AbortSignal; readonly selectionCurrent?: () => boolean; readonly onDrained?: () => void };
 export type RuntimeScope = { readonly binding: Binding; readonly generation: number; readonly isCurrent: () => boolean };
 type Collection = RuntimeParams['runtime.snapshot']['collection'];
-type Target = { readonly hello: Hello; readonly state: ProtocolState; readonly generation: number; paging: boolean; observerBatch?: boolean; observerResolution?: 'workspaces' | 'summaries' | 'legacy'; indexSnapshot?: Readonly<{ token: string; revision: number; watermark: number; expiresAt: number }> };
+type Target = { readonly hello: Hello; readonly state: ProtocolState; readonly generation: number; paging: boolean; observerQueuedRead?: boolean; observerBatch?: boolean; observerResolution?: 'workspaces' | 'summaries' | 'legacy'; indexSnapshot?: Readonly<{ token: string; revision: number; watermark: number; expiresAt: number }> };
 type Pending = {
   readonly target: Target; readonly method: RuntimeMethod; readonly current: () => boolean;
   readonly slot: 'normal' | 'reserved';
@@ -440,34 +440,62 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
       }
       throw new ProtocolError('source_unavailable', 'observer.catchup');
     }
+    const fetchDelivery = async (): Promise<RuntimeResults['runtime.observer.read']> => {
+      const resolution = attached.observerResolution ?? 'workspaces';
+      const batch = attached.observerBatch !== false && resolution !== 'legacy';
+      const queuedRead = batch && options.onDeliveries !== undefined && attached.observerQueuedRead !== false;
+      const params = {
+        observerId,
+        ...(queuedRead ? { queuedRead: true as const } : {}),
+        ...(batch ? { maxEvents: 16 } : {}),
+        ...(resolution === 'legacy' ? {} : { resolveSummary: true as const }),
+        ...(resolution === 'workspaces' ? { resolveWorkspace: true as const } : {}),
+      };
+      try {
+        const delivery = await request(target, 'runtime.observer.read', params, options);
+        if (queuedRead) attached.observerQueuedRead = true;
+        return delivery;
+      }
+      catch (error) {
+        if (resolution === 'legacy' || !(error instanceof RuntimeRequestError)
+          || error.code !== 'invalid_request' || error.field !== 'fields') throw error;
+        // Older Bridges reject optional fields before advancing the observer.
+        if (queuedRead) attached.observerQueuedRead = false;
+        else if (batch) attached.observerBatch = false;
+        else attached.observerResolution = resolution === 'workspaces' ? 'summaries' : 'legacy';
+        return fetchDelivery();
+      }
+    };
+    const queuedReads: ReturnType<typeof fetchDeliveryOutcome>[] = [];
+    function fetchDeliveryOutcome() {
+      return fetchDelivery().then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error }));
+    }
+    async function unwrapRead(pending: ReturnType<typeof fetchDeliveryOutcome>) {
+      const result = await pending;
+      if (!result.ok) throw result.error;
+      return result.value;
+    }
+    function fillReadQueue() {
+      while (queuedReads.length < 2) queuedReads.push(fetchDeliveryOutcome());
+    }
     return {
       async read(): Promise<ObserverDelivery> {
         active();
         requireValue(!reading && !attached.paging, 'observer.busy', 'conflict');
         reading = true;
         try {
-          const fetchDelivery = async (): Promise<RuntimeResults['runtime.observer.read']> => {
-            const resolution = attached.observerResolution ?? 'workspaces';
-            const batch = attached.observerBatch !== false && resolution !== 'legacy';
-            const params = {
-              observerId,
-              ...(batch ? { maxEvents: 16 } : {}),
-              ...(resolution === 'legacy' ? {} : { resolveSummary: true as const }),
-              ...(resolution === 'workspaces' ? { resolveWorkspace: true as const } : {}),
-            };
-            try { return await request(target, 'runtime.observer.read', params, options); }
-            catch (error) {
-              if (resolution === 'legacy' || !(error instanceof RuntimeRequestError)
-                || error.code !== 'invalid_request' || error.field !== 'fields') throw error;
-              // Older Bridges reject optional fields before advancing the observer.
-              if (batch) attached.observerBatch = false;
-              else attached.observerResolution = resolution === 'workspaces' ? 'summaries' : 'legacy';
-              return fetchDelivery();
-            }
-          };
-          const delivery = await fetchDelivery();
+          if (attached.observerQueuedRead === true && options.onDeliveries) fillReadQueue();
+          const next = queuedReads.shift();
+          const delivery = next ? await unwrapRead(next) : await fetchDelivery();
           active();
           if (delivery === null) return null;
+          if (delivery.kind === 'replay_required') {
+            // Let an already admitted read reach the same recovery boundary before resuming.
+            await Promise.all(queuedReads.splice(0));
+            await recover(delivery.through);
+            return delivery;
+          }
+          if (attached.observerQueuedRead === true && options.onDeliveries) fillReadQueue();
           switch (delivery.kind) {
             case 'events': {
               for (const item of delivery.events) attached.state.receive(item.frame);
@@ -483,7 +511,6 @@ export function createRuntimeClient({ connection }: { readonly connection: Runti
             case 'control':
               requireValue(delivery.frame.target === target && delivery.frame.epoch === attached.hello.epoch && delivery.frame.generation === attached.hello.generation, 'control.binding', 'reconcile_required');
               break;
-            case 'replay_required': await recover(delivery.through); return delivery;
             case 'binary': break;
             default: delivery satisfies never;
           }
