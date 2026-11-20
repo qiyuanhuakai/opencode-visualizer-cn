@@ -21,7 +21,7 @@ export interface RuntimeServices {
   readonly acceptance: RuntimeAcceptance; readonly capabilities: Capabilities; readonly grant: TargetGrant;
   readonly snapshots: RuntimeSnapshots; readonly events: RuntimeEventBus;
   authority(harnessInstanceId: string): NativeAuthority;
-  start(): Promise<void>;
+  start(options?: { readonly signal?: AbortSignal }): Promise<void>;
   inspect(base: RuntimeInspection, targets: readonly TargetGrant[]): Promise<WireInspection>;
   close(): Promise<void>;
 }

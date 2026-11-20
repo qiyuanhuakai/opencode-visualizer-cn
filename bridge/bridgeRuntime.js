@@ -65,7 +65,10 @@ export function createBridgeRuntime(options = {}) {
             : [
                 { id: 'native', start: startNative, stop: () => nativeSupervisor.stop() },
                 { id: 'acp', start: startAcp, stop: () => acpManager.stopAll() },
-                { id: 'runtime', start: async () => { await Promise.allSettled([startNative(), startAcp()]); await services.start(); }, stop: () => services.close() },
+                { id: 'runtime', start: async ({ signal }) => {
+                  await Promise.allSettled([startNative(), startAcp()]);
+                  await services.start({ signal });
+                }, stop: () => services.close() },
               ],
       });
       if (options.role === 'manager') host.resources.register('runtime', 'owned', () => services.close());
