@@ -11175,7 +11175,8 @@ const migrationWizardError = ref('');
 const migrationWizardInventory = ref<MigrationInventory>({ revision: '', sources: [] });
 
 const managementEnvironmentId = shallowRef<EnvironmentId | null>(null);
-watch(bridgeReference, () => { managementEnvironmentId.value = null; managedRemote.close(); });
+// Reset the old manager before the new reference opens its connection panel.
+watch(bridgeReference, () => { managementEnvironmentId.value = null; managedRemote.close(); }, { flush: 'sync' });
 const managementHostClient = computed(() => {
   if (!runtimeOnline.value) return null;
   const client = runtimeActionClient.value, target = managementEnvironmentId.value ?? bridgeReference.value?.expectedEnvironmentId;
