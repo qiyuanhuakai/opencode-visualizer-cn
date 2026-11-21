@@ -1989,7 +1989,7 @@ watch(tabs, (available) => {
 
         <!-- Plugins Tab -->
         <div v-if="activeTab === 'plugins'" class="status-monitor-content">
-          <KimiWebPluginManager v-if="isKimiWebBackend && kimiWebPluginsClient" :key="harnessScope?.kind === 'instance' ? harnessScope.harnessInstanceId : undefined" :client="kimiWebPluginsClient" />
+          <KimiWebPluginManager v-if="isKimiWebBackend && kimiWebPluginsClient" :key="`${harnessScope?.kind === 'instance' ? harnessScope.harnessInstanceId : ''}:${runtimeGrantRevision ?? 0}`" :client="kimiWebPluginsClient" />
           <div v-else-if="loading && !configData" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
