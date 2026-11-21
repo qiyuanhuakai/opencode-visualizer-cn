@@ -54,6 +54,33 @@ function kimiTurn(value: Record<string, unknown>): KimiWebTranscriptTurn {
   };
 }
 
+function kimiAgentTurn(turn: Record<string, unknown>): KimiWebTranscriptTurn {
+  requireValue(typeof turn.turn_id === 'string' && Array.isArray(turn.items), 'history.agent_turn');
+  const items = turn.items.map(record);
+  const opener = items.find(item => item.type === 'user_message' && item.placement === 'opener' && typeof item.text === 'string');
+  const frames = items.flatMap<Record<string, unknown>>(item => {
+    if (item === opener) return [];
+    const frameId = item.item_id;
+    if (typeof frameId !== 'string') return [];
+    if ((item.type === 'user_message' || item.type === 'assistant_message') && typeof item.text === 'string') {
+      return [{ frameId, kind: 'text', role: item.type === 'user_message' ? 'user' : 'assistant', text: item.text }];
+    }
+    if (item.type === 'reasoning' && typeof item.text === 'string') return [{ frameId, kind: 'thinking', text: item.text }];
+    if (item.type === 'tool_call' && typeof item.name === 'string') {
+      return [{ frameId, kind: 'tool', name: item.name, state: item.stage ?? item.status ?? 'completed', toolCallId: item.tool_call_id, input: item.input, output: item.output }];
+    }
+    if (item.type === 'notification' && typeof item.body === 'string') {
+      return [{ frameId, kind: 'notice', message: item.body, level: item.severity ?? 'info' }];
+    }
+    return [];
+  });
+  return kimiTurn({
+    turnId: turn.turn_id, ordinal: turn.ordinal, state: turn.status, startedAt: turn.started_at, endedAt: turn.ended_at,
+    prompt: opener?.text, triggerPromptId: Array.isArray(opener?.prompt_ids) ? opener.prompt_ids[0] : undefined,
+    steps: [{ stepId: `${turn.turn_id}:items`, frames }],
+  });
+}
+
 export function createNativeHistoryProjection(kind: HarnessKind, sessionId: string) {
   const codexItems = new Map<string, ReturnType<typeof normalizeCodexTurnsToHistory>>();
   const acp = createAcpSessionState({ id: sessionId, title: sessionId });
@@ -120,8 +147,8 @@ export function createNativeHistoryProjection(kind: HarnessKind, sessionId: stri
         return [...dshEntries.values()];
       }
       case 'kimi-web': {
-        if (row.kind !== 'turn') return [];
-        const turn = kimiTurn(row);
+        if (row.kind !== 'turn' && typeof row.turn_id !== 'string') return [];
+        const turn = typeof row.turn_id === 'string' ? kimiAgentTurn(row) : kimiTurn(row);
         const entries = kimiWebTranscriptToHistoryEntries(sessionId, { agent_id: 'main', items: [turn], has_more: false });
         for (const entry of entries) entry.info.agent = 'main';
         if (turn.prompt) {

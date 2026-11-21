@@ -10133,8 +10133,9 @@ const unifiedTreeSources = computed<readonly HarnessEntry[]>(() => {
   const entries = new Map((unifiedSessionTree.value?.harnesses.value ?? []).map(entry => [entry.harnessInstanceId, entry]));
   for (const manifest of harnessManifests.value) {
     const list = manifest.core.listSessionPage;
-    if (list.state === 'unsupported' && list.reason === 'on-demand') {
-      entries.set(manifest.harnessInstanceId, { harnessInstanceId: manifest.harnessInstanceId, kind: manifest.kind, status: 'standby', reason: null });
+    if (list.state === 'unsupported' && (list.reason === 'on-demand' || list.reason === 'on-demand-starting' || list.reason === 'on-demand-failed')) {
+      const status = list.reason === 'on-demand' ? 'standby' : list.reason === 'on-demand-starting' ? 'loading' : 'error';
+      entries.set(manifest.harnessInstanceId, { harnessInstanceId: manifest.harnessInstanceId, kind: manifest.kind, status, reason: null });
     }
   }
   return [...entries.values()];
@@ -11107,25 +11108,25 @@ async function handleRuntimeSessionBatch(action: 'pin' | 'unpin' | 'archive' | '
   const profileId = activeProfileId.value;
   const client = runtimeActionClient.value;
   if (!client) return;
+  const selections = [...new Set(keys)].map(key => ({ profileId, session: decodeSessionKey(key) }));
+  if (!selections.length) return;
   if (action === 'pin' || action === 'unpin') {
-    const selections = [...new Set(keys)].map(key => ({ profileId, session: decodeSessionKey(key) }));
     await runtimePins.value?.setPinned(selections, action === 'pin');
     return;
   }
-  if (action === 'delete' && !await showConfirm(t('topPanel.confirm.deleteSession'))) return;
+  if (action === 'delete' && !await showConfirm(t('topPanel.confirm.deleteRuntimeSessions', { count: selections.length }))) return;
   if (client !== runtimeActionClient.value || profileId !== activeProfileId.value) return;
   const failures: string[] = [];
-  for (const key of new Set(keys)) {
+  for (const selection of selections) {
     try {
-      const session = decodeSessionKey(key);
-      if (client !== runtimeActionClient.value || profileId !== activeProfileId.value || !runtimeTargetAttached(session)) break;
-      await runtimeSessionRuntime.router[action]({ profileId, session });
+      if (client !== runtimeActionClient.value || profileId !== activeProfileId.value || !runtimeTargetAttached(selection.session)) break;
+      await runtimeSessionRuntime.router[action](selection);
     } catch (error) {
       failures.push(toErrorMessage(error));
     }
   }
   if (failures.length && client === runtimeActionClient.value && profileId === activeProfileId.value) {
-    sessionError.value = t('app.error.batchOperationPartialFailure', { action, failures: failures.length, total: keys.length, firstError: failures[0] });
+    sessionError.value = t('app.error.batchOperationPartialFailure', { action, failures: failures.length, total: selections.length, firstError: failures[0] });
   }
 }
 

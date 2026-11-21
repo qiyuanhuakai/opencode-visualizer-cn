@@ -317,6 +317,7 @@ const messages: LocaleMessages = {
     confirm: {
       deleteWorktree: 'Forigi worktree "{directory}"?',
       deleteSession: 'Forigi seancon?',
+      deleteRuntimeSessions: 'Ĉu definitive forigi {count} elektitajn seancojn, inkluzive de tiuj kaŝitaj de filtriloj? Ĉi tiu ago ne estas malfarebla.',
       deleteSessions: 'Forigi {count} elektita(j)n seanco(j)n?',
       deleteCodexSession: 'Ĉu definitive forigi ĉi tiun Codex-seancon? Tion oni ne povas malfari.',
       deleteCodexSessions: 'Ĉu definitive forigi {count} elektita(j)n Codex-seanco(j)n? Tion oni ne povas malfari.',

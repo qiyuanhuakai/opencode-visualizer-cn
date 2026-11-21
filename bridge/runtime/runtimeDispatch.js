@@ -146,7 +146,12 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
     if (frame.method === 'session.create') requireValue(directory, 'runtime.workspace', 'unauthorized');
     if (frame.method === 'session.list') indexAccess(entry);
     if (frame.method === 'session.list' && !params.session && !params.workspaceKey && Object.keys(args).length === 0) {
-      if (manifest.core.listSessionPage.reason === 'on-demand') permission(entry, 'session:write');
+      const reason = manifest.core.listSessionPage.reason;
+      if (reason === 'on-demand' || reason === 'on-demand-starting' || reason === 'on-demand-failed') {
+        permission(entry, 'session:write');
+        if (reason !== 'on-demand-starting') entry.graph.requestSourceStart(params.harnessInstanceId);
+        return { items: [], cursor: null, completeness: 'partial', reason: 'agent-starting' };
+      }
       await entry.graph.index.retry(params.harnessInstanceId);
       entry.current();
     }

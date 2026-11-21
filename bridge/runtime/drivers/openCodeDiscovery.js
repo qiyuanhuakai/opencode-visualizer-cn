@@ -4,6 +4,7 @@ import { OPEN_CODE_LIMITS, summary, pageLimit, discoveryScope } from '../../../s
 
 /** Events are revision fences over provisional native pages, never a second full catalog. */
 export function createOpenCodeDiscovery({ reader, request, current, assertCurrent, cursorApi }) {
+  const storeReader = cursorApi ? undefined : reader;
   const scans = new Map();
   let failure = null;
   let closed = false;
@@ -74,15 +75,15 @@ export function createOpenCodeDiscovery({ reader, request, current, assertCurren
       // Install before awaiting the worker: a delete racing the first page is also fenced.
       const token = randomUUID(); scans.set(token, scan);
       try {
-        if (!reader && !cursorApi) throw new ProtocolError('unsupported', 'opencode.store_unavailable');
-        const page = reader ? await reader.page({ limit, scope, cursor: scan.nativeCursor }) : await apiPage(limit, scan);
+        if (!storeReader && !cursorApi) throw new ProtocolError('unsupported', 'opencode.store_unavailable');
+        const page = storeReader ? await storeReader.page({ limit, scope, cursor: scan.nativeCursor }) : await apiPage(limit, scan);
         await assertCurrent();
         if (!same(scan, current())) throw new ProtocolError('reconcile_required', 'opencode.generation');
         const seen = new Set();
         const items = [];
         for (const native of page.items) {
           const item = summary(native);
-          const ordered = reader
+          const ordered = storeReader
             ? scan.lastId === undefined || Buffer.compare(Buffer.from(item.id), Buffer.from(scan.lastId)) > 0
             : item.id !== scan.lastId && (scan.lastCreated === undefined || item.time.created >= scan.lastCreated);
           requireValue(!seen.has(item.id) && ordered, 'opencode.repeated_page', 'reconcile_required');

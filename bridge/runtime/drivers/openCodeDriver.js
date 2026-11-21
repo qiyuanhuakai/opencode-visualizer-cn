@@ -183,7 +183,7 @@ export async function createOpenCodeDriver(options) {
     health = await request('/global/health'); requireValue(health?.healthy === true, 'opencode.health', 'source_unavailable');
     requireValue([OPEN_CODE_VERSION, OPEN_CODE_CURSOR_VERSION].includes(health.version), 'opencode.version', 'version_mismatch');
     document = await request('/doc', { maxBytes: 4194304 });
-    if (options.officialStorePath) reader = createOpenCodeStoreReader({ databasePath: options.officialStorePath, nativeVersion: health.version });
+    if (options.officialStorePath && health.version === OPEN_CODE_VERSION) reader = createOpenCodeStoreReader({ databasePath: options.officialStorePath, nativeVersion: health.version });
     const cursorApi = health.version === OPEN_CODE_CURSOR_VERSION && document?.paths?.['/api/session']?.get?.operationId === 'v2.session.list';
     discovery = createOpenCodeDiscovery({ reader, request, current, assertCurrent: fence, cursorApi: cursorApi ? health.version : undefined });
     await startStream();

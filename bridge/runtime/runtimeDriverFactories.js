@@ -328,6 +328,26 @@ export function createRuntimeDriverFactories(options) {
       );
       return slot.source.discover();
     },
+    requestStart(harnessInstanceId) {
+      const slot = [...slots.values()].find(item => item.identity.harnessInstanceId === harnessInstanceId);
+      requireValue(active && sessionIndex && slot?.enabled && options.config.agentStartup === 'on-demand', 'factory.start_source', 'source_unavailable');
+      if (slot.startRequest || slot.source) return;
+      const standby = unavailableRegistration(slot.identity, 'starting', 'on-demand-starting');
+      replace(slot.key, standby);
+      const work = (async () => {
+        await options.onHarnessReady?.(standby.manifest);
+        await controller.start(sessionIndex, harnessInstanceId);
+      })().catch(async () => {
+        if (!active) return;
+        const failed = unavailableRegistration(slot.identity, 'failed', 'on-demand-failed');
+        replace(slot.key, failed);
+        await options.onHarnessReady?.(failed.manifest);
+      });
+      slot.startRequest = work;
+      pendingStarts.add(work);
+      const retire = () => { pendingStarts.delete(work); slot.startRequest = undefined; };
+      void work.then(retire, retire);
+    },
     async retry(harnessInstanceId) {
       const slot = [...slots.values()].find(item => item.identity.harnessInstanceId === harnessInstanceId);
       requireValue(active && sessionIndex && slot?.enabled, 'factory.retry_source', 'source_unavailable');
@@ -422,7 +442,7 @@ export function createRuntimeDriverFactories(options) {
                     : error.code === 'unauthorized'
                       ? 'auth-required'
                       : 'failed',
-                  options.config.agentStartup === 'on-demand' ? 'on-demand' : undefined,
+                  options.config.agentStartup === 'on-demand' ? 'on-demand-failed' : undefined,
                 ),
               );
               const manifest = registry.list().find(item => item.harnessInstanceId === slot.identity.harnessInstanceId);

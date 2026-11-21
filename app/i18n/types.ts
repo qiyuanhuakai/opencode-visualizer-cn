@@ -312,6 +312,7 @@ export interface LocaleMessages {
       deleteWorktree: string;
       deleteSession: string;
       deleteSessions: string;
+      deleteRuntimeSessions: string;
       deleteCodexSession: string;
       deleteCodexSessions: string;
     };

@@ -7,7 +7,7 @@ import { redactSettings } from '../../../shared/runtime/native/opencode/protocol
 import { CORE_OPERATIONS, unsupported, validateHarnessRegistration } from '../../../shared/runtime/harnessContract.js';
 import { record, nativeText, pageSize, parseCatalogPage, sessionSummary, parseNativeCapabilities } from '../../../shared/runtime/native/kimiWeb/protocol.js';
 import { createAdmissionQueue } from '../admissionQueue.js';
-import { HISTORY_JSON_LIMITS } from '../historyJsonStream.js';
+import { tokenizeHistoryJson } from '../historyJsonStream.js';
 import { createKimiWebTransport } from './kimiWebTransport.js';
 import { createKimiWebHistory, createKimiWebHistoryProducer, KIMI_WEB_HISTORY_LIMITS } from './kimiWebHistory.js';
 import { createKimiWebOperations } from './kimiWebOperations.js';
@@ -75,6 +75,7 @@ export async function createKimiWebDriver(options) {
   // a transient refusal (the store rejects with queue_full while it is saturated) and, once the
   // schedule is exhausted, leaves the session conservatively uncertain instead of pinning its slot.
   const recheckTimers = new Map();
+  const agentTerminalReads = new Map();
   const recheckAttempts = new Map();
   const RECHECK_DELAYS_MS = [50, 100, 200, 400, 800];
   const invalidated = new Set();
@@ -362,10 +363,11 @@ export async function createKimiWebDriver(options) {
   async function settleTranscript(captured, turns) {
     const sessionId = captured.session.nativeSessionId;
     const ended = await operations.syncTranscript(captured, turns);
-    if (!ended) return;
+    if (!ended) return false;
     noteEndedTask(sessionId, ended.operationId); releaseTask(sessionId, ended.operationId);
     uncertain.delete(sessionId); forgetRecheck(sessionId); reclaim(sessionId);
     emit({ type: 'turn.ended', session: captured.session, reason: ended.reason }, sessionId);
+    return true;
   }
   function settleModernTurns(captured, turns, bytes = 0) {
     if (!turns.length) return;
@@ -492,20 +494,43 @@ export async function createKimiWebDriver(options) {
       emit({ type: 'transcript.ops', session }, sessionId);
     }
     if (frame.agent_id !== 'main' || frame.type !== 'turn.started' && frame.type !== 'turn.ended') return;
-    emit({ type: 'session.activity', session, status: frame.type === 'turn.started' ? 'running' : 'idle' }, sessionId);
+    if (frame.type === 'turn.started') {
+      emit({ type: 'session.activity', session, status: 'running' }, sessionId);
+      return;
+    }
     const { turn_id: turnId, ordinal } = frame.turn ?? {};
-    if (frame.type !== 'turn.ended' || typeof turnId !== 'string' || !Number.isSafeInteger(ordinal + 1) || ordinal < 0) return;
+    if (typeof turnId !== 'string' || !Number.isSafeInteger(ordinal + 1) || ordinal < 0) return;
     const captured = capture({ ...scope, session }, true);
-    scheduled(async () => {
-      if (!await operations.liveTask(captured)) return;
-      const page = await readAgentTurns(captured, 'main', { page_size: '1', before_ordinal: String(ordinal + 1) });
-      const turn = page.turns.find(item => item.turn_id === turnId && item.status === 'ended');
-      const promptId = turn?.items?.find(item => item.type === 'user_message' && item.placement === 'opener')?.prompt_ids?.[0];
-      const state = { completed: 'completed', failed: 'failed', interrupted: 'cancelled' }[turn?.outcome];
-      if (typeof promptId === 'string' && state) {
-        await settleTranscript(captured, [{ kind: 'turn', turnId, triggerPromptId: promptId, state }]);
-      }
-    }, Buffer.byteLength(JSON.stringify(frame)));
+    const key = JSON.stringify([sessionId, turnId, captured.processGeneration]);
+    if (agentTerminalReads.has(key) || agentTerminalReads.size >= 32) return;
+    const terminal = { operationId: undefined, attempt: 0, timer: undefined };
+    agentTerminalReads.set(key, terminal);
+    const idle = () => emit({ type: 'session.activity', session, status: 'idle' }, sessionId);
+    function enqueue() {
+      if (!isCurrent(captured)) { agentTerminalReads.delete(key); return; }
+      if (!scheduled(async () => {
+        let terminalError;
+        try {
+          const liveOperation = await operations.liveTask(captured);
+          if (!liveOperation) { idle(); agentTerminalReads.delete(key); return; }
+          terminal.operationId ??= liveOperation;
+          if (terminal.operationId !== liveOperation) { agentTerminalReads.delete(key); return; }
+          const proof = await readAgentTurnProof(captured, turnId, ordinal);
+          if (proof && await settleTranscript(captured, [proof])) {
+            idle(); agentTerminalReads.delete(key); return;
+          }
+        } catch (error) { terminalError = error; }
+        const delay = RECHECK_DELAYS_MS[terminal.attempt++];
+        if (delay !== undefined && isCurrent(captured)) {
+          terminal.timer = setTimeout(enqueue, delay);
+          terminal.timer.unref?.();
+          return;
+        }
+        agentTerminalReads.delete(key);
+        throw terminalError ?? failure('reconcile_required', 'kimi.native_terminal_unconfirmed');
+      })) agentTerminalReads.delete(key);
+    }
+    enqueue();
   }
   async function subscribeSession(sessionId, agentId = 'main', hold = 'permanent') {
     const agentProtocol = capabilities.agentTurns && capabilities.subscribe;
@@ -565,12 +590,9 @@ export async function createKimiWebDriver(options) {
     return entry.stream;
   }
   /** Raw native transcript pull: the driver alone builds the endpoint and holds the admission slot. */
-  function pullTranscript(captured, agentId, before, signal) {
-    const sessionId = captured.session.nativeSessionId;
+  function pullNativeHistory(captured, path, signal) {
     return (async () => {
       fence(captured);
-      const query = new URLSearchParams({ agent_id: agentId, page_size: String(transcriptPageSize), ...(before === null ? {} : { before_turn: before }) });
-      const path = `/api/v1/sessions/${encodeURIComponent(sessionId)}/transcript?${query}`;
       const ready = Promise.withResolvers();
       let finish = () => {};
       const drained = new Promise((resolve) => { finish = resolve; });
@@ -590,13 +612,56 @@ export async function createKimiWebDriver(options) {
       return await ready.promise;
     })();
   }
-  async function readAgentTurns(captured, agentId, parameters, signal) {
-    const query = new URLSearchParams(parameters);
-    const path = `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}/agents/${encodeURIComponent(agentId)}/turns?${query}`;
-    const result = await admission.run({}, admissionSignal => transport.request('GET', path, undefined, signal ? AbortSignal.any([signal, admissionSignal]) : admissionSignal));
+  function pullTranscript(captured, agentId, before, signal) {
+    const query = new URLSearchParams({ agent_id: agentId, page_size: String(transcriptPageSize), ...(before === null ? {} : { before_turn: before }) });
+    return pullNativeHistory(captured, `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}/transcript?${query}`, signal);
+  }
+  function agentTurnsPath(captured, agentId, parameters) {
+    return `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}/agents/${encodeURIComponent(agentId)}/turns?${new URLSearchParams(parameters)}`;
+  }
+  async function readAgentTurnProof(captured, turnId, ordinal) {
+    const signal = AbortSignal.timeout(15000);
+    const pulled = await pullNativeHistory(captured, agentTurnsPath(captured, 'main', { page_size: '1', before_ordinal: String(ordinal + 1) }), signal);
+    const turn = {};
+    let item = {}, code, bytes = 0, wrapped, openerId;
+    const fields = new Set(['turn_id', 'status', 'outcome', 'type', 'placement', 'prompt_ids']);
+    const bounded = (async function* () {
+      for await (const piece of pulled.body) {
+        bytes += piece.byteLength;
+        requireValue(bytes <= 67108864, 'kimi.terminal_read_bytes', 'replay_required');
+        yield piece;
+      }
+    })();
+    try {
+      for await (const token of tokenizeHistoryJson(bounded, { signal })) {
+        const isWrapped = token.path[0] === 'data';
+        const path = isWrapped ? token.path.slice(1) : token.path;
+        if (path.length === 1 && path[0] === 'code' && token.kind === 'scalar') code = token.value;
+        if (path[0] !== 'turns' || path[1] !== 0) continue;
+        requireValue(wrapped === undefined || wrapped === isWrapped, 'kimi.terminal_envelope');
+        wrapped = isWrapped;
+        if (path[2] === 'items' && typeof path[3] === 'number' && path.length === 4 && token.kind === 'end') {
+          if (item.type === 'user_message' && item.placement === 'opener' && item.prompt_ids) openerId = item.prompt_ids;
+          item = {};
+        }
+        if (token.kind !== 'string-data') continue;
+        const isTurnField = path.length === 3;
+        const isItemField = path[2] === 'items' && typeof path[3] === 'number' &&
+          (path.length === 5 && path[4] !== 'prompt_ids' || path.length === 6 && path[4] === 'prompt_ids' && path[5] === 0);
+        if (!isTurnField && !isItemField) continue;
+        const field = isTurnField ? path[2] : path[4];
+        if (!fields.has(field)) continue;
+        const owner = isTurnField ? turn : item;
+        owner[field] = (owner[field] ?? '') + token.text;
+        requireValue(owner[field].length <= 512, 'kimi.terminal_identity');
+      }
+    } finally { pulled.release(); }
     fence(captured);
-    requireValue(Array.isArray(result?.turns) && result.turns.length <= Number(parameters.page_size) && typeof result.has_more === 'boolean', 'kimi.agent_turns');
-    return result;
+    requireValue(wrapped ? code === 0 : code === undefined, 'kimi.terminal_envelope');
+    if (turn.turn_id !== turnId || turn.status !== 'ended' || !openerId) return null;
+    const state = turn.outcome === 'interrupted' ? 'cancelled' : turn.outcome;
+    if (state !== 'completed' && state !== 'failed' && state !== 'cancelled') return null;
+    return { kind: 'turn', turnId, triggerPromptId: openerId, state };
   }
   async function pullAgentTurns(captured, agentId, before, signal) {
     const parameters = { page_size: '20' };
@@ -604,33 +669,7 @@ export async function createKimiWebDriver(options) {
       requireValue(/^\d+$/u.test(before) && Number.isSafeInteger(Number(before)), 'kimi.history_ordinal');
       parameters.before_ordinal = before;
     }
-    const result = await readAgentTurns(captured, agentId, parameters, signal);
-    const turns = result.turns.map(turn => {
-      requireValue(Number.isSafeInteger(turn.ordinal) && turn.ordinal >= 0 && Array.isArray(turn.items), 'kimi.agent_turn');
-      const frames = turn.items.flatMap(item => {
-        const frameId = nativeText(item.item_id, 'kimi.item_id', 512);
-        if (item.type === 'user_message' || item.type === 'assistant_message') return typeof item.text === 'string'
-          ? [{ frameId, kind: 'text', role: item.type === 'user_message' ? 'user' : 'assistant', text: item.text }] : [];
-        if (item.type === 'reasoning' && typeof item.text === 'string') return [{ frameId, kind: 'thinking', text: item.text }];
-        if (item.type === 'tool_call' && typeof item.name === 'string') return [{ frameId, kind: 'tool', name: item.name, state: item.stage ?? item.status, input: item.input, output: item.output }];
-        if (item.type === 'notification' && typeof item.body === 'string') return [{ frameId, kind: 'notice', message: item.body, level: item.severity ?? 'info' }];
-        return [];
-      });
-      const opener = turn.items.find(item => item.type === 'user_message' && item.placement === 'opener' && typeof item.text === 'string');
-      return { kind: 'turn', turnId: nativeText(turn.turn_id, 'kimi.turn_id', 512), ordinal: turn.ordinal, state: turn.status,
-        startedAt: turn.started_at, endedAt: turn.ended_at, ...(opener ? { prompt: opener.text, triggerPromptId: opener.prompt_ids?.[0] } : {}),
-        steps: [{ stepId: `${turn.turn_id}:items`, frames: frames.filter(frame => frame.frameId !== opener?.item_id) }],
-      };
-    });
-    if (result.has_more) requireValue(turns.length > 0, 'kimi.agent_turn_cursor', 'replay_required');
-    const next = turns.length ? Math.min(...turns.map(turn => turn.ordinal)) : undefined;
-    const bytes = Buffer.from(JSON.stringify({ items: turns, has_more: result.has_more, seq: 0, next_ordinal: next }));
-    const body = (function* () {
-      for (let offset = 0; offset < bytes.length; offset += HISTORY_JSON_LIMITS.inputBytes) {
-        yield Uint8Array.from(bytes.subarray(offset, offset + HISTORY_JSON_LIMITS.inputBytes));
-      }
-    })();
-    return { body, release() {} };
+    return pullNativeHistory(captured, agentTurnsPath(captured, agentId, parameters), signal);
   }
   async function teardown(type, payload) {
     const lane = type === 'unsubscribe_v2' ? transport : lifecycleTransport;
@@ -930,6 +969,8 @@ export async function createKimiWebDriver(options) {
       await attempt(() => eventWork);
       await attempt(() => operations?.close());
       await Promise.all([...observers].map(entry => attempt(() => entry.stream.return())));
+      for (const terminal of agentTerminalReads.values()) clearTimeout(terminal.timer);
+      agentTerminalReads.clear();
       history?.clear(); selected.clear(); retained.clear(); runningTasks.clear(); endedTasks.clear(); uncertain.clear();
       for (const timer of recheckTimers.values()) clearTimeout(timer);
       recheckTimers.clear(); recheckAttempts.clear(); lifecycleSubscriptions.clear();

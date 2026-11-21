@@ -2,7 +2,7 @@
 import { ProtocolError, type JsonValue } from '../../../shared/runtime/capabilities.js';
 import { KIMI_PROVIDER_OPERATIONS } from '../../../shared/runtime/native/kimiWeb/providerOperations.js';
 import { KIMI_SESSION_OPERATIONS } from '../../../shared/runtime/native/kimiWeb/sessionOperations.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { applyTranscriptOps, transcriptSnapshot } from '../../../shared/runtime/native/kimiWeb/transcript.js';
 import {
   parseCatalogPage,
@@ -112,7 +112,7 @@ function transcriptEnvelope(target: number, turns: number, epochValue = 'ep_fixt
   return { body, items };
 }
 const smallTranscript = () => Buffer.from(JSON.stringify({ items: [turn(0, 8), turn(1, 8)], has_more: false, seq: 7, tasks: [], interactions: [], attachments: [], todos: [], prompts: [], meta: {}, agents: [], epoch: 'ep_fixture' }));
-async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false) {
+async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false, agentSocket = false) {
   const dir = await mkdtemp(path.join(tmpdir(), 'vis-kimi-http-')); temporary.push(dir);
   const calls: { method: string; path: string; origin: string | undefined }[] = [];
   const promptBodies: unknown[] = [];
@@ -128,6 +128,7 @@ async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false) {
   let unsubscribeGate: Promise<void> | undefined;
   let published = 39;
   let providerError = 0;
+  let agentTerminalReads = 0;
   const sockets = new Set<import('node:net').Socket>();
   const server = createServer(async (request, response) => {
     const route = new URL(request.url ?? '/', 'http://fixture');
@@ -139,6 +140,7 @@ async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false) {
         response.end(JSON.stringify({ paths: {
           '/api/v1/sessions': { get: {} },
           '/api/v1/sessions/{session_id}': { get: {} },
+          '/api/v1/sessions/{session_id}/prompts': { post: {} },
           '/api/v1/sessions/{session_id}/agents/{agent_id}/turns': { get: {} },
         } }));
         return;
@@ -148,7 +150,7 @@ async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false) {
         return;
       }
       if (route.pathname === '/api/v1/meta') {
-        send({ server_id: 'srv_fixture', server_version: '2.7.2', kimi_agent_protocol_version: '1.0.0', capabilities: { websocket: false } });
+        send({ server_id: 'srv_fixture', server_version: '2.7.2', kimi_agent_protocol_version: '1.0.0', capabilities: { websocket: agentSocket } });
         return;
       }
       if (route.pathname === '/api/v1/sessions') {
@@ -156,12 +158,25 @@ async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false) {
         return;
       }
       if (route.pathname.endsWith('/agents/main/turns')) {
+        if (agentSocket && route.searchParams.get('page_size') === '1') {
+          if (++agentTerminalReads === 1) { response.statusCode = 503; response.end('{}'); return; }
+          const promptId = (promptBodies[0] as { prompt_id: string }).prompt_id;
+          send({ turns: [{ ordinal: 1, turn_id: 'agent-terminal', status: 'ended', outcome: 'completed', items: [
+            { item_id: 'opener', type: 'user_message', placement: 'opener', prompt_ids: [promptId] },
+          ] }], has_more: false });
+          return;
+        }
         const before = route.searchParams.get('before_ordinal');
         const index = before === null ? 2 : 1;
-        send({ turns: [{ ordinal: index, turn_id: `turn-${index}`, status: 'ended', items: [
-          { item_id: 'prompt', type: 'user_message', placement: 'opener', text: 'hello' },
-          { item_id: 'answer', type: 'assistant_message', text: 'world'.repeat(14_000) },
-        ] }], has_more: before === null });
+        const count = before === null && nativePageMaximum === 20 ? 20 : 1;
+        const repeat = before !== null ? 14_000 : count === 20 ? 22_000 : 430_000;
+        const turns = Array.from({ length: count }, (_, offset) => ({
+          ordinal: index + offset, turn_id: `turn-${index + offset}`, status: 'ended', items: [
+            { item_id: 'prompt', type: 'user_message', placement: 'opener', text: 'hello' },
+            { item_id: 'answer', type: 'assistant_message', text: 'world'.repeat(repeat) },
+          ],
+        }));
+        send({ turns, has_more: before === null });
         return;
       }
     }
@@ -232,6 +247,13 @@ async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false) {
     socket.removeListener('data', collect);
     const peer = createRawWebSocketPeer(socket, Buffer.concat(chunks));
     peers.push(peer);
+    if (agentSocket) {
+      peer.on('message', (text: string) => {
+        const frame = JSON.parse(text);
+        peer.send(JSON.stringify({ type: 'response', request_id: frame.request_id, code: 0 }));
+      });
+      return;
+    }
     peer.send(JSON.stringify({ type: 'server_hello', timestamp: new Date().toISOString(), payload: { ws_connection_id: `conn_${lane}`, protocol_version: 2, heartbeat_ms: 10000, max_event_buffer_size: 1000, capabilities: { event_batching: false, compression: false } } }));
     peer.on('message', (text: string) => {
       let frame: { type?: string; id?: string; payload?: Record<string, unknown> };
@@ -261,6 +283,10 @@ async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false) {
     options, store, calls, promptBodies, transcriptPulls, wsControls, wsPongs,
     transcript(value: { body?: Buffer; status?: number; gate?: Promise<void> } | undefined) { transcriptBody = value?.body; transcriptStatus = value?.status ?? 0; transcriptGate = value?.gate; },
     transcriptChunks: () => transcriptChunks,
+    publishAgentTerminal() {
+      for (const peer of peers) peer.send(JSON.stringify({ type: 'turn.ended', session_id: nativeSessionId, agent_id: 'main', turn: { turn_id: 'agent-terminal', ordinal: 1 } }));
+    },
+    terminalReads: () => agentTerminalReads,
     setAuthority(value: { epoch: string; processGeneration: number }) { authority = value; },
     providerError(code: number) { providerError = code; },
     holdUnsubscribe(gate: Promise<void> | undefined) { unsubscribeGate = gate; },
@@ -314,8 +340,8 @@ const rawPulls = (fixture: Awaited<ReturnType<typeof controlledKimiWeb>>) => fix
 const storeScope = JSON.stringify([environmentId, harnessInstanceId, session]);
 const producerInput = { environmentId, harnessInstanceId, session, params: historyAuthority };
 
-it('opens archived Agent turns through the current Kimi Web API with ordinal pagination', async () => {
-  const fixture = await controlledKimiWeb(200, true);
+it.each([1, 20])('streams a large native Agent turns page with %i record(s)', async (count) => {
+  const fixture = await controlledKimiWeb(count, true);
   const { driver, handle, close } = await historyProducer(fixture);
   const store = await historyStore('agent-turns');
   try {
@@ -329,7 +355,10 @@ it('opens archived Agent turns through the current Kimi Web API with ordinal pag
     const entry = first.items[0];
     if (!entry || entry.kind !== 'stream') throw new Error('Expected streamed turn');
     const { bytes } = await drainDescriptor(handle, first.pageId, entry.descriptor.id);
-    expect(JSON.parse(bytes.toString())).toMatchObject({ turnId: 'turn-2', prompt: 'hello', steps: [{ frames: [{ text: 'world'.repeat(14_000) }] }] });
+    expect(first.items).toHaveLength(count);
+    expect(first.document!.totalBytes).toBeGreaterThan(2 * 1024 * 1024);
+    if (count === 1) expect(bytes.length).toBeGreaterThan(2 * 1024 * 1024);
+    expect(JSON.parse(bytes.toString())).toMatchObject({ turn_id: 'turn-2', items: [{ text: 'hello' }, { type: 'assistant_message' }] });
     const second = await handle.page({ cursor: first.cursor ?? undefined, signal: historySignal() });
     expect(second).toMatchObject({ cursor: null, completeness: 'complete' });
     expect(fixture.calls.some(call => call.path.includes('before_ordinal=2'))).toBe(true);
@@ -338,6 +367,25 @@ it('opens archived Agent turns through the current Kimi Web API with ordinal pag
     await store.close();
     await fixture.close();
   }
+});
+
+it('retries a transient Agent terminal read and releases the exact prompt lease', async () => {
+  const fixture = await controlledKimiWeb(200, true, true);
+  const driver = await createKimiWebDriver(fixture.options);
+  try {
+    const send = driver.registration.driver.core.send!;
+    const submit = (idempotencyKey: string) => send({ environmentId, harnessInstanceId, session,
+      params: { content: [{ type: 'text', text: 'hello' }], idempotencyKey } });
+    const first = await submit('first') as { phase: string; operationId: string };
+    expect(first.phase).toBe('native-executed');
+    fixture.publishAgentTerminal();
+    await vi.waitFor(async () => {
+      expect(await fixture.store.get({ collection: 'operations', key: first.operationId })).toMatchObject({ value: { phase: 'terminal' } });
+    });
+    expect(fixture.terminalReads()).toBe(2);
+    await expect(submit('second')).resolves.toMatchObject({ phase: 'native-executed' });
+    expect(fixture.promptBodies).toHaveLength(2);
+  } finally { await driver.close(); await fixture.close(); }
 });
 
 describe('Kimi Web native selected-history producer over controlled raw HTTP and WebSocket', () => {

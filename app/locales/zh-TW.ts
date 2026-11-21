@@ -315,6 +315,7 @@ const messages: LocaleMessages = {
     confirm: {
       deleteWorktree: '刪除工作區 "{directory}"?',
       deleteSession: '刪除工作階段?',
+      deleteRuntimeSessions: '永久刪除選取的 {count} 個工作階段（包括篩選後隱藏的工作階段）？此操作無法復原。',
       deleteSessions: '刪除 {count} 個選中的工作階段?',
       deleteCodexSession: '永久刪除這個 Codex 工作階段？此操作無法復原。',
       deleteCodexSessions: '永久刪除選取的 {count} 個 Codex 工作階段？此操作無法復原。',

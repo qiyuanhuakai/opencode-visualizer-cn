@@ -27,6 +27,7 @@ export function createBridgeRuntime(options = {}) {
   let nativeStart;
   let acpStart;
   const requestedAcp = new Set();
+  const requestedNative = new Set();
   let host;
   let closing = false;
   let started = false;
@@ -52,18 +53,26 @@ export function createBridgeRuntime(options = {}) {
       : config.acpAgents;
   }
   function startRequestedAgent(kind, agentId) {
-    return enqueueMutation(async () => {
+    if (kind === 'acp') return enqueueMutation(async () => {
       const config = await configStore.getConfig();
-      if (config.agentStartup !== 'on-demand') return;
-      if (kind === 'acp') {
-        if (!config.acpAgents.some(agent => agent.id === agentId && agent.enabled)) throw new ProtocolError('unsupported', 'acp.disabled');
-        requestedAcp.add(agentId);
-        await acpManager.reconcile(activeAcpAgents(config));
-      } else {
-        if (!config.nativeServices?.[kind] || !nativeSupervisor.startOne) throw new ProtocolError('unsupported', 'native.disabled');
-        await nativeSupervisor.startOne(kind);
-      }
+      if (!config.acpAgents.some(agent => agent.id === agentId && agent.enabled)) throw new ProtocolError('unsupported', 'acp.disabled');
+      requestedAcp.add(agentId);
+      await acpManager.reconcile(activeAcpAgents(config));
     });
+    if (closing || !acceptingMutations) return Promise.reject(new ProtocolError('cancelled', 'runtime.closed'));
+    const work = (async () => {
+      const config = await configStore.getConfig();
+      if (!config.nativeServices?.[kind] || !nativeSupervisor.startOne) throw new ProtocolError('unsupported', 'native.disabled');
+      await nativeSupervisor.startOne(kind);
+    })();
+    requestedNative.add(work);
+    const retire = () => requestedNative.delete(work);
+    void work.then(retire, retire);
+    return work;
+  }
+  async function stopNative() {
+    await Promise.allSettled(requestedNative);
+    await nativeSupervisor.stop();
   }
   function getRuntimeHost() {
     if (closing) return Promise.reject(new Error('Bridge runtime is shutting down.'));
@@ -86,7 +95,7 @@ export function createBridgeRuntime(options = {}) {
           options.role === 'manager'
             ? []
             : [
-                { id: 'native', start: startNative, stop: () => nativeSupervisor.stop() },
+                { id: 'native', start: startNative, stop: stopNative },
                 { id: 'acp', start: startAcp, stop: () => acpManager.stopAll() },
                 { id: 'runtime', start: async ({ signal }) => {
                   await Promise.allSettled([startNative(), startAcp()]);
@@ -227,7 +236,7 @@ export function createBridgeRuntime(options = {}) {
         }
         await Promise.allSettled([nativeStart, acpStart]);
         const supervisorResults = await Promise.allSettled([
-          nativeSupervisor.stop(),
+          stopNative(),
           acpManager.stopAll(),
         ]);
         const reverseResourceResults = await Promise.allSettled([clientMethodHandler.stopAll()]);

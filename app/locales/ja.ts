@@ -319,6 +319,7 @@ const messages: LocaleMessages = {
     confirm: {
       deleteWorktree: 'ワークツリー「{directory}」を削除しますか？',
       deleteSession: 'セッションを削除しますか？',
+      deleteRuntimeSessions: 'フィルターで非表示のものを含む選択済み {count} 件のセッションを完全に削除しますか？この操作は元に戻せません。',
       deleteSessions: '選択した{count}件のセッションを削除しますか？',
       deleteCodexSession: 'このCodexセッションを完全に削除しますか？元に戻せません。',
       deleteCodexSessions: '選択した{count}件のCodexセッションを完全に削除しますか？元に戻せません。',

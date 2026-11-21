@@ -510,7 +510,8 @@ describe('OpenCode discovery fences', () => {
     const request = vi.fn()
       .mockResolvedValueOnce({ data: [firstRow], cursor: { next: 'opaque-native' } })
       .mockResolvedValueOnce({ data: [secondRow], cursor: {} });
-    const discovery = createOpenCodeDiscovery({ cursorApi: '1.19.5', request, current: () => ({ epoch, processGeneration: 1, seq: 0 }), assertCurrent() {} });
+    const unusedStoreReader = { page: vi.fn(), ready: Promise.resolve({ nativeVersion: '1.18.34', readOnly: true as const, summaryOnly: true as const, schemaVersion: 1 }), close: vi.fn() };
+    const discovery = createOpenCodeDiscovery({ cursorApi: '1.19.5', reader: unusedStoreReader, request, current: () => ({ epoch, processGeneration: 1, seq: 0 }), assertCurrent() {} });
     try {
       const scope = { archived: true };
       const first = await discovery.listSessionPage({ limit: 1, scope });
@@ -519,6 +520,7 @@ describe('OpenCode discovery fences', () => {
       const last = await discovery.listSessionPage({ cursor: first.cursor, limit: 1, scope });
       expect(request).toHaveBeenLastCalledWith('/api/session', { query: expect.objectContaining({ cursor: 'opaque-native' }) });
       expect(last).toMatchObject({ items: [{ summary: { id: secondRow.id, directory: firstRow.location.directory } }], cursor: null, completeness: 'complete' });
+      expect(unusedStoreReader.page).not.toHaveBeenCalled();
     } finally { discovery.close(); }
   });
 

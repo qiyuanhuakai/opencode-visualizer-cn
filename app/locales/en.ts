@@ -325,6 +325,7 @@ const messages: LocaleMessages = {
     confirm: {
       deleteWorktree: 'Delete worktree "{directory}"?',
       deleteSession: 'Delete session?',
+      deleteRuntimeSessions: 'Permanently delete {count} selected session(s), including any hidden by filters? This cannot be undone.',
       deleteSessions: 'Delete {count} selected session(s)?',
       deleteCodexSession: 'Permanently delete this Codex session? This cannot be undone.',
       deleteCodexSessions:

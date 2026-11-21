@@ -315,6 +315,7 @@ const messages: LocaleMessages = {
     confirm: {
       deleteWorktree: '删除工作区 "{directory}"?',
       deleteSession: '删除会话?',
+      deleteRuntimeSessions: '永久删除选中的 {count} 个会话（包括筛选后隐藏的会话）？此操作无法撤销。',
       deleteSessions: '删除 {count} 个选中的会话?',
       deleteCodexSession: '永久删除这个 Codex 会话？此操作无法撤销。',
       deleteCodexSessions: '永久删除选中的 {count} 个 Codex 会话？此操作无法撤销。',
