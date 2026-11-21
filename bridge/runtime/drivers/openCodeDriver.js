@@ -296,6 +296,15 @@ export async function createOpenCodeDriver(options) {
         const safe = route.redact ? redactSettings(result) : result;
         return name === 'listProviders' ? providerCatalog(safe) : safe;
       }
+      if (name === 'compactSession' && params.body?.providerID === undefined && params.body?.modelID === undefined) {
+        const rows = await request(`/session/${encodeURIComponent(session.nativeSessionId)}/message`, { query: { directory: params.directory, limit: 1 } });
+        requireValue(Array.isArray(rows) && rows.length <= 1, 'opencode.compact_history', 'reconcile_required');
+        const info = rows[0]?.info;
+        requireValue(info?.sessionID === session.nativeSessionId, 'opencode.compact_no_model', 'source_unavailable');
+        const model = info.model ?? info;
+        requireValue(typeof model.providerID === 'string' && model.providerID && typeof model.modelID === 'string' && model.modelID, 'opencode.compact_no_model', 'source_unavailable');
+        return sessionMutation(name, session, { ...params, body: { ...params.body, providerID: model.providerID, modelID: model.modelID } }, route);
+      }
       return operation.scope === 'session' ? sessionMutation(name, session, params, route, name === 'sendCommand') : instanceMutation(name, params, route);
     };
     return { name, owner: identity.harnessInstanceId, scope: operation.scope, permission: `opencode.${operation.method === 'GET' ? 'read' : 'write'}`, schemaVersion: 1, support: supported ? { state: 'supported' } : unsupported('native endpoint absent') };

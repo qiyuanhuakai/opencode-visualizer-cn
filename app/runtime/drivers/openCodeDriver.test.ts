@@ -91,7 +91,7 @@ async function controlledNative() {
   let generation = 1;
   let healthy = true;
   const paths: Record<string, Record<string, object>> = {};
-  for (const route of ['/session/{sessionID}', '/session/{sessionID}/fork', '/session/{sessionID}/revert', '/session/{sessionID}/unrevert', '/session/{sessionID}/diff', '/session/{sessionID}/children', '/session/{sessionID}/message/{messageID}', '/session/{sessionID}/todo', '/session/{sessionID}/command', '/session/{sessionID}/message/{messageID}/part/{partID}', '/global/config', '/provider', '/provider/auth', '/provider/{providerID}/oauth/authorize', '/provider/{providerID}/oauth/callback', '/auth/{providerID}', '/agent', '/command', '/session/status', '/permission', '/question', '/mcp', '/lsp', '/skill']) paths[route] = { get: {}, post: {}, patch: {}, put: {}, delete: {} };
+  for (const route of ['/session/{sessionID}', '/session/{sessionID}/fork', '/session/{sessionID}/summarize', '/session/{sessionID}/revert', '/session/{sessionID}/unrevert', '/session/{sessionID}/diff', '/session/{sessionID}/children', '/session/{sessionID}/message/{messageID}', '/session/{sessionID}/todo', '/session/{sessionID}/command', '/session/{sessionID}/message/{messageID}/part/{partID}', '/global/config', '/provider', '/provider/auth', '/provider/{providerID}/oauth/authorize', '/provider/{providerID}/oauth/callback', '/auth/{providerID}', '/agent', '/command', '/session/status', '/permission', '/question', '/mcp', '/lsp', '/skill']) paths[route] = { get: {}, post: {}, patch: {}, put: {}, delete: {} };
   function publish(type: string, properties: Json) { for (const stream of streams) stream.write(`data: ${JSON.stringify({ directory: '/non-git', payload: { type, properties } })}\n\n`); }
   let responseGate: Promise<void> | undefined;
   const historyPulls: { path: string; before: string | null; authorization: string | undefined }[] = [];
@@ -115,6 +115,10 @@ async function controlledNative() {
     if (route.pathname === '/session' && request.method === 'GET') { response.end(JSON.stringify([nativeSession])); return; }
     if (route.pathname === '/session/ses_real') { response.end(JSON.stringify(nativeSession)); return; }
     if (route.pathname.endsWith('/prompt_async')) { response.statusCode = 204; response.end(); return; }
+    if (route.pathname.endsWith('/message') && route.searchParams.get('limit') === '1') {
+      response.end(JSON.stringify([{ info: { id: 'newest', sessionID: session.nativeSessionId, role: 'user', model: { providerID: 'historical-provider', modelID: 'historical-model' } }, parts: [] }]));
+      return;
+    }
     if (route.pathname.endsWith('/message') && route.searchParams.get('limit') === '200') {
       // Given the native selected-history producer pull, the raw body is served before any concat or parse.
       historyPulls.push({ path: route.pathname + route.search, before: route.searchParams.get('before'), authorization: request.headers.authorization });
@@ -172,6 +176,21 @@ describe('OpenCode Bridge driver over controlled HTTP/SSE with real durable stor
       await driver.close();
     } finally { await fixture.close(); }
   });
+  it('compacts the requested session using that session’s native model', async () => {
+    const fixture = await controlledNative();
+    const driver = await createOpenCodeDriver(fixture.options);
+    try {
+      const compact = driver.registration.driver.native.compactSession;
+      if (!compact) throw new Error('missing compact operation');
+      await expect(compact(input({ idempotencyKey: 'compact', processGeneration: 1, body: {} })))
+        .resolves.toMatchObject({ phase: 'native-executed' });
+      expect(fixture.calls).toContainEqual({
+        method: 'POST', path: '/session/ses_real/summarize',
+        body: { providerID: 'historical-provider', modelID: 'historical-model' },
+      });
+    } finally { await driver.close(); await fixture.close(); }
+  });
+
   it('owns one SSE upstream for two subscribers and keeps it after a subscriber leaves', async () => {
     // Given one Runtime-owned native driver.
     const fixture = await controlledNative();
