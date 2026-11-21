@@ -29,6 +29,7 @@ export function createRuntimeServices(options: {
   readonly environmentId: string; readonly stateRoot: string; readonly role: TargetGrant['role']; readonly roots: readonly RuntimeRoot[];
   readonly config: BridgeConfig; readonly nativeSupervisor: ProcessSupervisor; readonly acpManager: AcpRuntimeProcessManager;
   readonly runtime: Pick<RuntimeHost, 'mutate'>; readonly factories?: Readonly<Record<string, RuntimeDriverFactory>>;
+  readonly recoverDeadOwner?: boolean;
   readonly runtimeStoreTakeover?: { readonly expectedFence: number };
   readonly permissions?: readonly string[];
   readonly remoteServices?: import('./remoteServices.js').RemoteServices;

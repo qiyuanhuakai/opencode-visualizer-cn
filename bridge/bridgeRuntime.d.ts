@@ -34,6 +34,7 @@ export type BridgeRuntime = {
 export function createBridgeRuntime(options?: {
   environmentId?: string;
   stateRoot?: string;
+  recoverDeadOwner?: boolean;
   role?: 'local' | 'manager' | 'execution';
   localWorkspaceRoots?: readonly RuntimeRoot[];
   runtimeDriverFactories?: Readonly<Record<string, RuntimeDriverFactory>>;
