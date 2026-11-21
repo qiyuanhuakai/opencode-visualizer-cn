@@ -6,14 +6,13 @@
         <TopPanel
           ref="topPanelRef"
           :runtime-mode="!!runtimeActionClient"
-          :runtime-archived="runtimeSelectedArchived"
           :runtime-fork-available="runtimeSupports('forkSession')"
           :runtime-compact-available="runtimeSupports('compactSession')"
-          :tree-data="topPanelTreeData"
+          :tree-data="runtimeActionClient ? runtimeTopPanelTree : topPanelTreeData"
           :notification-sessions="notificationSessions"
           :project-directory="projectDirectory"
           :active-directory="activeDirectory"
-          :selected-session-id="selectedSessionId"
+          :selected-session-id="runtimeActionClient ? unifiedTreeSelectedKey : selectedSessionId"
           :runtime-create-available="(runtimeConversationManifest ?? managementManifest)?.core.createSession.state === 'supported' && !!runtimeActionClient"
           :native-selected-display="nativeSelectedDisplay"
           :home-path="homePath"
@@ -35,20 +34,20 @@
           @new-session-in="handleNewSessionInSandbox"
           @open-shell="openShellFromInput('')"
           @delete-active-directory="deleteWorktree"
-          @delete-session="backendSessionActions.deleteSession"
-          @fork-session="backendSessionActions.handleForkSession"
-          @compact-session="backendSessionActions.handleCompactSession"
-          @archive-session="backendSessionActions.archiveSession"
-          @unarchive-session="backendSessionActions.unarchiveSession"
-          @rename-session="backendSessionActions.renameSession"
-          @pin-session="backendSessionActions.pinSession"
-          @unpin-session="backendSessionActions.unpinSession"
+          @delete-session="handleTopPanelRuntimeAction('delete', $event)"
+          @fork-session="backendSessionActions.handleForkSession(runtimeActionClient ? selectedSessionId : $event)"
+          @compact-session="backendSessionActions.handleCompactSession(runtimeActionClient ? selectedSessionId : $event)"
+          @archive-session="handleTopPanelRuntimeAction('archive', $event)"
+          @unarchive-session="handleTopPanelRuntimeAction('unarchive', $event)"
+          @rename-session="handleTopPanelRuntimeAction('rename', $event)"
+          @pin-session="handleTopPanelRuntimeAction('pin', $event)"
+          @unpin-session="handleTopPanelRuntimeAction('unpin', $event)"
           @pin-project="pinProject"
           @unpin-project="unpinProject"
           @pin-sandbox="pinSandbox"
           @unpin-sandbox="unpinSandbox"
           @select-session="handleTopPanelSessionSelect"
-          @batch-session-action="backendSessionActions.handleTopPanelBatchSessionAction"
+          @batch-session-action="handleTopPanelBatchAction"
           @open-directory="handleOpenProjectDirectory"
           @edit-project="handleEditProject"
           @open-settings="openSettings()"
@@ -64,6 +63,8 @@
           @dropdown-closed="focusInput"
         >
           <template #runtime-sessions="{ close, managementMode, done }">
+            <details class="runtime-dropdown-discovery">
+              <summary>{{ t('runtime.sessionTree.searchAll') }}</summary>
             <SessionTree
               v-if="unifiedTreeRows"
               top-dropdown
@@ -93,6 +94,7 @@
               @load-more-children="handleUnifiedLoadMoreChildren"
               @reload="handleReloadSidebar"
             />
+            </details>
           </template>
         </TopPanel>
         <div class="app-runtime-actions">
@@ -965,7 +967,8 @@ import type { ForgePanelAuxiliary } from './types/forge';
 import type { ContainerPinPayload } from './types/pin';
 import type { MessageInfo, MessagePart, ReasoningPart, ToolPart } from './types/sse';
 import type { WorkerToTabMessage } from './types/sse-worker';
-import type { TopPanelNotificationSession } from './types/top-panel';
+import { buildRuntimeTopPanelTree } from './runtime/topPanelTree';
+import type { TopPanelBatchSessionActionPayload, TopPanelNotificationSession } from './types/top-panel';
 import type { ProjectState, SandboxState, SessionState } from './types/worker-state';
 import type { Terminal } from '@xterm/xterm';
 import { resolveRestoredPtyKind } from './utils/forgePty';
@@ -5511,6 +5514,10 @@ function handleTopPanelSessionSelect(payload: {
   directory: string;
   sessionId: string;
 }) {
+  if (runtimeActionClient.value) {
+    void handleUnifiedSelectKey(payload.sessionId);
+    return;
+  }
   if (
     selectedSessionId.value === payload.sessionId &&
     activeDirectory.value === payload.directory &&
@@ -10138,6 +10145,17 @@ const sessionTreeData = computed<SessionTreeData>(() =>
   runtimeActionClient.value ? EMPTY_SESSION_TREE_DATA : legacySessionTrees.sessionTreeData.value,
 );
 
+const runtimeTopPanelPinnedKeys = shallowRef<ReadonlySet<string>>(new Set());
+watch([() => runtimePins.value, () => runtimePins.value?.revision.value, () => unifiedSessionTree.value?.sessions.value], ([pins, , sessions], _previous, onCleanup) => {
+  runtimeTopPanelPinnedKeys.value = new Set();
+  if (!pins || !sessions) return;
+  const controller = new AbortController();
+  onCleanup(() => controller.abort());
+  void pins.readKeys(sessions.filter(row => !row.archived).map(row => row.key), controller.signal).then(result => {
+    if (!controller.signal.aborted) runtimeTopPanelPinnedKeys.value = result;
+  }).catch(() => {});
+});
+const runtimeTopPanelTree = computed(() => buildRuntimeTopPanelTree(unifiedSessionTree.value?.tree.value ?? [], runtimeTopPanelPinnedKeys.value));
 const unifiedTreeRows = computed<readonly UnifiedFlatRow[] | undefined>(() => unifiedSessionTree.value?.rows.value);
 const unifiedTreeSources = computed<readonly HarnessEntry[]>(() => {
   const entries = new Map((unifiedSessionTree.value?.harnesses.value ?? []).map(entry => [entry.harnessInstanceId, entry]));
@@ -11109,8 +11127,28 @@ const runtimeSessionActionCapabilities = computed(() => ({
   rename: runtimeSupports(runtimeConversationManifest.value?.kind === 'kimi-web' ? 'kimi.updateProfile' : 'updateSession'),
   archive: runtimeSupports(runtimeConversationManifest.value?.kind === 'kimi-web' ? 'archiveSession' : 'updateSession'),
   unarchive: runtimeSupports(runtimeConversationManifest.value?.kind === 'kimi-web' ? 'restoreSession' : 'updateSession'),
-  delete: runtimeSupports('deleteSession'), pin: false, unpin: false,
+  delete: runtimeSupports('deleteSession'), pin: !!runtimePins.value, unpin: !!runtimePins.value,
 }));
+function handleTopPanelBatchAction(payload: TopPanelBatchSessionActionPayload) {
+  if (runtimeActionClient.value) return handleRuntimeSessionBatch(payload.action, payload.sessions.map(row => row.sessionId));
+  return backendSessionActions.handleTopPanelBatchSessionAction(payload);
+}
+
+async function handleTopPanelRuntimeAction(action: 'rename' | TopPanelBatchSessionActionPayload['action'], key: string) {
+  if (!runtimeActionClient.value) return backendSessionActions[`${action}Session`](key);
+  if (action !== 'rename') return handleRuntimeSessionBatch(action, [key]);
+  const session = decodeSessionKey(key);
+  const title = runtimeSessionRuntime.title?.(session) || session.nativeSessionId;
+  const client = runtimeActionClient.value;
+  const profileId = activeProfileId.value;
+  const next = (await showPrompt(t('topPanel.sessionActions.rename'), title))?.trim();
+  if (!next || next === title || client !== runtimeActionClient.value || profileId !== activeProfileId.value) return;
+  try {
+    await runtimeSessionRuntime.router.rename({ session, profileId }, next);
+  } catch (error) {
+    sessionError.value = toErrorMessage(error);
+  }
+}
 async function handleRuntimeSessionBatch(action: 'pin' | 'unpin' | 'archive' | 'unarchive' | 'delete', keys: string[]) {
   const profileId = activeProfileId.value;
   const client = runtimeActionClient.value;
@@ -14799,5 +14837,17 @@ body {
   border: 1px solid;
   border-radius: var(--radius-control);
   cursor: pointer;
+}
+.runtime-dropdown-discovery {
+  color: var(--theme-top-dropdown-text);
+  background: var(--theme-top-dropdown-bg);
+}
+.runtime-dropdown-discovery > summary {
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.runtime-dropdown-discovery[open] {
+  max-height: min(360px, 42vh);
+  overflow: auto;
 }
 </style>
