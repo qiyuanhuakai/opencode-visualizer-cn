@@ -174,7 +174,7 @@ describe('ACP-worded unsupported messages', () => {
     app.unmount();
   });
 
-  it('keeps the generic and OpenCode-worded messages for an opencode backend', async () => {
+  it('keeps Agent-neutral fallback messages for an OpenCode backend', async () => {
     adapterSlot.current = acpUnsupportedAdapter();
     const { root, app } = await mountModal('opencode');
 
@@ -184,7 +184,7 @@ describe('ACP-worded unsupported messages', () => {
 
     clickTab(root, 'Skills');
     await nextTick();
-    expect(root.textContent).toContain('OpenCode');
+    expect(root.textContent).toContain('Skill status is unavailable for this Agent.');
     app.unmount();
   });
 });

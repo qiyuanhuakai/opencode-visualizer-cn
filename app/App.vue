@@ -11293,20 +11293,21 @@ const managementDshRpcClient = computed(() => {
   return manifest?.kind === 'dsh' && client ? createNativeDshRpc(client, manifest) : undefined;
 });
 const managementDshStatus = shallowRef<DshStatusSnapshot>();
-watch([managementDshRpcClient, isStatusMonitorOpen, managementGrantRevision], async ([rpc, open], _previous, onCleanup) => {
-  managementDshStatus.value = undefined;
-  if (!rpc || !open) return;
+watch([managementDshRpcClient, isStatusMonitorOpen], () => { managementDshStatus.value = undefined; });
+watch(managementGrantRevision, async (_revision, _previous, onCleanup) => {
+  const rpc = managementDshRpcClient.value;
+  if (!rpc || !isStatusMonitorOpen.value) return;
   const accountOperation = managementManifest.value?.extensions.find(entry => entry.name === 'dsh.ui.account.getState');
   if (accountOperation?.support.state !== 'supported') return;
   let current = true;
   onCleanup(() => { current = false; });
   try {
     const result = await rpc.call('account', 'getState');
-    if (current && managementDshRpcClient.value === rpc) {
+    if (current && isStatusMonitorOpen.value && managementDshRpcClient.value === rpc) {
       managementDshStatus.value = { health: 'ok', account: dshAccountSnapshot(result) };
     }
   } catch {
-    if (current && managementDshRpcClient.value === rpc) managementDshStatus.value = { health: 'error' };
+    if (current && isStatusMonitorOpen.value && managementDshRpcClient.value === rpc) managementDshStatus.value = { health: 'error' };
   }
 });
 const managementProviders = ref<ProviderInfo[]>([]);
