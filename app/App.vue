@@ -79,6 +79,7 @@
               :row-pins="runtimePins ?? undefined"
               :management-mode="managementMode"
               @finish-management="done()"
+              :batch-action-available="batchActionAvailable"
               @batch-action="handleRuntimeSessionBatch"
               :projects="[]"
               :expanded-paths="unifiedSessionTree ? [...unifiedSessionTree.expanded.value] : []"
@@ -203,7 +204,11 @@
         <div class="app-main-column">
           <main ref="outputEl" class="app-output">
             <div class="output-workspace">
-              <p v-if="runtimeConversation.error.value" class="runtime-history-notice" :class="{ 'is-unavailable': runtimeSelectedSessionRef && !runtimeSelectedDirectory }" role="alert">{{ runtimeConversation.error.value }}</p>
+              <div v-if="runtimeConversation.error.value" class="runtime-history-notice" :class="{ 'is-unavailable': runtimeSelectedSessionRef && !runtimeSelectedDirectory }">
+                <span role="alert">{{ runtimeConversation.error.value }}</span>
+                <button v-if="runtimeConversation.hasMore.value" type="button" class="app-runtime-action"
+                  :disabled="runtimeConversation.loading.value" @click="loadOlderRuntimeHistory()">{{ t('common.retry') }}</button>
+              </div>
               <div class="tool-window-layer">
                 <div class="output-split">
                   <OutputPanel
@@ -11230,11 +11235,14 @@ async function handleTopPanelRuntimeAction(action: 'rename' | TopPanelBatchSessi
     sessionError.value = toErrorMessage(error);
   }
 }
+function batchActionAvailable(action: 'pin' | 'unpin' | 'archive' | 'unarchive' | 'delete', key: string) {
+  return runtimeActionsForSession(key)[action];
+}
 async function handleRuntimeSessionBatch(action: 'pin' | 'unpin' | 'archive' | 'unarchive' | 'delete', keys: string[]) {
   const profileId = activeProfileId.value;
   const client = runtimeActionClient.value;
   if (!client) return;
-  const selections = [...new Set(keys)].filter(key => runtimeActionsForSession(key)[action]).map(key => ({ profileId, session: decodeSessionKey(key) }));
+  const selections = [...new Set(keys)].filter(key => batchActionAvailable(action, key)).map(key => ({ profileId, session: decodeSessionKey(key) }));
   if (!selections.length) return;
   if (action === 'pin' || action === 'unpin') {
     await runtimePins.value?.setPinned(selections, action === 'pin');

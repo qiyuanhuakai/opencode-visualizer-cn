@@ -10,7 +10,7 @@
         <button v-if="topDropdown" type="button" class="unified-filter-trigger" @click="emit('finish-management')">{{ $t('topPanel.management.done') }}</button>
         <button v-if="topDropdown" type="button" class="unified-filter-trigger" :disabled="!manageableKeys.length" @click="toggleVisible">{{ $t(allVisibleManaged ? 'topPanel.management.unselectVisible' : 'topPanel.management.selectVisible') }}</button>
         <button v-for="action in batchActions" :key="action" type="button" class="unified-filter-trigger"
-          :disabled="managedKeys.size === 0" @click="emit('batch-action', action, [...managedKeys])">
+          :disabled="!eligibleBatchKeys[action].length" @click="emit('batch-action', action, eligibleBatchKeys[action])">
           {{ $t(batchLabels[action]) }}
         </button>
       </div>
@@ -401,6 +401,7 @@ const props = withDefaults(
     indexWaiting?: boolean;
     pinState?: RuntimePinsState;
     managementMode?: boolean;
+    batchActionAvailable?: (action: BatchAction, sessionKey: string) => boolean;
     topDropdown?: boolean;
     rowPins?: RuntimePinsState;
   }>(),
@@ -462,6 +463,7 @@ const batchLabels = {
   delete: 'topPanel.sessionActions.deletePermanently',
 } as const;
 const batchActions = ['pin', 'unpin', 'archive', 'unarchive', 'delete'] as const;
+type BatchAction = (typeof batchActions)[number];
 const managedKeys = ref(new Set<string>());
 watch(() => props.managementMode, () => { managedKeys.value = new Set(); });
 const selectedKeys = computed(() => props.managementMode ? managedKeys.value : new Set(props.selectedKey ? [props.selectedKey] : []));
@@ -485,6 +487,9 @@ const windowRows = computed(() => {
   const start = Math.min(startIndex.value, Math.max(0, rows.length - 1));
   return rows.slice(start, start + visibleCount.value).map((row, offset) => ({ row, index: start + offset, top: (start + offset) * ROW_HEIGHT }));
 });
+const eligibleBatchKeys = computed(() => Object.fromEntries(batchActions.map(action => [
+  action, [...managedKeys.value].filter(key => props.batchActionAvailable?.(action, key) ?? true),
+])) as Record<BatchAction, string[]>);
 const manageableKeys = computed(() => [...new Set(searchQuery.value
   ? (props.searchState?.matches ?? []).map(match => match.key)
   : (props.treeRows ?? []).filter(isSessionRow).map(selectionKey))]);

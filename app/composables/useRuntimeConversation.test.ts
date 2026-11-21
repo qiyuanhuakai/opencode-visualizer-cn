@@ -23,7 +23,7 @@ describe('selected conversation cancellation', () => {
       selection: { profileId: parseConnectionProfileId('22222222-2222-4222-8222-222222222222'), session: { environmentId: target, harnessInstanceId: parseHarnessInstanceId('33333333-3333-4333-8333-333333333333'), nativeSessionId: 'native' } },
       selectionGeneration: 1, clientScope: { binding: { target, epoch: 'epoch', generation: 1 }, generation: 1, isCurrent: () => true }, signal: new AbortController().signal, isCurrent: () => true,
     };
-    const ready = { value: { items: [{ kind: 'inline', value: { info: { id: 'message', sessionID: 'native', role: 'user', time: { created: 1 } }, parts: [] } }], cursor: null }, release: vi.fn() };
+    const ready = { value: { items: [{ kind: 'inline', value: { info: { id: 'message', sessionID: 'native', role: 'user', time: { created: 1 } }, parts: [] } }], cursor: 'older' }, release: vi.fn() };
     const held = Promise.withResolvers<typeof ready>();
     controlled.page.mockReturnValue(held.promise);
     const publish = vi.fn(), conversation = useRuntimeConversation({ publish });
@@ -40,9 +40,12 @@ describe('selected conversation cancellation', () => {
       controlled.page.mockRejectedValueOnce(new ProtocolError('source_unavailable', 'temporary-page'));
       await expect(conversation.loadMore()).rejects.toMatchObject({ code: 'source_unavailable' });
       expect(conversation.error.value).toContain('temporary-page');
-      controlled.page.mockResolvedValue(ready);
+      expect(conversation.hasMore.value).toBe(true);
+      controlled.page.mockResolvedValue({ ...ready, value: { ...ready.value, cursor: null }, release: vi.fn() });
       await conversation.loadMore();
+      expect(controlled.page.mock.calls.slice(-2)).toEqual([['older'], ['older']]);
       expect(conversation.error.value).toBe('');
+      expect(conversation.hasMore.value).toBe(false);
     } finally {
       held.resolve(ready);
       await Promise.allSettled(work);
