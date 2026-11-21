@@ -43,7 +43,7 @@ vi.mock('../composables/useGlobalEvents', () => ({ useGlobalEvents: () => ({
 type NativeHistory = Readonly<{ info: Readonly<Record<string, JsonValue>>; parts: readonly JsonValue[] }>;
 
 /** Real App + TCP/WebSocket + production Runtime/SQLite, controlled native harness boundary. */
-export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; bridgeToken?: string; managedBridge?: boolean; additionalModelId?: string; editableProvider?: boolean; beforeProviderWrite?: () => Promise<void>; beforeProviderRead?: () => Promise<void>; archivedAcpSession?: boolean; secondWorktree?: boolean; codexFactory?: RuntimeDriverFactory; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
+export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; readDshAccount?: () => Promise<JsonValue>; bridgeToken?: string; managedBridge?: boolean; additionalModelId?: string; editableProvider?: boolean; beforeProviderWrite?: () => Promise<void>; beforeProviderRead?: () => Promise<void>; archivedAcpSession?: boolean; secondWorktree?: boolean; codexFactory?: RuntimeDriverFactory; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
   // Load the Node worker owner without Vite's browser asset URL rewriting.
   // The worker itself still runs the production module in a real subprocess.
   const requireNodeModule = createRequire(path.resolve(process.cwd(), 'package.json'));
@@ -83,7 +83,7 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
   const services = await createRuntimeServices({
     environmentId: randomUUID(), stateRoot, role, remoteServices,
     roots: [...new Set([directory, secondDirectory])].map(root => ({ root, permissions: ['read', 'write', 'command', 'pty'] })),
-    config: { version: 1, nativeServices: { opencode: true, codex: Boolean(options.codexFactory), 'kimi-web': false, dsh: options.dshAccount !== undefined }, acpAgents: options.archivedAcpSession ? [{ id: 'fixture-acp', name: 'Fixture ACP', enabled: true, command: process.execPath, args: [], env: {} }] : [] },
+    config: { version: 1, nativeServices: { opencode: true, codex: Boolean(options.codexFactory), 'kimi-web': false, dsh: options.dshAccount !== undefined || Boolean(options.readDshAccount) }, acpAgents: options.archivedAcpSession ? [{ id: 'fixture-acp', name: 'Fixture ACP', enabled: true, command: process.execPath, args: [], env: {} }] : [] },
     nativeSupervisor: supervisor, acpManager: acp, runtime: { mutate: action => action() },
     factories: { ...(options.codexFactory ? { codex: options.codexFactory } : {}), opencode: async context => {
       const identity = { environmentId: parseEnvironmentId(context.environmentId), harnessInstanceId: parseHarnessInstanceId(context.harnessInstanceId), kind: 'opencode' as const };
@@ -190,7 +190,7 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
         driver: { core: { inspect: () => ({ state: 'ready', protocolVersion: 1 }) }, native: {
           [operation]: input => {
             nativeQueries.push({ operation, ...(input.session ? { session: input.session } : {}) });
-            return options.dshAccount ?? null;
+            return options.readDshAccount?.() ?? options.dshAccount ?? null;
           },
         } },
       }, close: async () => {} };

@@ -202,6 +202,47 @@ it('loads DSH account status from the management instance while OpenCode owns th
   expect(fixture.historyOpens.map(session => session.nativeSessionId)).toEqual(['session-a']);
 }, 30000);
 
+it('retires pending DSH status when closing and reopening the same Agent', async () => {
+  const previous = Promise.withResolvers<{ status: string }>();
+  const replacement = Promise.withResolvers<{ status: string }>();
+  const readDshAccount = vi.fn().mockReturnValueOnce(previous.promise).mockReturnValue(replacement.promise);
+  const fixture = await mountRuntimeApp([], { readDshAccount });
+  try {
+    await fixture.connect();
+    const trigger = fixture.element.querySelector<HTMLButtonElement>('button[title="Status monitor"]')!;
+    trigger.click();
+    const monitor = await vi.waitFor(() => {
+      const panel = fixture.element.querySelector('.status-monitor-popover');
+      expect(panel).toBeTruthy();
+      return panel!;
+    });
+    monitor.querySelector<HTMLButtonElement>('[data-testid="management-agent-selector"] button')!.click();
+    const option = await vi.waitFor(() => {
+      const row = [...monitor.querySelectorAll<HTMLElement>('[role="option"]')].find(item => item.textContent?.includes('DSH'));
+      expect(row).toBeTruthy();
+      return row!;
+    });
+    option.click();
+    await vi.waitFor(() => expect(readDshAccount).toHaveBeenCalledTimes(1));
+
+    trigger.click();
+    await vi.waitFor(() => expect(fixture.element.querySelector('.status-monitor-popover')).toBeNull());
+    trigger.click();
+    await vi.waitFor(() => expect(readDshAccount).toHaveBeenCalledTimes(2));
+
+    previous.resolve({ status: 'signed-in' });
+    await vi.waitFor(() => {
+      expect(fixture.frames.some(frame => frame.direction === 'receive' && (frame.value as { result?: { status?: string } }).result?.status === 'signed-in')).toBe(true);
+    });
+    expect(fixture.element.querySelector('.status-monitor-popover')?.textContent).not.toContain('Signed in');
+    replacement.resolve({ status: 'signed-out' });
+    await vi.waitFor(() => expect(fixture.element.querySelector('.status-monitor-popover')?.textContent).toContain('Signed out'));
+  } finally {
+    previous.resolve({ status: 'signed-in' });
+    replacement.resolve({ status: 'signed-out' });
+  }
+}, 30000);
+
 it('hides a slash-containing model from Bridge providers without changing the active conversation', async () => {
   const fixture = await mountRuntimeApp([], { additionalModelId: 'org/model/v1' });
   await fixture.connect();

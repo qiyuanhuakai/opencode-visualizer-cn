@@ -11293,10 +11293,9 @@ const managementDshRpcClient = computed(() => {
   return manifest?.kind === 'dsh' && client ? createNativeDshRpc(client, manifest) : undefined;
 });
 const managementDshStatus = shallowRef<DshStatusSnapshot>();
-watch([managementDshRpcClient, isStatusMonitorOpen], () => { managementDshStatus.value = undefined; });
-watch(managementGrantRevision, async (_revision, _previous, onCleanup) => {
-  const rpc = managementDshRpcClient.value;
-  if (!rpc || !isStatusMonitorOpen.value) return;
+watch([managementDshRpcClient, isStatusMonitorOpen, managementGrantRevision], async ([rpc, open, revision], [previousRpc, wasOpen, previousRevision], onCleanup) => {
+  if (rpc !== previousRpc || open !== wasOpen) managementDshStatus.value = undefined;
+  if (!rpc || !open || revision === previousRevision) return;
   const accountOperation = managementManifest.value?.extensions.find(entry => entry.name === 'dsh.ui.account.getState');
   if (accountOperation?.support.state !== 'supported') return;
   let current = true;
