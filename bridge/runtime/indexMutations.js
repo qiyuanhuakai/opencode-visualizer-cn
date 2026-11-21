@@ -80,6 +80,7 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
       if (!Array.isArray(items) || items.length > 200) throw new StoreError('invalid_request', 'index_page_budget');
       const summaries = new Map();
       async function flush() {
+      if (summaries.size === 0) return 0;
       for (let attempt = 0; attempt < 8; attempt++) {
         scan.assertCurrent();
         const priors = new Map((await store.getMany({ collection: 'session_summaries', keys: [...summaries.keys()] }))

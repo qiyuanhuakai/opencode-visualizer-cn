@@ -69,11 +69,17 @@ export function createOpenCodeDiscovery({ reader, request, current, assertCurren
         if (!scan || JSON.stringify(scan.scope) !== JSON.stringify(scope) || !same(scan, generation)) return partial('expired-or-repeated-cursor');
         scans.delete(params.cursor);
       } else {
+        if (scans.size >= 3) {
+          // A reader may only need the first page. Reclaim a parked cursor
+          // before rejecting a new scan, without interrupting a native read.
+          const parked = [...scans].find(([, entry]) => !entry.reading);
+          if (parked) scans.delete(parked[0]);
+        }
         requireValue(scans.size < 3, 'opencode.discovery_snapshots', 'reconcile_required');
         scan = { ...generation, scope, nativeCursor: null, overlay: new Map(), bytes: 0, expiresAt: Date.now() + 60000, invalid: null };
       }
       // Install before awaiting the worker: a delete racing the first page is also fenced.
-      const token = randomUUID(); scans.set(token, scan);
+      const token = randomUUID(); scan.reading = true; scans.set(token, scan);
       try {
         if (!storeReader && !cursorApi) throw new ProtocolError('unsupported', 'opencode.store_unavailable');
         const page = storeReader ? await storeReader.page({ limit, scope, cursor: scan.nativeCursor }) : await apiPage(limit, scan);
@@ -123,7 +129,7 @@ export function createOpenCodeDiscovery({ reader, request, current, assertCurren
           if (!(apiError instanceof ProtocolError)) throw apiError;
           return partial(`${error.field}:${apiError.field}`);
         } finally { scans.delete(token); }
-      }
+      } finally { scan.reading = false; }
     },
     retry() { failure = null; scans.clear(); },
     close() { closed = true; scans.clear(); },

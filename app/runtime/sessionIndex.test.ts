@@ -73,6 +73,19 @@ describe('progressive native summary index', () => {
       expect(lists).toBe(1);
     }, 'kimi-web');
   });
+  it('continues indexing after an initial batch outside the granted workspace', async () => {
+    const rejected = Array.from({ length: 4 }, (_, index) => row('outside-' + index, '/outside'));
+    await fixture(async () => ({
+      items: [...rejected, row('authorized')], cursor: null, completeness: 'complete',
+    }), async ({ index }) => {
+      const source = await index.attach({ harnessInstanceId, authority: () => ({ epoch, processGeneration: 1 }), subscribe: false });
+      expect(await source.discover()).toMatchObject({ status: 'complete', count: 1 });
+      const page = await index.page();
+      expect(page.items.map(item => item.key)).toEqual([encodeSessionKey(session('authorized'))]);
+    }, 'codex', async directory => {
+      if (directory === '/outside') throw Object.assign(new Error('outside workspace'), { code: 'unauthorized', field: 'runtime.workspace' });
+    });
+  });
   it('publishes each page and newly discovered directories before enumeration finishes', async () => {
     let page = 0;
     let release: () => void = () => {};

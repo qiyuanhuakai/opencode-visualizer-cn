@@ -504,6 +504,32 @@ describe('OpenCode discovery fences', () => {
     });
   });
 
+  it('reclaims an unused discovery cursor without discarding an in-flight page', async () => {
+    const row = { ...nativeSession, location: { directory: nativeSession.directory } };
+    const inFlight = Promise.withResolvers<unknown>();
+    const request = vi.fn().mockResolvedValue({ data: [row], cursor: { next: 'native-next' } });
+    const discovery = createOpenCodeDiscovery({
+      cursorApi: '1.19.5', request, current: () => ({ epoch, processGeneration: 1, seq: 0 }), assertCurrent() {},
+    });
+    try {
+      const first = await discovery.listSessionPage();
+      const second = await discovery.listSessionPage();
+      request.mockReturnValueOnce(inFlight.promise);
+      const current = discovery.listSessionPage();
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+      const fourth = await discovery.listSessionPage();
+      expect(fourth).toMatchObject({ cursor: expect.any(String) });
+      expect(await discovery.listSessionPage({ cursor: first.cursor })).toMatchObject({ reason: 'expired-or-repeated-cursor' });
+      inFlight.resolve({ data: [row], cursor: { next: 'native-next' } });
+      expect(await current).toMatchObject({ cursor: expect.any(String) });
+      request.mockResolvedValueOnce({ data: [], cursor: {} });
+      expect(await discovery.listSessionPage({ cursor: second.cursor })).toMatchObject({ completeness: 'complete' });
+    } finally {
+      inFlight.resolve({ data: [], cursor: {} });
+      discovery.close();
+    }
+  });
+
   it('enumerates OpenCode 1.19.5 with an opaque native cursor through filtered empty pages', async () => {
     const firstRow = { ...nativeSession, location: { directory: nativeSession.directory } };
     const secondRow = { ...firstRow, id: 'ses_archived', time: { ...firstRow.time, archived: firstRow.time.updated } };
