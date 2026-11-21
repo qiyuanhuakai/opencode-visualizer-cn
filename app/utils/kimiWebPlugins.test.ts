@@ -31,6 +31,20 @@ describe('Kimi Web plugin API', () => {
     await expect(client.action('missing', 'enable')).rejects.toThrow('Plugin not found');
   });
 
+  it('normalizes installed and marketplace names from the native Kimi API', async () => {
+    const client = createKimiWebPluginsClient({
+      bridgeUrl: 'ws://bridge.test/kimi-web/ws',
+      fetcher: async input => new Response(JSON.stringify({
+        code: 0,
+        data: String(input).endsWith('/marketplace')
+          ? { entries: [{ id: 'tool', display_name: 'Tool', source: 'marketplace', description: 'A native plugin' }] }
+          : { plugins: [{ id: 'tool', display_name: 'Tool', enabled: true, state: 'ok', version: '1.0' }] },
+      })),
+    });
+    await expect(client.list()).resolves.toEqual([{ id: 'tool', displayName: 'Tool', enabled: true, state: 'ok', version: '1.0' }]);
+    await expect(client.marketplace()).resolves.toEqual([{ id: 'tool', displayName: 'Tool', source: 'marketplace', description: 'A native plugin' }]);
+  });
+
   it('reads installed plugins and rejects malformed list envelopes', async () => {
     const client = createKimiWebPluginsClient({
       bridgeUrl: 'ws://bridge.test/kimi-web/ws',

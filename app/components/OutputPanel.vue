@@ -8,7 +8,8 @@
         <div
           ref="panelEl"
           class="output-panel-scroll"
-          @scroll="onPanelScroll"
+          @scroll.passive="onPanelScroll"
+          @wheel.passive="onHistoryWheel"
           @wheel="$emit('wheel', $event)"
           @touchmove="$emit('touchmove')"
         >
@@ -19,6 +20,9 @@
             >
               <div class="app-loading-spinner" aria-hidden="true"></div>
             </div>
+            <button v-if="loadOlderHistory" type="button" class="sr-only focus:not-sr-only" @click="loadOlderHistory()">
+              {{ $t('common.loadMore') }}
+            </button>
             <div class="output-panel-messages">
               <div
                 v-for="root in visibleThreadRoots"
@@ -214,6 +218,7 @@ const props = defineProps<{
     { parentID?: string; label: string; status?: 'busy' | 'idle' | 'retry' | 'unknown' }
   >;
   isLoading?: boolean;
+  loadOlderHistory?: () => Promise<void>;
   isAnchoring?: boolean;
   sessionRevert?: {
     messageID: string;
@@ -383,7 +388,6 @@ let windowShiftInProgress = false;
 let windowShiftQueued = false;
 let windowShiftGeneration = 0;
 const visibleThreadRoots = computed(() => {
-  if (props.isLoading) return renderableRoots.value.slice(-THREAD_BATCH_SIZE);
   return renderableRoots.value.slice(rootWindow.value.start, rootWindow.value.end);
 });
 
@@ -529,6 +533,20 @@ const { getAssistantHtml } = useAssistantPreRenderer({
   onRendered: handleMessageRendered,
 });
 
+watch(
+  [() => props.loadOlderHistory, () => renderableRoots.value.length],
+  ([loadOlderHistory, roots]) => {
+    if (loadOlderHistory && roots === 0) void loadOlderHistory();
+  },
+);
+
+function onHistoryWheel(event: WheelEvent) {
+  const panel = event.currentTarget;
+  if (event.deltaY < 0 && props.loadOlderHistory && panel instanceof HTMLDivElement && panel.scrollTop <= 0) {
+    void onPanelScroll(event);
+  }
+}
+
 async function onPanelScroll(event: Event) {
   emit('scroll');
   if (props.isAnchoring) return;
@@ -538,32 +556,44 @@ async function onPanelScroll(event: Event) {
     windowShiftQueued = true;
     return;
   }
-  const nearTop = panel.scrollTop <= 80 && rootWindow.value.start > 0;
-  const nearBottom =
-    panel.scrollHeight - panel.scrollTop - panel.clientHeight <= 80 &&
-    rootWindow.value.end < renderableRoots.value.length;
-  if (!nearTop && !nearBottom) return;
+  const hasMountedEarlier = rootWindow.value.start > 0;
+  const hasMountedLater = rootWindow.value.end < renderableRoots.value.length;
+  if (!hasMountedEarlier && !hasMountedLater && !props.loadOlderHistory) return;
+  const atTop = (hasMountedEarlier || props.loadOlderHistory) && panel.scrollTop <= 80;
+  const nearTop = atTop && hasMountedEarlier;
+  const loadOlderHistory = atTop && !nearTop ? props.loadOlderHistory : undefined;
+  const nearBottom = hasMountedLater && panel.scrollHeight - panel.scrollTop - panel.clientHeight <= 80;
+  if (!nearTop && !nearBottom && !loadOlderHistory) return;
   windowShiftInProgress = true;
   const shiftGeneration = ++windowShiftGeneration;
   const direction = nearTop ? 'older' : 'newer';
-  const anchorRootId = nearTop
+  const anchorRootId = nearTop || loadOlderHistory
     ? visibleThreadRoots.value[0]?.id
     : visibleThreadRoots.value.at(-1)?.id;
   const anchorBefore = contentEl.value?.querySelector<HTMLElement>(
     `.thread-card-item[data-root-id="${anchorRootId ?? ''}"]`,
   );
   if (!anchorBefore) {
-    windowShiftInProgress = false;
+    try { await loadOlderHistory?.(); }
+    finally {
+      if (shiftGeneration === windowShiftGeneration) {
+        windowShiftInProgress = false;
+        windowShiftQueued = false;
+      }
+    }
     return;
   }
   await preserveScrollAnchor(panel, anchorBefore, async () => {
-    rootWindow.value = shiftProgressiveRootWindow(
-      rootWindow.value,
-      renderableRoots.value.length,
-      direction,
-      THREAD_BATCH_SIZE,
-      THREAD_WINDOW_MAX,
-    );
+    if (loadOlderHistory) await loadOlderHistory();
+    else {
+      rootWindow.value = shiftProgressiveRootWindow(
+        rootWindow.value,
+        renderableRoots.value.length,
+        direction,
+        THREAD_BATCH_SIZE,
+        THREAD_WINDOW_MAX,
+      );
+    }
     await nextTick();
     return shiftGeneration === windowShiftGeneration;
   });

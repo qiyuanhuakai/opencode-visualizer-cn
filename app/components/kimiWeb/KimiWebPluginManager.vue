@@ -89,7 +89,13 @@ async function mutate(operation: () => Promise<unknown>) {
 
 function install(value: string) {
   const normalized = value.trim();
-  if (normalized) void mutate(() => props.client.install(normalized));
+  const run = props.client.install;
+  if (normalized && run) void mutate(() => run(normalized));
+}
+
+function togglePlugin(plugin: KimiWebPlugin) {
+  const action = props.client.action;
+  if (action) void mutate(() => action(plugin.id, plugin.enabled ? 'disable' : 'enable'));
 }
 
 async function remove(id: string) {
@@ -97,7 +103,8 @@ async function remove(id: string) {
   const accepted = confirm
     ? await confirm(copy.value.removeConfirm)
     : window.confirm(copy.value.removeConfirm);
-  if (accepted) await mutate(() => props.client.action(id, 'remove'));
+  const action = props.client.action;
+  if (accepted && action) await mutate(() => action(id, 'remove'));
 }
 
 onMounted(refresh);
@@ -109,7 +116,7 @@ onMounted(refresh);
       <strong>{{ copy.title }}</strong>
       <button type="button" :disabled="busy" @click="refresh">{{ copy.refresh }}</button>
     </header>
-    <form v-if="listReady" @submit.prevent="install(source)">
+    <form v-if="listReady && client.install" @submit.prevent="install(source)">
       <label
         >{{ copy.source }}<input v-model="source" :placeholder="copy.sourceHint" :disabled="busy"
       /></label>
@@ -137,12 +144,12 @@ onMounted(refresh);
           >
         </div>
       </div>
-      <div class="actions">
+      <div v-if="client.action" class="actions">
         <button
           type="button"
           :disabled="busy || !listReady"
           :aria-pressed="plugin.enabled"
-          @click="mutate(() => client.action(plugin.id, plugin.enabled ? 'disable' : 'enable'))"
+          @click="togglePlugin(plugin)"
         >
           {{ plugin.enabled ? copy.disable : copy.enable }}
         </button>
@@ -161,7 +168,7 @@ onMounted(refresh);
             entry.description || entry.source
           }}</small>
         </div>
-        <button type="button" :disabled="busy" @click="install(entry.source)">
+        <button v-if="client.install" type="button" :disabled="busy" @click="install(entry.source)">
           {{ copy.install }}
         </button>
       </article>

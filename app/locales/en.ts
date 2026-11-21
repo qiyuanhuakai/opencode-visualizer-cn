@@ -55,6 +55,7 @@ const messages: LocaleMessages = {
       remoteLocalApplication: 'the local application opens files on this machine only',
     },
     runtimeBridgeMenu: {
+      filterAgent: 'Only this Agent',
       title: 'Bridge',
       connections: 'Connections',
       migration: 'Migrate workspace data',
@@ -1662,6 +1663,7 @@ threadOpen: 'Open the Host Thread for the selected session',
     loading: 'Loading PDF...',
   },
   outputPanel: {
+    reloadHistory: 'Reload history',
     scrollToLatest: 'Scroll to latest',
   },
   welcome: {

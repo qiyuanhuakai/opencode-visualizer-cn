@@ -124,10 +124,10 @@ type ManualEntry = {
 const BRANCHES: BranchEntry[] = [
   // Bridge-first runtime: explicit dispatch and native protocol adapters.
   { file: "App.vue", fp: "if (captured && runtimeKindFor(captured) === 'dsh') await syncRuntimeDshSelection(captured, { model: selection.model, thinking: selection.thoughtLevel });", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', sym: "Bridge session selection, harness authority, and native command routing" },
-  { file: "App.vue", fp: "manifest.kind==='kimi-web'", n: 7, kind: 'cmp', cls: 'ui-required', disp: 'handled', sym: "Bridge session selection, harness authority, and native command routing" },
+  { file: "App.vue", fp: "manifest.kind==='kimi-web'", n: 8, kind: 'cmp', cls: 'ui-required', disp: 'handled', sym: "Bridge session selection, harness authority, and native command routing" },
   { file: "App.vue", fp: "manifest.kind==='dsh'", n: 3, kind: 'cmp', cls: 'ui-required', disp: 'handled', sym: "Bridge session selection, harness authority, and native command routing" },
   { file: "App.vue", fp: "manifest.kind==='codex'", n: 4, kind: 'cmp', cls: 'ui-required', disp: 'handled', sym: "Bridge session selection, harness authority, and native command routing" },
-  { file: "App.vue", fp: "kind==='kimi-web'", n: 5, kind: 'cmp', cls: 'ui-required', disp: 'handled', sym: "Bridge session selection, harness authority, and native command routing" },
+  { file: "App.vue", fp: "kind==='kimi-web'", n: 3, kind: 'cmp', cls: 'ui-required', disp: 'handled', sym: "Bridge session selection, harness authority, and native command routing" },
   { file: "App.vue", fp: "if (!session || runtimeKindFor(session) !== 'dsh') return dshComposerClient.value;", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', sym: "Bridge session selection, harness authority, and native command routing" },
   { file: "App.vue", fp: "kind==='codex'", n: 4, kind: 'cmp', cls: 'ui-required', disp: 'handled', sym: "Bridge session selection, harness authority, and native command routing" },
   { file: "App.vue", fp: "if (runtimeKindFor(binding.session) !== 'kimi-web' || typeof payload.messageId !== 'string') return completeRuntimeMutation(runtimeSessionActions.revert(binding.session, payload));", n: 1, kind: 'literal', cls: 'ui-required', disp: 'handled', sym: "Bridge session selection, harness authority, and native command routing" },

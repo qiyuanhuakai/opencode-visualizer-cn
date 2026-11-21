@@ -1,11 +1,13 @@
 import { NATIVE_METHODS } from '../../shared/runtime/native/codex/capabilities.js';
 import { OPEN_CODE_OPERATIONS } from '../../shared/runtime/native/opencode/operations.js';
+import { KIMI_PLUGIN_OPERATIONS } from '../../shared/runtime/native/kimiWeb/pluginOperations.js';
 import { KIMI_PROVIDER_OPERATIONS } from '../../shared/runtime/native/kimiWeb/providerOperations.js';
 import { KIMI_SESSION_OPERATIONS } from '../../shared/runtime/native/kimiWeb/sessionOperations.js';
 import { DSH_UI_OPERATIONS } from '../../shared/runtime/native/dsh/uiOperations.js';
 import { requireValue } from '../../shared/runtime/capabilities.js';
 
 const reads = new Set([
+  ...Object.entries(KIMI_PLUGIN_OPERATIONS).filter(([, route]) => route.method === 'GET').map(([name]) => name),
   ...Object.entries(KIMI_SESSION_OPERATIONS).filter(([, route]) => route.method === 'GET').map(([name]) => name),
   ...Object.entries(KIMI_PROVIDER_OPERATIONS).filter(([, route]) => route.method === 'GET').map(([name]) => name),
   ...Object.entries(DSH_UI_OPERATIONS).filter(([, route]) => !route.mutation).map(([method]) => `dsh.ui.${method.replace('/', '.')}`),

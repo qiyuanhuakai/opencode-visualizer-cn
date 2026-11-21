@@ -4,6 +4,7 @@ import { KIMI_PROVIDER_OPERATIONS } from '../../shared/runtime/native/kimiWeb/pr
 import { KIMI_SESSION_OPERATIONS } from '../../shared/runtime/native/kimiWeb/sessionOperations.js';
 import { parseSessionRef, type SessionRef } from '../../shared/runtime/identity.js';
 import { createKimiWebClient, KimiWebError } from '../utils/kimiWeb';
+import { parseKimiWebPluginList, parseKimiWebPluginMarketplace, type KimiWebPluginsClient } from '../utils/kimiWebPlugins';
 import type { KimiWebProviderConfigWire, KimiWebProvidersClient } from '../composables/useKimiWebProviders';
 import type { RuntimeClient } from './client';
 import { createNativeFacade } from './nativeFacade';
@@ -101,5 +102,29 @@ export function createNativeKimiProviders(client: RuntimeClient, manifest: Harne
       requireValue(value !== null && typeof value === 'object' && !Array.isArray(value), 'kimi.config');
       return value as KimiWebProviderConfigWire;
     },
+  };
+}
+
+export function createNativeKimiPlugins(client: RuntimeClient, manifest: HarnessManifest): KimiWebPluginsClient | null {
+  const supported = new Set(manifest.extensions.filter(entry => entry.support.state === 'supported').map(entry => entry.name));
+  if (!supported.has('kimi.plugins.list')) return null;
+  const facade = createNativeFacade(client, manifest);
+  async function mutate(operation: string, args: Record<string, string>) {
+    const mutation = facade.mutate(operation, args);
+    void mutation.accepted.catch(() => undefined);
+    const { value } = await mutation.executed;
+    const result = value && typeof value === 'object' && 'result' in value ? value.result : null;
+    if (result && typeof result === 'object' && '__kimiBusinessError' in result
+        && typeof result.__kimiBusinessError === 'number') {
+      throw new KimiWebError(result.__kimiBusinessError, 'Plugin operation failed.');
+    }
+    return result;
+  }
+  return {
+    list: async () => parseKimiWebPluginList(await facade.query('kimi.plugins.list')),
+    marketplace: async () => supported.has('kimi.plugins.marketplace')
+      ? parseKimiWebPluginMarketplace(await facade.query('kimi.plugins.marketplace')) : [],
+    install: supported.has('kimi.plugins.install') ? source => mutate('kimi.plugins.install', { source }) : undefined,
+    action: supported.has('kimi.plugins.action') ? (id, action) => mutate('kimi.plugins.action', { id, action }) : undefined,
   };
 }

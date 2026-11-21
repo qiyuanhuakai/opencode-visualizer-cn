@@ -58,6 +58,7 @@ const messages: LocaleMessages = {
       remoteLocalApplication: '本地應用程式僅開啟本機檔案',
     },
     runtimeBridgeMenu: {
+      filterAgent: '只顯示此 Agent',
       title: 'Bridge',
       connections: '連線管理',
       migration: '移轉工作區資料',
@@ -1644,6 +1645,7 @@ threadOpen: '為目前工作階段開啟 Host Thread',
     loading: '正在載入 PDF...',
   },
   outputPanel: {
+    reloadHistory: '重新載入歷史',
     scrollToLatest: '捲動至最新',
   },
   welcome: {

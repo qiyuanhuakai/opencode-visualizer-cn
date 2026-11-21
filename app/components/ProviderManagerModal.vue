@@ -351,7 +351,7 @@
                       {{ $t('providerManager.actions.disconnect') }}
                     </button>
                     <span
-                      v-if="providerControlUnavailable(disconnectProviderControl(provider))"
+                      v-if="!isBackendManagedProvider(provider) && providerControlSourceLine(disconnectProviderControl(provider))"
                       class="provider-control-source"
                       data-testid="provider-control-source"
                       >{{ providerControlSourceLine(disconnectProviderControl(provider)) }}</span
@@ -443,7 +443,7 @@
                         {{ $t('providerManager.actions.connect') }}
                       </button>
                       <span
-                        v-if="isProviderDisconnected(provider) && providerControlUnavailable('setProviderAuth')"
+                        v-if="isProviderDisconnected(provider) && providerControlSourceLine('setProviderAuth')"
                         class="provider-control-source"
                         data-testid="provider-control-source"
                         >{{ providerControlSourceLine('setProviderAuth') }}</span
@@ -1096,7 +1096,7 @@ function providerControlSupport(control: string): ControlSupport | null {
 /** Source information line for an unsupported control (which source, what is missing). */
 function providerControlSourceLine(control: string): string {
   const support = providerControlSupport(control);
-  if (!support || support.state !== 'unsupported') return '';
+  if (!support || support.state !== 'unsupported' || (support.channel === 'harness' && support.missingDeclaration)) return '';
   return describeControlSupport(support);
 }
 
@@ -1120,12 +1120,6 @@ function legacyProviderControlAvailable(control: string): boolean {
     default:
       return false;
   }
-}
-
-/** Whether a provider control shows its source-information line. */
-function providerControlUnavailable(control: string): boolean {
-  const support = providerControlSupport(control);
-  return support !== null && support.state === 'unsupported';
 }
 
 function canConnectProvider(provider: ProviderInfo) {

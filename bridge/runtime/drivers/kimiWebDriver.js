@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { KIMI_SESSION_OPERATIONS } from '../../../shared/runtime/native/kimiWeb/sessionOperations.js';
 import { parseEnvironmentId, parseHarnessInstanceId, parseSessionRef, parseInstanceId } from '../../../shared/runtime/identity.js';
 import { ProtocolError, jsonValue, requireValue } from '../../../shared/runtime/capabilities.js';
+import { KIMI_PLUGIN_OPERATIONS } from '../../../shared/runtime/native/kimiWeb/pluginOperations.js';
 import { KIMI_PROVIDER_OPERATIONS } from '../../../shared/runtime/native/kimiWeb/providerOperations.js';
 import { redactSettings } from '../../../shared/runtime/native/opencode/protocol.js';
 import { CORE_OPERATIONS, unsupported, validateHarnessRegistration } from '../../../shared/runtime/harnessContract.js';
@@ -56,6 +57,7 @@ export async function createKimiWebDriver(options) {
   let transcriptPageSize = 100;
   let capabilities = parseNativeCapabilities({}, { paths: {} }, { components: { messages: {} } });
   const providerSupport = new Map();
+  const pluginSupport = new Map();
   const sessionSupport = new Map();
   const admission = options.admission ?? createAdmissionQueue();
   const transport = state === 'starting' ? createKimiWebTransport({ endpoint: options.endpoint, getAuthorization: options.getAuthorization, deadlineMs: options.deadlineMs }) : undefined;
@@ -459,6 +461,9 @@ export async function createKimiWebDriver(options) {
         const template = route.path.replace(/\{id\}/g, '{}');
         const found = Object.entries(record(spec).paths ?? {}).some(([pathname, methods]) => pathname.replace(/\{[^}]+\}/g, '{}') === template && typeof methods?.[route.method.toLowerCase()] === 'object');
         providerSupport.set(name, found);
+      }
+      for (const [name, route] of Object.entries(KIMI_PLUGIN_OPERATIONS)) {
+        pluginSupport.set(name, typeof spec.paths?.[route.path]?.[route.method.toLowerCase()] === 'object');
       }
       const id = nativeText(record(meta).server_id, 'native_server_id', 512);
       if (sourceId && sourceId !== id) {
@@ -875,6 +880,24 @@ export async function createKimiWebDriver(options) {
       const result = await operations.instance(captured, name, params.body ?? {}, params.idempotencyKey, pathname, route.method, false);
       return { ...result, result: redactSettings(result.result ?? null) };
     }])),
+    ...Object.fromEntries(Object.entries(KIMI_PLUGIN_OPERATIONS).map(([name, route]) => [name, async context => {
+      const captured = capture(context), params = record(context.params);
+      requireValue(pluginSupport.get(name), 'kimi.plugin_operation', 'unsupported');
+      if (route.method === 'GET') {
+        const result = await transport.request('GET', route.path);
+        fence(captured);
+        return result;
+      }
+      if (name === 'kimi.plugins.install') {
+        const source = nativeText(params.source, 'kimi.plugin_source', 2048);
+        return operations.instance(captured, name, { source }, params.idempotencyKey, route.path, route.method, false);
+      }
+      const id = encodeURIComponent(nativeText(params.id, 'kimi.plugin_id', 512));
+      const action = params.action;
+      requireValue(['enable', 'disable', 'remove'].includes(action), 'kimi.plugin_action');
+      const pathname = route.path.replace('{tail}', `${id}:${action}`);
+      return operations.instance(captured, `${name}:${id}:${action}`, {}, params.idempotencyKey, pathname, route.method, false);
+    }])),
     async 'kimi.meta'(context) { const captured = capture(context); const value = await transport.request('GET', '/api/v1/meta'); fence(captured); return value; },
     async 'kimi.listWorkspacePage'(context) {
       const captured = capture(context); requireCapability('catalogV2');
@@ -995,6 +1018,7 @@ export async function createKimiWebDriver(options) {
   const extensions = [
     ...Object.entries(KIMI_SESSION_OPERATIONS).map(([name, route]) => ({ name, scope: 'session', enabled: sessionSupport.get(name) === true, mutation: route.method !== 'GET' })),
     ...Object.entries(KIMI_PROVIDER_OPERATIONS).map(([name, route]) => ({ name, scope: 'instance', enabled: providerSupport.get(name) === true, mutation: route.method !== 'GET' })),
+    ...Object.entries(KIMI_PLUGIN_OPERATIONS).map(([name, route]) => ({ name, scope: 'instance', enabled: pluginSupport.get(name) === true, mutation: route.method !== 'GET' })),
     { name: 'kimi.meta', scope: 'instance', enabled: true },
     ...[['kimi.updateProfile', 'updateProfile'], ['archiveSession', 'archive'], ['restoreSession', 'restore'], ['deleteSession', 'delete']].map(([name, capability]) => ({ name, scope: 'session', enabled: capabilities[capability], mutation: true })),
     { name: 'kimi.listWorkspacePage', scope: 'instance', enabled: capabilities.catalogV2 },

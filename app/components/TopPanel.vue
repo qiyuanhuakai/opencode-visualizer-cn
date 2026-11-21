@@ -60,6 +60,7 @@
           </template>
           <template #default="{ close }">
             <div class="tree-menu">
+              <slot v-if="runtimeMode" name="runtime-agent-controls" />
               <DropdownSearch
                 v-model="searchQuery"
                 :placeholder="$t('topPanel.searchPlaceholder')"
@@ -119,7 +120,7 @@
                     {{ $t('topPanel.management.clear') }}
                   </button>
                   <button
-                    v-if="sessionActions.pin"
+                    v-if="runtimeMode || sessionActions.pin"
                     type="button"
                     class="management-action"
                     :disabled="batchPinTargets.length === 0"
@@ -128,7 +129,7 @@
                     {{ $t('topPanel.management.pin') }} · {{ batchPinTargets.length }}
                   </button>
                   <button
-                    v-if="sessionActions.unpin"
+                    v-if="runtimeMode || sessionActions.unpin"
                     type="button"
                     class="management-action"
                     :disabled="batchUnpinTargets.length === 0"
@@ -137,7 +138,7 @@
                     {{ $t('topPanel.management.unpin') }} · {{ batchUnpinTargets.length }}
                   </button>
                   <button
-                    v-if="sessionActions.archive"
+                    v-if="runtimeMode || sessionActions.archive"
                     type="button"
                     class="management-action"
                     :disabled="batchArchiveTargets.length === 0"
@@ -146,7 +147,7 @@
                     {{ $t('topPanel.management.archive') }} · {{ batchArchiveTargets.length }}
                   </button>
                   <button
-                    v-if="sessionActions.unarchive"
+                    v-if="runtimeMode || sessionActions.unarchive"
                     type="button"
                     class="management-action"
                     :disabled="batchUnarchiveTargets.length === 0"
@@ -155,7 +156,7 @@
                     {{ $t('topPanel.management.unarchive') }} · {{ batchUnarchiveTargets.length }}
                   </button>
                   <button
-                    v-if="sessionActions.delete"
+                    v-if="runtimeMode || sessionActions.delete"
                     type="button"
                     class="management-action is-danger"
                     :disabled="batchDeleteTargets.length === 0"
@@ -295,6 +296,7 @@
                       <div class="tree-actions">
                         <button
                           v-if="
+                            (!runtimeMode || runtimeCreateAvailable) &&
                             sandbox.kind !== 'global' &&
                             (sandbox.kind !== 'sandbox' || sandbox.sessions.length > 0)
                           "
@@ -447,7 +449,7 @@
                         <template #action>
                           <div class="tree-session-actions">
                             <button
-                              v-if="!session.archivedAt && sessionActions.rename"
+                              v-if="!session.archivedAt && actionsForSession(session.id).rename"
                               type="button"
                               class="tree-action-button session-rename"
                               :title="$t('topPanel.sessionActions.rename')"
@@ -459,8 +461,8 @@
                               v-if="
                                 !session.archivedAt &&
                                 (session.isPinned || session.isImplicitlyPinned
-                                  ? sessionActions.unpin
-                                  : sessionActions.pin)
+                                  ? actionsForSession(session.id).unpin
+                                  : actionsForSession(session.id).pin)
                               "
                               type="button"
                               class="tree-action-button session-pin"
@@ -495,7 +497,7 @@
                               />
                             </button>
                             <button
-                              v-if="session.archivedAt && sessionActions.unarchive"
+                              v-if="session.archivedAt && actionsForSession(session.id).unarchive"
                               type="button"
                               class="tree-action-button session-unarchive"
                               :title="$t('topPanel.sessionActions.unarchive')"
@@ -506,13 +508,13 @@
                             <button
                               v-if="
                                 !session.archivedAt &&
-                                (sessionActions.archive || sessionActions.delete)
+                                (actionsForSession(session.id).archive || actionsForSession(session.id).delete)
                               "
                               type="button"
                               class="tree-action-button session-del"
-                              :class="shouldDeleteSession() ? 'danger' : 'archive'"
+                              :class="shouldDeleteSession(session.id) ? 'danger' : 'archive'"
                               :title="
-                                shouldDeleteSession()
+                                shouldDeleteSession(session.id)
                                   ? $t('topPanel.sessionActions.deletePermanently')
                                   : $t('topPanel.sessionActions.archive')
                               "
@@ -520,7 +522,7 @@
                             >
                               <Icon
                                 :icon="
-                                  shouldDeleteSession() ? 'lucide:trash-2' : 'lucide:archive'
+                                  shouldDeleteSession(session.id) ? 'lucide:trash-2' : 'lucide:archive'
                                 "
                                 :width="16"
                                 :height="16"
@@ -638,7 +640,7 @@
         <button
           type="button"
           class="control-button new-session-button"
-          :disabled="!selectedSessionId && !runtimeCreateAvailable"
+          :disabled="runtimeMode ? !runtimeCreateAvailable : !selectedSessionId"
           @click="$emit('new-session')"
           :title="$t('topPanel.newSessionShortcut')"
         >
@@ -685,7 +687,7 @@
           v-if="showCodexButton"
           class="codex-menu-root"
           :title="$t('codexPanel.title')"
-          :button-class="['control-button', 'codex-button']"
+          :button-class="['control-button', 'codex-panel-button']"
           menu-icon="lucide:chevron-down"
           :popup-style="{ minWidth: '220px', width: '240px' }"
           :auto-focus="false"
@@ -814,17 +816,9 @@
         </Dropdown>
       </div>
       <div class="top-right">
-        <button v-if="runtimeMode" type="button" class="control-button" :title="$t('app.runtimeConnection.sshSlurm')" :aria-label="$t('app.runtimeConnection.sshSlurm')" @click="$emit('open-connection-entry')">
+        <button v-if="runtimeMode" type="button" class="control-button remote-button" :title="$t('app.runtimeConnection.sshSlurm')" :aria-label="$t('app.runtimeConnection.sshSlurm')" @click="$emit('open-connection-entry')">
           <Icon icon="lucide:network" :width="16" :height="16" aria-hidden="true" />
         </button>
-        <Dropdown :aria-label="$t('app.runtimeBridgeMenu.title')" :button-class="['control-button']" :popup-style="{ minWidth: '220px' }">
-          <template #label><Icon icon="lucide:server" :width="16" :height="16" /></template>
-          <template #default="{ close }">
-            <DropdownItem value="migration" @click="$emit('open-workspace-migration'); close()">{{ $t('app.runtimeBridgeMenu.migration') }}</DropdownItem>
-            <DropdownItem value="agents" @click="$emit('open-harness-settings'); close()">{{ $t('app.runtimeBridgeMenu.agentSettings') }}</DropdownItem>
-          </template>
-        </Dropdown>
-
         <a
           href="https://github.com/qiyuanhuakai/opencode-visualizer-cn"
           target="_blank"
@@ -965,6 +959,7 @@ const props = defineProps<{
   codexConnected?: boolean;
   ptySupported?: boolean;
   sessionActionCapabilities?: SessionActionCapabilities;
+  resolveSessionActions?: (sessionId: string) => SessionActionCapabilities;
   worktreesEnabled?: boolean;
 }>();
 
@@ -979,6 +974,10 @@ const sessionActions = computed<SessionActionCapabilities>(
       delete: true,
     },
 );
+
+function actionsForSession(sessionId: string): SessionActionCapabilities {
+  return props.resolveSessionActions?.(sessionId) ?? sessionActions.value;
+}
 
 const notifications = computed(() => props.notificationSessions ?? []);
 const totalNotificationCount = computed(() =>
@@ -1011,8 +1010,6 @@ const emit = defineEmits<{
   (event: 'edit-project', payload: { projectId: string; worktree: string }): void;
   (event: 'open-settings'): void;
   (event: 'open-connection-entry'): void;
-  (event: 'open-workspace-migration'): void;
-  (event: 'open-harness-settings'): void;
   (event: 'open-provider-manager'): void;
   (event: 'open-status-monitor'): void;
   (event: 'open-codex-panel'): void;
@@ -1122,7 +1119,7 @@ const batchPinTargets = computed(() =>
   selectedEntries.value
     .filter(
       (entry) =>
-        !entry.session.archivedAt && !entry.session.isPinned && !entry.session.isImplicitlyPinned,
+        actionsForSession(entry.session.id).pin && !entry.session.archivedAt && !entry.session.isPinned && !entry.session.isImplicitlyPinned,
     )
     .map((entry) => entry.target),
 );
@@ -1131,23 +1128,23 @@ const batchUnpinTargets = computed(() =>
   selectedEntries.value
     .filter(
       (entry) =>
-        !entry.session.archivedAt &&
+        actionsForSession(entry.session.id).unpin && !entry.session.archivedAt &&
         Boolean(entry.session.isPinned || entry.session.isImplicitlyPinned),
     )
     .map((entry) => entry.target),
 );
 
 const batchArchiveTargets = computed(() =>
-  selectedEntries.value.filter((entry) => !entry.session.archivedAt).map((entry) => entry.target),
+  selectedEntries.value.filter((entry) => actionsForSession(entry.session.id).archive && !entry.session.archivedAt).map((entry) => entry.target),
 );
 
 const batchUnarchiveTargets = computed(() =>
   selectedEntries.value
-    .filter((entry) => Boolean(entry.session.archivedAt))
+    .filter((entry) => actionsForSession(entry.session.id).unarchive && Boolean(entry.session.archivedAt))
     .map((entry) => entry.target),
 );
 
-const batchDeleteTargets = computed(() => selectedEntries.value.map((entry) => entry.target));
+const batchDeleteTargets = computed(() => selectedEntries.value.filter(entry => actionsForSession(entry.session.id).delete).map(entry => entry.target));
 
 const batchSessionTargetsByAction = computed(() => {
   return {
@@ -1426,15 +1423,16 @@ async function handleSessionDelete(sessionId: string, close?: () => void) {
 }
 
 async function handleSessionAction(sessionId: string, close?: () => void) {
-  if (shouldDeleteSession()) {
+  if (shouldDeleteSession(sessionId)) {
     await handleSessionDelete(sessionId, close);
     return;
   }
-  if (sessionActions.value.archive) emit('archive-session', sessionId);
+  if (actionsForSession(sessionId).archive) emit('archive-session', sessionId);
 }
 
-function shouldDeleteSession() {
-  return sessionActions.value.delete && (!sessionActions.value.archive || isShiftPressed.value);
+function shouldDeleteSession(sessionId: string) {
+  const actions = actionsForSession(sessionId);
+  return actions.delete && (!actions.archive || isShiftPressed.value);
 }
 
 function handleSessionUnarchive(sessionId: string) {
@@ -2339,6 +2337,22 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   flex-shrink: 0;
 }
 
+.forge-button {
+  width: 32px;
+  padding: 0;
+}
+
+.codex-menu-root :deep(.codex-panel-button) {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 2px;
+  gap: 1px;
+  background: var(--theme-top-dropdown-control-bg, #0b1320);
+  border-color: var(--theme-top-dropdown-border, #334155);
+  color: var(--theme-top-dropdown-text, #e2e8f0);
+}
+
 .new-session-button {
   width: 32px;
   height: 32px;
@@ -2508,6 +2522,7 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
 }
 
 .settings-button,
+.remote-button,
 .provider-manager-button,
 .status-monitor-button,
 .codex-button,
@@ -2524,6 +2539,7 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
 }
 
 .settings-button:hover,
+.remote-button:hover,
 .provider-manager-button:hover,
 .status-monitor-button:hover,
 .codex-button:hover,

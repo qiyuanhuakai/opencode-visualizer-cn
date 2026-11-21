@@ -60,6 +60,7 @@ const messages: LocaleMessages = {
       remoteLocalApplication: 'ローカルアプリはこのマシンのファイルのみ開きます',
     },
     runtimeBridgeMenu: {
+      filterAgent: 'このエージェントのみ',
       title: 'Bridge',
       connections: '接続管理',
       migration: 'ワークスペースデータの移行',
@@ -1654,6 +1655,7 @@ threadOpen: '選択中のセッションの Host Thread を開く',
     loading: 'PDFを読み込み中...',
   },
   outputPanel: {
+    reloadHistory: '履歴を読み直す',
     scrollToLatest: '最新にスクロール',
   },
   welcome: {

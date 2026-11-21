@@ -44,8 +44,8 @@ it('retries migration through the real App using the same failed archive owner a
   try {
     Object.defineProperty(window, 'indexedDB', { configurable: true, value: { databases: async () => [] } });
     await fixture.connect();
-    fixture.element.querySelector<HTMLButtonElement>('button[aria-label="Bridge"]')!.click(); await nextTick();
-    const menu = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(entry => entry.textContent?.includes('Migrate workspace data'));
+    fixture.element.querySelector<HTMLButtonElement>('button[title="Settings"]')!.click(); await nextTick();
+    const menu = [...fixture.element.querySelectorAll<HTMLElement>('dialog[open][aria-labelledby="settings-modal-title"] .setting-link-row')].find(entry => entry.textContent?.includes('Migrate workspace data'));
     expect(menu).toBeDefined(); menu!.click();
     await vi.waitFor(() => expect(fixture.element.querySelector('[data-testid="migration-start"]')).not.toBeNull());
     const start = fixture.element.querySelector<HTMLButtonElement>('[data-testid="migration-start"]')!;

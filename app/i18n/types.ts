@@ -67,7 +67,7 @@ export interface LocaleMessages {
         error: string;
       };
     };
-    runtimeBridgeMenu: { title: string; connections: string; migration: string; agentSettings: string };
+    runtimeBridgeMenu: { title: string; connections: string; migration: string; agentSettings: string; filterAgent: string };
     runtimeMigration: {
       title: string;
       description: string;
@@ -1557,6 +1557,7 @@ export interface LocaleMessages {
     failedToLoad: string;
   };
   outputPanel: {
+    reloadHistory: string;
     scrollToLatest: string;
   };
   errors: {

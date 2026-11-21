@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { ProtocolError, type JsonValue } from '../../../shared/runtime/capabilities.js';
+import { KIMI_PLUGIN_OPERATIONS } from '../../../shared/runtime/native/kimiWeb/pluginOperations.js';
 import { KIMI_PROVIDER_OPERATIONS } from '../../../shared/runtime/native/kimiWeb/providerOperations.js';
 import { KIMI_SESSION_OPERATIONS } from '../../../shared/runtime/native/kimiWeb/sessionOperations.js';
 import { describe, expect, it, vi } from 'vitest';
@@ -187,6 +188,9 @@ async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false, ag
           ...Object.values(KIMI_SESSION_OPERATIONS).reduce<Record<string, Record<string, object>>>((paths, route) => { const path = `/api/v1/sessions/{session_id}${route.suffix}`; (paths[path] ??= {})[route.method.toLowerCase()] = {}; return paths; }, {}),
           '/api/v1/auth': { get: {} },
           '/api/v1/config': { get: {}, post: {} },
+          '/api/v1/plugins': { get: {}, post: {} },
+          '/api/v1/plugins/marketplace': { get: {} },
+          '/api/v1/plugins/{tail}': { post: {} },
           '/api/v1/providers': { get: {}, post: {} },
           '/api/v1/providers/{provider_id}': { put: {}, delete: {} },
           '/api/v1/providers/{provider_id}:refresh': { post: {} },
@@ -204,6 +208,10 @@ async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false, ag
           '/api/v1/models': { get: {} }, '/api/v1/sessions/{session_id}/status': { get: {} },
         },
       } : { components: { messages: { subscribe_v2: { name: 'subscribe_v2' }, subscribe: { name: 'subscribe' } } } }));
+      return;
+    }
+    if (route.pathname === '/api/v1/plugins' && request.method === 'GET') {
+      response.end(JSON.stringify({ code: 0, data: { plugins: [{ id: 'local/tool', display_name: 'Local tool', enabled: true, state: 'ok' }] } }));
       return;
     }
     if (route.pathname === '/api/v1/meta') { response.end(JSON.stringify({ code: 0, data: { backend: 'v2', server_id: 'srv_fixture', server_version: '2.1.1', capabilities: { websocket: true } } })); return; }
@@ -417,7 +425,7 @@ describe('Kimi Web native selected-history producer over controlled raw HTTP and
         if (name === 'openHistory') continue;
         expect(support).toEqual({ state: 'supported' });
       }
-      expect(driver.registration.manifest.extensions.map((entry) => entry.name).sort()).toEqual([...Object.keys(KIMI_PROVIDER_OPERATIONS), ...Object.keys(KIMI_SESSION_OPERATIONS), 'archiveSession', 'deleteSession', 'kimi.listWorkspacePage', 'kimi.meta', 'kimi.sessionStatus', 'kimi.updateProfile', 'listProviders', 'restoreSession'].sort());
+      expect(driver.registration.manifest.extensions.map((entry) => entry.name).sort()).toEqual([...Object.keys(KIMI_PROVIDER_OPERATIONS), ...Object.keys(KIMI_PLUGIN_OPERATIONS), ...Object.keys(KIMI_SESSION_OPERATIONS), 'archiveSession', 'deleteSession', 'kimi.listWorkspacePage', 'kimi.meta', 'kimi.sessionStatus', 'kimi.updateProfile', 'listProviders', 'restoreSession'].sort());
     } finally { await fixture.close(); }
   });
   it('updates goals with PATCH on the captured session and rejects invalid objectives before dispatch', async () => {
@@ -445,6 +453,20 @@ describe('Kimi Web native selected-history producer over controlled raw HTTP and
         if (route.method !== 'GET') expect(result).toMatchObject({ phase: 'native-executed' });
         expect(fixture.calls.some(call => call.method === route.method && call.path === route.path.replace('{id}', 'provider%2Fmodel'))).toBe(true);
       }
+    } finally { await driver.close(); await fixture.close(); }
+  });
+  it('reads installed plugins and confines management actions to the captured server', async () => {
+    const fixture = await controlledKimiWeb(), driver = await createKimiWebDriver(fixture.options);
+    try {
+      const native = driver.registration.driver.native;
+      const context = { environmentId, harnessInstanceId };
+      expect(driver.registration.manifest.extensions.find(entry => entry.name === 'kimi.plugins.list')?.support.state).toBe('supported');
+      await expect(native['kimi.plugins.list']({ ...context, params: {} })).resolves.toMatchObject({
+        plugins: [{ id: 'local/tool', display_name: 'Local tool', state: 'ok' }],
+      });
+      await expect(native['kimi.plugins.action']({ ...context, params: { id: 'local/tool', action: 'disable', idempotencyKey: 'fixture-plugin-disable' } })).resolves.toMatchObject({ phase: 'native-executed' });
+      expect(fixture.calls.some(call => call.method === 'POST' && call.path === '/api/v1/plugins/local%2Ftool:disable')).toBe(true);
+      await expect(native['kimi.plugins.action']({ ...context, params: { id: 'local/tool', action: 'unrecognized', idempotencyKey: 'fixture-invalid' } })).rejects.toThrow('kimi.plugin_action');
     } finally { await driver.close(); await fixture.close(); }
   });
   it('preserves provider conflict codes as terminal rejection without exposing upstream error text', async () => {

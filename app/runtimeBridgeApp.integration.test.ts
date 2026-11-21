@@ -1,3 +1,4 @@
+import { ProtocolError } from '../shared/runtime/capabilities.js';
 import { expect, it, vi } from 'vitest';
 import { mountRuntimeApp } from './test/runtimeAppHarness';
 
@@ -23,8 +24,7 @@ it('connects through Bridge login and renders selected native history over the a
   await vi.waitFor(() => expect(fixture.element.textContent).toContain('History through the qualified Bridge boundary'), { timeout: 10000 });
   expect(fixture.historyOpens).toEqual([expect.objectContaining({ environmentId: fixture.environmentId, nativeSessionId: 'session-a' })]);
   expect(fixture.element.querySelectorAll('.thread-block')).toHaveLength(1);
-  const manager = fixture.element.querySelector('[data-testid="management-agent-selector"]')!;
-  expect(manager.querySelector('button')?.textContent).toContain('OpenCode');
+  expect(fixture.element.querySelector('.app-runtime-actions [data-testid="management-agent-selector"]')).toBeNull();
   fixture.element.querySelector<HTMLButtonElement>('button[title="Status monitor"]')!.click();
   const monitor = await vi.waitFor(() => {
     const button = fixture.element.querySelector<HTMLButtonElement>('.status-monitor-popover [data-testid="management-agent-selector"] button');
@@ -33,14 +33,13 @@ it('connects through Bridge login and renders selected native history over the a
   });
   monitor.click();
   const codex = await vi.waitFor(() => {
-    const item = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(option => option.textContent?.includes('Codex'));
+    const item = [...fixture.element.querySelectorAll<HTMLElement>('.status-monitor-popover [role="option"]')].find(option => option.textContent?.trim() === 'Codex');
     expect(item).toBeTruthy();
     return item!;
   });
   codex.click();
   await vi.waitFor(() => {
-    expect(manager.querySelector('button')?.textContent).toContain('Codex');
-    expect(monitor.getAttribute('aria-label')).toContain('Codex');
+    expect(fixture.element.querySelector('.status-monitor-popover [data-testid="management-agent-selector"] button')?.getAttribute('aria-label')).toContain('Codex');
   });
   fixture.element.querySelector<HTMLButtonElement>('button[aria-label="Close status monitor"]')!.click();
   fixture.element.querySelector<HTMLButtonElement>('button[title="Providers & models"]')!.click();
@@ -58,6 +57,39 @@ it('connects through Bridge login and renders selected native history over the a
     expect(fixture.element.textContent).not.toContain('History through the qualified Bridge boundary');
   }, { timeout: 10000 });
   expect(fixture.historyOpens.every(session => session.environmentId === fixture.environmentId)).toBe(true);
+}, 30000);
+
+it('reopens the real Bridge history handle after a recoverable paging failure', async () => {
+  const record = (id: string, time: number, text: string) => ({
+    info: { id, sessionID: 'session-a', role: 'user', time: { created: time } },
+    parts: [{ id: id + '-text', sessionID: 'session-a', messageID: id, type: 'text', text }],
+  });
+  let failEarlierPage = true;
+  const fixture = await mountRuntimeApp([record('latest', 10, 'Newest proof'), record('earlier', 1, 'Earlier proof')], {
+    historyPageSize: 1,
+    beforeHistoryPage(cursor) {
+      if (cursor && failEarlierPage) {
+        failEarlierPage = false;
+        throw new ProtocolError('source_unavailable', 'temporary_history_failure');
+      }
+    },
+  });
+  await fixture.connect();
+  await fixture.select('Session A');
+  await vi.waitFor(() => expect(fixture.element.textContent).toContain('Newest proof'));
+  const wheelUp = () => fixture.element.querySelector('.output-panel-scroll')!.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true }));
+  wheelUp();
+  const retry = await vi.waitFor(() => {
+    const button = fixture.element.querySelector<HTMLButtonElement>('[data-testid=reload-runtime-history]');
+    expect(button?.disabled).toBe(false);
+    return button!;
+  });
+  retry.click();
+  await vi.waitFor(() => expect(fixture.historyOpens).toHaveLength(2));
+  await vi.waitFor(() => expect(fixture.element.textContent).toContain('Newest proof'));
+  wheelUp();
+  await vi.waitFor(() => expect(fixture.element.textContent).toContain('Earlier proof'));
+  expect(fixture.historyPages.map(page => page.cursor)).toEqual([null, '1', null, '1']);
 }, 30000);
 
 it('opens a Host Thread, refreshes a participant’s own history, and locates their session', async () => {

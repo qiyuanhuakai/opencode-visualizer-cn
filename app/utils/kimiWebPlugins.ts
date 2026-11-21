@@ -20,24 +20,55 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function plugin(value: unknown): value is KimiWebPlugin {
-  return (
-    record(value) &&
-    typeof value.id === 'string' &&
-    typeof value.displayName === 'string' &&
-    typeof value.enabled === 'boolean' &&
-    (value.state === 'ok' || value.state === 'error')
-  );
+function plugin(value: unknown): KimiWebPlugin | null {
+  if (!record(value)) return null;
+  const displayName = value.display_name ?? value.displayName;
+  if (typeof value.id !== 'string' || typeof displayName !== 'string' ||
+      typeof value.enabled !== 'boolean' || (value.state !== 'ok' && value.state !== 'error')) return null;
+  return { id: value.id, displayName, enabled: value.enabled, state: value.state,
+    ...(typeof value.version === 'string' ? { version: value.version } : {}) };
 }
 
-function catalogEntry(value: unknown): value is KimiWebPluginCatalogEntry {
-  return (
-    record(value) &&
-    typeof value.id === 'string' &&
-    typeof value.displayName === 'string' &&
-    typeof value.source === 'string'
-  );
+function catalogEntry(value: unknown): KimiWebPluginCatalogEntry | null {
+  if (!record(value)) return null;
+  const displayName = value.display_name ?? value.displayName;
+  if (typeof value.id !== 'string' || typeof displayName !== 'string' || typeof value.source !== 'string') return null;
+  return { id: value.id, displayName, source: value.source,
+    ...(typeof value.description === 'string' ? { description: value.description } : {}) };
 }
+
+function malformed(path: string) {
+  return new KimiWebTransportError('Invalid Kimi Web plugin response.', {
+    kind: 'malformed-response',
+    path,
+  });
+}
+export function parseKimiWebPluginList(data: unknown): readonly KimiWebPlugin[] {
+  const path = '/api/v1/plugins';
+  if (!record(data) || !Array.isArray(data.plugins)) throw malformed(path);
+  return data.plugins.map(value => {
+    const parsed = plugin(value);
+    if (!parsed) throw malformed(path);
+    return parsed;
+  });
+}
+
+export function parseKimiWebPluginMarketplace(data: unknown): readonly KimiWebPluginCatalogEntry[] {
+  const path = '/api/v1/plugins/marketplace';
+  if (!record(data) || !Array.isArray(data.entries)) throw malformed(path);
+  return data.entries.map(value => {
+    const parsed = catalogEntry(value);
+    if (!parsed) throw malformed(path);
+    return parsed;
+  });
+}
+
+export type KimiWebPluginsClient = {
+  list(): Promise<readonly KimiWebPlugin[]>;
+  marketplace(): Promise<readonly KimiWebPluginCatalogEntry[]>;
+  install?: (source: string) => Promise<unknown>;
+  action?: (id: string, action: 'enable' | 'disable' | 'remove') => Promise<unknown>;
+};
 
 export function createKimiWebPluginsClient(options: {
   readonly bridgeUrl: string;
@@ -46,12 +77,6 @@ export function createKimiWebPluginsClient(options: {
 }) {
   const base = kimiWebProxyHttpUrl(kimiWebWsUrl(options.bridgeUrl, options.bridgeToken ?? ''));
   const send = options.fetcher ?? fetch;
-  function malformed(path: string) {
-    return new KimiWebTransportError('Invalid Kimi Web plugin response.', {
-      kind: 'malformed-response',
-      path,
-    });
-  }
   async function request(path: string, body?: Readonly<Record<string, unknown>>): Promise<unknown> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (options.bridgeToken) headers.Authorization = `Bearer ${options.bridgeToken}`;
@@ -85,24 +110,10 @@ export function createKimiWebPluginsClient(options: {
     return payload.data;
   }
   return {
-    async list(): Promise<readonly KimiWebPlugin[]> {
-      const path = '/api/v1/plugins';
-      const data = await request(path);
-      if (!record(data) || !Array.isArray(data.plugins) || !data.plugins.every(plugin))
-        throw malformed(path);
-      return data.plugins;
-    },
-    async marketplace(): Promise<readonly KimiWebPluginCatalogEntry[]> {
-      const path = '/api/v1/plugins/marketplace';
-      const data = await request(path);
-      if (!record(data) || !Array.isArray(data.entries) || !data.entries.every(catalogEntry))
-        throw malformed(path);
-      return data.entries;
-    },
+    list: async () => parseKimiWebPluginList(await request('/api/v1/plugins')),
+    marketplace: async () => parseKimiWebPluginMarketplace(await request('/api/v1/plugins/marketplace')),
     install: (source: string) => request('/api/v1/plugins', { source }),
     action: (id: string, action: 'enable' | 'disable' | 'remove') =>
       request(`/api/v1/plugins/${encodeURIComponent(id)}:${action}`, {}),
   };
 }
-
-export type KimiWebPluginsClient = ReturnType<typeof createKimiWebPluginsClient>;

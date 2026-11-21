@@ -13,13 +13,14 @@
           :project-directory="projectDirectory"
           :active-directory="activeDirectory"
           :selected-session-id="runtimeActionClient ? unifiedTreeSelectedKey : selectedSessionId"
-          :runtime-create-available="(runtimeConversationManifest ?? managementManifest)?.core.createSession.state === 'supported' && !!runtimeActionClient"
+          :runtime-create-available="topPanelCreationManifest?.core.createSession.state === 'supported' && !!runtimeActionClient"
           :native-selected-display="nativeSelectedDisplay"
           :home-path="homePath"
           :sandbox-first-mode="activeBackendCapabilities.sessionManagementMode === 'sandbox-first'"
           :codex-connected="codexApi.connected.value"
           :pty-supported="ptySupported"
-          :session-action-capabilities="runtimeActionClient ? runtimeSessionActionCapabilities : {
+          :resolve-session-actions="runtimeActionClient ? runtimeActionsForSession : undefined"
+          :session-action-capabilities="{
             rename: activeBackendCapabilities.sessionRename,
             pin: activeBackendCapabilities.sessionPin,
             unpin: activeBackendCapabilities.sessionUnpin,
@@ -52,8 +53,6 @@
           @edit-project="handleEditProject"
           @open-settings="openSettings()"
           @open-connection-entry="openConnectionEntry()"
-          @open-harness-settings="isHarnessSettingsOpen = true"
-          @open-workspace-migration="openWorkspaceMigration()"
           @open-provider-manager="isProviderManagerOpen = true"
           @open-status-monitor="isStatusMonitorOpen = true"
           @open-codex-panel="openCodexPanel"
@@ -62,6 +61,15 @@
           @logout="handleLogout"
           @dropdown-closed="focusInput"
         >
+          <template #runtime-agent-controls>
+            <div class="runtime-dropdown-agents">
+              <AgentInstanceSelector :instances="harnessManifests" :names="runtimeAgentNames" :selected="topPanelCreationManifest?.harnessInstanceId ?? null" @select="topPanelHarnessChoice = $event" />
+              <label v-if="topPanelCreationManifest">
+                <input v-model="filterTopPanelAgent" type="checkbox" />
+                {{ t('app.runtimeBridgeMenu.filterAgent', 'Only this Agent') }}
+              </label>
+            </div>
+          </template>
           <template #runtime-sessions="{ close, managementMode, done }">
             <details class="runtime-dropdown-discovery">
               <summary>{{ t('runtime.sessionTree.searchAll') }}</summary>
@@ -71,6 +79,7 @@
               :row-pins="runtimePins ?? undefined"
               :management-mode="managementMode"
               @finish-management="done()"
+              :batch-action-available="batchActionAvailable"
               @batch-action="handleRuntimeSessionBatch"
               :projects="[]"
               :expanded-paths="unifiedSessionTree ? [...unifiedSessionTree.expanded.value] : []"
@@ -97,13 +106,12 @@
             </details>
           </template>
         </TopPanel>
-        <div class="app-runtime-actions">
-          <AgentInstanceSelector :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
+        <div v-if="showHostThreadAction || runtimeThreadState.threadId.value" class="app-runtime-actions">
           <button
             type="button"
             class="app-runtime-action"
             data-testid="open-runtime-thread"
-            :disabled="unifiedSessionTree === null || !runtimeSelectedSessionRef || (!runtimeSelectedDirectory && !runtimeThreadState.threadId.value)"
+            v-if="showHostThreadAction"
             :title="t('runtime.thread.openTitle')"
             @click="openRuntimeThreadForSelection()"
           >
@@ -113,7 +121,7 @@
             type="button"
             class="app-runtime-action"
             data-testid="open-runtime-collaboration"
-            :disabled="runtimeThreadState.threadId.value === null"
+            v-if="runtimeThreadState.threadId.value"
             :title="t('runtime.collaboration.openTitle')"
             @click="openCollaborationPanel()"
           >
@@ -196,8 +204,11 @@
         <div class="app-main-column">
           <main ref="outputEl" class="app-output">
             <div class="output-workspace">
-              <p v-if="runtimeConversation.error.value" class="runtime-history-notice" :class="{ 'is-unavailable': runtimeSelectedSessionRef && !runtimeSelectedDirectory }" role="alert">{{ runtimeConversation.error.value }}</p>
-              <button v-if="runtimeConversation.hasMore.value" type="button" class="app-runtime-action" :disabled="runtimeConversation.loading.value" @click="runtimeConversation.loadMore()">{{ t('common.loadMore', 'Load more') }}</button>
+              <div v-if="runtimeConversation.error.value" class="runtime-history-notice" :class="{ 'is-unavailable': runtimeSelectedSessionRef && !runtimeSelectedDirectory }">
+                <span role="alert">{{ runtimeConversation.error.value }}</span>
+                <button v-if="runtimeSelectedDirectory && runtimeSelectedSessionRef" type="button" class="app-runtime-action" data-testid="reload-runtime-history"
+                  :disabled="runtimeConversation.loading.value" @click="reloadRuntimeHistory()">{{ t('outputPanel.reloadHistory', 'Reload history') }}</button>
+              </div>
               <div class="tool-window-layer">
                 <div class="output-split">
                   <OutputPanel
@@ -241,7 +252,8 @@
                     :load-message-diffs="activeBackendKind === 'kimi-web' ? loadKimiMessageDiffs : undefined"
                     :has-message-diffs="activeBackendKind === 'kimi-web' ? hasKimiMessageDiffs : undefined"
                     :kimi-session-context="kimiSessionContext"
-                    :is-loading="isLoadingHistory"
+                    :is-loading="isLoadingHistory && !runtimeConversation.hasMore.value"
+                    :load-older-history="runtimeConversation.hasMore.value && !runtimeConversation.loading.value && !runtimeConversation.error.value ? loadOlderRuntimeHistory : undefined"
                     :is-anchoring="isOutputAnchoring"
                     @message-rendered="handleOutputPanelMessageRendered"
                     @resume-follow="handleOutputPanelResumeFollow"
@@ -543,7 +555,7 @@
         <h2 id="runtime-settings-title">{{ t('app.runtimeBridgeMenu.agentSettings') }}</h2>
         <button type="button" class="action-button" @click="isHarnessSettingsOpen = false">{{ t('floatingWindow.close') }}</button>
       </header>
-      <AgentInstanceSelector :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
+      <AgentInstanceSelector :instances="harnessManifests" :names="runtimeAgentNames" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
       <HarnessSettings v-if="harnessInstanceScope" :harness-kind="harnessSettingsKind" :manifests="harnessManifests" :scope="harnessInstanceScope" :controls="harnessSettingsControls" :action-labels="harnessSettingsActions" @save="handleHarnessSettingsSave" />
     </dialog>
     <CollaborationPanel
@@ -598,6 +610,9 @@
     <SettingsModal
       :open="isSettingsOpen"
       :initial-page="settingsInitialPage"
+      :runtime-actions="runtimeOnline"
+      @open-workspace-migration="isSettingsOpen = false; openWorkspaceMigration()"
+      @open-harness-settings="isSettingsOpen = false; isHarnessSettingsOpen = true"
       :connected-bridge-state="connectedBridgeState"
       :refresh-bridge-version="desktopBridgeVersion.refresh"
       @close="isSettingsOpen = false"
@@ -623,7 +638,7 @@
       @open-acp-auth-terminal="openAcpAuthTerminal"
     >
       <template #agent-selector>
-        <AgentInstanceSelector v-if="harnessManifests.length" :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
+        <AgentInstanceSelector v-if="harnessManifests.length" :instances="harnessManifests" :names="runtimeAgentNames" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
       </template>
     </ProviderManagerModal>
     <StatusMonitorModal
@@ -639,6 +654,7 @@
       :magic-context-workers="magicContextWorkers"
       :kimi-web-bridge="kimiWebMessageBridge"
       :get-native-kimi-meta="managementKimiMeta"
+      :native-kimi-plugins="managementKimiPlugins"
       :dsh-status="runtimeActionClient ? managementDshStatus : dshStatusSnapshot"
       :harness-scope="harnessInstanceScope ?? undefined"
       :harness-manifests="harnessManifests"
@@ -646,7 +662,7 @@
       @refresh="managementStatusRefresh++"
     >
       <template #agent-selector>
-        <AgentInstanceSelector v-if="harnessManifests.length" :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
+        <AgentInstanceSelector v-if="harnessManifests.length" :instances="harnessManifests" :names="runtimeAgentNames" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
       </template>
     </StatusMonitorModal>
     <ProjectSettingsDialog
@@ -833,7 +849,7 @@ import { createNativeBackendAdapter } from './runtime/nativeBackendAdapter';
 import { createWorkspacePty, type PtySocket, type WorkspacePty } from './runtime/workspacePty';
 import { createWorkspaceFiles } from './runtime/workspaceFiles';
 import { capturedBackend } from './runtime/capturedBackend';
-import { createNativeKimiProviders, createNativeKimiSessionClient } from './runtime/nativeKimiClient';
+import { createNativeKimiPlugins, createNativeKimiProviders, createNativeKimiSessionClient } from './runtime/nativeKimiClient';
 import { createRuntimeTurnProjection } from './runtime/turnProjection';
 import { createNativeDshRpc } from './runtime/nativeDshRpc';
 import BridgeLogin from './components/runtime-shell/BridgeLogin.vue';
@@ -9942,6 +9958,7 @@ const activeRuntimeEnvironmentId = computed(() => {
   return environment;
 });
 const activeHarnessKind = computed<HarnessKind>(() => activeBackendKind.value);
+const runtimeAgentNames = shallowRef<Readonly<Record<string, string>>>({});
 const managementHarnessInstanceId = ref<HarnessInstanceId | null>(null);
 
 let runtimeWorkspaceKeys: readonly import('../shared/runtime/identity.js').WorkspaceKey[] = [];
@@ -9973,6 +9990,9 @@ async function connectRuntimeBridge(openRemote = false): Promise<void> {
   runtimeIndexAvailable.value = false;
   runtimeEnvironmentId.value = null;
   bridgeReference.value = null;
+  runtimeAgentNames.value = {};
+  topPanelHarnessChoice.value = null;
+  filterTopPanelAgent.value = false;
   const owner = useRuntimeConnection({
     reference: managementCandidate(bridgeLoginUrl.value),
     bootstrapTree: !openRemote,
@@ -10126,10 +10146,13 @@ function buildUnifiedSessionTree(): void {
     onCanonical: entity => {
       runtimeTurns.apply(entity); runtimeInteractionProjection?.observeOperation(entity);
       if (entity.collection === 'harnesses' && entity.value) {
-        const raw = asRuntimeRecord(entity.value).manifest;
+        const { manifest: raw, displayName } = asRuntimeRecord(entity.value);
         if (raw) {
           const manifest = validateHarnessManifest(raw);
           if (manifest.environmentId === target && manifest.harnessInstanceId === entity.key) {
+            if (typeof displayName === 'string' && displayName !== runtimeAgentNames.value[manifest.harnessInstanceId]) {
+              runtimeAgentNames.value = { ...runtimeAgentNames.value, [manifest.harnessInstanceId]: displayName };
+            }
             const instances = harnessManifests.value;
             harnessManifests.value = instances.some(entry => entry.harnessInstanceId === manifest.harnessInstanceId)
               ? instances.map(entry => entry.harnessInstanceId === manifest.harnessInstanceId ? manifest : entry)
@@ -10177,7 +10200,13 @@ watch([() => runtimePins.value, () => runtimePins.value?.revision.value, () => u
     if (!controller.signal.aborted) runtimeTopPanelPinnedKeys.value = result;
   }).catch(() => {});
 });
-const runtimeTopPanelTree = computed(() => buildRuntimeTopPanelTree(unifiedSessionTree.value?.tree.value ?? [], runtimeTopPanelPinnedKeys.value));
+const filterTopPanelAgent = ref(false);
+const topPanelHarnessChoice = ref<HarnessInstanceId | null>(null);
+const runtimeTopPanelTree = computed(() => buildRuntimeTopPanelTree(
+  unifiedSessionTree.value?.tree.value ?? [],
+  runtimeTopPanelPinnedKeys.value,
+  filterTopPanelAgent.value ? topPanelCreationManifest.value?.harnessInstanceId : undefined,
+));
 const unifiedTreeRows = computed<readonly UnifiedFlatRow[] | undefined>(() => unifiedSessionTree.value?.rows.value);
 const unifiedTreeSources = computed<readonly HarnessEntry[]>(() => {
   const entries = new Map((unifiedSessionTree.value?.harnesses.value ?? []).map(entry => [entry.harnessInstanceId, entry]));
@@ -10407,6 +10436,13 @@ watch(
 
 const missingThreadRepositoryNotice = 'This session has no repository on the connected target, so no Host Thread can be opened for it.';
 
+const showHostThreadAction = computed(() => {
+  const tree = unifiedSessionTree.value;
+  if (!tree || !runtimeSelectedSessionRef.value) return false;
+  if (runtimeThreadState.threadId.value) return true;
+  const directory = runtimeSelectedDirectory.value;
+  return !!directory && !tree.workspaces.value.some(row => row.path === directory && row.gitKind === 'non-git');
+});
 async function openRuntimeThreadForSelection(): Promise<void> {
   if (runtimeThreadState.threadId.value) {
     try {
@@ -11065,6 +11101,17 @@ const runtimeConversation = useRuntimeConversation({ publish: entries => {
   const session = runtimeSelectedSessionRef.value;
   if (session) storeThreadNativeWindow(session, entries);
 } });
+async function loadOlderRuntimeHistory() {
+  try { await runtimeConversation.loadMore(); }
+  catch (error) { log('Earlier runtime history unavailable', error); }
+}
+async function reloadRuntimeHistory() {
+  const capture = runtimeSelectionCapture();
+  if (!capture || !capture.isCurrent()) return;
+  const { session, profileId } = capture.selection;
+  try { await runtimeSessionRuntime.router.history({ session, profileId }, {}); }
+  catch (error) { log('Could not reopen runtime history', error); }
+}
 watch(runtimeConversation.loading, value => { isLoadingHistory.value = value; });
 onScopeDispose(() => {
   void runtimeConversation.dispose().catch(error => log('Runtime history cleanup failed', error));
@@ -11159,12 +11206,22 @@ const runtimeConversationManifest = computed(() => {
   return session ? harnessManifests.value.find(entry => entry.environmentId === session.environmentId && entry.harnessInstanceId === session.harnessInstanceId) : undefined;
 });
 function runtimeSupports(operation: string): boolean { return runtimeConversationManifest.value?.extensions.some(entry => entry.name === operation && entry.support.state === 'supported') === true; }
-const runtimeSessionActionCapabilities = computed(() => ({
-  rename: runtimeSupports(runtimeConversationManifest.value?.kind === 'kimi-web' ? 'kimi.updateProfile' : 'updateSession'),
-  archive: runtimeSupports(runtimeConversationManifest.value?.kind === 'kimi-web' ? 'archiveSession' : 'updateSession'),
-  unarchive: runtimeSupports(runtimeConversationManifest.value?.kind === 'kimi-web' ? 'restoreSession' : 'updateSession'),
-  delete: runtimeSupports('deleteSession'), pin: !!runtimePins.value, unpin: !!runtimePins.value,
-}));
+const sessionActionsByHarness = computed(() => new Map(harnessManifests.value.map(manifest => {
+  const supported = new Set(manifest.extensions.filter(entry => entry.support.state === 'supported').map(entry => entry.name));
+  const kimi = manifest.kind === 'kimi-web';
+  return [manifest.harnessInstanceId, {
+    rename: supported.has(kimi ? 'kimi.updateProfile' : 'updateSession'),
+    archive: supported.has(kimi ? 'archiveSession' : 'updateSession'),
+    unarchive: supported.has(kimi ? 'restoreSession' : 'updateSession'),
+    delete: supported.has('deleteSession'),
+    pin: !!runtimePins.value,
+    unpin: !!runtimePins.value,
+  }] as const;
+})));
+function runtimeActionsForSession(key: string) {
+  const actions = sessionActionsByHarness.value.get(decodeSessionKey(key).harnessInstanceId);
+  return actions ?? { rename: false, archive: false, unarchive: false, delete: false, pin: !!runtimePins.value, unpin: !!runtimePins.value };
+}
 function handleTopPanelBatchAction(payload: TopPanelBatchSessionActionPayload) {
   if (runtimeActionClient.value) return handleRuntimeSessionBatch(payload.action, payload.sessions.map(row => row.sessionId));
   return backendSessionActions.handleTopPanelBatchSessionAction(payload);
@@ -11185,11 +11242,14 @@ async function handleTopPanelRuntimeAction(action: 'rename' | TopPanelBatchSessi
     sessionError.value = toErrorMessage(error);
   }
 }
+function batchActionAvailable(action: 'pin' | 'unpin' | 'archive' | 'unarchive' | 'delete', key: string) {
+  return runtimeActionsForSession(key)[action];
+}
 async function handleRuntimeSessionBatch(action: 'pin' | 'unpin' | 'archive' | 'unarchive' | 'delete', keys: string[]) {
   const profileId = activeProfileId.value;
   const client = runtimeActionClient.value;
   if (!client) return;
-  const selections = [...new Set(keys)].map(key => ({ profileId, session: decodeSessionKey(key) }));
+  const selections = [...new Set(keys)].filter(key => batchActionAvailable(action, key)).map(key => ({ profileId, session: decodeSessionKey(key) }));
   if (!selections.length) return;
   if (action === 'pin' || action === 'unpin') {
     await runtimePins.value?.setPinned(selections, action === 'pin');
@@ -11281,6 +11341,10 @@ const managementKimiMeta = computed(() => {
   if (manifest?.kind !== 'kimi-web' || !client) return undefined;
   const native = createNativeKimiSessionClient(client, manifest);
   return () => native.getMeta();
+});
+const managementKimiPlugins = computed(() => {
+  const manifest = managementManifest.value, client = runtimeActionClient.value;
+  return manifest?.kind === 'kimi-web' && client ? createNativeKimiPlugins(client, manifest) : client ? null : undefined;
 });
 const managementKimiProviders = computed(() => {
   const manifest = managementManifest.value;
@@ -11646,20 +11710,31 @@ const backendSessionActions = useBackendSessionActions({
   runtime: runtimeSessionRuntime,
 });
 
+const topPanelCreationManifest = computed(() =>
+  harnessManifests.value.find(manifest => manifest.harnessInstanceId === topPanelHarnessChoice.value)
+    ?? runtimeConversationManifest.value ?? managementManifest.value,
+);
+
 async function createRuntimeSession(directory?: string): Promise<BackendSessionInfo | undefined> {
-  const manifest = runtimeConversationManifest.value ?? managementManifest.value;
+  const manifest = topPanelCreationManifest.value;
   const client = runtimeActionClient.value;
   if (!manifest || !client) throw new Error('Select a connected Agent instance.');
+  const scope = client.scope(manifest.environmentId);
   const workspaces = runtimeWorkspaceKeys.map(key => ({ key, workspace: decodeWorkspaceKey(key) })).filter(entry => entry.workspace.environmentId === manifest.environmentId);
   let workspace = workspaces.find(entry => entry.workspace.canonicalPath === directory);
-  if (!workspace && workspaces.length === 1) workspace = workspaces[0];
+  if (!workspace && !directory && workspaces.length === 1) workspace = workspaces[0];
   if (!workspace) {
     const path = await showPrompt(`Workspace (${workspaces.map(entry => entry.workspace.canonicalPath).join(', ')})`, directory ?? '');
     if (path === null) return undefined;
     workspace = workspaces.find(entry => entry.workspace.canonicalPath === path);
   }
   if (!workspace) throw new Error('Select a workspace authorized by this Bridge.');
-  const scope = client.scope(manifest.environmentId);
+  const currentManifest = topPanelCreationManifest.value;
+  if (client !== runtimeActionClient.value || !scope.isCurrent()
+    || currentManifest?.harnessInstanceId !== manifest.harnessInstanceId
+    || currentManifest.environmentId !== manifest.environmentId) {
+    throw new Error('The selected Agent changed. Choose the workspace again.');
+  }
   const mutation = client.mutate(manifest.environmentId, 'session.create', {
     harnessInstanceId: manifest.harnessInstanceId,
     workspaceKey: workspace.key,
@@ -14907,6 +14982,20 @@ body {
   border-radius: var(--radius-control);
   cursor: pointer;
 }
+.runtime-dropdown-agents {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--type-sm);
+}
+
+.runtime-dropdown-agents label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .runtime-dropdown-discovery {
   color: var(--theme-top-dropdown-text);
   background: var(--theme-top-dropdown-bg);
