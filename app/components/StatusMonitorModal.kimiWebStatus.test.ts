@@ -686,7 +686,7 @@ describe('StatusMonitorModal kimi-web capability-gated unsupported copy', () => 
     clickTab(root, 'Skills');
     await nextTick();
     await vi.waitFor(() =>
-      expect(root.textContent).toContain('The current OpenCode version does not support viewing skill status.'),
+      expect(root.textContent).toContain(en.statusMonitor.skills.unsupported),
     );
     expect(root.textContent).not.toContain('not exposed by Kimi Web');
     app.unmount();
