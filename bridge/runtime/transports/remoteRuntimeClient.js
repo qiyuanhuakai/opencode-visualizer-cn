@@ -76,17 +76,17 @@ export async function openRemoteRuntime({ endpoint, channel, environmentId, toke
       catch (error) { clearTimeout(timer); pending.delete(id); reject(error); }
     });
   }
+  function inspectGrant(result, binding) {
+    const grant = result.targets.find(entry => entry.target === binding.target);
+    requireValue(grant && grant.capabilities.methods.every(method => method === 'runtime.session.search' || binding.capabilities.methods.includes(method)), 'remote.grant', 'unauthorized');
+    return grant;
+  }
   try {
     await ready;
     const inspection = await request({ method: 'runtime.inspect', params: { sessionSearch: true } }).catch(error => {
       if (!(error instanceof ProtocolError) || error.code !== 'invalid_request' || error.field !== 'fields') throw error;
       return request({ method: 'runtime.inspect', params: {} });
     });
-    function inspectGrant(result, binding) {
-      const grant = result.targets.find(entry => entry.target === binding.target);
-      requireValue(grant && grant.capabilities.methods.every(method => method === 'runtime.session.search' || binding.capabilities.methods.includes(method)), 'remote.grant', 'unauthorized');
-      return grant;
-    }
     let grant = inspectGrant(inspection, hello);
     if (grant.capabilities.methods.includes('runtime.session.search') && !hello.capabilities.methods.includes('runtime.session.search')) {
       hello = { ...hello, capabilities: { ...hello.capabilities, methods: [...hello.capabilities.methods, 'runtime.session.search'] } };
