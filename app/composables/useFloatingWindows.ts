@@ -327,7 +327,7 @@ export function useFloatingWindows() {
         `[data-floating-key="${key}"] .floating-window-body`,
       ) as HTMLElement | null;
       if (!body) return;
-      body.focus();
+      body.focus({ preventScroll: true });
     });
   }
 

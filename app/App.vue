@@ -1,18 +1,21 @@
 <template>
   <div ref="appEl" class="app">
     <ThemeInjector />
+    <header v-if="windowControls && uiInitState !== 'ready'" class="desktop-login-header">
+      <LoginPageActions v-if="uiInitState === 'login'" in-titlebar @connect-remote="handleLogin(true)" @open-settings="openSettings()" />
+      <DesktopWindowControls :controls="windowControls" />
+    </header>
     <template v-if="uiInitState === 'ready'">
-      <header class="app-header">
+      <header ref="appHeaderEl" class="app-header">
         <TopPanel
           ref="topPanelRef"
           :runtime-mode="!!runtimeActionClient"
-          :runtime-fork-available="runtimeSupports('forkSession')"
-          :runtime-compact-available="runtimeSupports('compactSession')"
           :tree-data="runtimeActionClient ? runtimeTopPanelTree : topPanelTreeData"
           :notification-sessions="notificationSessions"
           :project-directory="projectDirectory"
           :active-directory="activeDirectory"
           :selected-session-id="runtimeActionClient ? unifiedTreeSelectedKey : selectedSessionId"
+          :runtime-can-create-in-directory="canCreateRuntimeSessionInDirectory"
           :runtime-create-available="topPanelCreationManifest?.core.createSession.state === 'supported' && !!runtimeActionClient"
           :native-selected-display="nativeSelectedDisplay"
           :home-path="homePath"
@@ -29,6 +32,8 @@
             delete: activeBackendCapabilities.sessionDelete,
           }"
           :worktrees-enabled="activeBackendCapabilities.worktrees"
+          @load-session-children="handleUnifiedLoadMoreChildren"
+          @search-sessions="handleUnifiedSearch"
           @select-notification="handleNotificationSessionSelect"
           @create-worktree-from="createWorktreeFromWorktree"
           @new-session="backendSessionLifecycle.createNewSession"
@@ -36,13 +41,14 @@
           @open-shell="openShellFromInput('')"
           @delete-active-directory="deleteWorktree"
           @delete-session="handleTopPanelRuntimeAction('delete', $event)"
-          @fork-session="backendSessionActions.handleForkSession(runtimeActionClient ? selectedSessionId : $event)"
-          @compact-session="backendSessionActions.handleCompactSession(runtimeActionClient ? selectedSessionId : $event)"
+          @fork-session="handleTopPanelSessionTool('fork', $event)"
+          @compact-session="handleTopPanelSessionTool('compact', $event)"
           @archive-session="handleTopPanelRuntimeAction('archive', $event)"
           @unarchive-session="handleTopPanelRuntimeAction('unarchive', $event)"
           @rename-session="handleTopPanelRuntimeAction('rename', $event)"
           @pin-session="handleTopPanelRuntimeAction('pin', $event)"
           @unpin-session="handleTopPanelRuntimeAction('unpin', $event)"
+          @toggle-runtime-container-pin="toggleRuntimeContainerPin"
           @pin-project="pinProject"
           @unpin-project="unpinProject"
           @pin-sandbox="pinSandbox"
@@ -63,47 +69,46 @@
         >
           <template #runtime-agent-controls>
             <div class="runtime-dropdown-agents">
-              <AgentInstanceSelector :instances="harnessManifests" :names="runtimeAgentNames" :selected="topPanelCreationManifest?.harnessInstanceId ?? null" @select="topPanelHarnessChoice = $event" />
+              <AgentInstanceSelector
+                :instances="harnessManifests"
+                :names="runtimeAgentNames"
+                :selected="topPanelCreationManifest?.harnessInstanceId ?? null"
+                :sources="unifiedTreeSources"
+                @select="topPanelHarnessChoice = $event"
+              />
+              <button
+                v-if="topPanelAgentSource?.status === 'standby' || topPanelAgentSource?.status === 'error'"
+                type="button"
+                class="app-runtime-action"
+                :disabled="unifiedTreeRetrying.has(topPanelAgentSource.harnessInstanceId)"
+                :title="topPanelAgentSource.reason ?? undefined"
+                @click.stop="handleUnifiedRetrySource(topPanelAgentSource.harnessInstanceId)"
+              >
+                {{ t(topPanelAgentSource.status === 'standby' ? 'app.runtimeConnection.startAgent' : 'app.login.retry') }}
+              </button>
               <label v-if="topPanelCreationManifest">
                 <input v-model="filterTopPanelAgent" type="checkbox" />
                 {{ t('app.runtimeBridgeMenu.filterAgent', 'Only this Agent') }}
               </label>
             </div>
           </template>
-          <template #runtime-sessions="{ close, managementMode, done }">
-            <details class="runtime-dropdown-discovery">
-              <summary>{{ t('runtime.sessionTree.searchAll') }}</summary>
+          <template #runtime-search="{ query, close }">
             <SessionTree
-              v-if="unifiedTreeRows"
+              v-if="unifiedTreeSearch?.query === query"
               top-dropdown
+              search-only
               :row-pins="runtimePins ?? undefined"
-              :management-mode="managementMode"
-              @finish-management="done()"
-              :batch-action-available="batchActionAvailable"
-              @batch-action="handleRuntimeSessionBatch"
               :projects="[]"
-              :expanded-paths="unifiedSessionTree ? [...unifiedSessionTree.expanded.value] : []"
+              :expanded-paths="[]"
               :selected-session-id="selectedSessionId"
-              :tree-rows="unifiedTreeRows"
-              :selected-key="unifiedTreeSelectedKey"
-              :sources="unifiedTreeSources"
-              :retrying="unifiedTreeRetrying"
-              :child-scans="unifiedTreeChildScans"
-              :view-status="unifiedTreeStatus"
-              :view-loaded="unifiedTreeLoaded"
-              :view-error="unifiedTreeError"
-              :filter-kinds="unifiedTreeFilterKinds"
+              :tree-rows="[]"
               :search-state="unifiedTreeSearch"
-              @toggle-key="handleUnifiedToggleKey"
               @select-key="handleUnifiedSelectKey($event); close()"
-              @retry-source="handleUnifiedRetrySource"
-              @filter-change="handleUnifiedFilterChange"
-              @search="handleUnifiedSearch"
               @search-more="handleUnifiedSearchMore"
-              @load-more-children="handleUnifiedLoadMoreChildren"
-              @reload="handleReloadSidebar"
             />
-            </details>
+          </template>
+          <template v-if="windowControls" #window-controls>
+            <DesktopWindowControls :controls="windowControls" />
           </template>
         </TopPanel>
         <div v-if="showHostThreadAction || runtimeThreadState.threadId.value" class="app-runtime-actions">
@@ -162,6 +167,9 @@
             :session-tree-expanded-paths="unifiedSessionTree ? [...unifiedSessionTree.expanded.value] : sessionTreeExpandedPaths"
             :runtime-mode="!!runtimeActionClient"
             :runtime-pins="runtimePins ?? undefined"
+            :runtime-container-pins="runtimeContainerPins"
+            @select-container="openPinnedContainer"
+            @unpin-container="unpinRuntimeContainer"
             :tree-nodes="treeNodes"
             :expanded-tree-paths="expandedTreePaths"
             :selected-tree-path="selectedTreePath"
@@ -379,6 +387,7 @@
                     @tower-experiment-updated="handleKimiTowerExperimentUpdated"
                   />
                   <KimiWebComposerGoal
+                    v-if="kimiGoalAvailable"
                     :client="kimiWebComposerClient"
                     :session-id="selectedSessionId"
                     :connected="connectionState === 'ready'"
@@ -431,7 +440,7 @@
       </footer>
     </template>
     <div v-else class="app-loading-view" role="status" aria-live="polite">
-      <LoginPageActions v-if="uiInitState === 'login'" @connect-remote="handleLogin(true)" @open-settings="openSettings()" />
+      <LoginPageActions v-if="!windowControls && uiInitState === 'login'" @connect-remote="handleLogin(true)" @open-settings="openSettings()" />
       <div class="app-loading-stack">
         <div class="app-loading-identity">
           <div class="app-loading-heading">
@@ -546,18 +555,13 @@
     <ProjectPicker
       :open="isProjectPickerOpen"
       :home-path="projectPickerHomePath"
+      :runtime-directories="runtimeProjectDirectories"
+      :runtime-root-only="topPanelCreationManifest?.kind === 'acp'"
+      :list-runtime-directory="runtimeActionClient ? listRuntimeProjectDirectory : undefined"
       :backend-kind="activeBackendKind"
       @close="isProjectPickerOpen = false"
       @select="handleProjectDirectorySelect"
     />
-    <dialog ref="harnessSettingsDialog" class="runtime-settings-dialog" data-runtime-ui aria-labelledby="runtime-settings-title" @cancel.prevent="isHarnessSettingsOpen = false" @close="isHarnessSettingsOpen = false">
-      <header>
-        <h2 id="runtime-settings-title">{{ t('app.runtimeBridgeMenu.agentSettings') }}</h2>
-        <button type="button" class="action-button" @click="isHarnessSettingsOpen = false">{{ t('floatingWindow.close') }}</button>
-      </header>
-      <AgentInstanceSelector :instances="harnessManifests" :names="runtimeAgentNames" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
-      <HarnessSettings v-if="harnessInstanceScope" :harness-kind="harnessSettingsKind" :manifests="harnessManifests" :scope="harnessInstanceScope" :controls="harnessSettingsControls" :action-labels="harnessSettingsActions" @save="handleHarnessSettingsSave" />
-    </dialog>
     <CollaborationPanel
       v-if="isCollaborationPanelOpen"
       :open="isCollaborationPanelOpen"
@@ -612,7 +616,7 @@
       :initial-page="settingsInitialPage"
       :runtime-actions="runtimeOnline"
       @open-workspace-migration="isSettingsOpen = false; openWorkspaceMigration()"
-      @open-harness-settings="isSettingsOpen = false; isHarnessSettingsOpen = true"
+      @open-harness-settings="openHarnessSettings"
       :connected-bridge-state="connectedBridgeState"
       :refresh-bridge-version="desktopBridgeVersion.refresh"
       @close="isSettingsOpen = false"
@@ -747,6 +751,8 @@ import { assertLegacyEditAdmission, legacyEditingPaused, onLegacyWriterPhase, re
 import {
   computed,
   defineAsyncComponent,
+  defineComponent,
+  h,
   markRaw,
   nextTick,
   onBeforeUnmount,
@@ -853,6 +859,7 @@ import { createNativeKimiPlugins, createNativeKimiProviders, createNativeKimiSes
 import { createRuntimeTurnProjection } from './runtime/turnProjection';
 import { createNativeDshRpc } from './runtime/nativeDshRpc';
 import BridgeLogin from './components/runtime-shell/BridgeLogin.vue';
+import DesktopWindowControls from './components/DesktopWindowControls.vue';
 import LoginPageActions from './components/runtime-shell/LoginPageActions.vue';
 import AgentInstanceSelector from './components/runtime-shell/AgentInstanceSelector.vue';
 import type { PublicConnectionReference } from '../shared/runtime/runtimeWire.js';
@@ -863,8 +870,6 @@ import { DEFAULT_RUNTIME_BRIDGE_URL } from './runtime/connectionUrl';
 import {
   useRuntimeSessionTree,
   type HarnessEntry,
-  type SessionHarness,
-  type UnifiedFlatRow,
   type UnifiedSearchState,
   type UnifiedSessionTree,
 } from './composables/useRuntimeSessionTree';
@@ -985,7 +990,7 @@ import type { ContainerPinPayload } from './types/pin';
 import type { MessageInfo, MessagePart, ReasoningPart, ToolPart } from './types/sse';
 import type { WorkerToTabMessage } from './types/sse-worker';
 import { buildRuntimeTopPanelTree } from './runtime/topPanelTree';
-import type { TopPanelBatchSessionActionPayload, TopPanelNotificationSession } from './types/top-panel';
+import type { RuntimeContainerPin, TopPanelBatchSessionActionPayload, TopPanelNotificationSession } from './types/top-panel';
 import type { ProjectState, SandboxState, SessionState } from './types/worker-state';
 import type { Terminal } from '@xterm/xterm';
 import { resolveRestoredPtyKind } from './utils/forgePty';
@@ -1175,6 +1180,7 @@ const DshComposerPlanGoal = defineAsyncComponent(() => import('./components/dsh/
 const DshThreadGoalWindow = defineAsyncComponent(() => import('./components/dsh/DshThreadGoalWindow.vue'));
 const DshFeedbackDialog = defineAsyncComponent(() => import('./components/dsh/DshFeedbackDialog.vue'));
 const { t, locale } = useI18n();
+const windowControls = window.electronAPI?.windowControls;
 const desktopApi = window.electronAPI?.desktop;
 const desktopNotifications = desktopApi ? createDesktopNotificationRouter({
   api: desktopApi,
@@ -1758,8 +1764,10 @@ function openCodexThreadGoal() {
 }
 
 function openKimiThreadGoal(sessionId: string) {
-  if (activeBackendKind.value !== 'kimi-web' || !sessionId) return;
-  const key = `kimi-thread-goal:${sessionId}`;
+  if (activeBackendKind.value !== 'kimi-web' || !sessionId || !kimiGoalAvailable.value) return;
+  const qualifiedKey = runtimeActionClient.value ? unifiedTreeSelectedKey.value : sessionId;
+  if (!qualifiedKey) return;
+  const key = `kimi-thread-goal:${qualifiedKey}`;
   if (fw.has(key)) { fw.activate(key); return; }
   const extent = fw.getExtent();
   const width = Math.min(560, Math.max(280, extent.width - 32));
@@ -1925,6 +1933,7 @@ const outputPanelRef = ref<{
 } | null>(null);
 const topPanelRef = ref<{
   openSessionDropdown: () => void;
+  revealContainer: (key: string) => void;
   closeSessionDropdown: () => void;
   toggleSessionDropdown: () => void;
 } | null>(null);
@@ -2070,7 +2079,7 @@ const ptyToFileMap = new Map<string, string>();
 const codexSessionCreationByDirectory = new Map<string, Promise<SessionInfo | undefined>>();
 const ptyMetaDecoder = new TextDecoder();
 let floatingExtentResizeObserver: ResizeObserver | null = null;
-let floatingExtentObservedEl: HTMLDivElement | null = null;
+const appHeaderEl = ref<HTMLElement | null>(null);
 let floatingExtentFrameId: number | null = null;
 let shellFitAllFrameId: number | null = null;
 let windowResizeFrameId: number | null = null;
@@ -5117,7 +5126,7 @@ function handleWindowResize() {
 
 function syncFloatingExtent() {
   const canvas = toolWindowCanvasEl.value;
-  const header = document.querySelector('.app-header') as HTMLElement | null;
+  const header = appHeaderEl.value;
   const input = inputEl.value;
   if (!canvas || !header || !input) return;
   const headerRect = header.getBoundingClientRect();
@@ -5154,15 +5163,11 @@ function updateFloatingExtentObserver() {
       syncFloatingExtent();
     });
   }
-  const nextEl = toolWindowCanvasEl.value;
-  if (floatingExtentObservedEl && floatingExtentObservedEl !== nextEl) {
-    floatingExtentResizeObserver.unobserve(floatingExtentObservedEl);
+  floatingExtentResizeObserver.disconnect();
+  for (const element of [appHeaderEl.value, inputEl.value]) {
+    if (element) floatingExtentResizeObserver.observe(element);
   }
-  if (nextEl && nextEl !== floatingExtentObservedEl) {
-    floatingExtentResizeObserver.observe(nextEl);
-  }
-  floatingExtentObservedEl = nextEl ?? null;
-  if (nextEl) syncFloatingExtent();
+  if (toolWindowCanvasEl.value) syncFloatingExtent();
 }
 
 function getCanvasMetrics() {
@@ -5522,6 +5527,10 @@ async function handleNewSessionInSandbox(payload: { worktree: string; directory:
 }
 
 function handleOpenProjectDirectory() {
+  if (runtimeActionClient.value) {
+    isProjectPickerOpen.value = true;
+    return;
+  }
   void backendSessionLifecycle.openProjectPicker(isProjectPickerOpen);
 }
 
@@ -5670,6 +5679,11 @@ async function initProjectNameFromPackageJson(projectId: string, directory: stri
 async function handleProjectDirectorySelect(directory: string) {
   isProjectPickerOpen.value = false;
   if (!directory) return;
+  if (runtimeActionClient.value) {
+    try { await createRuntimeSession(directory); }
+    catch (error) { sessionError.value = toErrorMessage(error); }
+    return;
+  }
   const targetDirectory = normalizeProjectDirectoryForActiveBackend(directory);
 
   if (activeBackendCapabilities.value.projectPickerCreatesSession) {
@@ -7877,7 +7891,7 @@ function focusInput() {
 }
 
 watch(
-  () => toolWindowCanvasEl.value,
+  [toolWindowCanvasEl, appHeaderEl, inputEl],
   () => {
     updateFloatingExtentObserver();
   },
@@ -9433,6 +9447,7 @@ function kimiWebRestClient() {
   return configuredKimiWebAdapter.restClient;
 }
 
+const kimiGoalAvailable = computed(() => !runtimeActionClient.value || runtimeSupports('kimi.goal'));
 const kimiWebGoalRevision = ref(0);
 const kimiWebComposerClient = computed(() =>
   activeBackendKind.value === 'kimi-web' && connectionState.value === 'ready'
@@ -9961,7 +9976,7 @@ const activeHarnessKind = computed<HarnessKind>(() => activeBackendKind.value);
 const runtimeAgentNames = shallowRef<Readonly<Record<string, string>>>({});
 const managementHarnessInstanceId = ref<HarnessInstanceId | null>(null);
 
-let runtimeWorkspaceKeys: readonly import('../shared/runtime/identity.js').WorkspaceKey[] = [];
+const runtimeWorkspaceKeys = shallowRef<readonly import('../shared/runtime/identity.js').WorkspaceKey[]>([]);
 let runtimeConnectionOwner: ReturnType<typeof useRuntimeConnection> | undefined;
 let bridgeLoginGeneration = 0;
 let stopRuntimeRecovery: (() => void) | undefined;
@@ -10006,7 +10021,7 @@ async function connectRuntimeBridge(openRemote = false): Promise<void> {
   if (!inspection || owner.reference.value !== reference) throw new Error('Bridge connection changed.');
   bridgeReference.value = reference;
   harnessManifests.value = inspection.harnesses.map(entry => entry.manifest);
-  runtimeWorkspaceKeys = inspection.targets.find(target => target.target === reference.expectedEnvironmentId)?.workspaceKeys ?? [];
+  runtimeWorkspaceKeys.value = inspection.targets.find(target => target.target === reference.expectedEnvironmentId)?.workspaceKeys ?? [];
   managementHarnessInstanceId.value = inspection.harnesses.find(entry => entry.manifest.core.listSessionPage.state === 'supported')?.manifest.harnessInstanceId ?? null;
   runtimeIndexAvailable.value = inspection.targets.find(target => target.target === reference.expectedEnvironmentId)?.capabilities.methods.includes('runtime.snapshot') ?? false;
   runtimeActionClient.value = owner.client;
@@ -10051,7 +10066,7 @@ async function connectRuntimeBridge(openRemote = false): Promise<void> {
       if (current !== recoveryGeneration || runtimeConnectionOwner !== owner || !owner.reference.value) return;
       runtimeIndexAvailable.value = false;
       harnessManifests.value = targetInspection.harnesses.map(entry => entry.manifest);
-      runtimeWorkspaceKeys = targetInspection.targets.find(grant => grant.target === target)?.workspaceKeys ?? [];
+      runtimeWorkspaceKeys.value = targetInspection.targets.find(grant => grant.target === target)?.workspaceKeys ?? [];
       runtimeEnvironmentId.value = target;
       runtimeIndexAvailable.value = targetInspection.targets.find(grant => grant.target === target)?.capabilities.methods.includes('runtime.snapshot') ?? false;
       await runtimeTreeReady;
@@ -10094,7 +10109,6 @@ onScopeDispose(() => {
 
 /** Shared empty sets so the unified sidebar props never allocate per render. */
 const EMPTY_STRING_SET: ReadonlySet<string> = new Set<string>();
-const EMPTY_HARNESS_SET: ReadonlySet<SessionHarness> = new Set<SessionHarness>();
 const EMPTY_SESSION_TREE_DATA: SessionTreeData = [];
 
 /**
@@ -10202,12 +10216,53 @@ watch([() => runtimePins.value, () => runtimePins.value?.revision.value, () => u
 });
 const filterTopPanelAgent = ref(false);
 const topPanelHarnessChoice = ref<HarnessInstanceId | null>(null);
+type ScopedRuntimeContainerPin = RuntimeContainerPin & { profileId: string; environmentId: string };
+const runtimeContainerPinStore = shallowRef<ScopedRuntimeContainerPin[]>(readRuntimeContainerPins());
+function readRuntimeContainerPins(): ScopedRuntimeContainerPin[] {
+  const raw = storageGet(StorageKeys.state.runtimeContainerPins);
+  if (!raw) return [];
+  try {
+    const entries: unknown = JSON.parse(raw);
+    if (!Array.isArray(entries)) return [];
+    return entries.filter((entry): entry is ScopedRuntimeContainerPin =>
+      entry && typeof entry.key === 'string' && typeof entry.label === 'string'
+      && typeof entry.profileId === 'string' && typeof entry.environmentId === 'string'
+      && (entry.kind === 'project' || entry.kind === 'branch'));
+  } catch {
+    return [];
+  }
+}
+const runtimeContainerPins = computed(() => runtimeContainerPinStore.value.filter(
+  pin => pin.profileId === bridgeReference.value?.profileId && pin.environmentId === runtimeEnvironmentId.value,
+));
+function saveRuntimeContainerPins(pins: ScopedRuntimeContainerPin[]) {
+  storageSet(StorageKeys.state.runtimeContainerPins, JSON.stringify(pins));
+  runtimeContainerPinStore.value = pins;
+}
+function unpinRuntimeContainer(key: string) {
+  const pin = runtimeContainerPins.value.find(entry => entry.key === key);
+  if (pin) saveRuntimeContainerPins(runtimeContainerPinStore.value.filter(entry => entry !== pin));
+}
+function toggleRuntimeContainerPin(container: RuntimeContainerPin) {
+  const profileId = bridgeReference.value?.profileId, environmentId = runtimeEnvironmentId.value;
+  if (!profileId || !environmentId) return;
+  if (runtimeContainerPins.value.some(pin => pin.key === container.key)) {
+    unpinRuntimeContainer(container.key);
+    return;
+  }
+  saveRuntimeContainerPins([{ ...container, profileId, environmentId }, ...runtimeContainerPinStore.value]);
+}
+function openPinnedContainer(key: string) {
+  filterTopPanelAgent.value = false;
+  topPanelRef.value?.revealContainer(key);
+}
 const runtimeTopPanelTree = computed(() => buildRuntimeTopPanelTree(
   unifiedSessionTree.value?.tree.value ?? [],
   runtimeTopPanelPinnedKeys.value,
   filterTopPanelAgent.value ? topPanelCreationManifest.value?.harnessInstanceId : undefined,
+  new Set(runtimeContainerPins.value.map(pin => pin.key)),
+  unifiedSessionTree.value?.childScans.value,
 ));
-const unifiedTreeRows = computed<readonly UnifiedFlatRow[] | undefined>(() => unifiedSessionTree.value?.rows.value);
 const unifiedTreeSources = computed<readonly HarnessEntry[]>(() => {
   const entries = new Map((unifiedSessionTree.value?.harnesses.value ?? []).map(entry => [entry.harnessInstanceId, entry]));
   for (const manifest of harnessManifests.value) {
@@ -10220,14 +10275,9 @@ const unifiedTreeSources = computed<readonly HarnessEntry[]>(() => {
   return [...entries.values()];
 });
 const unifiedTreeRetrying = computed<ReadonlySet<string>>(() => unifiedSessionTree.value?.retrying.value ?? EMPTY_STRING_SET);
-const unifiedTreeChildScans = computed<ReadonlySet<string>>(() => unifiedSessionTree.value?.childScans.value ?? EMPTY_STRING_SET);
-const unifiedTreeStatus = computed<'loading' | 'partial' | 'complete' | 'error'>(() => unifiedSessionTree.value?.viewStatus.value ?? 'loading');
-const unifiedTreeLoaded = computed(() => unifiedSessionTree.value?.viewLoaded.value ?? 0);
-const unifiedTreeError = computed<string | null>(() => {
-  const code = unifiedSessionTree.value?.viewError.value;
-  return code === null || code === undefined ? null : String(code);
-});
-const unifiedTreeFilterKinds = computed<ReadonlySet<SessionHarness>>(() => unifiedSessionTree.value?.filterKinds.value ?? EMPTY_HARNESS_SET);
+const topPanelAgentSource = computed(() => unifiedTreeSources.value.find(
+  source => source.harnessInstanceId === topPanelCreationManifest.value?.harnessInstanceId,
+));
 const unifiedTreeSearch = computed<UnifiedSearchState | null>(() => unifiedSessionTree.value?.searchState.value ?? null);
 /** The unified selection's own session key, so the sidebar can mark the row. */
 const unifiedTreeSelectedKey = computed(() => unifiedSessionTree.value?.selection.value?.selection.session
@@ -10299,7 +10349,7 @@ async function handleUnifiedSelectKey(key: string, origin: 'session-navigation' 
     runtimeCodexAdapter.value = null;
     codexApi.disconnectTransport();
   }
-  runtimeSelectedDirectory.value = metadata.workspaceKey && runtimeWorkspaceKeys.includes(metadata.workspaceKey) ? metadata.directory ?? '' : '';
+  runtimeSelectedDirectory.value = metadata.workspaceKey && runtimeWorkspaceKeys.value.includes(metadata.workspaceKey) ? metadata.directory ?? '' : '';
   selectedSessionId.value = session.nativeSessionId;
   await runtimeInteractionProjection?.select();
   if (generation !== runtimeSelectionGeneration || !capture.isCurrent()) return;
@@ -10345,17 +10395,19 @@ async function handleUnifiedSelectKey(key: string, origin: 'session-navigation' 
   }
 }
 
-function handleUnifiedToggleKey(key: string): void {
-  unifiedSessionTree.value?.toggleExpand(key);
-}
 
-function handleUnifiedFilterChange(kinds: readonly SessionHarness[]): void {
-  unifiedSessionTree.value?.setFilterKinds(kinds);
-}
 
+function handleUnifiedLoadMoreChildren(key: string) {
+  void unifiedSessionTree.value?.loadMoreChildren(key).catch(error => { sessionError.value = toErrorMessage(error); });
+}
+const topPanelSearchQuery = ref('');
 function handleUnifiedSearch(query: string): void {
-  void unifiedSessionTree.value?.search(query).catch(() => {});
+  topPanelSearchQuery.value = query;
 }
+watch([topPanelSearchQuery, filterTopPanelAgent, topPanelHarnessChoice], ([query, filtered]) => {
+  const harness = filtered ? topPanelCreationManifest.value?.harnessInstanceId : undefined;
+  void unifiedSessionTree.value?.search(query, harness).catch(() => {});
+});
 
 function handleUnifiedSearchMore(): void {
   void unifiedSessionTree.value?.searchMore().catch(() => {});
@@ -10365,9 +10417,6 @@ function handleUnifiedRetrySource(harnessInstanceId: string): void {
   void unifiedSessionTree.value?.retrySource(harnessInstanceId).catch(() => {});
 }
 
-function handleUnifiedLoadMoreChildren(key: string): void {
-  void unifiedSessionTree.value?.loadMoreChildren(key).catch(() => {});
-}
 
 const runtimeSelectedSessionRef = computed<SessionRef | null>(parseQualifiedSession);
 function runtimeComposerCanSend(): boolean {
@@ -10668,7 +10717,7 @@ async function hydrateAcpTopPanelGitInfo() {
 }
 
 const ptySupported = computed(() => {
-  if (runtimeActionClient.value) return runtimeOnline.value && !!runtimeSelectedDirectory.value && runtimeWorkspaceKeys.length > 0;
+  if (runtimeActionClient.value) return runtimeOnline.value && !!runtimeSelectedDirectory.value && runtimeWorkspaceKeys.value.length > 0;
   const active = backend();
   return Boolean(active.createPty && active.createPtyWebSocketUrl && active.deletePty);
 });
@@ -10677,7 +10726,7 @@ function findWorkspaceContext(directory?: string) {
   const client = requireRuntimeActionClient();
   const target = runtimeSelectedSessionRef.value?.environmentId ?? runtimeEnvironmentId.value;
   if (!target) throw new Error('runtime.workspace: no environment selected');
-  const workspaces = runtimeWorkspaceKeys.map(key => ({ key, value: decodeWorkspaceKey(key) }))
+  const workspaces = runtimeWorkspaceKeys.value.map(key => ({ key, value: decodeWorkspaceKey(key) }))
     .filter(entry => entry.value.environmentId === target)
     .sort((a, b) => b.value.canonicalPath.length - a.value.canonicalPath.length);
   const normalized = directory?.replace(/\\/g, '/').replace(/\/+$/, '');
@@ -10976,7 +11025,7 @@ async function codexComposerDestination(target: SessionRef, input: RuntimeSendIn
     args: { native: { model: modelID, modelProvider: provider } },
   }, { idempotencyKey: crypto.randomUUID(), selectionCurrent: scope.isCurrent }));
   const session = readCreatedRuntimeSession(created, target);
-  await unifiedSessionTree.value?.retrySource(session.harnessInstanceId);
+  if (asRuntimeRecord(created).indexed !== true) await unifiedSessionTree.value?.retrySource(session.harnessInstanceId);
   if (!isCurrent() || !scope.isCurrent()) throw new Error('Codex session changed while creating the new thread.');
   return session;
 }
@@ -11214,13 +11263,32 @@ const sessionActionsByHarness = computed(() => new Map(harnessManifests.value.ma
     archive: supported.has(kimi ? 'archiveSession' : 'updateSession'),
     unarchive: supported.has(kimi ? 'restoreSession' : 'updateSession'),
     delete: supported.has('deleteSession'),
+    fork: supported.has('forkSession'),
+    compact: supported.has('compactSession'),
     pin: !!runtimePins.value,
     unpin: !!runtimePins.value,
   }] as const;
 })));
+const unavailableRuntimeSessionActions = {
+  rename: false, archive: false, unarchive: false, delete: false, pin: false, unpin: false,
+  fork: false, compact: false,
+};
 function runtimeActionsForSession(key: string) {
-  const actions = sessionActionsByHarness.value.get(decodeSessionKey(key).harnessInstanceId);
-  return actions ?? { rename: false, archive: false, unarchive: false, delete: false, pin: !!runtimePins.value, unpin: !!runtimePins.value };
+  try {
+    return sessionActionsByHarness.value.get(decodeSessionKey(key).harnessInstanceId) ?? unavailableRuntimeSessionActions;
+  } catch {
+    return unavailableRuntimeSessionActions;
+  }
+}
+async function handleTopPanelSessionTool(action: 'fork' | 'compact', key: string) {
+  if (!runtimeActionsForSession(key)[action]) return;
+  try {
+    const binding = { session: decodeSessionKey(key), profileId: activeProfileId.value };
+    if (action === 'fork') await runtimeSessionRuntime.router.fork(binding, {});
+    else await runtimeSessionRuntime.router.compact(binding);
+  } catch (error) {
+    sessionError.value = toErrorMessage(error);
+  }
 }
 function handleTopPanelBatchAction(payload: TopPanelBatchSessionActionPayload) {
   if (runtimeActionClient.value) return handleRuntimeSessionBatch(payload.action, payload.sessions.map(row => row.sessionId));
@@ -11258,13 +11326,18 @@ async function handleRuntimeSessionBatch(action: 'pin' | 'unpin' | 'archive' | '
   if (action === 'delete' && !await showConfirm(t('topPanel.confirm.deleteRuntimeSessions', { count: selections.length }))) return;
   if (client !== runtimeActionClient.value || profileId !== activeProfileId.value) return;
   const failures: string[] = [];
+  const changedSources = new Set<HarnessInstanceId>();
   for (const selection of selections) {
     try {
       if (client !== runtimeActionClient.value || profileId !== activeProfileId.value || !runtimeTargetAttached(selection.session)) break;
       await runtimeSessionRuntime.router[action](selection);
+      changedSources.add(selection.session.harnessInstanceId);
     } catch (error) {
       failures.push(toErrorMessage(error));
     }
+  }
+  if (client === runtimeActionClient.value && profileId === activeProfileId.value) {
+    for (const harness of changedSources) handleUnifiedRetrySource(harness);
   }
   if (failures.length && client === runtimeActionClient.value && profileId === activeProfileId.value) {
     sessionError.value = t('app.error.batchOperationPartialFailure', { action, failures: failures.length, total: selections.length, firstError: failures[0] });
@@ -11455,7 +11528,7 @@ async function activateRuntimeTarget(target: EnvironmentId) {
   runtimeSelectionLoading.value = false;
   selectedSessionId.value = ''; runtimeSelectedDirectory.value = '';
   harnessManifests.value = inspection.harnesses.map(entry => entry.manifest);
-  runtimeWorkspaceKeys = inspection.targets.find(entry => entry.target === target)?.workspaceKeys ?? [];
+  runtimeWorkspaceKeys.value = inspection.targets.find(entry => entry.target === target)?.workspaceKeys ?? [];
   managementHarnessInstanceId.value = inspection.harnesses.find(entry => entry.manifest.core.listSessionPage.state === 'supported')?.manifest.harnessInstanceId ?? null;
   runtimeIndexAvailable.value = false;
   runtimeEnvironmentId.value = target;
@@ -11523,14 +11596,6 @@ function openWorkspaceMigration() {
   openMigrationWizard();
 }
 
-const isHarnessSettingsOpen = ref(false);
-
-const harnessSettingsDialog = ref<HTMLDialogElement | null>(null);
-watch([isHarnessSettingsOpen, harnessSettingsDialog], ([open, dialog]) => {
-  if (!dialog) return;
-  if (open && !dialog.open) dialog.showModal();
-  else if (!open && dialog.open) dialog.close();
-});
 const harnessSettingsKind = computed(() => harnessManifests.value.find(entry => entry.harnessInstanceId === managementHarnessInstanceId.value)?.kind ?? activeBackendKind.value);
 
 /**
@@ -11556,9 +11621,44 @@ const harnessSettingsControls = computed<readonly string[]>(() => {
 });
 
 const harnessSettingsActions = computed(() => Object.fromEntries(harnessSettingsControls.value.map(control => [control, 'Open'])));
+const harnessSettingsWindowKey = 'runtime-agent-settings';
+const HarnessSettingsWindow = defineComponent({
+  setup() {
+    return () => h('div', { 'data-runtime-ui': '', 'data-testid': 'runtime-agent-settings', style: { padding: 'var(--space-4)' } }, [
+      h(AgentInstanceSelector, {
+        instances: harnessManifests.value,
+        names: runtimeAgentNames.value,
+        selected: managementHarnessInstanceId.value,
+        onSelect: value => { managementHarnessInstanceId.value = value; },
+      }),
+      harnessInstanceScope.value && h(HarnessSettings, {
+        harnessKind: harnessSettingsKind.value,
+        manifests: harnessManifests.value,
+        scope: harnessInstanceScope.value,
+        controls: harnessSettingsControls.value,
+        actionLabels: harnessSettingsActions.value,
+        onSave: handleHarnessSettingsSave,
+      }),
+    ]);
+  },
+});
+function openHarnessSettings() {
+  isSettingsOpen.value = false;
+  const key = harnessSettingsWindowKey;
+  if (fw.has(key)) { fw.activate(key); return; }
+  const extent = fw.getExtent();
+  const width = Math.min(640, Math.max(280, extent.width - 32));
+  const height = Math.min(600, Math.max(280, extent.height - 48));
+  void fw.open(key, {
+    component: HarnessSettingsWindow,
+    title: t('app.runtimeBridgeMenu.agentSettings'),
+    width, height, x: Math.max(16, (extent.width - width) / 2), y: 24,
+    closable: true, resizable: true, focusOnOpen: true, expiry: Infinity,
+  });
+}
 function handleHarnessSettingsSave(control: string) {
   const group = HARNESS_CONTROLS[control]?.group;
-  isHarnessSettingsOpen.value = false;
+  void fw.close(harnessSettingsWindowKey);
   if (group === 'model' || group === 'provider' || group === 'auth' || group === 'settings') isProviderManagerOpen.value = true;
   else isStatusMonitorOpen.value = true;
 }
@@ -11712,23 +11812,68 @@ const backendSessionActions = useBackendSessionActions({
 
 const topPanelCreationManifest = computed(() =>
   harnessManifests.value.find(manifest => manifest.harnessInstanceId === topPanelHarnessChoice.value)
-    ?? runtimeConversationManifest.value ?? managementManifest.value,
+    ?? runtimeConversationManifest.value ?? managementManifest.value
+    ?? harnessManifests.value.find(manifest => manifest.core.createSession.state === 'supported')
+    ?? harnessManifests.value[0],
 );
+
+const runtimeProjectDirectories = computed(() => {
+  if (!runtimeActionClient.value) return undefined;
+  const manifest = topPanelCreationManifest.value;
+  const target = manifest?.environmentId ?? runtimeEnvironmentId.value;
+  const roots = runtimeWorkspaceKeys.value.map(key => decodeWorkspaceKey(key))
+    .filter(workspace => workspace.environmentId === target)
+    .map(workspace => workspace.canonicalPath);
+  return manifest?.kind === 'acp' ? roots.slice(0, 1) : roots;
+});
+
+function findRuntimeProjectWorkspace(environmentId: EnvironmentId, directory: string) {
+  const normalize = (path: string) => path.replaceAll('\\', '/').replace(/\/+$/, '');
+  const candidate = normalize(directory);
+  const workspaces = runtimeWorkspaceKeys.value.map(key => ({ key, workspace: decodeWorkspaceKey(key) }))
+    .filter(entry => entry.workspace.environmentId === environmentId)
+    .sort((a, b) => b.workspace.canonicalPath.length - a.workspace.canonicalPath.length);
+  for (const entry of workspaces) {
+    const root = normalize(entry.workspace.canonicalPath);
+    const compare = entry.workspace.pathPolicy.caseSensitive ? candidate : candidate.toLowerCase();
+    const base = entry.workspace.pathPolicy.caseSensitive ? root : root.toLowerCase();
+    if (compare === base || compare.startsWith(`${base}/`)) {
+      return { ...entry, relative: candidate.slice(root.length).replace(/^\//, '') };
+    }
+  }
+  return undefined;
+}
+function canCreateRuntimeSessionInDirectory(directory: string) {
+  const manifest = topPanelCreationManifest.value;
+  if (manifest?.core.createSession.state !== 'supported') return false;
+  const workspace = findRuntimeProjectWorkspace(manifest.environmentId, directory);
+  return !!workspace && (manifest.kind !== 'acp' || (
+    !workspace.relative && runtimeProjectDirectories.value?.includes(workspace.workspace.canonicalPath) === true
+  ));
+}
+async function listRuntimeProjectDirectory(directory: string) {
+  const environmentId = topPanelCreationManifest.value?.environmentId ?? runtimeEnvironmentId.value;
+  const client = requireRuntimeActionClient();
+  const location = environmentId && findRuntimeProjectWorkspace(environmentId, directory);
+  if (!environmentId || !location) throw new Error(t('runtime.session.noWorkspace'));
+  return createWorkspaceFiles(client, environmentId, location.key).list(location.relative || '.');
+}
 
 async function createRuntimeSession(directory?: string): Promise<BackendSessionInfo | undefined> {
   const manifest = topPanelCreationManifest.value;
   const client = runtimeActionClient.value;
   if (!manifest || !client) throw new Error('Select a connected Agent instance.');
   const scope = client.scope(manifest.environmentId);
-  const workspaces = runtimeWorkspaceKeys.map(key => ({ key, workspace: decodeWorkspaceKey(key) })).filter(entry => entry.workspace.environmentId === manifest.environmentId);
-  let workspace = workspaces.find(entry => entry.workspace.canonicalPath === directory);
-  if (!workspace && !directory && workspaces.length === 1) workspace = workspaces[0];
-  if (!workspace) {
-    const path = await showPrompt(`Workspace (${workspaces.map(entry => entry.workspace.canonicalPath).join(', ')})`, directory ?? '');
+  const roots = runtimeProjectDirectories.value ?? [];
+  let requested = directory ?? (roots.length === 1 ? roots[0] : undefined);
+  if (!requested) {
+    if (!roots.length) throw new Error(t('runtime.session.noWorkspace'));
+    const path = await showPrompt(`Workspace (${roots.join(', ')})`, '');
     if (path === null) return undefined;
-    workspace = workspaces.find(entry => entry.workspace.canonicalPath === path);
+    requested = path;
   }
-  if (!workspace) throw new Error('Select a workspace authorized by this Bridge.');
+  const workspace = findRuntimeProjectWorkspace(manifest.environmentId, requested);
+  if (!workspace || !canCreateRuntimeSessionInDirectory(requested)) throw new Error(t('runtime.session.noWorkspace'));
   const currentManifest = topPanelCreationManifest.value;
   if (client !== runtimeActionClient.value || !scope.isCurrent()
     || currentManifest?.harnessInstanceId !== manifest.harnessInstanceId
@@ -11738,14 +11883,17 @@ async function createRuntimeSession(directory?: string): Promise<BackendSessionI
   const mutation = client.mutate(manifest.environmentId, 'session.create', {
     harnessInstanceId: manifest.harnessInstanceId,
     workspaceKey: workspace.key,
-    args: manifest.kind === 'codex' ? { native: {} } : manifest.kind === 'dsh' ? { request: {} } : {},
+    args: {
+      ...(manifest.kind === 'codex' ? { native: {} } : manifest.kind === 'dsh' ? { request: {} } : {}),
+      ...(workspace.relative ? { workspacePath: workspace.relative } : {}),
+    },
   }, { idempotencyKey: crypto.randomUUID(), selectionCurrent: scope.isCurrent });
   void mutation.accepted.catch(() => undefined);
   const result = (await mutation.executed).value;
   const session = readCreatedRuntimeSession(result, manifest);
-  await unifiedSessionTree.value?.retrySource(manifest.harnessInstanceId);
+  if (asRuntimeRecord(result).indexed !== true) await unifiedSessionTree.value?.retrySource(manifest.harnessInstanceId);
   await handleUnifiedSelectKey(encodeSessionKey(session));
-  return { id: session.nativeSessionId, projectID: '', directory: workspace.workspace.canonicalPath };
+  return { id: session.nativeSessionId, projectID: '', directory: requested };
 }
 
 function readCreatedRuntimeSession(result: unknown, owner: Pick<SessionRef, 'environmentId' | 'harnessInstanceId'>): SessionRef {
@@ -11765,6 +11913,10 @@ function asRuntimeRecord(value: unknown): Record<string, unknown> {
 
 const backendSessionLifecycle = useBackendSessionLifecycle({
   createRuntimeSession,
+  runtimeCreateDirectory: () => {
+    const directory = runtimeSelectedDirectory.value?.trim();
+    return directory && canCreateRuntimeSessionInDirectory(directory) ? directory : undefined;
+  },
   activeBackendKind,
   codexProjectId: CODEX_PROJECT_ID,
   acpProjectId: ACP_PROJECT_ID,
@@ -14035,7 +14187,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('blur', handleWindowAttentionChange);
   floatingExtentResizeObserver?.disconnect();
   floatingExtentResizeObserver = null;
-  floatingExtentObservedEl = null;
   if (floatingExtentFrameId !== null) {
     cancelAnimationFrame(floatingExtentFrameId);
     floatingExtentFrameId = null;
@@ -14095,6 +14246,17 @@ body {
   box-sizing: border-box;
   background: var(--theme-page-bg, var(--theme-surface-page));
   color: var(--theme-page-text, var(--theme-text-primary, #e2e8f0));
+}
+
+.desktop-login-header {
+  display: flex;
+  margin-block-start: -12px;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  min-height: 40px;
+  gap: 8px;
+  -webkit-app-region: drag;
 }
 
 .app-dock-panel {
@@ -14946,42 +15108,6 @@ body {
 }
 
 
-.runtime-settings-dialog {
-  width: min(640px, calc(100vw - 32px));
-  max-height: 85vh;
-  overflow: auto;
-  padding: var(--space-4);
-  border: 1px solid var(--theme-modal-border, var(--theme-border-default));
-  border-radius: 12px;
-  color: var(--theme-modal-text, var(--theme-text-primary));
-  background: var(--theme-modal-bg, var(--theme-surface-panel-elevated));
-  box-shadow: var(--theme-shadow-panel);
-}
-
-.runtime-settings-dialog::backdrop {
-  background: var(--theme-surface-overlay);
-}
-
-.runtime-settings-dialog header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  margin-bottom: var(--space-3);
-}
-
-.runtime-settings-dialog header h2 {
-  font-size: var(--type-heading);
-  font-weight: 600;
-}
-
-.runtime-settings-dialog header button {
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid;
-  border-radius: var(--radius-control);
-  cursor: pointer;
-}
 .runtime-dropdown-agents {
   display: flex;
   align-items: center;
@@ -14996,16 +15122,4 @@ body {
   gap: var(--space-2);
 }
 
-.runtime-dropdown-discovery {
-  color: var(--theme-top-dropdown-text);
-  background: var(--theme-top-dropdown-bg);
-}
-.runtime-dropdown-discovery > summary {
-  padding: 6px 12px;
-  cursor: pointer;
-}
-.runtime-dropdown-discovery[open] {
-  max-height: min(360px, 42vh);
-  overflow: auto;
-}
 </style>

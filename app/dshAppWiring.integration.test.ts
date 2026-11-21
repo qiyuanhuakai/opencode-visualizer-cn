@@ -1142,11 +1142,13 @@ describe('dsh lifecycle wiring (Todo 33)', () => {
 
   it.each([false, true])('confirms the deduplicated batch deletion count (confirmed=%s)', async (confirmed) => {
     const remove = vi.fn(async () => {});
+    const retrySource = vi.fn();
     const confirm = vi.fn(async () => confirmed);
     const batch = runInNewContext(transpile(`${appFunctionDeclaration('handleRuntimeSessionBatch')};handleRuntimeSessionBatch;`), {
       activeProfileId: box('profile'),
       runtimeActionClient: box({}),
-      decodeSessionKey: (key: string) => key,
+      decodeSessionKey: (key: string) => ({ nativeSessionId: key, harnessInstanceId: 'kimi-instance' }),
+      handleUnifiedRetrySource: retrySource,
       runtimeTargetAttached: () => true,
       batchActionAvailable: (_action: string, key: string) => key !== 'unsupported',
       showConfirm: confirm,
@@ -1156,6 +1158,7 @@ describe('dsh lifecycle wiring (Todo 33)', () => {
     await batch('delete', ['a', 'a', 'hidden-b', 'unsupported']);
     expect(confirm).toHaveBeenCalledExactlyOnceWith('Delete 2 selected sessions');
     expect(remove.mock.calls).toHaveLength(confirmed ? 2 : 0);
+    expect(retrySource.mock.calls).toEqual(confirmed ? [['kimi-instance']] : []);
   });
 
   it('shows a rejected Bridge connection and keeps the login form available to retry', async () => {

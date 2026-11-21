@@ -14,7 +14,7 @@
           {{ $t(batchLabels[action]) }}
         </button>
       </div>
-      <div class="unified-toolbar">
+      <div v-if="!searchOnly" class="unified-toolbar">
         <div class="unified-search">
           <Icon class="unified-search-icon" icon="lucide:search" :width="12" :height="12" />
           <input
@@ -60,21 +60,22 @@
         </Dropdown>
       </div>
       <DiscoveryStatus
+        v-if="!searchOnly"
         :sources="props.sources ?? []"
         :retrying="props.retrying ?? EMPTY_SET"
         :view-error="props.viewError ?? null"
         @retry="(harnessInstanceId) => emit('retry-source', harnessInstanceId)"
       />
       <RuntimePins v-if="pinState" :pins="pinState" @select="emit('select-qualified', $event)" />
-      <div v-if="!topDropdown || props.viewStatus === 'loading' || props.viewStatus === 'error' || waitingForIndexView || searchQuery" class="unified-meta" data-testid="unified-meta">
-        <span v-if="props.viewStatus === 'loading'" class="unified-meta-loading">
+      <div v-if="searchOnly || !topDropdown || props.viewStatus === 'loading' || props.viewStatus === 'error' || waitingForIndexView || searchQuery" class="unified-meta" data-testid="unified-meta">
+        <span v-if="!searchOnly && props.viewStatus === 'loading'" class="unified-meta-loading">
           <Icon class="unified-spin" icon="lucide:loader-2" :width="12" :height="12" />
           {{ $t('runtime.sessionTree.loading', 'Loading sessions…') }}
         </span>
         <span v-else-if="props.viewStatus === 'error'" class="unified-meta-error">
           {{ $t('runtime.sessionTree.indexError', 'Session index unavailable') }}
         </span>
-        <span v-else class="unified-meta-count">
+        <span v-else-if="!searchOnly" class="unified-meta-count">
           {{ $t('runtime.sessionTree.rowsLoaded', 'Loaded') }} {{ props.viewLoaded ?? 0 }} · {{ $t('runtime.sessionTree.rowsShown', 'rows') }} {{ (props.treeRows ?? []).length }}
         </span>
         <span
@@ -113,6 +114,7 @@
       <button v-if="searchState?.hasMore" type="button" class="unified-filter-trigger unified-search-next" data-testid="search-more" :aria-disabled="searchState.status !== 'complete'" :aria-busy="searchState.status === 'searching'" @click="requestNextSearch">{{ rt('Next page') }}</button>
     </div>
     <div
+      v-if="!searchOnly"
       ref="scrollRef"
       class="unified-scroll"
       data-testid="unified-scroll"
@@ -403,6 +405,7 @@ const props = withDefaults(
     managementMode?: boolean;
     batchActionAvailable?: (action: BatchAction, sessionKey: string) => boolean;
     topDropdown?: boolean;
+    searchOnly?: boolean;
     rowPins?: RuntimePinsState;
   }>(),
   {

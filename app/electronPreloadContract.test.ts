@@ -18,6 +18,7 @@ interface LocalFileError {
 }
 
 interface ElectronApiSchema {
+  windowControls: NonNullable<NonNullable<Window['electronAPI']>['windowControls']>;
   desktop: DesktopApi;
   platform: string;
   versions: { node: string; electron: string; chrome: string };
@@ -162,6 +163,28 @@ function loadPreloadWithMocks(): LoadedPreload {
 }
 
 describe('electron preload contract', () => {
+  it('forwards only window actions and sends maximize state without the IPC event', async () => {
+    const { api, ipcRenderer } = loadPreloadWithMocks();
+    await api.windowControls.isMaximized();
+    await api.windowControls.refresh();
+    await api.windowControls.minimize();
+    await api.windowControls.toggleMaximize();
+    await api.windowControls.close();
+    expect(ipcRenderer.invoke.mock.calls).toEqual([
+      ['window-control', 'is-maximized'],
+      ['window-control', 'refresh'],
+      ['window-control', 'minimize'],
+      ['window-control', 'toggle-maximize'],
+      ['window-control', 'close'],
+    ]);
+    const listener = vi.fn();
+    const unsubscribe = api.windowControls.onMaximized(listener);
+    ipcRenderer.emit('window-maximized', { sender: 'private' }, true);
+    unsubscribe();
+    ipcRenderer.emit('window-maximized', {}, false);
+    expect(listener.mock.calls).toEqual([[true]]);
+  });
+
   it('routes native database methods and unsubscribes identity-only invalidations', async () => {
     const { api, ipcRenderer } = loadPreloadWithMocks();
     expect(Object.keys(api.sessionDatabase).sort()).toEqual(['clearHistory', 'exportBinding', 'exportOpen', 'exportPage', 'flush', 'onHistoryChanged', 'readHistory', 'upsertHistory']);
@@ -212,6 +235,7 @@ describe('electron preload contract', () => {
       'platform',
       'sessionDatabase',
       'versions',
+      'windowControls',
     ]);
   });
 

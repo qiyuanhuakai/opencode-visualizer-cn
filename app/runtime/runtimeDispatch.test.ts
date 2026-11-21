@@ -2,7 +2,8 @@
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { createInteractionStore } from '../../bridge/runtime/interactionStore.js';
-import { createOperationJournal } from '../../bridge/runtime/operationJournal.js';
+import { createInstanceOperations } from '../../shared/runtime/native/codex/instanceOperations.js';
+import { createOperationJournal, fingerprint } from '../../bridge/runtime/operationJournal.js';
 import { objectFields, textValue } from '../../shared/runtime/capabilities.js';
 import { encodeWorkspaceKey, decodeWorkspaceKey } from '../../shared/runtime/identity.js';
 import { METHODS } from '../../shared/runtime/capabilities.js';
@@ -10,7 +11,7 @@ import { decodeRepoKey } from '../../shared/runtime/identity.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { mkdtemp, rm, readFile, readdir, writeFile, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readFile, readdir, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -312,6 +313,54 @@ describe('runtime real WebSocket dispatch', () => {
     expect(await connection.request('runtime.interaction.read', { session: fixture.session, interactionId: large })).toMatchObject({ ok: false, typedError: { code: 'source_unavailable' } });
     fixture.changeGeneration();
     expect(await connection.request('runtime.interaction.read', { session: fixture.session, interactionId })).toMatchObject({ ok: false, typedError: { code: 'reconcile_required' } });
+  });
+
+  it.each(['.', 'nested'])('selects a newly created session before discovery in workspace path %s', async relative => {
+    const { services } = await graph();
+    const registry = createHarnessRegistry();
+    const codex = services.registry.list().find(manifest => manifest.kind === 'codex');
+    if (!codex) throw new Error('Missing Codex registration');
+    const session = parseSessionRef({
+      environmentId: services.target,
+      harnessInstanceId: codex.harnessInstanceId,
+      nativeSessionId: 'newly-created-thread',
+    });
+    const workspace = services.workspace.workspaces[0];
+    const cwd = path.join(workspace.root, relative);
+    await mkdir(cwd, { recursive: true });
+    const no = unsupported('fixture');
+    const authority = { epoch: services.epoch, processGeneration: 1 };
+    const scope = { environmentId: session.environmentId, harnessInstanceId: session.harnessInstanceId, ...authority };
+    const journal = createInstanceOperations({ store: services.acceptance.store, scope, isCurrent: () => true, fingerprint, newId: randomUUID });
+    registry.register({
+      manifest: {
+        kind: 'codex', environmentId: session.environmentId, harnessInstanceId: session.harnessInstanceId, protocolVersion: 1,
+        core: { inspect: no, listSessionPage: no, getSession: no, readHistoryPage: no, openHistory: no, createSession: { state: 'supported' }, send: no, cancel: no, respondInteraction: no, subscribe: no, close: no },
+        extensions: [], capabilities: {},
+      },
+      driver: { core: {
+        async createSession(context) {
+          const params = objectFields(context.params, ['workspaceKey', 'idempotencyKey'], ['directory']);
+          expect(params.directory ?? workspace.root).toBe(cwd);
+          const key = textValue(params.idempotencyKey, 'idempotencyKey');
+          const accepted = await journal.accept({ method: 'thread/start', idempotencyKey: key, payload: { cwd } });
+          return journal.execute(accepted.operationId, async () => ({ session: { session, cwd, title: 'New thread' } }));
+        },
+      }, native: {} },
+    });
+    const host = createRuntimeHost({ environmentId: services.target, role: 'local', services: { ...services, registry, authority: () => authority } });
+    host.start();
+    cleanups.push(() => host.stop());
+    const connection = await client(host);
+    const select = () => connection.request('runtime.host.read', { domain: 'thread', operation: 'selection', args: { session } });
+    expect(await select()).toMatchObject({ ok: false, typedError: { code: 'unauthorized' } });
+    const create = (args: Readonly<Record<string, string>>) => connection.request('session.create', { harnessInstanceId: session.harnessInstanceId, workspaceKey: workspace.key, args });
+    expect(await create({ workspacePath: '..' })).toMatchObject({ ok: false });
+    const accepted = await create(relative === '.' ? {} : { workspacePath: relative });
+    if (!accepted.ok) throw new Error(JSON.stringify(accepted));
+    expect(accepted).toMatchObject({ ok: true, phase: 'durable-accepted' });
+    expect(await connection.terminal(accepted.id)).toMatchObject({ ok: true, phase: 'native-executed', result: { value: { indexed: true } } });
+    expect(await select()).toMatchObject({ ok: true, result: { session, title: 'New thread', directory: cwd, workspaceKey: workspace.key } });
   });
 
   it('executes a declared native rename through its durable journal and refuses mutation through query', async () => {

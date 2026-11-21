@@ -715,7 +715,7 @@ function onResizeEnd(e: PointerEvent) {
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  overflow: hidden;
+  overflow: clip;
   background: transparent;
   border: 1px solid var(--floating-accent, #3a4150);
   border-color: var(--floating-accent, #3a4150);

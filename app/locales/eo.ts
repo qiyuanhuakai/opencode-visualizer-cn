@@ -266,6 +266,13 @@ const messages: LocaleMessages = {
     },
   },
   topPanel: {
+    windowControls: {
+      refresh: 'Reŝargi',
+      minimize: 'Minimumigi',
+      maximize: 'Maksimumigi',
+      restore: 'Restaŭri',
+      close: 'Fermi',
+    },
     title: 'OpenCode Vizualigilo',
     noNotifications: 'Neniu sciigo',
     pendingNotifications: '{count} atendantaj sciigoj (Ctrl-G x2)',
@@ -303,6 +310,7 @@ const messages: LocaleMessages = {
       archived: 'arkivita',
     },
     sessionActions: {
+      loadChildren: 'Ŝargi infanajn seancojn',
       agents: 'Administrado de subagentoj',
       fork: 'Duobligi la tutan seancon',
       compact: 'Kompaktigi la seancan kuntekston',
@@ -356,7 +364,7 @@ const messages: LocaleMessages = {
       skills: 'Kapablecoj',
       token: 'Token',
       mc: 'MC',
-      acp: 'ACP',
+      acp: 'Servoj',
     },
     server: {
       status: 'Servila stato',
@@ -1397,6 +1405,7 @@ threadOpen: 'Malfermu la Host-fadenon por la elektita seanco',
     },
   },
   projectPicker: {
+    acpBoundRoot: 'Ĉi tiu ACP-agento kreas seancojn en la agordita radiko de la laborspaco.',
     title: 'Malfermi projekton',
     placeholder: 'Vojo de dosierujo…',
     open: 'Malfermi',

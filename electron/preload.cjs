@@ -1,9 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
 const localFileListeners = new Set();
 const localFileErrorListeners = new Set();
+const windowMaximizedListeners = new Set();
 const desktopStateListeners = new Set();
 const desktopNotificationListeners = new Set();
 
+ipcRenderer.on('window-maximized', (_event, maximized) => {
+  for (const listener of windowMaximizedListeners) listener(maximized);
+});
 ipcRenderer.on('desktop-state', (_event, state) => {
   for (const listener of desktopStateListeners) listener(state);
 });
@@ -57,6 +61,14 @@ ipcRenderer.on('local-file-error', (_event, error) => {
  * - 所有通信经过验证
  */
 contextBridge.exposeInMainWorld('electronAPI', {
+  windowControls: {
+    isMaximized: () => ipcRenderer.invoke('window-control', 'is-maximized'),
+    refresh: () => ipcRenderer.invoke('window-control', 'refresh'),
+    minimize: () => ipcRenderer.invoke('window-control', 'minimize'),
+    toggleMaximize: () => ipcRenderer.invoke('window-control', 'toggle-maximize'),
+    close: () => ipcRenderer.invoke('window-control', 'close'),
+    onMaximized: (listener) => subscribe(windowMaximizedListeners, listener),
+  },
   desktop: {
     getState: () => ipcRenderer.invoke('desktop-get-state'),
     configure: (patch) => ipcRenderer.invoke('desktop-configure', patch),

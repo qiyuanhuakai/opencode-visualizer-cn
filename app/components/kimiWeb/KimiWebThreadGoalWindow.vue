@@ -18,6 +18,7 @@ const { goal, objective, pending, loaded, error, refresh } = useKimiWebGoal(
   () => ({ sessionId: props.sessionId, client: props.client }),
 );
 const disabled = computed(() => pending.value || !loaded.value);
+const canControl = (control: 'pause' | 'resume' | 'cancel') => props.client.canControlGoal?.(control) ?? true;
 async function updateGoal(change: KimiWebGoalChange) {
   if (await refresh(change)) emit('updated');
 }
@@ -52,9 +53,9 @@ async function updateGoal(change: KimiWebGoalChange) {
         </div>
       </form>
       <div v-if="loaded && goal && goal.status !== 'complete'" class="goal-actions">
-        <button v-if="goal.status === 'active'" type="button" class="goal-button goal-clear" :disabled="disabled" @click="updateGoal({ goal_control: 'pause' })">{{ copy.pause }}</button>
-        <button v-else type="button" class="goal-button goal-save" :disabled="disabled" :title="copy.help" @click="updateGoal({ goal_control: 'resume' })">{{ copy.resume }}</button>
-        <button type="button" class="goal-button goal-clear" :disabled="disabled" @click="updateGoal({ goal_control: 'cancel' })">{{ copy.cancel }}</button>
+        <button v-if="goal.status === 'active' && canControl('pause')" type="button" class="goal-button goal-clear" :disabled="disabled" @click="updateGoal({ goal_control: 'pause' })">{{ copy.pause }}</button>
+        <button v-if="goal.status !== 'active' && canControl('resume')" type="button" class="goal-button goal-save" :disabled="disabled" :title="copy.help" @click="updateGoal({ goal_control: 'resume' })">{{ copy.resume }}</button>
+        <button v-if="canControl('cancel')" type="button" class="goal-button goal-clear" :disabled="disabled" @click="updateGoal({ goal_control: 'cancel' })">{{ copy.cancel }}</button>
       </div>
     </div>
   </section>

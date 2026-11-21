@@ -26,12 +26,23 @@
               <Icon icon="lucide:x" :width="14" :height="14" />
             </button>
           </header>
+          <div v-if="runtimeDirectories && runtimeDirectories.length > 1" class="runtime-project-choices">
+            <button v-for="root in runtimeDirectories" :key="root" type="button" @click="rawInput = ensureTrailingSlash(normalizePath(root))">
+              <Icon icon="lucide:folder" :width="14" :height="14" />
+              {{ root }}
+            </button>
+          </div>
+          <p v-if="runtimeRootOnly && runtimeDirectories?.length" class="error-text">
+            {{ $t('projectPicker.acpBoundRoot', 'This ACP agent creates sessions at its configured workspace root.') }}
+          </p>
+          <p v-if="runtimeDirectories?.length === 0" class="error-text">{{ $t('runtime.session.noWorkspace') }}</p>
           <div class="path-row">
             <input
               ref="inputRef"
               :value="rawInput"
               class="path-input"
               type="text"
+              :readonly="runtimeRootOnly"
               :placeholder="$t('projectPicker.placeholder')"
               @input="handleInput"
               @keydown="handleInputKeydown"
@@ -89,6 +100,9 @@ const props = defineProps<{
   open: boolean;
   homePath?: string;
   backendKind: BackendKind;
+  runtimeDirectories?: readonly string[];
+  runtimeRootOnly?: boolean;
+  listRuntimeDirectory?: (directory: string) => Promise<{ name: string; path: string; type: FileNode['type'] }[]>;
 }>();
 
 const emit = defineEmits<{
@@ -179,6 +193,7 @@ const isDrillDownLocked = computed(() => {
 // ---------------------------------------------------------------------------
 
 watch(currentDir, (dir) => {
+  if (props.runtimeRootOnly) return;
   if (!dir) {
     allEntries.value = [];
     hasGitDirectory.value = false;
@@ -194,7 +209,7 @@ watch(
     if (!el) return;
     if (open) {
       if (!el.open) el.showModal();
-      dropdownOpen.value = true;
+      dropdownOpen.value = !props.runtimeRootOnly;
       void initPicker();
     } else if (el.open) {
       el.close();
@@ -212,10 +227,10 @@ function initPicker() {
   hasGitDirectory.value = false;
   rawInput.value = '';
 
-  const initial = homePrefix.value || '/';
-  rawInput.value = collapseTilde(initial);
+  const initial = props.runtimeDirectories ? props.runtimeDirectories[0] ?? '' : homePrefix.value || '/';
+  rawInput.value = initial ? collapseTilde(ensureTrailingSlash(normalizePath(initial))) : '';
   const dir = currentDir.value;
-  if (dir) void fetchDirectory(dir);
+  if (dir && !props.runtimeRootOnly) void fetchDirectory(dir);
 
   nextTick(() => {
     inputRef.value?.focus();
@@ -251,7 +266,7 @@ async function fetchDirectory(dir: string) {
       gitEntries = [];
     }
     let hasGitEntry = data.some((entry) => entry.name === '.git');
-    if (!hasGitEntry && gitEntries.length === 0 && (props.backendKind === 'kimi-web' || props.backendKind === 'dsh')) {
+    if (!props.listRuntimeDirectory && !hasGitEntry && gitEntries.length === 0 && (props.backendKind === 'kimi-web' || props.backendKind === 'dsh')) {
       try {
         const files = await getBackendAdapter(props.backendKind).listFiles?.(
           { directory: cleanDir, path: '.' },
@@ -280,6 +295,9 @@ async function fetchDirectory(dir: string) {
 
 async function listDirectory(dir: string, signal: AbortSignal) {
   const cleanDir = cleanDirectoryPath(dir);
+  if (props.listRuntimeDirectory) {
+    return (await props.listRuntimeDirectory(cleanDir)).map(entry => ({ ...entry, absolute: entry.path, ignored: false }));
+  }
   if (props.backendKind === 'kimi-web') {
     const adapter = getBackendAdapter(props.backendKind);
     if (!(adapter instanceof KimiWebAdapter)) throw new Error('Kimi Web backend is unavailable.');
@@ -336,6 +354,10 @@ function handleInputKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
     e.preventDefault();
     handleClose();
+    return;
+  }
+  if (props.runtimeRootOnly) {
+    if (e.key === 'Enter') { e.preventDefault(); handleOpen(); }
     return;
   }
   if (e.key === 'ArrowDown') {
@@ -552,6 +574,9 @@ function cleanDirectoryPath(p: string): string {
 </script>
 
 <style scoped>
+.runtime-project-choices { display: grid; gap: 6px; margin-block-end: 8px; max-height: 20vh; overflow: auto; }
+.runtime-project-choices button { display: flex; align-items: center; gap: 8px; text-align: left; color: inherit; background: var(--theme-modal-control-bg, var(--theme-surface-panel)); border: 1px solid var(--theme-modal-border, var(--theme-border-default)); border-radius: 8px; padding: 8px; cursor: pointer; overflow-wrap: anywhere; }
+
 .modal-backdrop {
   border: none;
   padding: 0;

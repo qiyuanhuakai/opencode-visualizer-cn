@@ -26,11 +26,13 @@ const EXPECTED_PRELOAD_SCHEMA = {
     'platform',
     'sessionDatabase',
     'versions',
+    'windowControls',
   ],
   clipboard: ['readText', 'writeText'],
   desktop: ['check', 'configure', 'download', 'getState', 'install', 'notify', 'onNotificationClick', 'onState', 'reportBridgeVersion'],
   persistentStorage: ['getItem', 'migrate', 'removeItem', 'setItem', 'setItemAsync'],
   sessionDatabase: ['clearHistory', 'exportBinding', 'exportOpen', 'exportPage', 'flush', 'onHistoryChanged', 'readHistory', 'upsertHistory'],
+  windowControls: ['close', 'isMaximized', 'minimize', 'onMaximized', 'refresh', 'toggleMaximize'],
   localFile: [
     'clearApplication',
     'close',

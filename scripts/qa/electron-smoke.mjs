@@ -309,6 +309,21 @@ async function main() {
     record('preload-schema-matches-task2-contract', schemaMatch, JSON.stringify(schema));
     receipt.preloadSchema = { match: schemaMatch, actual: schema };
 
+    await page.locator('.desktop-login-header .window-controls').waitFor();
+    const titlebar = await page.evaluate(async () => {
+      const header = document.querySelector('.desktop-login-header');
+      const controls = header.querySelector('.window-controls');
+      return {
+        drag: getComputedStyle(header).getPropertyValue('-webkit-app-region'),
+        controlsRegion: getComputedStyle(controls).getPropertyValue('-webkit-app-region'),
+        buttons: [...controls.querySelectorAll('button')].map(button => Boolean(button.getAttribute('aria-label'))),
+        maximized: await window.electronAPI.windowControls.isMaximized(),
+      };
+    });
+    record('desktop-titlebar-controls', titlebar.drag === 'drag' && titlebar.controlsRegion === 'no-drag'
+      && titlebar.buttons.length === 4 && titlebar.buttons.every(Boolean)
+      && typeof titlebar.maximized === 'boolean', JSON.stringify(titlebar));
+
     // persistentStorage round-trip (same session).
     const storageRoundTrip = await page.evaluate(
       ([key, value]) => {

@@ -19,7 +19,14 @@
           <div class="session-title">{{ $t('sidePanel.session.title') }}</div>
           <div class="session-count">{{ sessionTreeSessionCount }}</div>
         </div>
-        <RuntimePins v-if="runtimeMode && runtimePins" :pins="runtimePins" @select="emit('select-qualified', $event)" />
+        <RuntimePins
+          v-if="runtimeMode && runtimePins"
+          :pins="runtimePins"
+          :containers="runtimeContainerPins"
+          @select="emit('select-qualified', $event)"
+          @select-container="emit('select-container', $event)"
+          @unpin-container="emit('unpin-container', $event)"
+        />
         <SessionTree
           v-else-if="!runtimeMode"
           :projects="sessionTreeData"
@@ -152,10 +159,12 @@ const props = defineProps<{
   unifiedTreeFilterKinds?: ReadonlySet<SessionHarness>;
   unifiedTreeSearch?: UnifiedSearchState | null;
   runtimeMode?: boolean;
+  runtimeContainerPins?: readonly import('../types/top-panel').RuntimeContainerPin[];
   runtimePins?: import('../composables/useRuntimePins').RuntimePinsState;
 }>();
 
 const emit = defineEmits<{
+  (event: 'select-container' | 'unpin-container', key: string): void;
   (event: 'select-qualified', selection: import('../runtime/selectionScope').QualifiedSession): void;
   (event: 'change-tab', value: 'todo' | 'session' | 'tree'): void;
   (event: 'select-session', payload: { projectId: string; sessionId: string }): void;
@@ -192,7 +201,7 @@ const tabs = computed(() => [
 ]);
 
 const sessionTreeSessionCount = computed(() => {
-  if (props.runtimeMode) return props.runtimePins?.records.value.length ?? 0;
+  if (props.runtimeMode) return (props.runtimePins?.records.value.length ?? 0) + (props.runtimeContainerPins?.length ?? 0);
   if (props.unifiedTreeRows !== undefined) return props.unifiedTreeLoaded ?? 0;
   return props.sessionTreeData.reduce(
     (count, project) =>

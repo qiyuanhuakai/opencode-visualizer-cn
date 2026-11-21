@@ -264,6 +264,13 @@ const messages: LocaleMessages = {
     },
   },
   topPanel: {
+    windowControls: {
+      refresh: '重新整理',
+      minimize: '最小化',
+      maximize: '最大化',
+      restore: '還原視窗',
+      close: '關閉',
+    },
     title: 'OpenCode Visualizer',
     noNotifications: '無通知',
     pendingNotifications: '{count} 個待處理通知 (Ctrl-G x2)',
@@ -301,6 +308,7 @@ const messages: LocaleMessages = {
       archived: '已封存',
     },
     sessionActions: {
+      loadChildren: '載入子工作階段',
       agents: '子智慧體管理',
       fork: '複製完整工作階段',
       compact: '壓縮工作階段上下文',
@@ -354,7 +362,7 @@ const messages: LocaleMessages = {
       skills: '技能',
       token: 'Token',
       mc: 'MC',
-      acp: 'ACP',
+      acp: '服務',
     },
     server: {
       status: '伺服器狀態',
@@ -1390,6 +1398,7 @@ threadOpen: '為目前工作階段開啟 Host Thread',
     },
   },
   projectPicker: {
+    acpBoundRoot: '此 ACP Agent 只能在設定的工作區根目錄建立工作階段。',
     title: '開啟專案',
     placeholder: '目錄路徑...',
     open: '開啟',

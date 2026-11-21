@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { parseHarnessInstanceId } from '../../shared/runtime/identity.js';
+import { decodeWorkspaceKey, parseHarnessInstanceId } from '../../shared/runtime/identity.js';
 import { StoreError } from './storage/storeProtocol.js';
 import { createDiscoveryScheduler } from './discoveryScheduler.js';
 import { createIndexMutations } from './indexMutations.js';
@@ -7,7 +7,7 @@ import { createIndexDiscovery } from './indexDiscovery.js';
 import { createNativeEventIntake, INTAKE_LIMITS } from './nativeEventIntake.js';
 import { createRuntimeEventBus } from './eventBus.js';
 import { createRuntimeSnapshots } from './snapshots.js';
-import { sourceIdentity, sourceAuthority } from './sessionSummaries.js';
+import { sessionSummary, sourceIdentity, sourceAuthority } from './sessionSummaries.js';
 
 export function createSessionIndex({ store, registry, catalog, resolveWorkspace, recoverSource }) {
   const scheduler = createDiscoveryScheduler();
@@ -84,6 +84,26 @@ export function createSessionIndex({ store, registry, catalog, resolveWorkspace,
   }
   return {
     attach,
+    async recordCreated({ manifest, authority: rawAuthority, result, workspaceKey, directory, assertCurrent }) {
+      const source = sourceIdentity(manifest);
+      const authority = sourceAuthority(rawAuthority);
+      const created = result?.session;
+      if (!created) throw new StoreError('reconcile_required', 'index_created_session');
+      const row = created.session ? created : { session: created };
+      const input = source.kind === 'opencode'
+        ? { ...row, summary: result.summary }
+        : source.kind === 'acp'
+          ? { ...row, native: { cwd: directory } }
+          : row;
+      const summary = sessionSummary(source, input);
+      if (summary.directory !== null && summary.directory !== directory) {
+        const resolved = await resolveWorkspace({ source, directory: summary.directory });
+        if (decodeWorkspaceKey(workspaceKey).canonicalPath !== resolved.canonicalPath) {
+          throw new StoreError('reconcile_required', 'index_created_workspace');
+        }
+      }
+      return mutations.created({ authority, workspaceKey, summary: { ...summary, directory: summary.directory ?? directory }, assertCurrent });
+    },
     retry(harnessInstanceId) {
       if (closed) throw new StoreError('source_unavailable', 'index_harness');
       if (!retries.has(harnessInstanceId)) retries.set(harnessInstanceId, Promise.resolve().then(async () => {

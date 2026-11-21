@@ -381,19 +381,15 @@ it('keeps a provider write receipt across a same-Agent manifest refresh and a de
   }
 }, 15000);
 
-it('places archived ACP protocol sessions in the unified archived section', async () => {
+it('keeps archived ACP sessions out of the initial menu and finds them with their archived badge', async () => {
   const fixture = await mountRuntimeApp([], { archivedAcpSession: true });
   await fixture.connect();
-  const archive = await vi.waitFor(() => {
-    const row = [...fixture.element.querySelectorAll('[role="treeitem"]')].find(item => item.textContent?.includes('Archived'));
-    expect(row, fixture.element.querySelector('[data-testid=unified-session-tree]')?.textContent).toBeTruthy();
-    return row!;
-  }, { timeout: 10000 });
-  expect(fixture.element.textContent).not.toContain('Archived ACP session');
-  archive.querySelector<HTMLElement>('[data-testid="row-toggle"]')!.click();
+  await fixture.openSessionMenu();
+  expect(fixture.element.querySelector('.tree-menu')?.textContent).not.toContain('Archived ACP session');
+  await fixture.searchSessionMenu('Archived ACP session');
   await vi.waitFor(() => {
-    const session = [...fixture.element.querySelectorAll('[role="treeitem"]')].find(item => item.textContent?.includes('Archived ACP session'));
-    expect(session).toBeTruthy();
-    expect(Number(session?.getAttribute('aria-level'))).toBeGreaterThan(Number(archive.getAttribute('aria-level')));
-  });
+    const row = [...fixture.element.querySelectorAll('.tree-menu .tree-session-main')]
+      .find(item => item.textContent?.includes('Archived ACP session'));
+    expect(row?.querySelector('.session-badge-archived')).toBeTruthy();
+  }, { timeout: 10000 });
 }, 20000);

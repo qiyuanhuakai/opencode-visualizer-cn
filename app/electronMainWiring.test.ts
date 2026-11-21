@@ -10,6 +10,30 @@ afterEach(() => {
 });
 
 describe('Electron main wiring', () => {
+  it('gates frameless window controls and broadcasts the actual maximize state', async () => {
+    const harness = await loadElectronMainHarness();
+    cleanupCallbacks.push(harness.cleanup);
+    const [window] = harness.windows;
+    expect(window.options).toMatchObject({ frame: false });
+    expect(() => harness.invoke('window-control', 'close', 42)).toThrow('Untrusted renderer');
+    expect(() => harness.invoke('window-control', 'arbitrary')).toThrow('Invalid window control');
+    expect(window.close).not.toHaveBeenCalled();
+    expect(harness.invoke('window-control', 'is-maximized').result).toBe(false);
+    harness.invoke('window-control', 'toggle-maximize');
+    expect(harness.invoke('window-control', 'is-maximized').result).toBe(true);
+    harness.invoke('window-control', 'toggle-maximize');
+    expect(harness.sentMessages).toEqual([
+      [1, 'window-maximized', true],
+      [1, 'window-maximized', false],
+    ]);
+    harness.invoke('window-control', 'refresh');
+    harness.invoke('window-control', 'minimize');
+    harness.invoke('window-control', 'close');
+    expect(window.webContents.reload).toHaveBeenCalledOnce();
+    expect(window.minimize).toHaveBeenCalledOnce();
+    expect(window.close).toHaveBeenCalledOnce();
+  });
+
   it('drains writes accepted while desktop shutdown is still pending', async () => {
     const harness = await loadElectronMainHarness();
     cleanupCallbacks.push(harness.cleanup);

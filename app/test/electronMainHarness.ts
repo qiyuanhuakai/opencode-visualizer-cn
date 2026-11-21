@@ -27,6 +27,7 @@ const harness = vi.hoisted(() => {
       send: (channel: string, payload: unknown) =>
         sentMessages.push([this.webContents.id, channel, payload]),
       openDevTools: vi.fn(),
+      reload: vi.fn(),
       session: {
         webRequest: { onHeadersReceived: vi.fn() },
         setPermissionRequestHandler: vi.fn(),
@@ -35,7 +36,7 @@ const harness = vi.hoisted(() => {
       setWindowOpenHandler: vi.fn(),
     };
 
-    constructor(_options: unknown) {
+    constructor(readonly options: unknown) {
       windows.push(this);
     }
 
@@ -43,10 +44,29 @@ const harness = vi.hoisted(() => {
       return windows;
     }
 
+    private maximized = false;
+    isMaximized = () => this.maximized;
+    maximize = vi.fn(() => {
+      this.maximized = true;
+      this.fireWindowEvent('maximize');
+    });
+    unmaximize = vi.fn(() => {
+      this.maximized = false;
+      this.fireWindowEvent('unmaximize');
+    });
+    minimize = vi.fn();
+    close = vi.fn();
+
+    private fireWindowEvent(event: string) {
+      for (const [name, listener] of this.on.mock.calls) {
+        if (name === event) listener();
+      }
+    }
+
     focus = vi.fn();
     loadURL = vi.fn(async () => undefined);
     once = vi.fn();
-    on = vi.fn();
+    on = vi.fn<(event: string, listener: EventListener) => void>();
     setEnabled = vi.fn();
     show = vi.fn();
   }

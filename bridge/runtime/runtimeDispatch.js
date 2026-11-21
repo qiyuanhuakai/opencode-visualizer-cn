@@ -143,7 +143,15 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
     let directory;
     if (params.workspaceKey) directory = workspaceKey(entry, params.workspaceKey);
     for (const candidate of [args.directory, args.cwd, args.request?.cwd]) if (candidate !== undefined) requireValue(candidate === directory, 'runtime.directory', 'unauthorized');
-    if (frame.method === 'session.create') requireValue(directory, 'runtime.workspace', 'unauthorized');
+    if (frame.method === 'session.create') {
+      requireValue(directory, 'runtime.workspace', 'unauthorized');
+      if (args.workspacePath !== undefined) {
+        permission(entry, 'workspace:read');
+        requireValue(typeof args.workspacePath === 'string', 'runtime.workspace_path');
+        directory = await workspace(entry).directory(params.workspaceKey, args.workspacePath);
+        delete args.workspacePath;
+      }
+    }
     if (frame.method === 'session.list') indexAccess(entry);
     if (frame.method === 'session.list' && !params.session && !params.workspaceKey && Object.keys(args).length === 0) {
       const reason = manifest.core.listSessionPage.reason;
@@ -156,7 +164,10 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
       entry.current();
     }
     const authority = entry.graph.authority(params.harnessInstanceId);
-    if (manifest.kind === 'codex') { if (params.workspaceKey && frame.method === 'session.create') args.workspaceKey = params.workspaceKey; }
+    if (manifest.kind === 'codex') { if (params.workspaceKey && frame.method === 'session.create') {
+        args.workspaceKey = params.workspaceKey;
+        if (directory !== workspaceKey(entry, params.workspaceKey)) args.directory = directory;
+      } }
     else {
       Object.assign(args, authority);
       if (directory) {
@@ -170,6 +181,16 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
     const invoke = () => entry.graph.registry.invoke({ environmentId: entry.binding.target, harnessInstanceId: params.harnessInstanceId, ...(params.session ? { session: params.session } : {}), channel: extension ? 'native' : 'core', operation: extension ? params.operation : operations[frame.method], ...(extension ? { permissions: entry.grant.permissions } : {}), params: args });
     if (!mutation) return invoke();
     const execution = await entry.graph.acceptance.run({ scope: { target: entry.binding.target, harnessInstanceId: params.harnessInstanceId, ...authority, ...(params.session ? { session: params.session } : {}) }, method: frame.method, idempotencyKey: frame.idempotencyKey, interactionId: args.interactionId, signal, onAccepted: receipt => accepted({ operationId: receipt.operationId }) }, invoke);
+    if (frame.method === 'session.create') {
+      await entry.graph.index.recordCreated({
+        manifest, authority, result: execution.value, workspaceKey: params.workspaceKey, directory,
+        assertCurrent() {
+          const current = entry.graph.authority(params.harnessInstanceId);
+          requireValue(current.epoch === authority.epoch && current.processGeneration === authority.processGeneration, 'runtime.create_generation', 'reconcile_required');
+        },
+      });
+      return { operationId: execution.receipt.operationId, value: { ...execution.value, indexed: true } };
+    }
     return { operationId: execution.receipt.operationId, value: execution.value };
   }
   async function execute(entry, frame, params, accepted, signal) {

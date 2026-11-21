@@ -12,6 +12,7 @@ export type TopPanelSession = {
   pinnedAt?: number;
   isPinned?: boolean;
   isImplicitlyPinned?: boolean;
+  canLoadChildren?: boolean;
 };
 
 export type TopPanelSandbox = {
@@ -58,4 +59,10 @@ export type TopPanelBatchSessionTarget = {
 export type TopPanelBatchSessionActionPayload = {
   action: 'pin' | 'unpin' | 'archive' | 'unarchive' | 'delete';
   sessions: TopPanelBatchSessionTarget[];
+};
+
+export type RuntimeContainerPin = {
+  key: string;
+  kind: 'project' | 'branch';
+  label: string;
 };

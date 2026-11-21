@@ -264,6 +264,13 @@ const messages: LocaleMessages = {
     },
   },
   topPanel: {
+    windowControls: {
+      refresh: '刷新',
+      minimize: '最小化',
+      maximize: '最大化',
+      restore: '还原窗口',
+      close: '关闭',
+    },
     title: 'OpenCode Visualizer',
     noNotifications: '无通知',
     pendingNotifications: '{count} 个待处理通知 (Ctrl-G x2)',
@@ -301,6 +308,7 @@ const messages: LocaleMessages = {
       archived: '已归档',
     },
     sessionActions: {
+      loadChildren: '加载子会话',
       agents: '子智能体管理',
       fork: '复制完整会话',
       compact: '压缩会话上下文',
@@ -354,7 +362,7 @@ const messages: LocaleMessages = {
       skills: '技能',
       token: 'Token',
       mc: 'MC',
-      acp: 'ACP',
+      acp: '服务',
     },
     server: {
       status: '服务器状态',
@@ -1391,6 +1399,7 @@ threadOpen: '为当前会话打开 Host Thread',
     },
   },
   projectPicker: {
+    acpBoundRoot: '此 ACP Agent 只能在配置的工作区根目录创建会话。',
     title: '打开项目',
     placeholder: '目录路径...',
     open: '打开',

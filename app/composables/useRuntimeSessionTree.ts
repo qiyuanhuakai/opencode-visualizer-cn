@@ -423,7 +423,12 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   // The index revision each parent's children were scanned against. A parent is "already scanned"
   // only for the view it was scanned against, so a newer index view re-scans it.
   const childScanRevisions = new Map<string, number>();
-  const childScans = computed<ReadonlySet<string>>(() => new Set(childScanRevisions.keys()));
+  const childScans = computed<ReadonlySet<string>>(() => {
+    // Child publication replaces this map after committing the scan revision.
+    const children = nativeChildren.value;
+    const revision = lastIndexRevision.value;
+    return new Set([...children.keys()].filter(key => childScanRevisions.get(key) === revision));
+  });
   const manualExpanded = shallowRef<ReadonlySet<string> | null>(null);
   const initialSessionKey = shallowRef<string | undefined>();
   const filterKinds = shallowRef<ReadonlySet<SessionHarness>>(new Set<SessionHarness>([...HARNESS_KINDS, 'unknown']));
@@ -444,7 +449,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   // The revision of the most recent index view this composable read. It tells a child expand
   // whether the index has moved on since that parent was last scanned, without minting another
   // bridge snapshot view just to ask.
-  let lastIndexRevision: number | null = null;
+  const lastIndexRevision = shallowRef<number | null>(null);
 
   function serialize<T>(work: () => Promise<T>): Promise<T> {
     const next = readChain.then(work, work);
@@ -506,7 +511,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     } finally {
       indexWaiting.value = false;
     }
-    lastIndexRevision = view.revision;
+    lastIndexRevision.value = view.revision;
     if (disposed) return;
     for (const value of harnessValues) {
       if (typeof value.revision === 'number') mergeHarness(String(value.key), value.value, value.revision);
@@ -544,7 +549,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
    * cached view may predate sessions the query should match; paging the SAME
    * search leaves it unset so every page reads one consistent view.
    */
-  async function scanSearch(query: string, skip: number, signal: AbortSignal, accumulator: SearchScan, fresh: boolean, onWaiting?: () => void, onMatches?: () => void, kinds = filterKinds.value): Promise<void> {
+  async function scanSearch(query: string, skip: number, signal: AbortSignal, accumulator: SearchScan, fresh: boolean, onWaiting?: () => void, onMatches?: () => void, kinds = filterKinds.value, harnessInstanceId?: string): Promise<void> {
     const view = await client.readIndex(target, 'session_summaries', {
       fresh,
       signal,
@@ -559,14 +564,14 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
           if (!record || typeof record.key !== 'string') continue;
           const session = asRecord(record.value)?.session;
           const parsed = parseUnifiedSessionRow(record.key, record.value, kindById.get(asText(asRecord(session)?.harnessInstanceId, 64) ?? '') ?? 'unknown');
-          if (!parsed || !matchesQuery(parsed, query) || !kinds.has(parsed.harness)) continue;
+          if (!parsed || (harnessInstanceId && parsed.harnessInstanceId !== harnessInstanceId) || !matchesQuery(parsed, query) || !kinds.has(parsed.harness)) continue;
           accumulator.totalMatched += 1;
           if (accumulator.totalMatched > skip && accumulator.retained.length < SEARCH_LIMITS.maxRetained) accumulator.retained.push(parsed);
         }
         if (accumulator.retained.length > previouslyRetained) onMatches?.();
       },
     });
-    lastIndexRevision = view.revision;
+    lastIndexRevision.value = view.revision;
   }
   async function searchBridge(query: string, signal: AbortSignal, kinds: ReadonlySet<SessionHarness>, continuation?: { cursor: string; revision: number }) {
     const page = await client.request(target, 'runtime.session.search', {
@@ -591,10 +596,17 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
   }
 
   /** Full-index search: traverses every session_summaries page, not the LRU window. */
-  async function searchAll(query: string): Promise<UnifiedSearchState> {
+  let searchHarnessInstanceId: string | undefined;
+  async function searchAll(query: string, harnessInstanceId?: string): Promise<UnifiedSearchState> {
     const generation = ++searchGeneration;
     serverSearchRevision = undefined;
+    searchHarnessInstanceId = harnessInstanceId;
     searchController?.abort();
+    if (!query.trim()) {
+      searchController = undefined;
+      search.value = idleSearchState();
+      return search.value;
+    }
     const controller = new AbortController();
     searchController = controller;
     search.value = { status: 'searching', query, scanned: 0, pages: 0, matches: [], totalMatched: 0, hasMore: false, cursor: null, error: null, waiting: false };
@@ -606,7 +618,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
       if (generation !== searchGeneration) return search.value;
       const accumulator: SearchScan = { retained: [], totalMatched: 0, scanned: 0, pages: 0 };
       try {
-        if (client.supports?.(target, 'runtime.session.search')) {
+        if (!harnessInstanceId && client.supports?.(target, 'runtime.session.search')) {
           const { page, matches } = await searchBridge(query, controller.signal, filterKinds.value);
           if (generation !== searchGeneration) return search.value;
           serverSearchRevision = page.revision;
@@ -627,7 +639,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
             matches: Object.freeze([...accumulator.retained]),
             waiting: false,
           };
-        });
+        }, filterKinds.value, harnessInstanceId);
         if (generation !== searchGeneration) return search.value;
         const hasMore = accumulator.totalMatched > accumulator.retained.length;
         const complete: UnifiedSearchState = { status: 'complete', query, scanned: accumulator.scanned, pages: accumulator.pages,
@@ -657,6 +669,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     const skip = Number(current.cursor);
     if (!continuation && (!Number.isSafeInteger(skip) || skip < 0)) return current;
     const query = current.query;
+    const harnessInstanceId = searchHarnessInstanceId;
     const generation = searchGeneration;
     searchController?.abort();
     const controller = new AbortController();
@@ -673,7 +686,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
           search.value = complete;
           return complete;
         }
-        await scanSearch(query, skip, controller.signal, accumulator, false);
+        await scanSearch(query, skip, controller.signal, accumulator, false, undefined, undefined, filterKinds.value, harnessInstanceId);
         if (generation !== searchGeneration) return search.value;
         const nextOffset = skip + accumulator.retained.length;
         const hasMore = accumulator.totalMatched > nextOffset;
@@ -697,7 +710,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
     // view — a new search, an explicit refresh, or a cached view that aged out — re-scans it, so a
     // child that appeared after the first expand is found instead of hidden by a frozen marker.
     const scannedAt = childScanRevisions.get(parentKey);
-    if (scannedAt !== undefined && scannedAt === lastIndexRevision) {
+    if (scannedAt !== undefined && scannedAt === lastIndexRevision.value) {
       const existing = nativeChildren.value.get(parentKey) ?? [];
       return Object.freeze({ parentKey, scanned: 0, pages: 0, added: 0, duplicates: 0, total: existing.length, alreadyScanned: true });
     }
@@ -717,7 +730,7 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
           }
         },
       });
-      lastIndexRevision = view.revision;
+      lastIndexRevision.value = view.revision;
       const existing = nativeChildren.value.get(parentKey) ?? [];
       const merged = new Map(existing.map((row) => [row.key, row]));
       let duplicates = 0;
@@ -727,8 +740,8 @@ export function useRuntimeSessionTree(options: UnifiedSessionTreeOptions) {
       }
       const next = new Map(nativeChildren.value);
       next.set(parentKey, Object.freeze([...merged.values()]));
-      nativeChildren.value = next;
       childScanRevisions.set(parentKey, view.revision);
+      nativeChildren.value = next;
       return Object.freeze({ parentKey, scanned, pages, added: found.length - duplicates, duplicates, total: merged.size, alreadyScanned: false });
     });
   }

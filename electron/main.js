@@ -132,7 +132,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     show: false,
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    frame: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -145,6 +145,15 @@ function createWindow() {
     },
     backgroundColor: '#1a1a2e',
   });
+
+  const window = mainWindow;
+  const publishMaximized = () => {
+    if (!window.webContents.isDestroyed()) {
+      window.webContents.send('window-maximized', window.isMaximized());
+    }
+  };
+  window.on('maximize', publishMaximized);
+  window.on('unmaximize', publishMaximized);
 
   desktopRuntime?.attachWindow(mainWindow);
   if (isDev) {
@@ -305,6 +314,30 @@ app.on('web-contents-created', (_event, contents) => {
   contents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(isPermissionAllowed(permission));
   });
+});
+
+ipcMain.handle('window-control', (event, action) => {
+  assertTrustedRenderer(event);
+  const window = mainWindow;
+  switch (action) {
+    case 'is-maximized':
+      return window.isMaximized();
+    case 'refresh':
+      window.webContents.reload();
+      return;
+    case 'minimize':
+      window.minimize();
+      return;
+    case 'toggle-maximize':
+      if (window.isMaximized()) window.unmaximize();
+      else window.maximize();
+      return;
+    case 'close':
+      window.close();
+      return;
+    default:
+      throw new Error('Invalid window control');
+  }
 });
 
 ipcMain.handle('get-app-version', () => {

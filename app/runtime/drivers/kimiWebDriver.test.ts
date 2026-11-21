@@ -10,6 +10,7 @@ import {
   recoverSnapshotFrames,
   updateDurableCursor,
   parseNativeCapabilities,
+  sessionSummary,
 } from '../../../shared/runtime/native/kimiWeb/protocol.js';
 
 describe('Kimi Runtime protocol boundaries', () => {
@@ -113,7 +114,7 @@ function transcriptEnvelope(target: number, turns: number, epochValue = 'ep_fixt
   return { body, items };
 }
 const smallTranscript = () => Buffer.from(JSON.stringify({ items: [turn(0, 8), turn(1, 8)], has_more: false, seq: 7, tasks: [], interactions: [], attachments: [], todos: [], prompts: [], meta: {}, agents: [], epoch: 'ep_fixture' }));
-async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false, agentSocket = false) {
+async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false, agentSocket = false, goalSocket = false) {
   const dir = await mkdtemp(path.join(tmpdir(), 'vis-kimi-http-')); temporary.push(dir);
   const calls: { method: string; path: string; origin: string | undefined }[] = [];
   const promptBodies: unknown[] = [];
@@ -122,6 +123,7 @@ async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false, ag
   const wsPongs: string[] = [];
   const peers: { send(message: string): void }[] = [];
   let authority = { epoch, processGeneration: 1 };
+  let goalObjective: string | undefined;
   let transcriptBody: Buffer | undefined;
   let transcriptStatus = 0;
   let transcriptGate: Promise<void> | undefined;
@@ -143,11 +145,12 @@ async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false, ag
           '/api/v1/sessions/{session_id}': { get: {} },
           '/api/v1/sessions/{session_id}/prompts': { post: {} },
           '/api/v1/sessions/{session_id}/agents/{agent_id}/turns': { get: {} },
+          ...(goalSocket ? { '/api/v1/sessions/{session_id}/profile': { post: { requestBody: { content: { 'application/json': { schema: { properties: { agent_config: { properties: { goal_objective: {}, goal_control: { enum: ['edit'] } } } } } } } } } } } : {}),
         } }));
         return;
       }
       if (route.pathname === '/asyncapi.json') {
-        response.end(JSON.stringify({ components: { messages: { subscribe: { name: 'subscribe' } } } }));
+        response.end(JSON.stringify({ components: { messages: { subscribe: { name: 'subscribe' }, ...(goalSocket ? { goal: { name: 'goal' } } : {}) } } }));
         return;
       }
       if (route.pathname === '/api/v1/meta') {
@@ -156,6 +159,15 @@ async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false, ag
       }
       if (route.pathname === '/api/v1/sessions') {
         send({ items: [{ id: nativeSessionId, cwd: dir, title: 'Agent session' }], has_more: false });
+        return;
+      }
+      if (goalSocket && route.pathname.endsWith('/profile')) {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        if (body.agent_config.goal_control !== 'edit') { response.statusCode = 400; response.end('{}'); return; }
+        goalObjective = body.agent_config.goal_objective;
+        send({});
         return;
       }
       if (route.pathname.endsWith('/agents/main/turns')) {
@@ -259,6 +271,10 @@ async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false, ag
       peer.on('message', (text: string) => {
         const frame = JSON.parse(text);
         peer.send(JSON.stringify({ type: 'response', request_id: frame.request_id, code: 0 }));
+        if (goalSocket && frame.type === 'subscribe') {
+          peer.send(JSON.stringify({ type: 'goal', session_id: frame.session_id, agent_id: 'main',
+            goal: goalObjective ? { objective: goalObjective, status: 'active', turns_used: 0, tokens_used: 0, wall_clock_ms: 0 } : undefined }));
+        }
       });
       return;
     }
@@ -377,6 +393,35 @@ it.each([1, 20])('streams a large native Agent turns page with %i record(s)', as
   }
 });
 
+it.each([['idle', null], ['turn', 'running'], ['background', 'running']])(
+  'maps the catalog activity %s to the observed session state',
+  (activity, expected) => {
+    expect(sessionSummary({ id: nativeSessionId, activity }, { environmentId, harnessInstanceId }).status).toBe(expected);
+  },
+);
+
+it('reads and edits the goal through the current Kimi protocol without a REST goal route', async () => {
+  const fixture = await controlledKimiWeb(200, true, true, true);
+  const driver = await createKimiWebDriver(fixture.options);
+  try {
+    const { manifest, driver: native } = driver.registration;
+    for (const name of ['kimi.goal', 'kimi.goal.update']) {
+      expect(manifest.extensions.find(extension => extension.name === name)?.support.state).toBe('supported');
+    }
+    for (const control of ['pause', 'resume', 'cancel']) {
+      expect(manifest.extensions.find(extension => extension.name === `kimi.goal.${control}`)?.support.state).toBe('unsupported');
+    }
+    const context = { environmentId, harnessInstanceId, session };
+    await expect(native.native['kimi.goal']!({ ...context, params: {} })).resolves.toBeNull();
+    await expect(native.native['kimi.goal.update']!({ ...context, params: { body: { objective: 'Verify native goal' }, idempotencyKey: 'update-goal' } }))
+      .resolves.toMatchObject({ phase: 'native-executed' });
+    await expect(native.native['kimi.goal']!({ ...context, params: {} })).resolves.toMatchObject({
+      objective: 'Verify native goal', status: 'active', turnsUsed: 0,
+    });
+    expect(fixture.calls.some(call => call.path.endsWith('/goal'))).toBe(false);
+  } finally { await driver.close(); await fixture.close(); }
+});
+
 it('retries a transient Agent terminal read and releases the exact prompt lease', async () => {
   const fixture = await controlledKimiWeb(200, true, true);
   const driver = await createKimiWebDriver(fixture.options);
@@ -425,7 +470,7 @@ describe('Kimi Web native selected-history producer over controlled raw HTTP and
         if (name === 'openHistory') continue;
         expect(support).toEqual({ state: 'supported' });
       }
-      expect(driver.registration.manifest.extensions.map((entry) => entry.name).sort()).toEqual([...Object.keys(KIMI_PROVIDER_OPERATIONS), ...Object.keys(KIMI_PLUGIN_OPERATIONS), ...Object.keys(KIMI_SESSION_OPERATIONS), 'archiveSession', 'deleteSession', 'kimi.listWorkspacePage', 'kimi.meta', 'kimi.sessionStatus', 'kimi.updateProfile', 'listProviders', 'restoreSession'].sort());
+      expect(driver.registration.manifest.extensions.map((entry) => entry.name).sort()).toEqual([...Object.keys(KIMI_PROVIDER_OPERATIONS), ...Object.keys(KIMI_PLUGIN_OPERATIONS), ...Object.keys(KIMI_SESSION_OPERATIONS), 'kimi.goal.pause', 'kimi.goal.resume', 'kimi.goal.cancel', 'archiveSession', 'deleteSession', 'kimi.listWorkspacePage', 'kimi.meta', 'kimi.sessionStatus', 'kimi.updateProfile', 'listProviders', 'restoreSession'].sort());
     } finally { await fixture.close(); }
   });
   it('updates goals with PATCH on the captured session and rejects invalid objectives before dispatch', async () => {

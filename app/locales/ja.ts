@@ -268,6 +268,13 @@ const messages: LocaleMessages = {
     },
   },
   topPanel: {
+    windowControls: {
+      refresh: '再読み込み',
+      minimize: '最小化',
+      maximize: '最大化',
+      restore: '元のサイズに戻す',
+      close: '閉じる',
+    },
     title: 'OpenCode Visualizer',
     noNotifications: '通知なし',
     pendingNotifications: '{count}件の保留中の通知（Ctrl-G x2）',
@@ -305,6 +312,7 @@ const messages: LocaleMessages = {
       archived: 'アーカイブ',
     },
     sessionActions: {
+      loadChildren: '子セッションを読み込む',
       agents: 'サブエージェント管理',
       fork: 'セッション全体を複製',
       compact: 'セッションのコンテキストを圧縮',
@@ -358,7 +366,7 @@ const messages: LocaleMessages = {
       skills: 'スキル',
       token: 'Token',
       mc: 'MC',
-      acp: 'ACP',
+      acp: 'サービス',
     },
     server: {
       status: 'サーバー状態',
@@ -1400,6 +1408,7 @@ threadOpen: '選択中のセッションの Host Thread を開く',
     },
   },
   projectPicker: {
+    acpBoundRoot: 'この ACP エージェントは、設定済みのワークスペースのルートでセッションを作成します。',
     title: 'プロジェクトを開く',
     placeholder: 'ディレクトリパス…',
     open: '開く',

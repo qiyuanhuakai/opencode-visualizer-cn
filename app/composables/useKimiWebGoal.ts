@@ -4,6 +4,7 @@ import type { KimiWebClient } from '../utils/kimiWeb';
 
 export type KimiWebGoalClient = Pick<KimiWebClient, 'getGoal' | 'updateProfile'> & {
   readonly canUpdateGoalObjective?: boolean;
+  readonly canControlGoal?: (control: 'pause' | 'resume' | 'cancel') => boolean;
   readonly updateGoalObjective?: KimiWebClient['updateGoalObjective'];
 };
 

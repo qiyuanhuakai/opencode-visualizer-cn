@@ -182,6 +182,7 @@ export function useBackendSessionLifecycle(params: {
   onDshSessionCreated?: (session: BackendSessionInfo) => void;
   selectDshSession?: (projectId: string, sessionId: string) => Promise<void>;
   runtime?: RuntimeSessionRuntime;
+  runtimeCreateDirectory?: () => string | undefined;
   createRuntimeSession?: (directory?: string) => Promise<BackendSessionInfo | undefined>;
 }) {
   let kimiWebCreationGeneration = 0;
@@ -358,7 +359,12 @@ export function useBackendSessionLifecycle(params: {
       return undefined;
     params.clearSessionError();
     try {
-      if (params.createRuntimeSession) return await params.createRuntimeSession(params.activeDirectory.value.trim());
+      if (params.createRuntimeSession) {
+        const directory = params.runtimeCreateDirectory
+          ? params.runtimeCreateDirectory()
+          : params.activeDirectory.value.trim();
+        return await params.createRuntimeSession(directory);
+      }
       const directory = params.activeDirectory.value.trim();
       if (!directory) throw new Error(params.translate('errors.sessionCreateEmptyDirectory'));
       return await createSessionInDirectory(directory, { reuseExisting: false });

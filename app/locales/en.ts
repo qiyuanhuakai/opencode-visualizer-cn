@@ -274,6 +274,13 @@ const messages: LocaleMessages = {
     },
   },
   topPanel: {
+    windowControls: {
+      refresh: 'Refresh',
+      minimize: 'Minimize',
+      maximize: 'Maximize',
+      restore: 'Restore',
+      close: 'Close',
+    },
     title: 'OpenCode Visualizer',
     noNotifications: 'No notifications',
     pendingNotifications: '{count} pending notifications (Ctrl-G x2)',
@@ -311,6 +318,7 @@ const messages: LocaleMessages = {
       archived: 'archived',
     },
     sessionActions: {
+      loadChildren: 'Load child sessions',
       agents: 'Subagent management',
       fork: 'Fork entire session',
       compact: 'Compact session context',
@@ -365,7 +373,7 @@ const messages: LocaleMessages = {
       skills: 'Skills',
       token: 'Token',
       mc: 'MC',
-      acp: 'ACP',
+      acp: 'Services',
     },
     server: {
       status: 'Server Status',
@@ -1408,6 +1416,7 @@ threadOpen: 'Open the Host Thread for the selected session',
     },
   },
   projectPicker: {
+    acpBoundRoot: 'This ACP agent creates sessions at its configured workspace root.',
     title: 'Open project',
     placeholder: 'Directory path...',
     open: 'Open',

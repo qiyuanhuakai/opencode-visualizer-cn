@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue';
 import { useI18n } from 'vue-i18n';
+defineProps<{ inTitlebar?: boolean }>();
 defineEmits<{ connectRemote: []; openSettings: [] }>();
 const { t } = useI18n();
 const remoteIcon = {
@@ -10,7 +11,7 @@ const remoteIcon = {
 </script>
 
 <template>
-  <div class="login-page-actions" data-testid="login-page-actions">
+  <div class="login-page-actions" :class="{ 'in-titlebar': inTitlebar }" data-testid="login-page-actions">
     <button type="button" :aria-label="t('app.runtimeConnection.sshSlurm')" :title="t('app.runtimeConnection.sshSlurm')" @click="$emit('connectRemote')">
       <Icon :icon="remoteIcon" :width="16" :height="16" aria-hidden="true" />
     </button>
@@ -27,6 +28,10 @@ const remoteIcon = {
   inset-inline-end: 12px;
   display: flex;
   gap: 8px;
+}
+.in-titlebar {
+  position: static;
+  -webkit-app-region: no-drag;
 }
 button {
   display: grid;
