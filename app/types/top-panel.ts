@@ -59,3 +59,9 @@ export type TopPanelBatchSessionActionPayload = {
   action: 'pin' | 'unpin' | 'archive' | 'unarchive' | 'delete';
   sessions: TopPanelBatchSessionTarget[];
 };
+
+export type RuntimeContainerPin = {
+  key: string;
+  kind: 'project' | 'branch';
+  label: string;
+};

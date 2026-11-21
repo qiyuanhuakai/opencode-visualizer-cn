@@ -1,6 +1,6 @@
 <template>
   <div class="top-panel" :style="regionStyle">
-    <div class="top-row">
+    <div class="top-row" :class="{ 'desktop-titlebar': $slots['window-controls'] }">
       <div class="top-left flex items-center gap-2" :title="gitRevision">
         <svg width="48" height="24" viewBox="0 0 24 12" role="img" aria-label="Vis" class="shrink-0">
           <path fill="currentColor" d="m12.342 2.4512v3.328l1.3352 1.3352v3.9658l-0.67757 0.67756h-1.2953l-0.67757-0.67756v-8.629zm0-1.0562h-1.3153l-0.23914-0.23914v-0.91671l0.23914-0.23914h1.3153l0.23914 0.23914v0.91671zm10.602 9.6852-0.67756 0.67756h-6.6162l-0.67756-0.67756v-1.9928h1.3352v1.3352h2.6305v-2.6505h-3.2882l-0.67756-0.67756v-3.9658l0.67756-0.67757h6.6162l0.67756 0.67757v1.9729h-1.3153v-1.3153h-3.9857v2.6505h4.6234l0.67756 0.67757z" />
@@ -80,6 +80,8 @@
                   </button>
                 </template>
               </DropdownSearch>
+
+              <slot v-if="runtimeMode && searchQuery.trim() && !managementMode" name="runtime-search" :query="searchQuery.trim()" :close="close" />
 
               <div v-if="managementMode" class="management-toolbar">
                 <div class="management-title">
@@ -185,6 +187,7 @@
                   v-for="worktree in displayedTree"
                   :key="worktree.key || worktree.directory"
                   class="tree-worktree"
+                  :data-runtime-container-key="runtimeMode ? worktree.key : undefined"
                   :style="worktreeAccentStyle(worktree)"
                 >
                   <div class="tree-worktree-header">
@@ -212,10 +215,10 @@
                     </div>
                     <button
                       v-if="
-                        worktree.projectId &&
-                        worktree.projectId !== 'global' &&
-                        worktree.kind !== 'global' &&
-                        (!sandboxFirstMode || worktree.kind === 'sandbox')
+                        runtimeMode
+                          ? worktree.key?.startsWith('repo:')
+                          : worktree.projectId && worktree.projectId !== 'global' && worktree.kind !== 'global'
+                            && (!sandboxFirstMode || worktree.kind === 'sandbox')
                       "
                       type="button"
                       class="tree-action-button"
@@ -268,6 +271,7 @@
                     v-for="sandbox in worktree.sandboxes"
                     :key="sandbox.key || sandbox.directory"
                     class="tree-sandbox"
+                    :data-runtime-container-key="runtimeMode ? sandbox.key : undefined"
                     :class="{ 'is-branch': sandbox.kind === 'branch' }"
                   >
                     <div class="tree-sandbox-header">
@@ -327,10 +331,10 @@
                         </button>
                         <button
                           v-if="
-                            worktree.projectId &&
-                            worktree.projectId !== 'global' &&
-                            worktree.kind !== 'global' &&
-                            sandbox.kind !== 'global'
+                            runtimeMode
+                              ? worktree.key?.startsWith('repo:') && sandbox.kind === 'branch' && sandbox.key
+                              : worktree.projectId && worktree.projectId !== 'global' && worktree.kind !== 'global'
+                                && sandbox.kind !== 'global'
                           "
                           type="button"
                           class="tree-action-button"
@@ -346,7 +350,9 @@
                               : $t('sidePanel.session.sessionTree.pinSandbox')
                           } ${sandbox.branch || directoryBasename(sandbox.directory)}`"
                           @click.stop="
-                            sandbox.isPinned || sandbox.isImplicitlyPinned
+                            runtimeMode && sandbox.key
+                              ? emit('toggle-runtime-container-pin', { key: sandbox.key, kind: 'branch', label: sandbox.branch || directoryBasename(sandbox.directory) })
+                              : sandbox.isPinned || sandbox.isImplicitlyPinned
                               ? handleUnpinSandbox(
                                   worktree.projectId,
                                   sandbox.pinScope || {
@@ -448,6 +454,26 @@
                         </div>
                         <template #action>
                           <div class="tree-session-actions">
+                            <button
+                              v-if="!session.archivedAt && actionsForSession(session.id).fork"
+                              type="button"
+                              class="tree-action-button session-fork"
+                              :title="$t('topPanel.sessionActions.fork')"
+                              :aria-label="$t('topPanel.sessionActions.fork')"
+                              @click.stop.prevent="emit('fork-session', session.id); close()"
+                            >
+                              <Icon icon="lucide:copy" :width="16" :height="16" aria-hidden="true" />
+                            </button>
+                            <button
+                              v-if="!session.archivedAt && actionsForSession(session.id).compact"
+                              type="button"
+                              class="tree-action-button session-compact"
+                              :title="$t('topPanel.sessionActions.compact')"
+                              :aria-label="$t('topPanel.sessionActions.compact')"
+                              @click.stop.prevent="emit('compact-session', session.id); close()"
+                            >
+                              <Icon icon="lucide:minimize-2" :width="16" :height="16" aria-hidden="true" />
+                            </button>
                             <button
                               v-if="!session.archivedAt && actionsForSession(session.id).rename"
                               type="button"
@@ -622,18 +648,11 @@
             </div>
 
             <div class="tree-footer">
-              <button v-if="selectedSessionId && runtimeForkAvailable" type="button" class="tree-footer-button" @click="emit('fork-session', selectedSessionId); close()">
-                {{ $t('topPanel.sessionActions.fork') }}
-              </button>
-              <button v-if="selectedSessionId && runtimeCompactAvailable" type="button" class="tree-footer-button" @click="emit('compact-session', selectedSessionId); close()">
-                {{ $t('topPanel.sessionActions.compact') }}
-              </button>
               <button type="button" class="tree-footer-button" @click="handleOpenDirectory(close)">
                 <Icon icon="lucide:folder-open" :width="14" :height="14" />
                 {{ $t('topPanel.openProject') }}
               </button>
             </div>
-            <slot v-if="runtimeMode" name="runtime-sessions" :close="close" :management-mode="managementMode" :done="toggleManagementMode" />
           </template>
         </Dropdown>
 
@@ -877,13 +896,14 @@
         >
           <Icon icon="lucide:log-out" :width="16" :height="16" />
         </button>
+        <slot name="window-controls" />
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onBeforeUnmount, onMounted, inject } from 'vue';
+import { computed, nextTick, ref, watch, onBeforeUnmount, onMounted, inject } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useI18n } from 'vue-i18n';
 import Dropdown from './Dropdown.vue';
@@ -941,12 +961,12 @@ type SessionActionCapabilities = {
   archive: boolean;
   unarchive: boolean;
   delete: boolean;
+  fork?: boolean;
+  compact?: boolean;
 };
 
 const props = defineProps<{
   runtimeMode?: boolean;
-  runtimeForkAvailable?: boolean;
-  runtimeCompactAvailable?: boolean;
   runtimeCreateAvailable?: boolean;
   nativeSelectedDisplay?: { branch: string; title: string; status: 'idle' | 'busy' | 'retry' | 'unknown' };
   treeData: TopPanelWorktree[];
@@ -985,6 +1005,7 @@ const totalNotificationCount = computed(() =>
 );
 
 const emit = defineEmits<{
+  (event: 'search-sessions', query: string): void;
   (event: 'select-notification'): void;
   (event: 'select-session', payload: SessionSelectPayload): void;
   (event: 'batch-session-action', payload: TopPanelBatchSessionActionPayload): void;
@@ -1000,6 +1021,7 @@ const emit = defineEmits<{
   (event: 'rename-session', value: string): void;
   (event: 'pin-session', value: string): void;
   (event: 'unpin-session', value: string): void;
+  (event: 'toggle-runtime-container-pin', container: import('../types/top-panel').RuntimeContainerPin): void;
   (event: 'pin-project', projectId: string): void;
   (event: 'unpin-project', projectId: string): void;
   (event: 'pin-sandbox', payload: ContainerPinPayload): void;
@@ -1043,13 +1065,24 @@ function toggleSessionDropdown() {
   treeDropdownOpen.value = !treeDropdownOpen.value;
 }
 
-defineExpose({ openSessionDropdown, closeSessionDropdown, toggleSessionDropdown });
+async function revealContainer(key: string) {
+  searchQuery.value = '';
+  openSessionDropdown();
+  await nextTick();
+  document.querySelector(`[data-runtime-container-key="${CSS.escape(key)}"]`)
+    ?.scrollIntoView({ block: 'nearest' });
+}
+defineExpose({ openSessionDropdown, closeSessionDropdown, toggleSessionDropdown, revealContainer });
 
 const MAX_WORKTREES = Infinity;
 const MAX_SANDBOXES = Infinity;
 const MAX_SESSIONS = Infinity;
 
 const searchQuery = ref('');
+watch(searchQuery, query => {
+  if (props.runtimeMode && treeDropdownOpen.value) emit('search-sessions', query.trim());
+});
+
 const isShiftPressed = ref(false);
 const managementMode = ref(false);
 const managedSessionKeys = ref<string[]>([]);
@@ -1354,6 +1387,10 @@ function handleUnpinProject(projectId: string | undefined) {
 }
 
 function handlePinWorktree(worktree: TopPanelWorktree) {
+  if (props.runtimeMode && worktree.key) {
+    emit('toggle-runtime-container-pin', { key: worktree.key, kind: 'project', label: worktree.name || worktree.label });
+    return;
+  }
   if (!worktree.projectId) return;
   if (worktree.pinScope) {
     handlePinSandbox(worktree.projectId, worktree.pinScope);
@@ -1367,6 +1404,10 @@ function handlePinWorktree(worktree: TopPanelWorktree) {
 }
 
 function handleUnpinWorktree(worktree: TopPanelWorktree) {
+  if (props.runtimeMode && worktree.key) {
+    emit('toggle-runtime-container-pin', { key: worktree.key, kind: 'project', label: worktree.name || worktree.label });
+    return;
+  }
   if (!worktree.projectId) return;
   if (worktree.pinScope) {
     handleUnpinSandbox(worktree.projectId, worktree.pinScope);
@@ -1408,7 +1449,7 @@ async function handleSandboxDelete(
 }
 
 async function handleSessionDelete(sessionId: string, close?: () => void) {
-  const confirmed = showConfirm
+  const confirmed = !props.runtimeMode && showConfirm
     ? await showConfirm(
         t(
           props.sandboxFirstMode
@@ -1597,6 +1638,17 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   justify-content: space-between;
   gap: 12px;
   width: 100%;
+}
+
+.desktop-titlebar {
+  -webkit-app-region: drag;
+}
+
+.desktop-titlebar :deep(button),
+.desktop-titlebar :deep(a),
+.desktop-titlebar :deep(input),
+.desktop-titlebar .top-center {
+  -webkit-app-region: no-drag;
 }
 
 .top-left {

@@ -76,6 +76,19 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
     throw new StoreError('conflict', 'index_contention');
   }
   return {
+    created({ authority, workspaceKey, summary, assertCurrent }) {
+      return replace(encodeSessionKey(summary.session), prior => {
+        if (prior?.value === null) throw new StoreError('reconcile_required', 'index_created_deleted');
+        if (prior?.value?.workspaceKey) {
+          if (prior.value.workspaceKey !== workspaceKey) throw new StoreError('reconcile_required', 'index_created_workspace');
+          return undefined;
+        }
+        return {
+          ...summary, ...prior?.value, workspaceKey, directory: summary.directory,
+          _index: prior?.value?._index ?? { authority, scanId: null, seen: [] },
+        };
+      }, assertCurrent);
+    },
     async apply(scan, items, { firstPage = false, onBatchCommitted } = {}) {
       if (!Array.isArray(items) || items.length > 200) throw new StoreError('invalid_request', 'index_page_budget');
       const summaries = new Map();
@@ -93,9 +106,12 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
           if (prior && prior.value === null && prior.revision > scan.startRevision) continue;
           if (!prior?.value?._index?.seen?.includes(scan.id)) applied++;
           const seen = [...(prior?.value?._index?.seen ?? []).filter((id) => id !== scan.id), scan.id].slice(-8);
+          const keepObservedIdle = scan.source.kind === 'kimi-web' && summary.status === null
+            && prior?.value?.status === 'idle' && prior.value._index?.authority
+            && sameAuthority(prior.value._index.authority, scan.authority);
           const value = prior?.value && prior.revision > scan.startRevision && prior.value._index?.scanId !== scan.id
             ? { ...prior.value, _index: { ...prior.value._index, seen } }
-            : { ...summary, workspaceKey, _index: { authority: scan.authority, scanId: scan.id, seen } };
+            : { ...summary, status: keepObservedIdle ? 'idle' : summary.status, workspaceKey, _index: { authority: scan.authority, scanId: scan.id, seen } };
           changes.push({ collection: 'session_summaries', key, expectedRevision: prior?.revision ?? 0, value });
         }
         if (!changes.length) return 0;

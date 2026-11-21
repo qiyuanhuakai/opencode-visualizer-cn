@@ -68,6 +68,9 @@ export function sessionSummary(value, scope) {
   const item = record(value, 'session');
   const id = nativeText(item.id, 'session_id', 512);
   const meta = item.meta ?? item;
+  const activity = typeof item.activity === 'string' ? item.activity : item.activity?.status;
+  const status = item.busy === true || activity === 'turn' || activity === 'background'
+    ? 'running' : activity && activity !== 'idle' ? activity : null;
   const workspace = item.workspace ?? { id: item.workspace_id ?? null, cwd: item.metadata?.cwd ?? item.cwd ?? null };
   return {
     session: { ...scope, nativeSessionId: id },
@@ -76,7 +79,7 @@ export function sessionSummary(value, scope) {
     nativeWorkspaceId: typeof workspace.id === 'string' ? workspace.id : null,
     archived: meta.archived === true,
     updatedAt: meta.updated_at ?? null,
-    status: item.activity?.status ?? (item.busy ? 'running' : 'idle'),
+    status,
     ...(typeof item.parent_session_id === 'string'
       ? { parentSession: { ...scope, nativeSessionId: item.parent_session_id } }
       : {}),

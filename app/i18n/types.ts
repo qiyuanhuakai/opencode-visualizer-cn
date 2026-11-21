@@ -259,6 +259,13 @@ export interface LocaleMessages {
     };
   };
   topPanel: {
+    windowControls: {
+      refresh: string;
+      minimize: string;
+      maximize: string;
+      restore: string;
+      close: string;
+    };
     title: string;
     noNotifications: string;
     pendingNotifications: string;

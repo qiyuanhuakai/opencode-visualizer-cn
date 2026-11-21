@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createApp, defineComponent, h, nextTick } from 'vue';
+import { createApp, defineComponent, h, nextTick, ref } from 'vue';
 import { createI18n } from 'vue-i18n';
 
 vi.mock('@iconify/vue', async () => {
@@ -115,6 +115,8 @@ describe('TopPanel', () => {
     const root = document.createElement('div'); document.body.appendChild(root);
     const rename = vi.fn();
     const pin = vi.fn();
+    const fork = vi.fn();
+    const search = vi.fn();
     const app = createApp({ render: () => h(TopPanel, {
       treeData: [{
         directory: '/workspace', label: 'Workspace', sandboxes: [{
@@ -122,27 +124,73 @@ describe('TopPanel', () => {
         }],
       }],
       notificationSessions: [], projectDirectory: '/workspace', activeDirectory: '/workspace', selectedSessionId: 'native-session',
-      runtimeMode: true, runtimeForkAvailable: true, runtimePinsAvailable: true,
+      runtimeMode: true,
       nativeSelectedDisplay: { branch: 'workspace', title: 'Native session', status: 'idle' },
-      sessionActionCapabilities: { rename: true, archive: true, unarchive: true, delete: false, pin: true, unpin: true },
-      onRenameSession: rename, onPinSession: pin,
+      resolveSessionActions: () => ({ rename: true, archive: true, unarchive: true, delete: false, pin: true, unpin: true, fork: true, compact: false }),
+      onRenameSession: rename, onPinSession: pin, onForkSession: fork, onSearchSessions: search,
     }, {
-      'runtime-sessions': ({ managementMode }: { managementMode: boolean }) => h('div', { 'data-testid': 'runtime-picker', 'data-management': managementMode }),
+      'runtime-search': ({ query }: { query: string }) => h('div', { 'data-testid': 'runtime-picker' }, query),
     }) });
     app.use(createI18n({ legacy: false, locale: 'en', messages: createMessages() }));
     app.mount(root);
     requireButton(root, '.tree-dropdown-root .ui-dropdown-button').click(); await nextTick();
-    expect(root.querySelector('[data-testid="runtime-picker"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="runtime-picker"]')).toBeNull();
     expect(root.querySelector('.tree-search')).not.toBeNull();
     expect(root.querySelector('.tree-session-main')?.textContent).toContain('Native session');
+    expect(root.querySelector('.tree-session-actions .session-compact')).toBeNull();
+    expect(root.querySelectorAll('.tree-footer button')).toHaveLength(1);
+    requireButton(root, '.tree-session-actions .session-fork').click();
+    expect(fork).toHaveBeenCalledWith('native-session');
+    await nextTick();
+    requireButton(root, '.tree-dropdown-root .ui-dropdown-button').click();
+    await nextTick();
     requireButton(root, '.session-rename').click();
     requireButton(root, '.session-pin').click();
     expect(rename).toHaveBeenCalledWith('native-session');
     expect(pin).toHaveBeenCalledWith('native-session');
-    requireButton(root, '.management-toggle-button').click();
+    const input = root.querySelector<HTMLInputElement>('.tree-search input');
+    if (!input) throw new Error('Missing top search input');
+    input.value = 'native';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
     await nextTick();
-    expect(root.querySelector('[data-testid="runtime-picker"]')?.getAttribute('data-management')).toBe('true');
+    expect(search).toHaveBeenCalledWith('native');
+    expect(root.querySelector('[data-testid="runtime-picker"]')?.textContent).toBe('native');
     app.unmount();
+  });
+  it('uses the runtime repository and branch keys when toggling container pins', async () => {
+    const { default: TopPanel } = await import('./TopPanel.vue');
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const toggle = vi.fn();
+    const pinned = ref(false);
+    const app = createApp({ render: () => h(TopPanel, {
+      runtimeMode: true, sandboxFirstMode: true,
+      treeData: [{
+        key: 'repo:target-r', directory: '/repo', label: 'Repo', name: 'Repo', isPinned: pinned.value,
+        sandboxes: [{ key: 'worktree:repo:target-r:/repo', kind: 'branch', directory: '/repo', branch: 'main', isPinned: pinned.value, sessions: [{ id: 'session', status: 'unknown' }] }],
+      }],
+      notificationSessions: [], projectDirectory: '/repo', activeDirectory: '/repo', selectedSessionId: 'session',
+      onToggleRuntimeContainerPin: toggle,
+    }) });
+    app.use(createI18n({ legacy: false, locale: 'en', messages: createMessages() }));
+    app.mount(root);
+    try {
+      requireButton(root, '.tree-dropdown-root .ui-dropdown-button').click();
+      await nextTick();
+      requireButton(root, '[aria-label="Pin project Repo"]').click();
+      requireButton(root, '[aria-label="Pin sandbox main"]').click();
+      expect(toggle.mock.calls).toEqual([
+        [{ key: 'repo:target-r', kind: 'project', label: 'Repo' }],
+        [{ key: 'worktree:repo:target-r:/repo', kind: 'branch', label: 'main' }],
+      ]);
+      pinned.value = true;
+      await nextTick();
+      expect(requireButton(root, '[aria-label="Unpin project Repo"]')).toBeTruthy();
+      expect(requireButton(root, '[aria-label="Unpin sandbox main"]')).toBeTruthy();
+    } finally {
+      app.unmount();
+      root.remove();
+    }
   });
   let originalLocalStorage: Storage;
 

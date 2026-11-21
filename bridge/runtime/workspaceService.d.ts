@@ -13,6 +13,7 @@ export function createWorkspaceService(options: { readonly target: string; reado
       list(request: FileRequest & { readonly offset?: number; readonly limit?: number; readonly version?: string }): Promise<{ readonly items: readonly { readonly name: string; readonly path: string; readonly type: 'file' | 'directory' }[]; readonly version: string; readonly nextOffset: number | null }>;
       read(request: FileRequest & { readonly offset?: number; readonly version?: string }): Promise<{ readonly path: string; readonly version: string; readonly size: number; readonly offset: number; readonly dataBase64: string; readonly nextOffset: number | null }>;
     };
+    directory(workspaceKey: string, path?: string): Promise<string>;
     list(request: FileRequest): Promise<readonly { readonly name: string; readonly path: string; readonly type: string }[]>;
     read(request: FileRequest): Promise<{ readonly content: string; readonly dataBase64: string; readonly path: string }>;
     write(request: FileRequest & { readonly content: string }): Promise<{ readonly path: string }>;

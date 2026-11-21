@@ -274,6 +274,13 @@ const messages: LocaleMessages = {
     },
   },
   topPanel: {
+    windowControls: {
+      refresh: 'Refresh',
+      minimize: 'Minimize',
+      maximize: 'Maximize',
+      restore: 'Restore',
+      close: 'Close',
+    },
     title: 'OpenCode Visualizer',
     noNotifications: 'No notifications',
     pendingNotifications: '{count} pending notifications (Ctrl-G x2)',
@@ -365,7 +372,7 @@ const messages: LocaleMessages = {
       skills: 'Skills',
       token: 'Token',
       mc: 'MC',
-      acp: 'ACP',
+      acp: 'Services',
     },
     server: {
       status: 'Server Status',

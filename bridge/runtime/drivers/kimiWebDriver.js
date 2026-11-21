@@ -59,6 +59,8 @@ export async function createKimiWebDriver(options) {
   const providerSupport = new Map();
   const pluginSupport = new Map();
   const sessionSupport = new Map();
+  let goalSubscription = false, goalProfileEdit = false;
+  const goalReads = new Map();
   const admission = options.admission ?? createAdmissionQueue();
   const transport = state === 'starting' ? createKimiWebTransport({ endpoint: options.endpoint, getAuthorization: options.getAuthorization, deadlineMs: options.deadlineMs }) : undefined;
   const lifecycleTransport = transport ? createKimiWebTransport({ endpoint: options.endpoint, getAuthorization: options.getAuthorization, deadlineMs: options.deadlineMs }) : undefined;
@@ -442,6 +444,50 @@ export async function createKimiWebDriver(options) {
     lifecycleSubscriptions.set(key, work);
     try { await work; } catch (error) { lifecycleSubscriptions.delete(key); throw error; }
   }
+  async function readNativeGoal(captured) {
+    const sessionId = captured.session.nativeSessionId;
+    const key = JSON.stringify([captured.epoch, captured.processGeneration, sessionId]);
+    const concurrent = goalReads.get(key);
+    if (concurrent) return concurrent.promise;
+    requireValue(goalReads.size < 8, 'kimi.goal_reads', 'source_unavailable');
+    // Each read receives the initial state from a fresh subscription. It does not
+    // borrow the conversation subscription or its history cursor.
+    const socket = createKimiWebTransport({ endpoint: options.endpoint, getAuthorization: options.getAuthorization, deadlineMs: options.deadlineMs });
+    const work = (async () => {
+      const state = Promise.withResolvers();
+      void state.promise.catch(() => {});
+      const timer = setTimeout(() => state.reject(failure('timeout', 'kimi.goal_snapshot')), options.deadlineMs ?? 5000);
+      try {
+        await socket.open(frame => {
+          if (frame.type !== 'goal' || frame.session_id !== sessionId || frame.agent_id !== 'main') return;
+          if (frame.goal == null) { state.resolve(null); return; }
+          const goal = frame.goal;
+          if (typeof goal.objective !== 'string' || !['active', 'paused', 'blocked', 'complete'].includes(goal.status)
+            || !Number.isSafeInteger(goal.turns_used) || goal.turns_used < 0
+            || !Number.isSafeInteger(goal.tokens_used) || goal.tokens_used < 0
+            || !Number.isFinite(goal.wall_clock_ms) || goal.wall_clock_ms < 0) {
+            state.reject(failure('invalid_request', 'kimi.goal_snapshot'));
+            return;
+          }
+          state.resolve({
+            goalId: sessionId, objective: goal.objective, status: goal.status,
+            turnsUsed: goal.turns_used, tokensUsed: goal.tokens_used, wallClockMs: goal.wall_clock_ms,
+            ...(typeof goal.completion_criterion === 'string' ? { completionCriterion: goal.completion_criterion } : {}),
+            ...(typeof goal.terminal_reason === 'string' ? { terminalReason: goal.terminal_reason } : {}),
+          });
+        }, () => state.reject(failure('source_unavailable', 'kimi.goal_disconnected')), true);
+        await socket.control('subscribe', { session_id: sessionId, agent_ids: ['main'] });
+        const value = await state.promise;
+        fence(captured);
+        return value;
+      } finally {
+        clearTimeout(timer);
+        await socket.close();
+      }
+    })().finally(() => goalReads.delete(key));
+    goalReads.set(key, { socket, promise: work });
+    return work;
+  }
   async function inspectNative() {
     if (state === 'disabled' || state === 'missing') return { state, protocolVersion: 1 };
     try {
@@ -457,6 +503,14 @@ export async function createKimiWebDriver(options) {
         sessionSupport.set(name, Object.entries(record(spec).paths ?? {}).some(([pathname, methods]) =>
           pathname.replace(/\{[^}]+\}/g, '{}') === template && typeof methods?.[route.method.toLowerCase()] === 'object'));
       }
+      goalSubscription = !sessionSupport.get('kimi.goal') && capabilities.agentTurns
+        && capabilities.subscribe && !!asyncspec.components?.messages?.goal;
+      const profileSchema = spec.paths?.['/api/v1/sessions/{session_id}/profile']?.post
+        ?.requestBody?.content?.['application/json']?.schema?.properties?.agent_config?.properties;
+      goalProfileEdit = !sessionSupport.get('kimi.goal.update') && !!profileSchema?.goal_objective
+        && profileSchema.goal_control?.enum?.includes('edit') === true;
+      if (goalSubscription) sessionSupport.set('kimi.goal', true);
+      if (goalProfileEdit) sessionSupport.set('kimi.goal.update', true);
       for (const [name, route] of Object.entries(KIMI_PROVIDER_OPERATIONS)) {
         const template = route.path.replace(/\{id\}/g, '{}');
         const found = Object.entries(record(spec).paths ?? {}).some(([pathname, methods]) => pathname.replace(/\{[^}]+\}/g, '{}') === template && typeof methods?.[route.method.toLowerCase()] === 'object');
@@ -851,6 +905,7 @@ export async function createKimiWebDriver(options) {
     ...Object.fromEntries(Object.entries(KIMI_SESSION_OPERATIONS).map(([name, route]) => [name, async context => {
       const captured = capture(context, true), params = record(context.params);
       requireValue(sessionSupport.get(name), 'kimi.session_operation', 'unsupported');
+      if (name === 'kimi.goal' && goalSubscription) return readNativeGoal(captured);
       const suffix = route.suffix.replace('{id}', route.suffix.includes('{id}') ? encodeURIComponent(nativeText(params.id, 'kimi.task_id', 512)) : '');
       let pathname = `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}${suffix}`;
       if (route.method === 'GET') {
@@ -866,6 +921,10 @@ export async function createKimiWebDriver(options) {
       const body = record(params.body ?? {});
       if (name === 'kimi.goal.update') {
         requireValue(Object.keys(body).length === 1 && typeof body.objective === 'string' && body.objective.trim().length > 0, 'kimi.goal_objective');
+        if (goalProfileEdit) {
+          pathname = `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}/profile`;
+          return operations.nativeMutation(captured, name, { agent_config: { goal_objective: body.objective, goal_control: 'edit' } }, params.idempotencyKey, pathname);
+        }
       }
       return operations.nativeMutation(captured, route.suffix.includes('{id}') ? `${name}:${suffix}` : name, body, params.idempotencyKey, pathname, route.method);
     }])),
@@ -987,6 +1046,7 @@ export async function createKimiWebDriver(options) {
       await Promise.all([
         attempt(() => transport?.close()),
         attempt(() => lifecycleTransport?.close()),
+        ...[...goalReads.values()].map(entry => attempt(() => entry.socket.close())),
       ]);
       await attempt(() => startupWork);
       await attempt(() => eventWork);

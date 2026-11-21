@@ -88,7 +88,7 @@ describe('StatusMonitorModal ACP integration', () => {
     });
 
     const acpTab = [...root.querySelectorAll<HTMLButtonElement>('[role="tablist"] button')]
-      .find((button) => button.textContent?.trim() === 'ACP');
+      .find((button) => button.textContent?.trim() === 'Services');
     expect(acpTab).toBeDefined();
     acpTab?.click();
     await nextTick();

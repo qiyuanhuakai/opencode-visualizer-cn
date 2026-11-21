@@ -264,6 +264,13 @@ const messages: LocaleMessages = {
     },
   },
   topPanel: {
+    windowControls: {
+      refresh: '刷新',
+      minimize: '最小化',
+      maximize: '最大化',
+      restore: '还原窗口',
+      close: '关闭',
+    },
     title: 'OpenCode Visualizer',
     noNotifications: '无通知',
     pendingNotifications: '{count} 个待处理通知 (Ctrl-G x2)',
@@ -354,7 +361,7 @@ const messages: LocaleMessages = {
       skills: '技能',
       token: 'Token',
       mc: 'MC',
-      acp: 'ACP',
+      acp: '服务',
     },
     server: {
       status: '服务器状态',

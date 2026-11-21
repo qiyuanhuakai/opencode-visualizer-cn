@@ -18,6 +18,7 @@ export interface IndexedSource {
   readonly state: { readonly serial: number; readonly intake: NativeEventIntake['state'] };
 }
 export interface SessionIndex {
+  recordCreated(input: { manifest: SourceIdentity; authority: SourceAuthority; result: unknown; workspaceKey: string; directory: string; assertCurrent(): void }): Promise<boolean>;
   retry(harnessInstanceId: string): Promise<DiscoveryResult>;
   attach(input: { readonly harnessInstanceId: string; readonly authority: () => SourceAuthority; readonly subscribe?: boolean }): Promise<IndexedSource>;
   createDshSource<T extends HarnessRegistration & { close(): Promise<unknown> }>(input: { readonly create: (options: { readonly onEvent: (event: unknown) => void }) => T | Promise<T>; readonly authority: () => SourceAuthority }): Promise<{ readonly source: IndexedSource; readonly native: T }>;

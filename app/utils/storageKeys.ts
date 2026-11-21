@@ -192,6 +192,7 @@ export const StorageKeys = {
     sidePanelCollapsed: 'state.sidePanelCollapsed.v1',
     sidePanelTab: 'state.sidePanelTab.v1',
     pinnedSessions: 'state.pinnedSessions.v1',
+    runtimeContainerPins: 'state.runtimeContainerPins.v1',
     sessionTreeExpanded: 'state.sessionTreeExpanded.v1',
     lastAuthError: 'state.lastAuthError.v1',
     deletedSandboxes: 'state.deletedSandboxes.v1',

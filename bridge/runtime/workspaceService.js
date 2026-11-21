@@ -70,6 +70,7 @@ export async function createWorkspaceService({ target, epoch, roots }) {
     scope.assertCurrent();
     const client = {
       reads: createWorkspaceReads(scope),
+      directory: scope.directory,
       async list({ workspaceKey, path: relative = '.' }) {
         const grant = scope.authorize(workspaceKey, 'read');
         return fs.listDirectory(relative, grant.root);

@@ -266,6 +266,13 @@ const messages: LocaleMessages = {
     },
   },
   topPanel: {
+    windowControls: {
+      refresh: 'Reŝargi',
+      minimize: 'Minimumigi',
+      maximize: 'Maksimumigi',
+      restore: 'Restaŭri',
+      close: 'Fermi',
+    },
     title: 'OpenCode Vizualigilo',
     noNotifications: 'Neniu sciigo',
     pendingNotifications: '{count} atendantaj sciigoj (Ctrl-G x2)',
@@ -356,7 +363,7 @@ const messages: LocaleMessages = {
       skills: 'Kapablecoj',
       token: 'Token',
       mc: 'MC',
-      acp: 'ACP',
+      acp: 'Servoj',
     },
     server: {
       status: 'Servila stato',

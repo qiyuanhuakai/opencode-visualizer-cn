@@ -21,6 +21,14 @@ interface Window {
     };
     getAppVersion: () => Promise<string>;
     getPlatform: () => Promise<string>;
+    windowControls?: {
+      isMaximized(): Promise<boolean>;
+      refresh(): Promise<void>;
+      minimize(): Promise<void>;
+      toggleMaximize(): Promise<void>;
+      close(): Promise<void>;
+      onMaximized(listener: (maximized: boolean) => void): () => void;
+    };
     desktop: import('./types/desktop').DesktopApi;
     sessionDatabase?: import('./types/sessionDatabase').SessionDatabaseApi;
     persistentStorage?: {
