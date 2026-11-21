@@ -46,7 +46,7 @@ function label(instance: HarnessManifest | undefined, instances: readonly Harnes
 <template>
   <div class="agent-instance-selector" data-runtime-ui data-testid="management-agent-selector">
     <span aria-hidden="true">{{ rt("Agent") }}</span>
-    <Dropdown :model-value="selected ?? undefined" :aria-label="`${rt('Agent')} · ${label(instances.find(entry => entry.harnessInstanceId === selected), instances)}`" :popup-style="{ minWidth: 'max(100%, min(16rem, 85vw))', width: 'max-content', maxWidth: 'min(30rem, 90vw)' }" popup-class="agent-instance-options" auto-close @update:model-value="select($event, instances)">
+    <Dropdown :model-value="selected ?? undefined" :aria-label="`${rt('Agent')} · ${label(instances.find(entry => entry.harnessInstanceId === selected), instances)}`" :popup-style="{ minWidth: 'min(16rem, 85vw)', width: 'max-content', maxWidth: 'min(30rem, 90vw)' }" popup-class="agent-instance-options" auto-close @update:model-value="select($event, instances)">
       <template #value>{{ label(instances.find(entry => entry.harnessInstanceId === selected), instances) }}</template>
       <DropdownItem v-for="instance in instances" :key="instance.harnessInstanceId" :value="instance.harnessInstanceId">
         <div class="agent-instance-option">
@@ -61,6 +61,9 @@ function label(instance: HarnessManifest | undefined, instances: readonly Harnes
 </template>
 <style scoped>
 .agent-instance-selector { display: flex; align-items: center; gap: var(--space-2); font-size: var(--type-sm); color: var(--theme-text-secondary); }
+.agent-instance-selector :deep(.agent-instance-options) {
+  left: clamp(8px, anchor(left), calc(100vw - min(30rem, 90vw) - 8px));
+}
 .agent-instance-selector :deep(.ui-dropdown-button) { min-inline-size: min(12rem, 32vw); }
 .agent-instance-option { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); white-space: nowrap; }
 .agent-instance-name { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; }
