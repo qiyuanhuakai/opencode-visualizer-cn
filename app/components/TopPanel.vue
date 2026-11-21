@@ -59,11 +59,12 @@
           </template>
           <template #default="{ close }">
             <template v-if="runtimeMode">
-              <slot name="runtime-sessions" :close="close" :management-mode="managementMode" />
+              <div class="tree-menu runtime-tree-menu">
+                <slot name="runtime-sessions" :close="close" :management-mode="managementMode" :done="toggleManagementMode" />
+              </div>
               <DropdownItem v-if="selectedSessionId && sessionActions.rename" value="rename" @click="handleSessionRename(selectedSessionId); close()">{{ $t('topPanel.sessionActions.rename') }}</DropdownItem>
               <DropdownItem v-if="selectedSessionId && runtimeForkAvailable" value="fork" @click="emit('fork-session', selectedSessionId); close()">{{ $t('topPanel.sessionActions.fork') }}</DropdownItem>
               <DropdownItem v-if="selectedSessionId && runtimeCompactAvailable" value="compact" @click="emit('compact-session', selectedSessionId); close()">{{ $t('topPanel.sessionActions.compact') }}</DropdownItem>
-              <DropdownItem v-if="selectedSessionId && runtimePinsAvailable" value="pin" @click="emit('toggle-runtime-pin'); close()">{{ $t(runtimePinned ? 'topPanel.sessionActions.unpin' : 'topPanel.sessionActions.pin') }}</DropdownItem>
               <DropdownItem v-if="selectedSessionId && !runtimeArchived && sessionActions.archive" value="archive" @click="emit('archive-session', selectedSessionId); close()">{{ $t('topPanel.management.archive') }}</DropdownItem>
               <DropdownItem v-if="selectedSessionId && runtimeArchived && sessionActions.unarchive" value="restore" @click="emit('unarchive-session', selectedSessionId); close()">{{ $t('topPanel.sessionActions.unarchive') }}</DropdownItem>
               <DropdownItem v-if="selectedSessionId && sessionActions.delete" value="delete" @click="emit('delete-session', selectedSessionId); close()">{{ $t('topPanel.sessionActions.deletePermanently') }}</DropdownItem>
@@ -818,6 +819,9 @@
         </Dropdown>
       </div>
       <div class="top-right">
+        <button v-if="runtimeMode" type="button" class="control-button" :title="$t('app.runtimeConnection.sshSlurm')" :aria-label="$t('app.runtimeConnection.sshSlurm')" @click="$emit('open-connection-entry')">
+          <Icon icon="lucide:network" :width="16" :height="16" aria-hidden="true" />
+        </button>
         <Dropdown :aria-label="$t('app.runtimeBridgeMenu.title')" :button-class="['control-button']" :popup-style="{ minWidth: '220px' }">
           <template #label><Icon icon="lucide:server" :width="16" :height="16" /></template>
           <template #default="{ close }">
@@ -956,8 +960,6 @@ const props = defineProps<{
   runtimeArchived?: boolean;
   runtimeForkAvailable?: boolean;
   runtimeCompactAvailable?: boolean;
-  runtimePinsAvailable?: boolean;
-  runtimePinned?: boolean;
   runtimeCreateAvailable?: boolean;
   nativeSelectedDisplay?: { branch: string; title: string; status: 'idle' | 'busy' | 'retry' | 'unknown' };
   treeData: TopPanelWorktree[];
@@ -999,7 +1001,6 @@ const emit = defineEmits<{
   (event: 'new-session-in', payload: { worktree: string; directory: string }): void;
   (event: 'fork-session', value: string): void;
   (event: 'compact-session', value: string): void;
-  (event: 'toggle-runtime-pin'): void;
   (event: 'delete-active-directory', payload: SandboxDeletePayload): void;
   (event: 'delete-session', value: string): void;
   (event: 'archive-session', value: string): void;

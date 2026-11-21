@@ -9,8 +9,6 @@
           :runtime-archived="runtimeSelectedArchived"
           :runtime-fork-available="runtimeSupports('forkSession')"
           :runtime-compact-available="runtimeSupports('compactSession')"
-          :runtime-pins-available="runtimePins?.pinned.value !== null && !!runtimePins"
-          :runtime-pinned="runtimePins?.pinned.value === true"
           :tree-data="topPanelTreeData"
           :notification-sessions="notificationSessions"
           :project-directory="projectDirectory"
@@ -40,7 +38,6 @@
           @delete-session="backendSessionActions.deleteSession"
           @fork-session="backendSessionActions.handleForkSession"
           @compact-session="backendSessionActions.handleCompactSession"
-          @toggle-runtime-pin="runtimePins?.toggleSelected()"
           @archive-session="backendSessionActions.archiveSession"
           @unarchive-session="backendSessionActions.unarchiveSession"
           @rename-session="backendSessionActions.renameSession"
@@ -66,11 +63,14 @@
           @logout="handleLogout"
           @dropdown-closed="focusInput"
         >
-          <template #runtime-sessions="{ close, managementMode }">
+          <template #runtime-sessions="{ close, managementMode, done }">
             <SessionTree
               v-if="unifiedTreeRows"
               class="runtime-session-dropdown-tree"
+              top-dropdown
+              :row-pins="runtimePins ?? undefined"
               :management-mode="managementMode"
+              @finish-management="done()"
               @batch-action="handleRuntimeSessionBatch"
               :projects="[]"
               :expanded-paths="unifiedSessionTree ? [...unifiedSessionTree.expanded.value] : []"
@@ -9888,6 +9888,7 @@ watch(() => bridgeReference.value?.profileId, profileId => {
     const key = encodeSessionKey(selection.session);
     return unifiedSessionTree.value?.sessions.value.find(row => row.key === key)?.title ?? (runtimeSelectedPresentation.value?.key === key ? runtimeSelectedPresentation.value.title : undefined);
   } }) : null;
+  void runtimePins.value?.show();
 });
 onScopeDispose(() => { void runtimePins.value?.dispose(); });
 const activeBridgeUrl = computed(() => bridgeReference.value?.url ?? '');
@@ -10312,9 +10313,6 @@ watch([runtimeSelectedSessionRef, runtimeComposerReadyKey, () => {
     }
   } catch (error) { if (generation === runtimeSourceRefreshGeneration && capture.isCurrent()) setSendStatusText(toErrorMessage(error)); }
 });
-watch([runtimeSelectedSessionRef, runtimePins], ([session, pins]) => {
-  void pins?.setSelected(session && bridgeReference.value ? { profileId: bridgeReference.value.profileId, session } : null);
-}, { immediate: true });
 const hostEnvironment = computed(() => runtimeSelectedSessionRef.value?.environmentId ?? null);
 const selectedHostClient = computed(() => {
   if (!runtimeOnline.value) return null;
