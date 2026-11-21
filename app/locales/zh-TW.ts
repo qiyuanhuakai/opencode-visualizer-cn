@@ -412,7 +412,7 @@ const messages: LocaleMessages = {
     skills: {
       total: '總數: {count}',
       noData: '沒有已載入的技能。',
-      unsupported: '目前 OpenCode 版本暫不支援查看技能狀態。',
+      unsupported: '目前 Agent 的技能狀態無法使用。',
       unsupportedAcp: '此 ACP Agent 未公開結構化技能狀態。',
       unsupportedKimiWeb: 'Kimi Web 未公開結構化技能狀態。',
       unsupportedDsh: 'DSH 不支援結構化技能狀態。',

@@ -416,7 +416,7 @@ const messages: LocaleMessages = {
     skills: {
       total: '合計: {count}',
       noData: 'スキルが読み込まれていません。',
-      unsupported: '現在のOpenCodeバージョンではスキル状態の表示がサポートされていません。',
+      unsupported: '選択したエージェントのスキル状態は取得できません。',
       unsupportedAcp: 'この ACP エージェントは構造化されたスキル状態を公開していません。',
       unsupportedKimiWeb: 'Kimi Web は構造化されたスキル状態を公開していません。',
       unsupportedDsh: 'DSH は構造化されたスキル状態をサポートしていません。',

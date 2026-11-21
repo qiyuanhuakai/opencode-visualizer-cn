@@ -423,7 +423,7 @@ const messages: LocaleMessages = {
     skills: {
       total: 'Total: {count}',
       noData: 'No skills loaded.',
-      unsupported: 'The current OpenCode version does not support viewing skill status.',
+      unsupported: 'Skill status is unavailable for this Agent.',
       unsupportedAcp: 'Structured skill status is not exposed by this ACP agent.',
       unsupportedKimiWeb: 'Structured skill status is not exposed by Kimi Web.',
       unsupportedDsh: 'Structured skill status is not supported by DSH.',

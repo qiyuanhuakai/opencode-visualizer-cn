@@ -98,6 +98,7 @@ function mountStatusMonitor(options: {
   const root = document.createElement('div');
   document.body.appendChild(root);
   const open = ref(false);
+  const runtimeGrantRevision = ref(0);
   const sessionId = ref<string | undefined>('thread-1');
   const backendKind = ref<'codex' | 'opencode'>(options.backendKind ?? 'codex');
   const codexApi = options.codexApi ?? useCodexApi();
@@ -108,6 +109,7 @@ function mountStatusMonitor(options: {
           h(StatusMonitorModal, {
             open: open.value,
             preload: false,
+            runtimeGrantRevision: runtimeGrantRevision.value,
             activeBackendKind: backendKind.value,
             sessionId: sessionId.value,
             codexApi,
@@ -118,7 +120,7 @@ function mountStatusMonitor(options: {
   app.use(createI18n({ legacy: false, locale: 'en', messages: { en } }));
   app.mount(root);
   open.value = true;
-  return { app, root, sessionId, backendKind };
+  return { app, root, sessionId, backendKind, runtimeGrantRevision };
 }
 
 describe('StatusMonitorModal stale request isolation', () => {
@@ -128,6 +130,24 @@ describe('StatusMonitorModal stale request isolation', () => {
 
   afterEach(() => {
     document.body.innerHTML = '';
+  });
+
+  it('retries status after cold-start grants refresh with the same selected Agent', async () => {
+    const getGlobalHealth = vi.fn()
+      .mockRejectedValueOnce(new Error('unauthorized'))
+      .mockResolvedValue({ healthy: true, version: '0.171.0' });
+    registryMock.getAdapter.mockReturnValue(createBackend({ getGlobalHealth }));
+    const { app, root, runtimeGrantRevision } = mountStatusMonitor();
+    try {
+      await vi.waitFor(() => expect(getGlobalHealth).toHaveBeenCalledTimes(1));
+      expect(root.textContent).not.toContain('0.171.0');
+
+      runtimeGrantRevision.value++;
+      await vi.waitFor(() => expect(root.textContent).toContain('0.171.0'));
+      expect(getGlobalHealth).toHaveBeenCalledTimes(2);
+    } finally {
+      app.unmount();
+    }
   });
 
   it('keeps the current session context limit when an older provider lookup finishes last', async () => {

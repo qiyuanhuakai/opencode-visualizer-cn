@@ -414,7 +414,7 @@ const messages: LocaleMessages = {
     skills: {
       total: 'Entute: {count}',
       noData: 'Neniu kapableco ŝargita.',
-      unsupported: 'La aktuala OpenCode-versio ne subtenas vidon de kapableca stato.',
+      unsupported: 'La stato de kapablecoj ne estas disponebla por ĉi tiu agento.',
       unsupportedAcp: 'Ĉi tiu ACP-agento ne montras strukturitan kapablecan staton.',
       unsupportedKimiWeb: 'Kimi Web ne montras strukturitan kapablecan staton.',
       unsupportedDsh: 'DSH ne subtenas strukturitan kapablecan staton.',

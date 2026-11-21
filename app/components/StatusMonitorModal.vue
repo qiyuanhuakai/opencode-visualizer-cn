@@ -228,6 +228,7 @@ type KimiWebSessionStateReader = {
 const props = defineProps<{
   open: boolean;
   nativeAdapter?: Partial<BackendAdapter>;
+  runtimeGrantRevision?: number;
   getNativeKimiMeta?: () => Promise<KimiWebMeta>;
   initialTab?: TabId;
   initialUsageView?: 'daily' | 'weekly' | 'cumulative';
@@ -517,7 +518,7 @@ watch(() => props.activeBackendKind, (newKind, oldKind) => {
 // controls resolve against. When either changes, the previous source's
 // results are retired before the new resolution runs, so data fetched for
 // one instance can never be attributed to another.
-watch([() => props.harnessScope, () => props.harnessManifests], () => {
+watch([() => props.harnessScope, () => props.harnessManifests, () => props.runtimeGrantRevision], () => {
   resetLoadedState();
   if (props.open || props.preload) {
     void ensureLoaded();
