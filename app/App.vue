@@ -11235,6 +11235,23 @@ const managementAgentScope = computed<ManagementAgentScope | null>(previous => {
   try { return { ...client.scope(environmentId), client, harness: harnessInstanceId }; }
   catch { return null; }
 });
+watch([isStatusMonitorOpen, isProviderManagerOpen, managementAgentScope], async ([monitor, providers, scope], _previous, onCleanup) => {
+  if ((!monitor && !providers) || !scope) return;
+  let current = true;
+  onCleanup(() => { current = false; });
+  try {
+    const target = scope.binding.target;
+    const inspection = await scope.client.request(target, 'runtime.inspect', {}, { selectionCurrent: scope.isCurrent });
+    if (!current || !scope.isCurrent()) return;
+    const verified = inspection.harnesses.map(entry => entry.manifest)
+      .filter(manifest => manifest.environmentId === target);
+    if (verified.some(manifest => manifest.harnessInstanceId === scope.harness)) {
+      harnessManifests.value = [...harnessManifests.value.filter(manifest => manifest.environmentId !== target), ...verified];
+    }
+  } catch (error) {
+    if (current && scope.isCurrent()) log('Agent status inspection failed', error);
+  }
+});
 const managementNativeAdapter = computed(() => {
   const manifest = managementManifest.value;
   const client = runtimeActionClient.value;
