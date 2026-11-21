@@ -26,6 +26,10 @@ export function createCodexNativeOperations({
         'codex.review.detached',
         'unsupported',
       );
+    // Status reads the locally discoverable inventories. The default native
+    // scope also fetches the entire remote marketplace, which can exceed
+    // both the app-server frame limit and Vis's response budget.
+    if (name === 'getPluginStatus') payload = { ...payload, marketplaceKinds: ['local'] };
     if (spec.method === 'thread/fork') payload = { ...payload, excludeTurns: true };
     if (spec.method === 'permissionProfile/list')
       payload = { ...payload, cwd: await authorizeSession(context.session) };
