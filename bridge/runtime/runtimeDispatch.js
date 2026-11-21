@@ -146,6 +146,7 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
     if (frame.method === 'session.create') requireValue(directory, 'runtime.workspace', 'unauthorized');
     if (frame.method === 'session.list') indexAccess(entry);
     if (frame.method === 'session.list' && !params.session && !params.workspaceKey && Object.keys(args).length === 0) {
+      if (manifest.core.listSessionPage.reason === 'on-demand') permission(entry, 'session:write');
       await entry.graph.index.retry(params.harnessInstanceId);
       entry.current();
     }

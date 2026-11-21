@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { DSH_RUNTIME_VERSION } from '../shared/runtime/native/dsh/protocol.js';
 import { connect } from 'node:net';
 import { createKimiWebTokenProvider } from './kimiWebToken.js';
 import { createDshAuthProvider, createNodeDshExchange } from './dshAuth.js';
@@ -16,8 +17,7 @@ const DSH_GET_STATE_URL = `http://127.0.0.1:${DSH_WEB_PORT}/api/account/getState
 // is the per-process launch token (docs/dsh.md 4.1). NOTE: dsh uses `/?token=`
 // while kimi uses `/#token=` — the patterns are deliberately not shared.
 const DSH_LAUNCH_LINE_PATTERN = /dsh web: http:\/\/127\.0\.0\.1:(\d+)\/\?token=(\S+)/;
-const DSH_SUPPORTED_VERSION = '0.2.0-rc.2';
-const DSH_INSTALL_GUIDANCE = 'npm i -g @deepseek-ai/dsh@0.2.0-rc.2';
+const DSH_INSTALL_GUIDANCE = 'npm i -g @deepseek-ai/dsh@latest';
 const DSH_VERSION_PROBE_TIMEOUT_MS = 10_000;
 
 export function createNativeServiceDefinitions() {
@@ -497,11 +497,11 @@ export function createProcessSupervisor(options = {}) {
         return;
       }
       status.version = version;
-      if (version !== DSH_SUPPORTED_VERSION) {
+      if (version !== DSH_RUNTIME_VERSION) {
         await stopFailedChild(
           service,
           child,
-          `DSH protocol generation mismatch: expected dsh@${DSH_SUPPORTED_VERSION}, found ${version}. Install the matching version (${DSH_INSTALL_GUIDANCE}) or wait for the bridge adapter to support it.`,
+          `DSH protocol generation mismatch: expected dsh@${DSH_RUNTIME_VERSION}, found ${version}. Install the matching version (${DSH_INSTALL_GUIDANCE}) or wait for the bridge adapter to support it.`,
         );
         return;
       }
@@ -583,9 +583,12 @@ export function createProcessSupervisor(options = {}) {
     }
   }
 
-  async function start(enabledServices = {}) {
+  async function start(enabledServices = {}, { onDemand = false } = {}) {
     await Promise.all(services.map((service) => {
-      if (enabledServices[service.id] !== false) return startService(service);
+      if (enabledServices[service.id] !== false) {
+        if (!onDemand) return startService(service);
+        return;
+      }
       const status = statuses.get(service.id);
       status.state = 'disabled';
       status.owned = false;
@@ -615,5 +618,11 @@ export function createProcessSupervisor(options = {}) {
     await Promise.all(services.map(stopService));
   }
 
-  return { start, stop, getStatus, getDshAuthProvider: () => dshAuthProvider };
+  async function startOne(id) {
+    const service = services.find(candidate => candidate.id === id);
+    if (!service || statuses.get(id)?.state === 'disabled') throw new Error('Native agent is disabled or unknown.');
+    await startService(service);
+  }
+
+  return { start, startOne, stop, getStatus, getDshAuthProvider: () => dshAuthProvider };
 }

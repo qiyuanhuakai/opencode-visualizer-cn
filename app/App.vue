@@ -41,7 +41,6 @@
           @fork-session="backendSessionActions.handleForkSession"
           @compact-session="backendSessionActions.handleCompactSession"
           @toggle-runtime-pin="runtimePins?.toggleSelected()"
-          @open-runtime-sessions="openRuntimeSessionTree"
           @archive-session="backendSessionActions.archiveSession"
           @unarchive-session="backendSessionActions.unarchiveSession"
           @rename-session="backendSessionActions.renameSession"
@@ -66,7 +65,37 @@
           @open-forge-panel="openForgePanel"
           @logout="handleLogout"
           @dropdown-closed="focusInput"
-        />
+        >
+          <template #runtime-sessions="{ close, managementMode }">
+            <SessionTree
+              v-if="unifiedTreeRows"
+              class="runtime-session-dropdown-tree"
+              :management-mode="managementMode"
+              @batch-action="handleRuntimeSessionBatch"
+              :projects="[]"
+              :expanded-paths="unifiedSessionTree ? [...unifiedSessionTree.expanded.value] : []"
+              :selected-session-id="selectedSessionId"
+              :tree-rows="unifiedTreeRows"
+              :selected-key="unifiedTreeSelectedKey"
+              :sources="unifiedTreeSources"
+              :retrying="unifiedTreeRetrying"
+              :child-scans="unifiedTreeChildScans"
+              :view-status="unifiedTreeStatus"
+              :view-loaded="unifiedTreeLoaded"
+              :view-error="unifiedTreeError"
+              :filter-kinds="unifiedTreeFilterKinds"
+              :search-state="unifiedTreeSearch"
+              @toggle-key="handleUnifiedToggleKey"
+              @select-key="handleUnifiedSelectKey($event); close()"
+              @retry-source="handleUnifiedRetrySource"
+              @filter-change="handleUnifiedFilterChange"
+              @search="handleUnifiedSearch"
+              @search-more="handleUnifiedSearchMore"
+              @load-more-children="handleUnifiedLoadMoreChildren"
+              @reload="handleReloadSidebar"
+            />
+          </template>
+        </TopPanel>
         <div class="app-runtime-actions">
           <AgentInstanceSelector :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
           <button
@@ -122,16 +151,7 @@
             :todo-label="activeBackendKind === 'codex' ? t('codexPanel.planTitle') : undefined"
             :session-tree-data="sessionTreeData"
             :session-tree-expanded-paths="unifiedSessionTree ? [...unifiedSessionTree.expanded.value] : sessionTreeExpandedPaths"
-            :unified-tree-rows="unifiedTreeRows"
-            :unified-tree-selected-key="unifiedTreeSelectedKey"
-            :unified-tree-sources="unifiedTreeSources"
-            :unified-tree-retrying="unifiedTreeRetrying"
-            :unified-tree-child-scans="unifiedTreeChildScans"
-            :unified-tree-status="unifiedTreeStatus"
-            :unified-tree-loaded="unifiedTreeLoaded"
-            :unified-tree-error="unifiedTreeError"
-            :unified-tree-filter-kinds="unifiedTreeFilterKinds"
-            :unified-tree-search="unifiedTreeSearch"
+            :runtime-mode="!!runtimeActionClient"
             :runtime-pins="runtimePins ?? undefined"
             :tree-nodes="treeNodes"
             :expanded-tree-paths="expandedTreePaths"
@@ -149,14 +169,7 @@
             @change-tab="setSidePanelTab"
             @select-session="handleSidePanelSessionSelect"
             @toggle-expand="toggleSessionTreeExpand"
-            @toggle-key="handleUnifiedToggleKey"
-            @select-key="handleUnifiedSelectKey"
             @select-qualified="handlePinnedSessionSelect"
-            @retry-source="handleUnifiedRetrySource"
-            @filter-change="handleUnifiedFilterChange"
-            @search="handleUnifiedSearch"
-            @search-more="handleUnifiedSearchMore"
-            @load-more-children="handleUnifiedLoadMoreChildren"
             @pin-project="pinProject"
             @unpin-project="unpinProject"
             @pin-sandbox="pinSandbox"
@@ -437,7 +450,9 @@
             v-model:url="bridgeLoginUrl"
             v-model:token="bridgeLoginToken"
             :error="initErrorMessage"
-            @connect="handleLogin"
+            @connect="handleLogin()"
+            @connect-remote="handleLogin(true)"
+            @open-settings="openSettings()"
           />
         </div>
         <div v-else>
@@ -451,7 +466,7 @@
               v-if="uiInitState === 'error'"
               type="button"
               class="app-loading-retry"
-              @click="handleLogin"
+              @click="handleLogin()"
             >
               {{ t('app.login.retry') }}
             </button>
@@ -743,6 +758,7 @@ import SubagentContent from './components/ToolWindow/Subagent.vue';
 import WebContent from './components/ToolWindow/Web.vue';
 import SidePanel from './components/SidePanel.vue';
 import TopPanel, { type TopPanelCodexSubpanel } from './components/TopPanel.vue';
+import SessionTree from './components/SessionTree.vue';
 import ProviderManagerModal from './components/ProviderManagerModal.vue';
 import SettingsModal from './components/SettingsModal.vue';
 import { createDesktopNotificationRouter } from './utils/desktopNotifications';
@@ -851,7 +867,7 @@ import {
 } from './composables/useRuntimeSessionActions';
 import { HARNESS_CONTROLS } from './composables/useRuntimeCapabilities';
 
-import type { HarnessKind, HarnessManifest } from '../shared/runtime/harnessContract.js';
+import { validateHarnessManifest, type HarnessKind, type HarnessManifest } from '../shared/runtime/harnessContract.js';
 import { hostSessionSelection } from './runtime/hostThreadViews';
 import type { SelectionCapture, QualifiedSession } from './runtime/selectionScope';
 import { createRuntimePins } from './composables/useRuntimePins';
@@ -9895,7 +9911,7 @@ let bridgeLoginGeneration = 0;
 let stopRuntimeRecovery: (() => void) | undefined;
 let pendingRuntimeSelection: Readonly<{ key: string; target: EnvironmentId }> | null = null;
 let lastRuntimeSelection: Readonly<{ key: string; target: EnvironmentId }> | null = null;
-async function connectRuntimeBridge(): Promise<void> {
+async function connectRuntimeBridge(openRemote = false): Promise<void> {
   if (runtimeDraftEditorRef.value && !await runtimeDraftEditorRef.value.flush()) return;
   if (runtimeActionClient.value) {
     persistComposerDraftForCurrentContext();
@@ -9920,7 +9936,7 @@ async function connectRuntimeBridge(): Promise<void> {
   bridgeReference.value = null;
   const owner = useRuntimeConnection({
     reference: managementCandidate(bridgeLoginUrl.value),
-    bootstrapTree: true,
+    bootstrapTree: !openRemote,
     resolveAuthentication: async () => bridgeLoginToken.value ? { bridgeToken: bridgeLoginToken.value } : {},
     createWebSocket: endpoint => new WebSocket(endpoint),
   });
@@ -10004,7 +10020,8 @@ async function connectRuntimeBridge(): Promise<void> {
     }
   }, { flush: 'sync' });
   if (!storageSet('vis.runtime.bridgeUrl', reference.url)) setSendStatusText('Connected, but the Bridge address could not be saved.');
-  if (inspection.role === 'manager') {
+  if (openRemote || inspection.role === 'manager') {
+    remoteLoginPending = true;
     isConnectionEntryOpen.value = true;
     await managedRemote.open();
   }
@@ -10069,6 +10086,21 @@ function buildUnifiedSessionTree(): void {
     sessionWindow: true,
     onCanonical: entity => {
       runtimeTurns.apply(entity); runtimeInteractionProjection?.observeOperation(entity);
+      if (entity.collection === 'harnesses' && entity.value) {
+        const raw = asRuntimeRecord(entity.value).manifest;
+        if (raw) {
+          const manifest = validateHarnessManifest(raw);
+          if (manifest.environmentId === target && manifest.harnessInstanceId === entity.key) {
+            const instances = harnessManifests.value;
+            harnessManifests.value = instances.some(entry => entry.harnessInstanceId === manifest.harnessInstanceId)
+              ? instances.map(entry => entry.harnessInstanceId === manifest.harnessInstanceId ? manifest : entry)
+              : [...instances, manifest];
+            if (!managementHarnessInstanceId.value && manifest.core.listSessionPage.state === 'supported') {
+              managementHarnessInstanceId.value = manifest.harnessInstanceId;
+            }
+          }
+        }
+      }
       const selected = runtimeSelectedPresentation.value;
       if (entity.collection === 'session_summaries' && entity.key === selected?.key && entity.value) {
         const row = asRuntimeRecord(entity.value);
@@ -10085,27 +10117,28 @@ function buildUnifiedSessionTree(): void {
   }) : tree.start();
   runtimeTreeReady = ready.catch(() => {
     // A target whose snapshot cannot be opened leaves the tree in its error
-    // state, which the sidebar renders; the legacy tree keeps running.
+    // state rendered by the session dropdown.
   });
 }
 
 watch([runtimeActionClient, runtimeEnvironmentId, runtimeIndexAvailable], buildUnifiedSessionTree, { immediate: true, flush: 'sync' });
 onScopeDispose(disposeUnifiedSessionTree);
 
-/**
- * The sidebar's session tree. On a live `/runtime` connection it is the unified
- * five-source tree and the legacy per-backend shape is not read at all (the
- * sidebar renders the unified rows and ignores this prop); without one — a bare
- * OpenCode server is not a runtime wire endpoint — it stays the legacy tree,
- * which is the read-only migration source the plan keeps.
- */
 const sessionTreeData = computed<SessionTreeData>(() =>
   runtimeActionClient.value ? EMPTY_SESSION_TREE_DATA : legacySessionTrees.sessionTreeData.value,
 );
 
-/** The unified tree's rows, or undefined so the sidebar keeps its legacy tree. */
 const unifiedTreeRows = computed<readonly UnifiedFlatRow[] | undefined>(() => unifiedSessionTree.value?.rows.value);
-const unifiedTreeSources = computed<readonly HarnessEntry[]>(() => unifiedSessionTree.value?.harnesses.value ?? []);
+const unifiedTreeSources = computed<readonly HarnessEntry[]>(() => {
+  const entries = new Map((unifiedSessionTree.value?.harnesses.value ?? []).map(entry => [entry.harnessInstanceId, entry]));
+  for (const manifest of harnessManifests.value) {
+    const list = manifest.core.listSessionPage;
+    if (list.state === 'unsupported' && list.reason === 'on-demand') {
+      entries.set(manifest.harnessInstanceId, { harnessInstanceId: manifest.harnessInstanceId, kind: manifest.kind, status: 'standby', reason: null });
+    }
+  }
+  return [...entries.values()];
+});
 const unifiedTreeRetrying = computed<ReadonlySet<string>>(() => unifiedSessionTree.value?.retrying.value ?? EMPTY_STRING_SET);
 const unifiedTreeChildScans = computed<ReadonlySet<string>>(() => unifiedSessionTree.value?.childScans.value ?? EMPTY_STRING_SET);
 const unifiedTreeStatus = computed<'loading' | 'partial' | 'complete' | 'error'>(() => unifiedSessionTree.value?.viewStatus.value ?? 'loading');
@@ -11070,12 +11103,33 @@ const runtimeSessionActionCapabilities = computed(() => ({
   unarchive: runtimeSupports(runtimeConversationManifest.value?.kind === 'kimi-web' ? 'restoreSession' : 'updateSession'),
   delete: runtimeSupports('deleteSession'), pin: false, unpin: false,
 }));
-const runtimeSelectedArchived = computed(() => unifiedSessionTree.value?.sessions.value.find(row => row.key === unifiedTreeSelectedKey.value)?.archived ?? runtimeSelectedPresentation.value?.archived ?? false);
-function openRuntimeSessionTree() {
-  sidePanelCollapsed.value = false; sidePanelActiveTab.value = 'session';
-  void nextTick(() => { sidePanelAreaEl.value?.querySelector<HTMLInputElement>('[data-testid="unified-search"] input, input[type="search"]')?.focus(); });
+async function handleRuntimeSessionBatch(action: 'pin' | 'unpin' | 'archive' | 'unarchive' | 'delete', keys: string[]) {
+  const profileId = activeProfileId.value;
+  const client = runtimeActionClient.value;
+  if (!client) return;
+  if (action === 'pin' || action === 'unpin') {
+    const selections = [...new Set(keys)].map(key => ({ profileId, session: decodeSessionKey(key) }));
+    await runtimePins.value?.setPinned(selections, action === 'pin');
+    return;
+  }
+  if (action === 'delete' && !await showConfirm(t('topPanel.confirm.deleteSession'))) return;
+  if (client !== runtimeActionClient.value || profileId !== activeProfileId.value) return;
+  const failures: string[] = [];
+  for (const key of new Set(keys)) {
+    try {
+      const session = decodeSessionKey(key);
+      if (client !== runtimeActionClient.value || profileId !== activeProfileId.value || !runtimeTargetAttached(session)) break;
+      await runtimeSessionRuntime.router[action]({ profileId, session });
+    } catch (error) {
+      failures.push(toErrorMessage(error));
+    }
+  }
+  if (failures.length && client === runtimeActionClient.value && profileId === activeProfileId.value) {
+    sessionError.value = t('app.error.batchOperationPartialFailure', { action, failures: failures.length, total: keys.length, firstError: failures[0] });
+  }
 }
 
+const runtimeSelectedArchived = computed(() => unifiedSessionTree.value?.sessions.value.find(row => row.key === unifiedTreeSelectedKey.value)?.archived ?? runtimeSelectedPresentation.value?.archived ?? false);
 const managementManifest = computed(() => harnessManifests.value.find(manifest => manifest.harnessInstanceId === managementHarnessInstanceId.value));
 watch([runtimeKimiSessionClient, activeBackendKind, connectionState], async ([native]) => {
   if (!runtimeActionClient.value) return;
@@ -11177,6 +11231,7 @@ watch([managementNativeAdapter, managementAgentScope], () => {
 watch(isProviderManagerOpen, open => { if (open) void refreshManagementProviders(); });
 
 const isConnectionEntryOpen = ref(false);
+let remoteLoginPending = false;
 const isMigrationWizardOpen = ref(false);
 const migrationWizardStatus = ref<'idle' | 'backing-up' | 'migrating' | 'done' | 'failed'>('idle');
 const migrationWizardError = ref('');
@@ -11227,13 +11282,26 @@ async function activateRuntimeTarget(target: EnvironmentId) {
     connectionState.value = 'ready';
   }
   isConnectionEntryOpen.value = false;
+  if (remoteLoginPending) {
+    remoteLoginPending = false;
+    sidePanelActiveTab.value = 'session';
+    connectionState.value = 'ready';
+    uiInitState.value = 'ready';
+  }
 }
 async function returnToInitialManager() {
   managementEnvironmentId.value = null;
   await managedRemote.open();
 }
 function openConnectionEntry() { isConnectionEntryOpen.value = true; void managedRemote.open(); }
-function closeConnectionManager() { isConnectionEntryOpen.value = false; managedRemote.close(); }
+function closeConnectionManager() {
+  isConnectionEntryOpen.value = false;
+  managedRemote.close();
+  if (remoteLoginPending) {
+    remoteLoginPending = false;
+    void handleLogout();
+  }
+}
 onScopeDispose(() => { managedRemote.close(); });
 
 const migrationInventoryNext = shallowRef<LegacyExportToken | null>(null);
@@ -13456,8 +13524,8 @@ const handleBackendConnectionError = createBackendAuthFailureHandler({
   translate: t,
 });
 
-async function handleLogin() {
-  if (uiInitState.value === 'loading') return;
+async function handleLogin(openRemote = false) {
+  if (uiInitState.value === 'loading' || remoteLoginPending) return;
   const generation = ++bridgeLoginGeneration;
   uiInitState.value = 'loading';
   connectionState.value = 'connecting';
@@ -13465,11 +13533,11 @@ async function handleLogin() {
   try {
     await activateQualifiedComposerDrafts();
     if (generation !== bridgeLoginGeneration) return;
-    await connectRuntimeBridge();
+    await connectRuntimeBridge(openRemote);
     if (generation !== bridgeLoginGeneration) return;
     sidePanelActiveTab.value = 'session';
     connectionState.value = 'ready';
-    uiInitState.value = 'ready';
+    uiInitState.value = remoteLoginPending ? 'login' : 'ready';
   } catch (error) {
     if (generation !== bridgeLoginGeneration) return;
     runtimeConnectionOwner?.dispose();
@@ -13481,6 +13549,9 @@ async function handleLogin() {
 }
 
 function handleAbortInit() {
+  remoteLoginPending = false;
+  isConnectionEntryOpen.value = false;
+  managedRemote.close();
   bridgeLoginGeneration++;
   stopRuntimeRecovery?.();
   runtimeOnline.value = false;
@@ -13795,6 +13866,11 @@ onBeforeUnmount(() => {
 });
 </script>
 
+<style scoped>
+.runtime-session-dropdown-tree {
+  height: min(440px, 58vh);
+}
+</style>
 <style>
 html,
 body,

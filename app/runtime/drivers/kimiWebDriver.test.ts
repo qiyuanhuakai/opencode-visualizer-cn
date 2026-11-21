@@ -112,7 +112,7 @@ function transcriptEnvelope(target: number, turns: number, epochValue = 'ep_fixt
   return { body, items };
 }
 const smallTranscript = () => Buffer.from(JSON.stringify({ items: [turn(0, 8), turn(1, 8)], has_more: false, seq: 7, tasks: [], interactions: [], attachments: [], todos: [], prompts: [], meta: {}, agents: [], epoch: 'ep_fixture' }));
-async function controlledKimiWeb(nativePageMaximum = 200) {
+async function controlledKimiWeb(nativePageMaximum = 200, agentTurns = false) {
   const dir = await mkdtemp(path.join(tmpdir(), 'vis-kimi-http-')); temporary.push(dir);
   const calls: { method: string; path: string; origin: string | undefined }[] = [];
   const promptBodies: unknown[] = [];
@@ -133,6 +133,38 @@ async function controlledKimiWeb(nativePageMaximum = 200) {
     const route = new URL(request.url ?? '/', 'http://fixture');
     calls.push({ method: request.method ?? '', path: route.pathname + route.search, origin: request.headers.origin });
     response.setHeader('Content-Type', 'application/json');
+    if (agentTurns) {
+      const send = (data: unknown) => response.end(JSON.stringify({ code: 0, data }));
+      if (route.pathname === '/openapi.json') {
+        response.end(JSON.stringify({ paths: {
+          '/api/v1/sessions': { get: {} },
+          '/api/v1/sessions/{session_id}': { get: {} },
+          '/api/v1/sessions/{session_id}/agents/{agent_id}/turns': { get: {} },
+        } }));
+        return;
+      }
+      if (route.pathname === '/asyncapi.json') {
+        response.end(JSON.stringify({ components: { messages: { subscribe: { name: 'subscribe' } } } }));
+        return;
+      }
+      if (route.pathname === '/api/v1/meta') {
+        send({ server_id: 'srv_fixture', server_version: '2.7.2', kimi_agent_protocol_version: '1.0.0', capabilities: { websocket: false } });
+        return;
+      }
+      if (route.pathname === '/api/v1/sessions') {
+        send({ items: [{ id: nativeSessionId, cwd: dir, title: 'Agent session' }], has_more: false });
+        return;
+      }
+      if (route.pathname.endsWith('/agents/main/turns')) {
+        const before = route.searchParams.get('before_ordinal');
+        const index = before === null ? 2 : 1;
+        send({ turns: [{ ordinal: index, turn_id: `turn-${index}`, status: 'ended', items: [
+          { item_id: 'prompt', type: 'user_message', placement: 'opener', text: 'hello' },
+          { item_id: 'answer', type: 'assistant_message', text: 'world'.repeat(14_000) },
+        ] }], has_more: before === null });
+        return;
+      }
+    }
     if (providerError && route.pathname === '/api/v1/providers' && request.method === 'POST') { response.end(JSON.stringify({ code: providerError, data: null, msg: 'secret upstream details' })); return; }
     if (route.pathname === '/openapi.json' || route.pathname === '/asyncapi.json') {
       response.end(JSON.stringify(route.pathname === '/openapi.json' ? {
@@ -281,6 +313,32 @@ async function drainDescriptor(handle: InternalNativeHistoryHandle, pageId: stri
 const rawPulls = (fixture: Awaited<ReturnType<typeof controlledKimiWeb>>) => fixture.transcriptPulls.filter((pull) => pull.raw);
 const storeScope = JSON.stringify([environmentId, harnessInstanceId, session]);
 const producerInput = { environmentId, harnessInstanceId, session, params: historyAuthority };
+
+it('opens archived Agent turns through the current Kimi Web API with ordinal pagination', async () => {
+  const fixture = await controlledKimiWeb(200, true);
+  const { driver, handle, close } = await historyProducer(fixture);
+  const store = await historyStore('agent-turns');
+  try {
+    const list = driver.registration.driver.core.listSessionPage!;
+    const catalog = await list({ environmentId, harnessInstanceId, params: { limit: 1 } });
+    expect(catalog).toMatchObject({ items: [{ title: 'Agent session', directory: expect.any(String) }] });
+    expect(handle.capabilities).toMatchObject({ archive: 'paged', live: 'unsupported' });
+    await handle.open({ signal: historySignal(), streamStore: store });
+    const first = await handle.page({ signal: historySignal() });
+    expect(first).toMatchObject({ cursor: '2', completeness: 'partial' });
+    const entry = first.items[0];
+    if (!entry || entry.kind !== 'stream') throw new Error('Expected streamed turn');
+    const { bytes } = await drainDescriptor(handle, first.pageId, entry.descriptor.id);
+    expect(JSON.parse(bytes.toString())).toMatchObject({ turnId: 'turn-2', prompt: 'hello', steps: [{ frames: [{ text: 'world'.repeat(14_000) }] }] });
+    const second = await handle.page({ cursor: first.cursor ?? undefined, signal: historySignal() });
+    expect(second).toMatchObject({ cursor: null, completeness: 'complete' });
+    expect(fixture.calls.some(call => call.path.includes('before_ordinal=2'))).toBe(true);
+  } finally {
+    await close();
+    await store.close();
+    await fixture.close();
+  }
+});
 
 describe('Kimi Web native selected-history producer over controlled raw HTTP and WebSocket', () => {
   it('discovers advanced session routes and keeps query and mutation identity on the captured session', async () => {

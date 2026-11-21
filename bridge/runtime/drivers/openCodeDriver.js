@@ -181,7 +181,7 @@ export async function createOpenCodeDriver(options) {
   try {
     await instances.ready;
     health = await request('/global/health'); requireValue(health?.healthy === true, 'opencode.health', 'source_unavailable');
-    requireValue(health.version === OPEN_CODE_VERSION, 'opencode.version', 'version_mismatch');
+    requireValue([OPEN_CODE_VERSION, '1.19.5'].includes(health.version), 'opencode.version', 'version_mismatch');
     document = await request('/doc', { maxBytes: 4194304 });
     if (options.officialStorePath) reader = createOpenCodeStoreReader({ databasePath: options.officialStorePath, nativeVersion: health.version });
     discovery = createOpenCodeDiscovery({ reader, request, current, assertCurrent: fence });
@@ -268,7 +268,7 @@ export async function createOpenCodeDriver(options) {
     };
     return { name, owner: identity.harnessInstanceId, scope: operation.scope, permission: `opencode.${operation.method === 'GET' ? 'read' : 'write'}`, schemaVersion: 1, support: supported ? { state: 'supported' } : unsupported('native endpoint absent') };
   });
-  const registration = validateHarnessRegistration({ manifest: { ...identity, kind: 'opencode', protocolVersion: 1, core: Object.fromEntries(Object.keys(CORE_OPERATIONS).map((name) => [name, { state: 'supported' }])), extensions, capabilities: { sessions: { state: 'supported' }, permissions: { state: 'supported' }, questions: { state: 'supported' }, sessionFork: { state: 'supported' }, sessionRevert: { state: 'supported' }, sessionRename: { state: 'supported' }, sessionArchive: { state: 'supported' }, sessionUnarchive: { state: 'supported' }, sessionDelete: { state: 'supported' }, sessionPin: unsupported('OpenCode 1.18.34 session.update does not expose pinned'), sessionUnpin: unsupported('OpenCode 1.18.34 session.update does not expose pinned'), sessionCompact: unsupported('not exposed by the previous OpenCode adapter'), todos: { state: 'supported' }, status: { state: 'supported' }, providerConfig: { state: 'supported' } } }, driver: { core, native } });
+  const registration = validateHarnessRegistration({ manifest: { ...identity, kind: 'opencode', protocolVersion: 1, core: Object.fromEntries(Object.keys(CORE_OPERATIONS).map((name) => [name, { state: 'supported' }])), extensions, capabilities: { sessions: { state: 'supported' }, permissions: { state: 'supported' }, questions: { state: 'supported' }, sessionFork: { state: 'supported' }, sessionRevert: { state: 'supported' }, sessionRename: { state: 'supported' }, sessionArchive: { state: 'supported' }, sessionUnarchive: { state: 'supported' }, sessionDelete: { state: 'supported' }, sessionPin: unsupported('OpenCode session.update does not expose pinned'), sessionUnpin: unsupported('OpenCode session.update does not expose pinned'), sessionCompact: unsupported('not exposed by the previous OpenCode adapter'), todos: { state: 'supported' }, status: { state: 'supported' }, providerConfig: { state: 'supported' } } }, driver: { core, native } });
   options.runtime.resources.register(`opencode:${identity.harnessInstanceId}:${options.processGeneration}`, 'owned', close);
   return { registration, nativeVersion: health.version, close, retryDiscovery: recoverStream, get bufferedBytes() { return subscriptions.bufferedBytes; } };
 }

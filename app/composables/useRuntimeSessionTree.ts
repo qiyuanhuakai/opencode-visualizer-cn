@@ -84,7 +84,7 @@ export type UnifiedFlatRow = Readonly<{ key: string; node: UnifiedTreeNode; dept
 export type HarnessEntry = Readonly<{
   harnessInstanceId: string;
   kind: SessionHarness;
-  status: 'loading' | 'partial' | 'complete' | 'error' | 'disabled';
+  status: 'loading' | 'partial' | 'complete' | 'error' | 'disabled' | 'standby';
   reason: string | null;
 }>;
 

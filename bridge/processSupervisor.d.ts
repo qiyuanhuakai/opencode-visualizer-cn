@@ -28,7 +28,8 @@ export type ProcessSupervisor = {
     codex: boolean;
     'kimi-web': boolean;
     dsh?: boolean;
-  }): Promise<ProcessStatus[]>;
+  }, options?: { onDemand: boolean }): Promise<ProcessStatus[]>;
+  startOne?(id: ProcessStatus['id']): Promise<void>;
   stop(): Promise<void>;
   getStatus(): ProcessStatus[];
   /** Cookie provider for the bridge dsh proxies; the launch token lives here. */

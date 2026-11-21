@@ -2,6 +2,7 @@ import type { JsonValue } from '../../capabilities.js';
 import type { HarnessScope } from '../../harnessContract.js';
 import type { SessionRef } from '../../identity.js';
 export { ProtocolError as DshError } from '../../capabilities.js';
+export const DSH_RUNTIME_VERSION: '0.2.2-rc.5';
 export function fail(code: string, reason: string): never;
 export function record(value: unknown): Record<string, unknown>;
 export function text(value: unknown): string;

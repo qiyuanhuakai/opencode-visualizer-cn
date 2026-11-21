@@ -178,11 +178,11 @@ export function createKimiWebTransport({ endpoint, getAuthorization, deadlineMs 
         if (destructive) connection?.socket.destroy();
       }, deadlineMs);
       pending.set(id, { resolve, reject, timer });
-      try { send({ type, id, payload }); }
+      try { send(connection?.agentProtocol ? { type, request_id: id, ...payload } : { type, id, payload }); }
       catch (error) { clearTimeout(timer); pending.delete(id); reject(error); }
     });
   }
-  async function open(onFrame, onDisconnect) {
+  async function open(onFrame, onDisconnect, agentProtocol = false) {
     if (stopped) throw failure('source_unavailable', 'driver_closed');
     if (connecting) return connecting;
     if (connection) return { generation, hello: connection.hello };
@@ -195,7 +195,7 @@ export function createKimiWebTransport({ endpoint, getAuthorization, deadlineMs 
       catch { throw failure('source_unavailable', 'native_ws_connect'); }
       if (stopped) { upstream.socket.destroy(); throw failure('source_unavailable', 'driver_closed'); }
       generation++;
-      const current = { socket: upstream.socket, hello: undefined };
+      const current = { socket: upstream.socket, hello: undefined, agentProtocol };
       connection = current;
       let buffer = Buffer.alloc(0), fragments = [], fragmentedBytes = 0, lastInbound = Date.now();
       let helloResolve, helloReject;
@@ -206,6 +206,18 @@ export function createKimiWebTransport({ endpoint, getAuthorization, deadlineMs 
         let frame;
         try { frame = parseFrame(JSON.parse(bytes.toString('utf8'))); }
         catch { current.socket.destroy(); return; }
+        if (agentProtocol) {
+          if (frame.type === 'ping') { pings++; send({ type: 'pong' }); pongs++; }
+          else if (frame.type === 'response') {
+            const entry = pending.get(frame.request_id);
+            if (entry) {
+              pending.delete(frame.request_id); clearTimeout(entry.timer);
+              if (frame.code === 0) entry.resolve({ payload: frame, resync: [] });
+              else entry.reject(failure(frame.code === 40112 ? 'unauthorized' : 'source_unavailable', 'native_ack_rejected'));
+            }
+          } else onFrame(frame, generation);
+          return;
+        }
         if (frame.type === 'server_hello') {
           if (current.hello || frame.payload?.protocol_version !== 2) { helloReject(failure('version_mismatch', 'native_ws_version')); current.socket.destroy(); return; }
           current.hello = record(frame.payload);
@@ -254,9 +266,14 @@ export function createKimiWebTransport({ endpoint, getAuthorization, deadlineMs 
         pending.clear();
         onDisconnect(generation);
       });
+      if (agentProtocol) {
+        clearTimeout(helloTimer);
+        current.hello = {};
+        helloResolve(current.hello);
+      }
       if (upstream.head.length) receive(upstream.head);
       await hello;
-      await control('client_hello', { client_id: 'vis-runtime', subscriptions: [] });
+      if (!agentProtocol) await control('client_hello', { client_id: 'vis-runtime', subscriptions: [] });
       return { generation, hello: current.hello };
     })();
     try { return await connecting; } finally { connecting = undefined; }

@@ -8,6 +8,15 @@
 
 ---
 
+## [v0.9.0-alpha.2]
+
+- 更新 Bridge 的 OpenCode、Codex、Kimi Web、DSH 运行时适配，修复 Kimi Web 新版打开会话历史失败。
+- 会话管理和多选恢复到顶部会话下拉栏，左侧会话树用于显示固定会话。
+- 登录页增加 SSH / Slurm 连接与设置入口。Bridge 支持通过 `agentStartup` 按需启动 Agent。
+- 性能采样留待正式版发布时考虑。
+
+---
+
 ## [v0.9.0-alpha.1]
 
 ### 统一运行环境（Unified Runtime）

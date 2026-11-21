@@ -408,9 +408,11 @@ export async function createCodexDriver(options) {
       capabilities: { experimentalApi: true },
     });
     assertCurrent();
+    const protocolProfile = typeof initialized.userAgent === 'string'
+      ? [CODEX_PROFILE, '0.170.0'].find(version => initialized.userAgent.includes(`/${version} `))
+      : undefined;
     requireValue(
-      typeof initialized.userAgent === 'string' &&
-        initialized.userAgent.includes(`/${CODEX_PROFILE} `),
+      protocolProfile,
       'codex.version',
       'version_mismatch',
     );
@@ -424,7 +426,7 @@ export async function createCodexDriver(options) {
       'owned',
       close,
     );
-    return { registration, close, protocolProfile: CODEX_PROFILE, journal, interactions };
+    return { registration, close, protocolProfile, journal, interactions };
   } catch (error) {
     await close();
     throw error;

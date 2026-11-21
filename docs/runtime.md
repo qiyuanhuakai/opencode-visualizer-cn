@@ -20,7 +20,13 @@ v0.9.0-alpha 引入统一运行环境：客户端经一个 Bridge 入口连接�
 - 已注册方法族（`shared/runtime/capabilities.js` 的 `METHODS`）：`runtime.history.*`、`runtime.target.attach/detach`、`runtime.snapshot*`、`runtime.entity.resolve`、`runtime.observer.*`、`runtime.channel.*`、`runtime.pty.*`、`session.*`、`interaction.respond`、`harness.*`（models/providers/auth/settings/skills/mcp/commands/usage）、`native.extension`。
 - **typed native extension**：可选原生能力（rename/archive/delete/fork/revert/compact 等）经能力与扩展声明授予，未声明的调用返回 `unsupported`，UI 不伪造能力。
 
-## 3. 五来源能力/版本实测矩阵
+## 3. 上游版本适配
+
+- OpenCode 1 以 `1.19.5` 为主要验收版本。后续单独适配 OpenCode 2。
+- Kimi Web 和 DSH 各自跟踪上游最新版。遇到协议变更时更新适配与验收版本。
+- Codex 保留已验证的旧版 App Server 兼容性。旧版缺少的接口按能力标记为不可用，基础连接和会话功能按该版本实际提供的接口验收。
+
+### Alpha.1 五来源能力与版本实测矩阵
 
 能力列为 E23 在真实 Chromium 中实测解析的结果（共 29 项可控件的支持集合），版本列为源码常量或实测版本。**某来源不支持某项时，UI 显示该来源名称与具体未声明项，而不是静默隐藏。**
 
@@ -35,7 +41,7 @@ v0.9.0-alpha 引入统一运行环境：客户端经一个 Bridge 入口连接�
 要点：
 
 - **能力差异是真实的，不是缺陷**：原生特色不压成最低共同能力。缺失能力以来源名称明确呈现（E23：渲染 "kimi-web (…): kimi-web does not declare the \"setProviderAuth\" operation" 且 Connect 禁用）。
-- **DSH 只支持协议代 `0.2.0-rc.2`**：版本不符时 bridge 拒绝托管并给出安装命令；bridge 侧默认不托管（opt-in）。
+- **DSH 托管要求匹配当前适配的协议版本**。版本不符时 bridge 拒绝托管并给出安装命令。Bridge 默认不托管 DSH。
 - **OpenCode 的发现走受控只读枚举**：本机正式支持档必须有已验证的无损枚举路径；不能证明时用同用户官方本地存储的只读摘要枚举（不修改原生数据、不读消息），仅用于 discovery，动作仍走 API。
 
 ## 4. 驱动最小接口

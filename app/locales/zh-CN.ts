@@ -45,7 +45,7 @@ const messages: LocaleMessages = {
         launchTokenMissing:
           'dsh 启动令牌不可用。bridge 必须自行启动 dsh web 进程；请关闭外部 dsh web 进程后重新连接。',
         versionMismatch:
-          "本机 dsh 版本与支持的协议代不匹配。请安装 dsh{'@'}0.2.0-rc.2 后重新连接。",
+          "本机 dsh 版本与支持的协议代不匹配。请安装 dsh{'@'}0.2.2-rc.5 后重新连接。",
       },
       authRequired: '服务器需要身份验证',
       connect: '连接',
@@ -64,6 +64,10 @@ const messages: LocaleMessages = {
       agentSettings: '代理设置',
     },
     runtimeConnection: {
+      sshSlurm: 'SSH / Slurm',
+      startAgent: '启动 Agent',
+      agentStandby: '等待启动',
+      settings: '设置',
       title: '连接到 Bridge 目标',
       description: '连接 vis_bridge，访问你的 Agent 和会话。',
       profilesLabel: '连接配置文件',

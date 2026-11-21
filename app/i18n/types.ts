@@ -53,6 +53,10 @@ export interface LocaleMessages {
       title: string;
       description: string;
       profilesLabel: string;
+      sshSlurm: string;
+      settings: string;
+      startAgent: string;
+      agentStandby: string;
       unsupported: string;
       connect: string;
       retry: string;

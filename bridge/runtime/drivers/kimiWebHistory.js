@@ -149,7 +149,7 @@ const INVALIDATION = Object.freeze(['transcript.reset', 'transcript.ops', 'repla
  * this module never builds an endpoint, holds credentials or observes any other session.
  */
 export function createKimiWebHistoryProducer(options) {
-  const { session, authority, current, assertCurrent, pull, subscribe, releaseOwner, sessionEpoch, randomUUID } = options;
+  const { session, authority, current, assertCurrent, pull, subscribe, releaseOwner, sessionEpoch, randomUUID, ordinalCursor = false, live = true } = options;
   const nativeSessionId = nativeText(session.nativeSessionId, 'kimi.history_session', 512);
   let store, observer, pump, opened = false, closed = false, through = 0, nativeCursor = null, failure;
   const pages = new Set();
@@ -194,6 +194,7 @@ export function createKimiWebHistoryProducer(options) {
     fields: Object.freeze([
       Object.freeze({ name: 'hasMore', path: Object.freeze(['has_more']) }),
       Object.freeze({ name: 'seq', path: Object.freeze(['seq']) }),
+      Object.freeze({ name: 'nextOrdinal', path: Object.freeze(['next_ordinal']) }),
       Object.freeze({ name: 'epoch', path: Object.freeze(['epoch']) }),
       Object.freeze({ name: 'nativeCode', path: Object.freeze(['code']) }),
       Object.freeze({ name: 'dataHasMore', path: Object.freeze(['data', 'has_more']) }),
@@ -215,24 +216,26 @@ export function createKimiWebHistoryProducer(options) {
       const epoch = rawEpoch === undefined ? undefined : nativeText(rawEpoch, 'kimi.history_native_epoch', 512);
       const known = sessionEpoch();
       if (epoch !== undefined && known !== undefined && known !== epoch) throw new ProtocolError('replay_required', 'kimi.history_epoch_changed');
-      envelope = Object.freeze({ hasMore, seq, epoch: epoch ?? null });
+      envelope = Object.freeze({ hasMore, seq, epoch: epoch ?? null, nextOrdinal: metadata.nextOrdinal });
     },
   });
   async function open({ signal, streamStore }) {
     requireValue(!opened && !closed, 'kimi.history_open', 'conflict');
     await fenced(signal);
     opened = true; store = streamStore;
-    observer = subscribe((event) => event?.type !== undefined && INVALIDATION.includes(event.type) && event.session?.nativeSessionId === nativeSessionId);
-    pump = (async () => {
-      try {
-        for (;;) {
-          const next = await observer.next();
-          if (next.done) { failure ??= new ProtocolError('source_unavailable', 'kimi.history_observer_closed'); break; }
-          if (next.value !== undefined) { through++; wake(); }
-        }
-      } catch (error) { failure ??= error instanceof ProtocolError ? error : new ProtocolError('replay_required', 'kimi.history_observer'); }
-      finally { wake(); }
-    })();
+    if (live) {
+      observer = subscribe((event) => event?.type !== undefined && INVALIDATION.includes(event.type) && event.session?.nativeSessionId === nativeSessionId);
+      pump = (async () => {
+        try {
+          for (;;) {
+            const next = await observer.next();
+            if (next.done) { failure ??= new ProtocolError('source_unavailable', 'kimi.history_observer_closed'); break; }
+            if (next.value !== undefined) { through++; wake(); }
+          }
+        } catch (error) { failure ??= error instanceof ProtocolError ? error : new ProtocolError('replay_required', 'kimi.history_observer'); }
+        finally { wake(); }
+      })();
+    }
     return { fence: { id: randomUUID(), sourceGeneration: authority.epoch } };
   }
   async function page({ cursor, releasePageIds = [], signal }) {
@@ -262,12 +265,16 @@ export function createKimiWebHistoryProducer(options) {
       await fenced(signal);
       requireValue(envelope !== undefined, 'kimi.history_envelope', 'replay_required');
       const boundary = output.records.find((record) => record.recordId.startsWith('turn:'));
-      if (envelope.hasMore) {
+      if (envelope.hasMore && !ordinalCursor) {
         requireValue(boundary !== undefined, 'kimi.history_cursor', 'replay_required');
         requireValue(boundary.recordId.slice(5) !== before, 'kimi.history_repeated_cursor', 'replay_required');
       }
       pages.add(output.id);
-      nativeCursor = envelope.hasMore ? boundary.recordId.slice(5) : null;
+      if (envelope.hasMore && ordinalCursor) {
+        integerValue(envelope.nextOrdinal, 'kimi.history_next_ordinal');
+        requireValue(before === null || envelope.nextOrdinal < Number(before), 'kimi.history_repeated_cursor', 'replay_required');
+      }
+      nativeCursor = envelope.hasMore ? (ordinalCursor ? String(envelope.nextOrdinal) : boundary.recordId.slice(5)) : null;
       return {
         pageId: output.id,
         items: output.records.map((record) => ({ recordId: record.recordId, kind: 'stream', descriptor: { id: record.id, format: record.format, totalBytes: record.totalBytes, sha256: record.sha256 } })),
@@ -313,5 +320,5 @@ export function createKimiWebHistoryProducer(options) {
     store = undefined;
     await releaseOwner?.();
   }
-  return Object.freeze({ capabilities: Object.freeze({ archive: 'paged', recordStream: true, live: 'invalidate' }), open, page, chunk, read, close });
+  return Object.freeze({ capabilities: Object.freeze({ archive: 'paged', recordStream: true, live: live ? 'invalidate' : 'unsupported' }), open, page, chunk, read, close });
 }

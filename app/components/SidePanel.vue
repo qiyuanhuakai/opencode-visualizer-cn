@@ -19,7 +19,9 @@
           <div class="session-title">{{ $t('sidePanel.session.title') }}</div>
           <div class="session-count">{{ sessionTreeSessionCount }}</div>
         </div>
+        <RuntimePins v-if="runtimeMode && runtimePins" :pins="runtimePins" @select="emit('select-qualified', $event)" />
         <SessionTree
+          v-else-if="!runtimeMode"
           :projects="sessionTreeData"
           :expanded-paths="sessionTreeExpandedPaths"
           :selected-session-id="selectedSessionId"
@@ -98,6 +100,7 @@ import TreeView from './TreeView.vue';
 // on the session tab. Load it as its own async chunk (defineAsyncComponent) so
 // it stays out of the entry bundle and within the frozen entry-js budget, while
 // every prop, emitted event and theme token behaves exactly as before.
+const RuntimePins = defineAsyncComponent(() => import('./runtime/RuntimePins.vue'));
 const SessionTree = defineAsyncComponent(() => import('./SessionTree.vue'));
 
 type TodoItem = {
@@ -148,6 +151,7 @@ const props = defineProps<{
   unifiedTreeError?: string | null;
   unifiedTreeFilterKinds?: ReadonlySet<SessionHarness>;
   unifiedTreeSearch?: UnifiedSearchState | null;
+  runtimeMode?: boolean;
   runtimePins?: import('../composables/useRuntimePins').RuntimePinsState;
 }>();
 
@@ -188,6 +192,7 @@ const tabs = computed(() => [
 ]);
 
 const sessionTreeSessionCount = computed(() => {
+  if (props.runtimeMode) return props.runtimePins?.records.value.length ?? 0;
   if (props.unifiedTreeRows !== undefined) return props.unifiedTreeLoaded ?? 0;
   return props.sessionTreeData.reduce(
     (count, project) =>

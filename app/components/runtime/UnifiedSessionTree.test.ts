@@ -612,6 +612,26 @@ describe('task 21 — unified session tree acceptance', () => {
     expect(loaded.root.querySelector('[data-testid="unified-empty"]')).not.toBeNull();
   });
 
+  it('batch selection keeps same-named sessions on different Agents distinct', async () => {
+    const kinds = ['opencode', 'codex'] as const;
+    const sessions = kinds.map(kind => parseUnifiedSessionRow(sessionKey(1, kind), summaryValue(1, kind), kind)!);
+    const nodes = buildUnifiedTree(sessions, [{ path: DIRECTORY, repoKey: REPO_KEY, gitKind: 'git', orphan: false }]);
+    const expanded = new Set<string>();
+    expandGroups(nodes, expanded);
+    const rows = flattenUnifiedTree(nodes, expanded, new Set([...HARNESS_KINDS, 'unknown'] as const));
+    const onBatchAction = vi.fn();
+    const tree = await mountTree({ treeRows: rows, expandedPaths: [...expanded], managementMode: true, onBatchAction });
+    mounted.push(tree);
+    const buttons = [...tree.root.querySelectorAll<HTMLElement>('[data-row-kind="session"]')];
+    expect(buttons).toHaveLength(2);
+    for (const button of buttons) button.click();
+    await nextTick();
+    expect(tree.root.querySelectorAll('[role="treeitem"][aria-selected="true"]')).toHaveLength(2);
+    expect(tree.emitted.has('select-key')).toBe(false);
+    tree.root.querySelector<HTMLButtonElement>('.unified-header .unified-toolbar button')!.click();
+    expect(onBatchAction).toHaveBeenCalledWith('pin', buttons.map(button => button.dataset.rowKey));
+  });
+
   it('keyboard navigation selects the focused row and expands groups', async () => {
     const sessions: UnifiedSessionRow[] = [];
     for (const index of [1, 2, 3]) sessions.push(parseUnifiedSessionRow(sessionKey(index, 'opencode'), summaryValue(index, 'opencode'), 'opencode')!);

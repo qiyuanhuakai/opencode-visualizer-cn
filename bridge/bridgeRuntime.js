@@ -26,6 +26,7 @@ export function createBridgeRuntime(options = {}) {
   let sourceStart;
   let nativeStart;
   let acpStart;
+  const requestedAcp = new Set();
   let host;
   let closing = false;
   let started = false;
@@ -36,12 +37,33 @@ export function createBridgeRuntime(options = {}) {
   }
 
   function startNative() {
-    nativeStart ??= startSources().then((config) => nativeSupervisor.start(config.nativeServices));
+    nativeStart ??= startSources().then(config => config.agentStartup === 'on-demand'
+      ? nativeSupervisor.start(config.nativeServices, { onDemand: true })
+      : nativeSupervisor.start(config.nativeServices));
     return nativeStart;
   }
   function startAcp() {
-    acpStart ??= startSources().then((config) => acpManager.reconcile(config.acpAgents));
+    acpStart ??= startSources().then((config) => acpManager.reconcile(activeAcpAgents(config)));
     return acpStart;
+  }
+  function activeAcpAgents(config) {
+    return config.agentStartup === 'on-demand'
+      ? config.acpAgents.map(agent => requestedAcp.has(agent.id) ? agent : { ...agent, enabled: false })
+      : config.acpAgents;
+  }
+  function startRequestedAgent(kind, agentId) {
+    return enqueueMutation(async () => {
+      const config = await configStore.getConfig();
+      if (config.agentStartup !== 'on-demand') return;
+      if (kind === 'acp') {
+        if (!config.acpAgents.some(agent => agent.id === agentId && agent.enabled)) throw new ProtocolError('unsupported', 'acp.disabled');
+        requestedAcp.add(agentId);
+        await acpManager.reconcile(activeAcpAgents(config));
+      } else {
+        if (!config.nativeServices?.[kind] || !nativeSupervisor.startOne) throw new ProtocolError('unsupported', 'native.disabled');
+        await nativeSupervisor.startOne(kind);
+      }
+    });
   }
   function getRuntimeHost() {
     if (closing) return Promise.reject(new Error('Bridge runtime is shutting down.'));
@@ -51,7 +73,8 @@ export function createBridgeRuntime(options = {}) {
         (await loadEnvironmentIdentity(options.stateRoot ?? path.dirname(configStore.configPath)));
       const { createRuntimeServices } = await import('./runtime/runtimeServices.js');
       if (closing) throw new Error('Bridge runtime is shutting down.');
-      const services = await createRuntimeServices({ environmentId, stateRoot: options.stateRoot ?? path.dirname(configStore.configPath), role: options.role ?? 'local', roots: options.localWorkspaceRoots ?? [{ root: process.cwd(), permissions: ['read', 'write', 'command', 'pty', 'reverse'] }], config: await startSources(), nativeSupervisor, acpManager, runtime: { mutate: operation => host.mutate(operation) }, factories: options.runtimeDriverFactories, runtimeStoreTakeover: options.runtimeStoreTakeover, remoteServices });
+      const config = await startSources();
+      const services = await createRuntimeServices({ environmentId, stateRoot: options.stateRoot ?? path.dirname(configStore.configPath), role: options.role ?? 'local', roots: options.localWorkspaceRoots ?? [{ root: process.cwd(), permissions: ['read', 'write', 'command', 'pty', 'reverse'] }], config, nativeSupervisor, acpManager, startRequestedAgent, runtime: { mutate: operation => host.mutate(operation) }, factories: options.runtimeDriverFactories, runtimeStoreTakeover: options.runtimeStoreTakeover, remoteServices });
       if (closing) { await services.close(); throw new Error('Bridge runtime is shutting down.'); }
       host = createRuntimeHost({
         environmentId,
@@ -75,6 +98,7 @@ export function createBridgeRuntime(options = {}) {
       host.resources.register('remote', 'owned', () => remoteServices.close());
       host.resources.register('reverse', 'owned', () => clientMethodHandler.stopAll());
       host.start();
+      if (config.agentStartup === 'on-demand') await host.sourcesReady;
       return host;
     })();
     return hostPromise;
@@ -130,7 +154,7 @@ export function createBridgeRuntime(options = {}) {
   }
 
   async function reconcileConfig(config) {
-    await acpManager.reconcile(config.acpAgents);
+    await acpManager.reconcile(activeAcpAgents(config));
     return acpManager.getStatus();
   }
 
@@ -174,6 +198,7 @@ export function createBridgeRuntime(options = {}) {
       const config = await configStore.getConfig();
       if (!config.acpAgents.some((agent) => agent.id === id)) return false;
       const next = await configStore.removeAgent(id);
+      requestedAcp.delete(id);
       await reconcileConfig(next);
       return true;
     });
@@ -218,6 +243,7 @@ export function createBridgeRuntime(options = {}) {
         sourceStart = undefined;
         nativeStart = undefined;
         acpStart = undefined;
+        requestedAcp.clear();
       });
     try {
       await stopPromise;

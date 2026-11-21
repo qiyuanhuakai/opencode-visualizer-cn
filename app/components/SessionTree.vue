@@ -1,6 +1,13 @@
 <template>
   <div v-if="unified" class="session-tree session-tree-unified" data-testid="unified-session-tree">
     <div class="unified-header">
+      <div v-if="managementMode" class="unified-toolbar">
+        <span aria-live="polite">{{ managedKeys.size }}</span>
+        <button v-for="action in batchActions" :key="action" type="button" class="unified-filter-trigger"
+          :disabled="managedKeys.size === 0" @click="emit('batch-action', action, [...managedKeys])">
+          {{ $t(batchLabels[action]) }}
+        </button>
+      </div>
       <div class="unified-toolbar">
         <div class="unified-search">
           <Icon class="unified-search-icon" icon="lucide:search" :width="12" :height="12" />
@@ -85,7 +92,7 @@
       </div>
       <ul v-if="searchState?.matches.length" class="unified-search-results" data-testid="search-results">
         <li v-for="match in searchState.matches" :key="match.key">
-          <button type="button" class="unified-search-result" data-testid="search-result" @click="emit('select-key', match.key)">
+          <button type="button" class="unified-search-result" data-testid="search-result" :aria-pressed="managementMode ? managedKeys.has(match.key) : undefined" @click="chooseSession(match.key)">
             <HarnessBadge class="unified-search-result-badge" :harness="match.harness" compact />
             <span class="unified-search-result-title">{{ match.title }}</span>
           </button>
@@ -99,6 +106,7 @@
       data-testid="unified-scroll"
       tabindex="0"
       role="tree"
+      :aria-multiselectable="managementMode || undefined"
       :aria-label="$t('runtime.sessionTree.treeLabel', 'Sessions')"
       @scroll.passive="onScroll"
       @keydown="onKeyDown"
@@ -375,6 +383,7 @@ const props = withDefaults(
     searchState?: UnifiedSearchState | null;
     indexWaiting?: boolean;
     pinState?: RuntimePinsState;
+    managementMode?: boolean;
   }>(),
   {
     treeRows: undefined,
@@ -404,6 +413,7 @@ const emit = defineEmits<{
   (event: 'reload'): void;
   (event: 'toggle-key', key: string): void;
   (event: 'select-key', key: string): void;
+  (event: 'batch-action', action: keyof typeof batchLabels, keys: string[]): void;
   (event: 'retry-source', harnessInstanceId: string): void;
   (event: 'filter-change', kinds: SessionHarness[]): void;
   (event: 'search', query: string): void;
@@ -423,7 +433,23 @@ const scrollTop = ref(0);
 const viewportHeight = ref(640);
 const focusIndex = ref(0);
 const activeKinds = computed(() => props.filterKinds);
-const selectedKeys = computed(() => (props.selectedKey ? new Set<string>([props.selectedKey]) : new Set<string>()));
+const batchLabels = {
+  pin: 'topPanel.sessionActions.pin',
+  unpin: 'topPanel.sessionActions.unpin',
+  archive: 'topPanel.management.archive',
+  unarchive: 'topPanel.sessionActions.unarchive',
+  delete: 'topPanel.sessionActions.deletePermanently',
+} as const;
+const batchActions = ['pin', 'unpin', 'archive', 'unarchive', 'delete'] as const;
+const managedKeys = ref(new Set<string>());
+watch(() => props.managementMode, () => { managedKeys.value = new Set(); });
+const selectedKeys = computed(() => props.managementMode ? managedKeys.value : new Set(props.selectedKey ? [props.selectedKey] : []));
+function chooseSession(key: string): void {
+  if (!props.managementMode) { emit('select-key', key); return; }
+  const next = new Set(managedKeys.value);
+  if (!next.delete(key)) next.add(key);
+  managedKeys.value = next;
+}
 
 const filterLabel = computed(() => {
   const active = HARNESS_KINDS.filter((kind) => activeKinds.value.has(kind)).length;
@@ -460,7 +486,7 @@ function selectionKey(row: UnifiedFlatRow): string {
 }
 function onRowClick(row: UnifiedFlatRow): void {
   if (row.node.kind === 'session' || row.node.kind === 'native') {
-    emit('select-key', row.node.session.key);
+    chooseSession(row.node.session.key);
     return;
   }
   emit('toggle-key', row.key);

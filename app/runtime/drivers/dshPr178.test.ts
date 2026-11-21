@@ -285,7 +285,7 @@ async function withDshDriver(summaries: Array<Record<string, unknown>>, action: 
   const store = decorate ? decorate(created) : created;
   const driver = createDshDriver({
     ...driverIdentity, store, onEvent: (event) => { events.push(event as Record<string, unknown>); },
-    getOwnedEndpoint: () => ({ state: 'ready', ownership: 'owned', nativeVersion: '0.2.0-rc.2', origin: controlled.origin, generation: 1 }),
+    getOwnedEndpoint: () => ({ state: 'ready', ownership: 'owned', nativeVersion: '0.2.2-rc.5', origin: controlled.origin, generation: 1 }),
     auth: { getCookie: async () => 'private-fixture-cookie', invalidate: () => {} },
   });
   const harness: DshHarness = {

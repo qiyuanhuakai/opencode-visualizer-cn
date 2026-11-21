@@ -3,7 +3,7 @@ import { request as httpRequest } from 'node:http';
 import { Readable } from 'node:stream';
 import { connectUpstreamWebSocket } from '../../codexWebSocketProxy.js';
 import { decodeWebSocketFrames, encodeWebSocketFrame } from '../../webSocketFrames.js';
-import { request, response, muxFrame, fail, DshError } from '../../../shared/runtime/native/dsh/protocol.js';
+import { request, response, muxFrame, fail, DshError, DSH_RUNTIME_VERSION } from '../../../shared/runtime/native/dsh/protocol.js';
 
 const BODY_LIMIT = 16777216;
 const FRAME_LIMIT = 2097152;
@@ -25,7 +25,7 @@ export function createDshTransport({ getOwnedEndpoint, auth, deadlineMs = 15000 
     if (closed) fail('source_unavailable', 'closed');
     const lease = getOwnedEndpoint();
     if (!lease || lease.state !== 'ready') fail(lease?.state === 'auth-required' ? 'unauthorized' : 'source_unavailable', 'not_ready');
-    if (lease.nativeVersion !== '0.2.0-rc.2') fail('version_mismatch', 'native_version');
+    if (lease.nativeVersion !== DSH_RUNTIME_VERSION) fail('version_mismatch', 'native_version');
     if (lease.ownership !== 'owned' || !Number.isSafeInteger(lease.generation) || lease.generation < 1) fail('unauthorized', 'owned_child_required');
     const url = new URL(lease.origin);
     if (url.protocol !== 'http:' || !['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname) || url.username || url.password || url.search || url.hash || url.pathname !== '/') fail('unauthorized', 'owned_endpoint');

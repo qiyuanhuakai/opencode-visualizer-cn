@@ -101,6 +101,22 @@ export function createRuntimePins(options: {
         await loadPage(database);
       });
     },
+    setPinned(selections: readonly QualifiedSession[], value: boolean) {
+      return run(async database => {
+        await releasePage();
+        for (const selection of selections) {
+          if (selection.profileId !== options.profileId || disposed) break;
+          const identity = { selection, clientOrigin: options.clientOrigin };
+          const existing = await database.get(identity);
+          const revision = (existing?.record.revision ?? 0) + 1;
+          const previous = existing?.record.pinned ?? false;
+          existing?.release();
+          if (disposed) break;
+          if (previous !== value) await database.set({ ...identity, revision, pinned: value });
+        }
+        await loadPage(database);
+      }).then(() => refreshSelected());
+    },
     show() { opened.value = true; after = undefined; return run(loadPage); },
     nextPage() {
       if (!next || busy.value) return Promise.resolve();

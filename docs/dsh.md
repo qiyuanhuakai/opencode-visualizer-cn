@@ -23,10 +23,10 @@
 
 落地代码：bridge 侧 `bridge/processSupervisor.js`（dsh 托管）、`bridge/dshAuth.js`（launch token → cookie）、`bridge/dshHttpProxy.js`（`/dsh/*` → `/api/*`）、`bridge/dshWsProxy.js`（`/dsh/ws` → `/api/remote.mux`）、`bridge/bridgeConfig.js`（`nativeServices.dsh`）；前端侧 `app/backends/dsh/`、`app/utils/dshRpc.ts`、`app/utils/dshMux.ts`、`app/composables/useDshMessageBridge.ts`、`app/composables/dshPermissions.ts`。
 
-**版本钉死**：只支持协议代 `0.2.0-rc.2`。版本闸门在 `bridge/processSupervisor.js`（`DSH_SUPPORTED_VERSION`）：不符即停掉该子进程并提示安装。唯一受支持的安装命令（与 `DSH_INSTALL_GUIDANCE` 逐字一致）：
+Vis 跟踪 DSH 上游最新版。当前适配版本为 `0.2.2-rc.5`，由 `DSH_RUNTIME_VERSION` 统一约束。下面的实测表记录历史版本 `0.2.0-rc.2` 的结果。
 
 ```bash
-npm i -g @deepseek-ai/dsh@0.2.0-rc.2
+npm i -g @deepseek-ai/dsh@0.2.2-rc.5
 ```
 
 | 状态 | 判定标准 | 表面 |
