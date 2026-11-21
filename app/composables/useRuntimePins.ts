@@ -106,6 +106,8 @@ export function createRuntimePins(options: {
     },
     toggleKey(key: string) {
       return run(async database => {
+        await releasePage();
+        if (disposed) return;
         const identity = { selection: { profileId: options.profileId, session: decodeSessionKey(key) }, clientOrigin: options.clientOrigin };
         const existing = await database.get(identity);
         const nextRevision = (existing?.record.revision ?? 0) + 1;
