@@ -176,7 +176,7 @@ import { useRuntimeThreadState } from '../composables/useRuntimeThread';
 const ThreadPanel = defineAsyncComponent(() => import('./runtime/ThreadView.vue'));
 import {
   initialProgressiveRootWindow,
-  preserveProgressiveRootWindowOnAppend,
+  reconcileProgressiveRootWindow,
   shiftProgressiveRootWindow,
 } from '../utils/progressiveRoots';
 import { preserveScrollAnchor } from '../utils/scrollAnchor';
@@ -398,11 +398,11 @@ watch(
 );
 
 watch(renderableRoots, (nextRoots, previousRoots) => {
-  if (props.isLoading || previousRoots.length === 0) {
+  if (previousRoots.length === 0) {
     rootWindow.value = initialProgressiveRootWindow(nextRoots.length, THREAD_BATCH_SIZE);
     return;
   }
-  rootWindow.value = preserveProgressiveRootWindowOnAppend(
+  rootWindow.value = reconcileProgressiveRootWindow(
     previousRoots.map((root) => root.id),
     nextRoots.map((root) => root.id),
     rootWindow.value,
