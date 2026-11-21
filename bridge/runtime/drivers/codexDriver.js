@@ -409,7 +409,7 @@ export async function createCodexDriver(options) {
     });
     assertCurrent();
     const protocolProfile = typeof initialized.userAgent === 'string'
-      ? [CODEX_PROFILE, '0.170.0'].find(version => initialized.userAgent.includes(`/${version} `))
+      ? [CODEX_PROFILE, '0.170.0', '0.171.0'].find(version => initialized.userAgent.includes(`/${version} `))
       : undefined;
     requireValue(
       protocolProfile,

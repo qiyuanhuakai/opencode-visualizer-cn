@@ -25,7 +25,7 @@ describe('vis_bridge daemon CLI', { timeout: 15_000 }, () => {
       fixture.env,
     );
 
-    expect(result.stdout).toContain('vis_bridge started');
+    expect(result.stdout).toContain(`on ws://127.0.0.1:${fixture.port}/runtime.`);
     await expect(readHealthStatus(fixture.port)).resolves.toBe(200);
   });
 

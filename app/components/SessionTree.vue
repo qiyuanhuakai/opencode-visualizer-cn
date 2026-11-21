@@ -1,8 +1,14 @@
 <template>
-  <div v-if="unified" class="session-tree session-tree-unified" data-testid="unified-session-tree">
+  <div v-if="unified" class="session-tree session-tree-unified" :class="{ 'is-top-dropdown': topDropdown }" data-testid="unified-session-tree">
     <div class="unified-header">
-      <div v-if="managementMode" class="unified-toolbar">
-        <span aria-live="polite">{{ managedKeys.size }}</span>
+      <div v-if="managementMode" class="unified-toolbar unified-management-toolbar">
+        <span class="unified-management-title" aria-live="polite">
+          <Icon icon="lucide:check-check" :width="14" :height="14" />
+          {{ $t('topPanel.management.title') }}
+          <span>{{ $t('topPanel.management.selectedCount', { count: managedKeys.size }) }}</span>
+        </span>
+        <button v-if="topDropdown" type="button" class="unified-filter-trigger" @click="emit('finish-management')">{{ $t('topPanel.management.done') }}</button>
+        <button v-if="topDropdown" type="button" class="unified-filter-trigger" :disabled="!manageableKeys.length" @click="toggleVisible">{{ $t(allVisibleManaged ? 'topPanel.management.unselectVisible' : 'topPanel.management.selectVisible') }}</button>
         <button v-for="action in batchActions" :key="action" type="button" class="unified-filter-trigger"
           :disabled="managedKeys.size === 0" @click="emit('batch-action', action, [...managedKeys])">
           {{ $t(batchLabels[action]) }}
@@ -21,6 +27,9 @@
             @input="onSearchInput"
             @keydown.enter.prevent="emit('search', searchQuery)"
           />
+          <button v-if="topDropdown && searchQuery" type="button" class="unified-clear-search" :aria-label="$t('common.clear', 'Clear search')" @click="searchQuery = ''; emit('search', '')">
+            <Icon icon="lucide:x" :width="14" :height="14" />
+          </button>
         </div>
         <Dropdown class="unified-filter" :auto-close="false" :aria-label="$t('runtime.sessionTree.filterSources', 'Filter sources')">
           <template #trigger="{ toggle, expanded }">
@@ -57,7 +66,7 @@
         @retry="(harnessInstanceId) => emit('retry-source', harnessInstanceId)"
       />
       <RuntimePins v-if="pinState" :pins="pinState" @select="emit('select-qualified', $event)" />
-      <div class="unified-meta" data-testid="unified-meta">
+      <div v-if="!topDropdown || props.viewStatus === 'loading' || props.viewStatus === 'error' || waitingForIndexView || searchQuery" class="unified-meta" data-testid="unified-meta">
         <span v-if="props.viewStatus === 'loading'" class="unified-meta-loading">
           <Icon class="unified-spin" icon="lucide:loader-2" :width="12" :height="12" />
           {{ $t('runtime.sessionTree.loading', 'Loading sessions…') }}
@@ -95,6 +104,9 @@
           <button type="button" class="unified-search-result" data-testid="search-result" :aria-pressed="managementMode ? managedKeys.has(match.key) : undefined" @click="chooseSession(match.key)">
             <HarnessBadge class="unified-search-result-badge" :harness="match.harness" compact />
             <span class="unified-search-result-title">{{ match.title }}</span>
+          </button>
+          <button v-if="rowPins && !managementMode && !match.archived" type="button" class="unified-pin-button" :class="{ 'is-pinned': pinnedKeys.has(match.key) }" :aria-label="pinLabel(match.key, match.title)" :title="pinLabel(match.key, match.title)" @click.stop.prevent="rowPins.toggleKey(match.key)">
+            <Icon :icon="pinnedKeys.has(match.key) ? 'lucide:pin-off' : 'lucide:pin'" :width="16" :height="16" />
           </button>
         </li>
       </ul>
@@ -141,6 +153,7 @@
             <Icon :icon="isExpanded(entry.row.key) ? 'lucide:chevron-down' : 'lucide:chevron-right'" width="12" height="12" />
           </span>
           <span v-else class="unified-row-toggle is-leaf"></span>
+          <input v-if="managementMode && topDropdown && isSessionRow(entry.row)" class="unified-row-checkbox" type="checkbox" :checked="managedKeys.has(selectionKey(entry.row))" :aria-label="rowLabel(entry.row)" @click.stop="chooseSession(selectionKey(entry.row))" />
           <span class="unified-row-icon">
             <Icon :icon="rowIcon(entry.row)" width="13" height="13" />
           </span>
@@ -160,13 +173,16 @@
             :harness="entry.row.node.session.harness"
             compact
           />
+          <button v-if="rowPins && !managementMode && isPinnable(entry.row)" type="button" class="unified-pin-button" :class="{ 'is-pinned': pinnedKeys.has(selectionKey(entry.row)) }" :aria-label="pinLabel(selectionKey(entry.row), rowLabel(entry.row))" :title="pinLabel(selectionKey(entry.row), rowLabel(entry.row))" @click.stop.prevent="rowPins.toggleKey(selectionKey(entry.row))">
+            <Icon :icon="pinnedKeys.has(selectionKey(entry.row)) ? 'lucide:pin-off' : 'lucide:pin'" :width="16" :height="16" />
+          </button>
         </div>
       </div>
     </div>
     <div v-if="(props.treeRows ?? []).length === 0 && props.viewStatus !== 'loading'" class="unified-empty" data-testid="unified-empty">
       {{ props.viewStatus === 'error' ? $t('runtime.sessionTree.indexError', 'Session index unavailable') : $t('sidePanel.session.noPinned') }}
     </div>
-    <div class="session-tree-footer">
+    <div v-if="!topDropdown" class="session-tree-footer">
       <div class="session-tree-footer-left">
         <span class="unified-footer-count" data-testid="unified-footer-count">{{ (props.treeRows ?? []).length }}</span>
       </div>
@@ -344,7 +360,8 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue';
 import { useRuntimeUi } from '../locales/runtimeUi';
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import type { ContainerPinPayload } from '../types/pin';
 import type { SessionTreeProject, SessionTreeSandbox } from '../types/session-tree';
 import {
@@ -384,6 +401,8 @@ const props = withDefaults(
     indexWaiting?: boolean;
     pinState?: RuntimePinsState;
     managementMode?: boolean;
+    topDropdown?: boolean;
+    rowPins?: RuntimePinsState;
   }>(),
   {
     treeRows: undefined,
@@ -413,6 +432,7 @@ const emit = defineEmits<{
   (event: 'reload'): void;
   (event: 'toggle-key', key: string): void;
   (event: 'select-key', key: string): void;
+  (event: 'finish-management'): void;
   (event: 'batch-action', action: keyof typeof batchLabels, keys: string[]): void;
   (event: 'retry-source', harnessInstanceId: string): void;
   (event: 'filter-change', kinds: SessionHarness[]): void;
@@ -422,6 +442,7 @@ const emit = defineEmits<{
 }>();
 
 const { rt } = useRuntimeUi();
+const { t } = useI18n();
 function requestNextSearch() {
   if (props.searchState?.status === 'complete') emit('search-more');
 }
@@ -464,6 +485,41 @@ const windowRows = computed(() => {
   const start = Math.min(startIndex.value, Math.max(0, rows.length - 1));
   return rows.slice(start, start + visibleCount.value).map((row, offset) => ({ row, index: start + offset, top: (start + offset) * ROW_HEIGHT }));
 });
+const manageableKeys = computed(() => [...new Set(searchQuery.value
+  ? (props.searchState?.matches ?? []).map(match => match.key)
+  : (props.treeRows ?? []).filter(isSessionRow).map(selectionKey))]);
+const allVisibleManaged = computed(() => manageableKeys.value.length > 0 && manageableKeys.value.every(key => managedKeys.value.has(key)));
+function toggleVisible() {
+  const next = new Set(managedKeys.value);
+  for (const key of manageableKeys.value) {
+    if (allVisibleManaged.value) next.delete(key);
+    else next.add(key);
+  }
+  managedKeys.value = next;
+}
+function isSessionRow(row: UnifiedFlatRow) {
+  return row.node.kind === 'session' || row.node.kind === 'native';
+}
+function isPinnable(row: UnifiedFlatRow) {
+  return (row.node.kind === 'session' || row.node.kind === 'native') && !row.node.session.archived;
+}
+const pinnedKeys = shallowRef(new Set<string>());
+const pinReadKeys = computed(() => [...new Set([
+  ...windowRows.value.map(entry => entry.row).filter(isPinnable).map(selectionKey),
+  ...(props.searchState?.matches ?? []).filter(match => !match.archived).map(match => match.key),
+])]);
+watch([() => props.rowPins, () => props.rowPins?.revision.value, pinReadKeys], ([pins, , keys], _old, onCleanup) => {
+  if (!pins) { pinnedKeys.value = new Set(); return; }
+  const controller = new AbortController();
+  onCleanup(() => controller.abort());
+  void pins.readKeys(keys, controller.signal).then(result => {
+    if (!controller.signal.aborted) pinnedKeys.value = result;
+  }).catch(() => {});
+}, { immediate: true });
+function pinLabel(key: string, title: string) {
+  return `${t(pinnedKeys.value.has(key) ? 'topPanel.sessionActions.unpin' : 'topPanel.sessionActions.pin')} ${title}`;
+}
+
 const totalHeight = computed(() => (props.treeRows ?? []).length * ROW_HEIGHT);
 
 function onScroll(): void {
@@ -533,6 +589,7 @@ function rowLabel(row: UnifiedFlatRow): string {
   return row.node.session.title;
 }
 function onKeyDown(event: KeyboardEvent): void {
+  if (event.target !== event.currentTarget) return;
   const rows = props.treeRows ?? [];
   if (!rows.length) return;
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -1154,4 +1211,39 @@ function sessionStatusIcon(status: 'busy' | 'idle' | 'retry' | 'unknown'): strin
   color: var(--theme-side-text-muted, #94a3b8);
   font-variant-numeric: tabular-nums;
 }
+
+.is-top-dropdown {
+  color: var(--theme-top-dropdown-text, var(--theme-text-primary));
+  background: var(--theme-top-dropdown-bg, var(--theme-surface-panel));
+}
+.is-top-dropdown .unified-header { border-bottom: 1px solid var(--theme-top-dropdown-border); }
+.is-top-dropdown .unified-toolbar { gap: 8px; padding: 8px; }
+.is-top-dropdown .unified-search { min-height: 30px; border-radius: 8px; background: var(--theme-search-bg, var(--theme-top-dropdown-control-bg)); }
+.is-top-dropdown .unified-search-input { padding: 6px 8px; font-size: var(--ui-font-size, 12px); color: var(--theme-top-dropdown-text, var(--theme-text-primary)); }
+.is-top-dropdown .unified-search:focus-within { background: var(--theme-search-focus-bg, var(--theme-top-dropdown-active-bg)); }
+.is-top-dropdown .unified-filter-trigger { border-color: var(--theme-top-dropdown-border); background: var(--theme-top-dropdown-control-bg); color: inherit; }
+.is-top-dropdown .unified-management-toolbar { flex-wrap: wrap; border-bottom: 1px solid var(--theme-top-dropdown-border); background: var(--theme-top-dropdown-control-bg); }
+.unified-management-title { display: inline-flex; align-items: center; gap: 6px; }
+.unified-management-title span { color: var(--theme-top-dropdown-text-muted, var(--theme-text-muted)); }
+.is-top-dropdown .unified-row { left: 8px; right: 8px; border: 1px solid transparent; border-radius: 8px; font-size: var(--ui-font-size, 12px); }
+.is-top-dropdown .unified-row:hover,
+.is-top-dropdown .unified-row[data-selected='true'],
+.is-top-dropdown .unified-search-result:hover { background: var(--theme-top-dropdown-active-bg); }
+.is-top-dropdown .unified-row[data-selected='true'] { border-color: var(--theme-top-dropdown-accent); }
+.is-top-dropdown .unified-row-label,
+.is-top-dropdown .unified-search-result { color: var(--theme-top-dropdown-text, var(--theme-text-primary)); }
+.is-top-dropdown .unified-search-results li { display: flex; align-items: center; }
+.is-top-dropdown .unified-row.is-group .unified-row-label { color: var(--theme-top-dropdown-text-muted, var(--theme-text-muted)); }
+.unified-row-checkbox { accent-color: var(--theme-top-dropdown-accent); flex: 0 0 auto; }
+.unified-clear-search,
+.unified-pin-button { flex: 0 0 auto; display: grid; place-items: center; width: 23px; height: 23px; padding: 0; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--theme-top-dropdown-text-muted, var(--theme-text-muted)); cursor: pointer; }
+.unified-pin-button { opacity: 0; }
+.unified-row:hover .unified-pin-button,
+.unified-search-results li:hover .unified-pin-button,
+.unified-pin-button:focus-visible,
+.unified-pin-button.is-pinned { opacity: 1; }
+.unified-pin-button:hover,
+.unified-clear-search:hover { background: var(--theme-top-dropdown-control-bg); color: var(--theme-top-dropdown-text); }
+.unified-pin-button.is-pinned { color: var(--theme-status-git-pinned-strong, var(--theme-top-dropdown-accent)); border-color: currentColor; }
+@media (hover: none) { .unified-pin-button { opacity: 1; } }
 </style>

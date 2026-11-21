@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { parseConnectionProfileId, parseSessionRef } from '../../shared/runtime/identity.js';
+import { encodeSessionKey, parseConnectionProfileId, parseSessionRef } from '../../shared/runtime/identity.js';
 import type { PinIdentity, PinRecord } from '../runtime/pinStore';
 import type { PinStore } from '../runtime/pinStore';
 import { createRuntimePins } from './useRuntimePins';
@@ -54,4 +54,18 @@ it('coalesces rapid selections instead of queuing resident identity copies for e
   expect(state.pinned.value).toBe(false); expect(state.error.value).toBe('');
   expect(database.get).toHaveBeenCalledTimes(1);
   await state.dispose();
+});
+
+it('updates the sidebar page when a dropdown row is pinned or unpinned', async () => {
+  const { state, rows } = fixture();
+  const key = encodeSessionKey(selection('from-dropdown').session);
+  try {
+    await state.show();
+    await state.toggleKey(key);
+    expect(state.error.value).toBe('');
+    expect(state.records.value.map(row => row.selection.session.nativeSessionId)).toEqual(['from-dropdown']);
+    await state.toggleKey(key);
+    expect(state.records.value).toEqual([]);
+    expect(rows.get('from-dropdown')).toMatchObject({ revision: 2, pinned: false });
+  } finally { await state.dispose(); }
 });

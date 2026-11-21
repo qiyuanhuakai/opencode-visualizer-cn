@@ -632,6 +632,32 @@ describe('task 21 — unified session tree acceptance', () => {
     expect(onBatchAction).toHaveBeenCalledWith('pin', buttons.map(button => button.dataset.rowKey));
   });
 
+  it('pins the qualified session from its top dropdown row without switching sessions', async () => {
+    const sessions = ['opencode', 'codex'].map(kind => {
+      const harness = kind as HarnessKind;
+      return parseUnifiedSessionRow(sessionKey(1, harness), summaryValue(1, harness), harness)!;
+    });
+    const nodes = buildUnifiedTree(sessions, [{ path: DIRECTORY, repoKey: REPO_KEY, gitKind: 'git', orphan: false }]);
+    const expanded = new Set<string>();
+    expandGroups(nodes, expanded);
+    const rows = flattenUnifiedTree(nodes, expanded, new Set([...HARNESS_KINDS, 'unknown'] as const));
+    const toggleKey = vi.fn();
+    const tree = await mountTree({ topDropdown: true, treeRows: rows, expandedPaths: [...expanded], rowPins: {
+      revision: { value: 0 }, readKeys: async () => new Set([sessionKey(1, 'codex')]), toggleKey,
+    } });
+    mounted.push(tree);
+    await vi.waitFor(() => expect(tree.root.querySelectorAll('.unified-pin-button.is-pinned')).toHaveLength(1));
+    const pin = tree.root.querySelector<HTMLButtonElement>('.unified-pin-button.is-pinned')!;
+    for (const key of ['Enter', ' ']) {
+      const keydown = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      pin.dispatchEvent(keydown);
+      expect(keydown.defaultPrevented).toBe(false);
+    }
+    pin.click();
+    expect(toggleKey).toHaveBeenCalledExactlyOnceWith(sessionKey(1, 'codex'));
+    expect(tree.emitted.has('select-key')).toBe(false);
+  });
+
   it('keyboard navigation selects the focused row and expands groups', async () => {
     const sessions: UnifiedSessionRow[] = [];
     for (const index of [1, 2, 3]) sessions.push(parseUnifiedSessionRow(sessionKey(index, 'opencode'), summaryValue(index, 'opencode'), 'opencode')!);

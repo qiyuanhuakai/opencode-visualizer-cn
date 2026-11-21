@@ -1,5 +1,5 @@
 import { nextTick, ref, shallowRef } from 'vue';
-import type { ConnectionProfileId } from '../../shared/runtime/identity.js';
+import { decodeSessionKey, type ConnectionProfileId } from '../../shared/runtime/identity.js';
 import { PinStore } from '../runtime/pinStore';
 import type { PinRecord } from '../runtime/pinStore';
 import type { QualifiedSession } from '../runtime/selectionScope';
@@ -19,7 +19,11 @@ export function createRuntimePins(options: {
   const error = ref('');
   const opened = ref(false);
   const hasNext = ref(false);
+  const hasPrevious = ref(false);
+  const revision = ref(0);
   let storage: Promise<Storage> | undefined;
+  let lookupStorage: Promise<Storage> | undefined;
+  let lookupQueue = Promise.resolve();
   let loadedStore: Storage | undefined;
   let page: Awaited<ReturnType<Storage['page']>> | undefined;
   let after: readonly string[] | undefined;
@@ -43,7 +47,7 @@ export function createRuntimePins(options: {
     if (disposed || !opened.value) return;
     const loaded = await database.page({ profileId: options.profileId, after, limit: 100 });
     if (disposed || !opened.value) { loaded.release(); return; }
-    page = loaded; next = loaded.next; hasNext.value = next !== null;
+    page = loaded; next = loaded.next; hasNext.value = next !== null; hasPrevious.value = after !== undefined;
     records.value = loaded.records.filter(record => record.pinned && record.clientOrigin === options.clientOrigin);
   }
   function run(action: (database: Storage) => Promise<void>): Promise<void> {
@@ -75,8 +79,46 @@ export function createRuntimePins(options: {
     return selectionTask;
   }
 
+  function revisionChanged() { revision.value++; }
+
   return {
-    records, selected, pinned, busy, error, opened, hasNext,
+    records, selected, pinned, busy, error, opened, hasNext, hasPrevious, revision,
+    readKeys(keys: readonly string[], signal: AbortSignal) {
+      const operation = lookupQueue.then(async () => {
+        const result = new Set<string>();
+        if (signal.aborted || disposed || !keys.length) return result;
+        // A retained sidebar page owns the page budget. Keep row lookups on
+        // a separate handle and admit one small read at a time.
+        const database = await (lookupStorage ??= (options.openStore ?? (() => PinStore.open()))().catch(failure => {
+          lookupStorage = undefined;
+          throw failure;
+        }));
+        for (const key of keys) {
+          if (signal.aborted || disposed) break;
+          const entry = await database.get({ selection: { profileId: options.profileId, session: decodeSessionKey(key) }, clientOrigin: options.clientOrigin });
+          if (entry?.record.pinned) result.add(key);
+          entry?.release();
+        }
+        return result;
+      });
+      lookupQueue = operation.then(() => {}, () => {});
+      return operation;
+    },
+    toggleKey(key: string) {
+      return run(async database => {
+        await releasePage();
+        if (disposed) return;
+        const identity = { selection: { profileId: options.profileId, session: decodeSessionKey(key) }, clientOrigin: options.clientOrigin };
+        const existing = await database.get(identity);
+        const nextRevision = (existing?.record.revision ?? 0) + 1;
+        const value = !existing?.record.pinned;
+        existing?.release();
+        if (disposed) return;
+        await database.set({ ...identity, revision: nextRevision, pinned: value });
+        revision.value++;
+        await loadPage(database);
+      }).then(() => selected.value ? refreshSelected() : undefined);
+    },
     title: (selection: QualifiedSession) => (selection.profileId === options.profileId ? options.title?.(selection) : undefined) || selection.session.nativeSessionId,
     setSelected(selection: QualifiedSession | null) {
       sequence += 1;
@@ -97,6 +139,7 @@ export function createRuntimePins(options: {
         existing?.release();
         if (token !== sequence || disposed) return;
         await database.set({ ...identity, revision, pinned: value });
+        revisionChanged();
         if (token === sequence && !disposed) pinned.value = value;
         await loadPage(database);
       });
@@ -112,10 +155,10 @@ export function createRuntimePins(options: {
           const previous = existing?.record.pinned ?? false;
           existing?.release();
           if (disposed) break;
-          if (previous !== value) await database.set({ ...identity, revision, pinned: value });
+          if (previous !== value) { await database.set({ ...identity, revision, pinned: value }); revisionChanged(); }
         }
         await loadPage(database);
-      }).then(() => refreshSelected());
+      }).then(() => selected.value ? refreshSelected() : undefined);
     },
     show() { opened.value = true; after = undefined; return run(loadPage); },
     nextPage() {
@@ -127,7 +170,8 @@ export function createRuntimePins(options: {
     usage: () => loadedStore?.usage() ?? { residentBytes: 0, reservedBytes: 0, entries: 0 },
     async dispose() {
       disposed = true; sequence += 1; opened.value = false; selected.value = null; pinned.value = null;
-      await queue; await releasePage();
+      await Promise.all([queue, lookupQueue]); await releasePage();
+      if (lookupStorage) (await lookupStorage).close();
       if (storage) (await storage).close();
     },
   };

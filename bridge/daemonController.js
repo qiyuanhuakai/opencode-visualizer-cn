@@ -1,3 +1,4 @@
+import { isIPv6 } from 'node:net';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import { request } from 'node:http';
@@ -25,6 +26,10 @@ const STOP_TIMEOUT_MS = 8_000;
 const FORCE_STOP_TIMEOUT_MS = 2_000;
 
 export { createDaemonInvocation } from './daemonInvocation.js';
+
+export function daemonRuntimeUrl(host, port) {
+  return `ws://${isIPv6(host) ? `[${host}]` : host}:${port}/runtime`;
+}
 
 export function collectStartupFailures(status) {
   return [...status.services, ...status.acpAgents]
@@ -234,7 +239,7 @@ export function createDaemonController(options = {}) {
       if (child.connected) child.disconnect();
       child.unref();
     });
-    stdout.write(`vis_bridge started (pid ${child.pid}) on ws://${message.host}:${message.port}${message.path}.\n`);
+    stdout.write(`vis_bridge started (pid ${child.pid}) on ${daemonRuntimeUrl(message.host, message.port)}.\n`);
     for (const failure of message.failures) stderr.write(`${failure.name}: ${failure.error}\n`);
     return readDaemonState(paths);
   }
