@@ -66,7 +66,6 @@
           <template #runtime-sessions="{ close, managementMode, done }">
             <SessionTree
               v-if="unifiedTreeRows"
-              class="runtime-session-dropdown-tree"
               top-dropdown
               :row-pins="runtimePins ?? undefined"
               :management-mode="managementMode"
@@ -13865,11 +13864,6 @@ onBeforeUnmount(() => {
 });
 </script>
 
-<style scoped>
-.runtime-session-dropdown-tree {
-  height: min(440px, 58vh);
-}
-</style>
 <style>
 html,
 body,

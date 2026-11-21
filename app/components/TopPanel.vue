@@ -1682,6 +1682,11 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   --theme-top-bg: var(--theme-top-dropdown-bg, rgba(15, 23, 42, 0.92));
 }
 
+.runtime-tree-menu {
+  flex: 0 0 auto;
+  height: min(440px, 58vh);
+}
+
 .codex-menu-root {
   flex: 0 0 auto;
 }
