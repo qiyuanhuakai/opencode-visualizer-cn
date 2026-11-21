@@ -11246,11 +11246,12 @@ watch([isStatusMonitorOpen, isProviderManagerOpen, managementAgentScope, managem
     const target = scope.binding.target;
     // The management inspection applies the verified connection grants. A raw
     // target inspection only returns manifests and cannot refresh permissions.
-    const grantsInspection = await scope.client.inspect();
-    if (!current || !scope.isCurrent()) return;
-    const inspection = grantsInspection.harnesses.some(entry => entry.manifest.environmentId === target)
-      ? grantsInspection
+    const direct = target === bridgeReference.value?.expectedEnvironmentId;
+    const inspection = direct ? await scope.client.inspect()
       : await scope.client.request(target, 'runtime.inspect', {}, { selectionCurrent: scope.isCurrent });
+    if (!current || !scope.isCurrent()) return;
+    // The manager can advertise newly verified remote grants after inspecting that target.
+    if (!direct) await scope.client.inspect();
     if (!current || !scope.isCurrent()) return;
     const verified = inspection.harnesses.map(entry => entry.manifest)
       .filter(manifest => manifest.environmentId === target);

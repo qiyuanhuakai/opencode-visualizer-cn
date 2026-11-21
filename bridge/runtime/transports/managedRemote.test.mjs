@@ -72,7 +72,7 @@ test('manager re-advertises late native grants for an attached execution Bridge'
   server.on('upgrade', (req, socket, head) => void handleRuntimeUpgrade(req, socket, head, { host: '127.0.0.1', runtime: { getRuntimeHost: async () => host } }));
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const remote = createRemoteServices({ resolveCredential: async () => ({}) });
-  const managerCapabilities = { methods: ['runtime.inspect', 'runtime.target.attach'], extensions: [] };
+  const managerCapabilities = { methods: ['runtime.inspect', 'runtime.target.attach', 'runtime.target.detach'], extensions: [] };
   const managerGrant = { target: managerTarget, role: 'manager', capabilities: managerCapabilities, permissions: ['runtime:read'], workspaceKeys: [] };
   const binding = { target: managerTarget, epoch: randomUUID(), generation: 1 };
   const results = new Map();
@@ -82,15 +82,16 @@ test('manager re-advertises late native grants for an attached execution Bridge'
     assertCurrent() {}, inspect: () => ({ role: 'manager', state: 'ready', subscribers: 1, topology: [], sources: [] }),
     send: frame => results.set(frame.id, frame), sendBinary() {}, canSend: () => true,
   });
-  async function request(method, params) {
+  async function request(method, params, scope = binding) {
     const id = randomUUID();
-    await dispatch.request({ ...binding, version: 1, kind: 'request', id, method, params });
+    const { target, epoch, generation } = scope;
+    await dispatch.request({ target, epoch, generation, version: 1, kind: 'request', id, method, params });
     const frame = results.get(id);
     assert.equal(frame?.ok, true, JSON.stringify(frame?.typedError));
     return frame.result;
   }
   try {
-    await remote.openProfileTransport({ profileId, credentialRef: 'system', enabled: true, role: 'execution', transport: { kind: 'direct', endpoint: `ws://127.0.0.1:${server.address().port}/runtime` }, target: { kind: 'direct', environmentId: target } });
+    const handle = await remote.openProfileTransport({ profileId, credentialRef: 'system', enabled: true, role: 'execution', transport: { kind: 'direct', endpoint: `ws://127.0.0.1:${server.address().port}/runtime` }, target: { kind: 'direct', environmentId: target } });
     assert.deepEqual((await request('runtime.inspect', {})).targets.find(entry => entry.target === target).capabilities.extensions, []);
     const attached = await request('runtime.target.attach', { target });
     assert.deepEqual(attached.grant.capabilities.extensions, []);
@@ -98,15 +99,23 @@ test('manager re-advertises late native grants for an attached execution Bridge'
     const extension = { owner: randomUUID(), name: 'listProviders', permission: 'codex:listProviders', schemaVersion: 1, metadata: { scope: 'instance' } };
     capabilities.extensions.push(extension);
     grant.permissions.push(extension.permission);
+    await request('runtime.inspect', {}, attached.hello);
     const refreshed = (await request('runtime.inspect', {})).targets.find(entry => entry.target === target);
     assert.deepEqual(refreshed.capabilities.extensions, [extension]);
     assert.ok(refreshed.permissions.includes(extension.permission));
 
     grant.permissions.pop();
     capabilities.extensions.pop();
+    await request('runtime.inspect', {}, attached.hello);
     const revoked = (await request('runtime.inspect', {})).targets.find(entry => entry.target === target);
     assert.deepEqual(revoked.capabilities.extensions, []);
     assert.ok(!revoked.permissions.includes(extension.permission));
+
+    await request('runtime.target.detach', { target });
+    assert.ok((await request('runtime.inspect', {})).targets.some(entry => entry.target === target));
+    await handle.close();
+    assert.ok(!(await request('runtime.inspect', {})).targets.some(entry => entry.target === target));
+    assert.ok(!(await request('runtime.inspect', {})).targets.some(entry => entry.target === target));
   } finally {
     await dispatch.close();
     await remote.close();

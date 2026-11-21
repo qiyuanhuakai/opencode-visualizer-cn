@@ -239,6 +239,7 @@ export function createRuntimeDispatch({ management, targets = [], grants, bindin
             const stale = attached.get(target);
             if (stale) await detach(stale);
             graphs.delete(target); allowed.delete(target);
+            continue;
           }
           if (!grants) {
             const refreshed = parseTargetGrant(cached.remote?.grant ?? cached.grant);
