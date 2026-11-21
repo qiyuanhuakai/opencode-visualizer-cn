@@ -3,6 +3,7 @@ export type Json = null | boolean | number | string | readonly Json[] | { readon
 export interface StoreOptions {
   readonly stateDirectory: string; readonly environmentId: string; readonly ownerId: string; readonly epoch: string;
   /** Trusted local control plane only: atomically replaces the explicitly observed owner fence. Never expose as an unauthenticated RPC parameter. */
+  readonly recoverDeadOwner?: boolean;
   readonly takeover?: { readonly expectedFence: number };
   readonly installRoot?: string; readonly requestTimeoutMs?: number; readonly storageBudgetBytes?: number;
 }

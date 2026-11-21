@@ -65,6 +65,25 @@ describe('runtime durable store', () => {
     }
   });
 
+  it.skipIf(process.platform !== 'linux')('recovers only a verified dead owner on daemon restart', async () => {
+    const stateDirectory = await mkdtemp(path.join(tmpdir(), 'runtime-store-dead-owner-'));
+    const options = { stateDirectory, environmentId, ownerId, epoch, recoverDeadOwner: true };
+    const old = createRuntimeStore(options);
+    try {
+      await old.ready;
+      await old.mutate({ intentId: 'before-crash', changes: [{ collection: 'threads', key: 'thread', value: { title: 'preserved' } }] });
+      const competitor = createRuntimeStore(options);
+      try { await expect(competitor.ready).rejects.toMatchObject({ reason: 'owner_conflict' }); }
+      finally { await competitor.terminate(); }
+      await old.terminate();
+      const recovered = createRuntimeStore(options);
+      try {
+        await expect(recovered.ready).resolves.toMatchObject({ fence: 2 });
+        expect(await recovered.get({ collection: 'threads', key: 'thread' })).toMatchObject({ value: { title: 'preserved' } });
+      } finally { await recovered.close(); }
+    } finally { await old.terminate(); await rm(stateDirectory, { recursive: true, force: true }); }
+  });
+
   it('failure rejects another owner without implicit takeover', async () => {
     // Given an active owner.
     const stateDirectory = await mkdtemp(path.join(tmpdir(), 'runtime-store-test-'));

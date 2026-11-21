@@ -417,6 +417,7 @@
       </footer>
     </template>
     <div v-else class="app-loading-view" role="status" aria-live="polite">
+      <LoginPageActions v-if="uiInitState === 'login'" @connect-remote="handleLogin(true)" @open-settings="openSettings()" />
       <div class="app-loading-stack">
         <div class="app-loading-identity">
           <div class="app-loading-heading">
@@ -450,8 +451,6 @@
             v-model:token="bridgeLoginToken"
             :error="initErrorMessage"
             @connect="handleLogin()"
-            @connect-remote="handleLogin(true)"
-            @open-settings="openSettings()"
           />
         </div>
         <div v-else>
@@ -834,6 +833,7 @@ import { createNativeKimiProviders, createNativeKimiSessionClient } from './runt
 import { createRuntimeTurnProjection } from './runtime/turnProjection';
 import { createNativeDshRpc } from './runtime/nativeDshRpc';
 import BridgeLogin from './components/runtime-shell/BridgeLogin.vue';
+import LoginPageActions from './components/runtime-shell/LoginPageActions.vue';
 import AgentInstanceSelector from './components/runtime-shell/AgentInstanceSelector.vue';
 import type { PublicConnectionReference } from '../shared/runtime/runtimeWire.js';
 import { parseSessionRef, encodeSessionKey, decodeSessionKey, decodeRepoKey, decodeWorkspaceKey } from '../shared/runtime/identity.js';
@@ -13901,6 +13901,7 @@ body {
 }
 
 .app-loading-view {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   display: grid;

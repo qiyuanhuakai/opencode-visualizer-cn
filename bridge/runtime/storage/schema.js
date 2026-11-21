@@ -23,6 +23,7 @@ export function prepareSchema(db, file) {
   }
   transaction(db, () => {
     db.exec(`CREATE TABLE IF NOT EXISTS runtime_meta(environment TEXT PRIMARY KEY, owner TEXT, epoch TEXT NOT NULL, fence INTEGER NOT NULL, revision INTEGER NOT NULL DEFAULT 0, seq INTEGER NOT NULL DEFAULT 0, floor INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS runtime_owner_processes(environment TEXT PRIMARY KEY, owner TEXT NOT NULL, pid INTEGER NOT NULL, boot TEXT NOT NULL, namespace TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS runtime_intents(environment TEXT NOT NULL, id TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(environment,id));
       CREATE TABLE IF NOT EXISTS runtime_events(environment TEXT NOT NULL, seq INTEGER NOT NULL, revision INTEGER NOT NULL, created INTEGER NOT NULL, bytes INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(environment,seq));
       CREATE TABLE IF NOT EXISTS runtime_snapshots(token TEXT PRIMARY KEY, environment TEXT NOT NULL, collection TEXT NOT NULL, epoch TEXT NOT NULL, revision INTEGER NOT NULL, watermark INTEGER NOT NULL, expires INTEGER NOT NULL);
