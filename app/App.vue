@@ -643,7 +643,7 @@
       :harness-scope="harnessInstanceScope ?? undefined"
       :harness-manifests="harnessManifests"
       @close="isStatusMonitorOpen = false"
-      @refresh="managementDshStatusRefresh++"
+      @refresh="managementStatusRefresh++"
     >
       <template #agent-selector>
         <AgentInstanceSelector v-if="harnessManifests.length" :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
@@ -11237,7 +11237,8 @@ const managementAgentScope = computed<ManagementAgentScope | null>(previous => {
   catch { return null; }
 });
 const managementGrantRevision = ref(0);
-watch([isStatusMonitorOpen, isProviderManagerOpen, managementAgentScope], async ([monitor, providers, scope], _previous, onCleanup) => {
+const managementStatusRefresh = ref(0);
+watch([isStatusMonitorOpen, isProviderManagerOpen, managementAgentScope, managementManifest, managementStatusRefresh], async ([monitor, providers, scope], _previous, onCleanup) => {
   if ((!monitor && !providers) || !scope) return;
   let current = true;
   onCleanup(() => { current = false; });
@@ -11291,8 +11292,7 @@ const managementDshRpcClient = computed(() => {
   return manifest?.kind === 'dsh' && client ? createNativeDshRpc(client, manifest) : undefined;
 });
 const managementDshStatus = shallowRef<DshStatusSnapshot>();
-const managementDshStatusRefresh = ref(0);
-watch([managementDshRpcClient, isStatusMonitorOpen, managementDshStatusRefresh, managementGrantRevision], async ([rpc, open], _previous, onCleanup) => {
+watch([managementDshRpcClient, isStatusMonitorOpen, managementGrantRevision], async ([rpc, open], _previous, onCleanup) => {
   managementDshStatus.value = undefined;
   if (!rpc || !open) return;
   const accountOperation = managementManifest.value?.extensions.find(entry => entry.name === 'dsh.ui.account.getState');

@@ -14,7 +14,7 @@ export function createRemoteServices(options = {}) {
   const targets = new Map(), handles = new Set(), opening = new Set();
   const targetProfiles = new Map();
   const nestedTargets = new Map();
-  let refreshingTargets = false;
+  let refreshingTargets;
   const challenges = new Map();
   const slurm = options.slurm ?? createSlurmServices(options);
   const resolveCredential = options.resolveCredential ?? createRemoteCredentialResolver(options.stateRoot);
@@ -112,18 +112,23 @@ export function createRemoteServices(options = {}) {
     }
   }
   async function refreshTargets() {
-    if (refreshingTargets) return;
-    refreshingTargets = true;
-    try {
+    if (refreshingTargets) return refreshingTargets;
+    const refresh = (async () => {
       for (const [target, nested] of nestedTargets) {
         if (targets.get(nested.parent.hello.target) !== nested.parent) nestedTargets.delete(target);
       }
-      for (const parent of targets.values()) {
-        if (parent.inspection.role !== 'manager' || !parent.attachTarget) continue;
-        const inspection = await parent.request({ method: 'runtime.inspect', params: {} });
+      const parents = [...targets.values()];
+      const inspections = await Promise.all(parents.map(parent =>
+        parent.refreshGrant?.().catch(error => { options.onError?.(error); return undefined; }),
+      ));
+      for (const [index, parent] of parents.entries()) {
+        const inspection = inspections[index];
+        if (targets.get(parent.hello.target) !== parent || inspection?.role !== 'manager' || !parent.attachTarget) continue;
         const advertised = new Set(inspection.targets.map(grant => grant.target));
         for (const [target, nested] of nestedTargets) {
-          if (nested.parent === parent && !advertised.has(target)) {
+          if (nested.parent !== parent) continue;
+          if (advertised.has(target)) nested.client.updateGrant(inspection);
+          else {
             nestedTargets.delete(target);
             await nested.client.close();
           }
@@ -133,7 +138,10 @@ export function createRemoteServices(options = {}) {
           nestedTargets.set(grant.target, { parent, client: await parent.attachTarget(grant.target) });
         }
       }
-    } finally { refreshingTargets = false; }
+    })();
+    refreshingTargets = refresh;
+    try { await refresh; }
+    finally { refreshingTargets = undefined; }
   }
   return Object.freeze({
     capabilities,

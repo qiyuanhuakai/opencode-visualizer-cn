@@ -82,8 +82,12 @@ export async function openRemoteRuntime({ endpoint, channel, environmentId, toke
       if (!(error instanceof ProtocolError) || error.code !== 'invalid_request' || error.field !== 'fields') throw error;
       return request({ method: 'runtime.inspect', params: {} });
     });
-    const grant = inspection.targets.find(entry => entry.target === environmentId);
-    requireValue(grant && grant.capabilities.methods.every(method => method === 'runtime.session.search' || hello.capabilities.methods.includes(method)), 'remote.grant', 'unauthorized');
+    function inspectGrant(result, binding) {
+      const grant = result.targets.find(entry => entry.target === binding.target);
+      requireValue(grant && grant.capabilities.methods.every(method => method === 'runtime.session.search' || binding.capabilities.methods.includes(method)), 'remote.grant', 'unauthorized');
+      return grant;
+    }
+    let grant = inspectGrant(inspection, hello);
     if (grant.capabilities.methods.includes('runtime.session.search') && !hello.capabilities.methods.includes('runtime.session.search')) {
       hello = { ...hello, capabilities: { ...hello.capabilities, methods: [...hello.capabilities.methods, 'runtime.session.search'] } };
       bindings.set(hello.target, hello);
@@ -99,8 +103,11 @@ export async function openRemoteRuntime({ endpoint, channel, environmentId, toke
         const result = await request({ method: 'runtime.target.attach', params: { target } });
         requireValue(result.hello.target === target && result.grant.target === target, 'remote.child_target', 'unauthorized');
         bindings.set(target, result.hello);
+        let childGrant = result.grant;
         return Object.freeze({
-          hello: result.hello, grant: result.grant,
+          hello: result.hello,
+          get grant() { return childGrant; },
+          updateGrant(inspection) { childGrant = inspectGrant(inspection, result.hello); },
           request: (frame, accepted) => request(frame, accepted, result.hello),
           subscribe: listener => subscribe(target, listener),
           sendBinary,
@@ -115,7 +122,13 @@ export async function openRemoteRuntime({ endpoint, channel, environmentId, toke
       children.set(target, attaching);
       try { return await attaching; } catch (error) { children.delete(target); throw error; }
     };
-    return Object.freeze({ hello, grant, inspection, request, attachTarget,
+    return Object.freeze({ hello, get grant() { return grant; }, inspection, request, attachTarget,
+      async refreshGrant() {
+        // Keep session-search negotiation enabled for older renderer peers.
+        const updated = await request({ method: 'runtime.inspect', params: {} });
+        grant = inspectGrant(updated, hello);
+        return updated;
+      },
       subscribe: listener => subscribe(hello.target, listener),
       sendBinary,
       close() { fail(new ProtocolError('cancelled', 'remote.closed')); },
