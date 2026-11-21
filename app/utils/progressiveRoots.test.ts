@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   initialProgressiveRootWindow,
-  preserveProgressiveRootWindowOnAppend,
+  reconcileProgressiveRootWindow,
   shiftProgressiveRootWindow,
 } from './progressiveRoots';
 
@@ -24,7 +24,7 @@ describe('progressive root window', () => {
     const previous = Array.from({ length: 100 }, (_, index) => `root-${index}`);
 
     expect(
-      preserveProgressiveRootWindowOnAppend(
+      reconcileProgressiveRootWindow(
         previous,
         [...previous, 'root-100'],
         { start: 0, end: 100 },
@@ -37,7 +37,7 @@ describe('progressive root window', () => {
     const previous = Array.from({ length: 100 }, (_, index) => `root-${index}`);
 
     expect(
-      preserveProgressiveRootWindowOnAppend(
+      reconcileProgressiveRootWindow(
         previous,
         [...previous, 'root-100'],
         { start: 0, end: 100 },
@@ -47,12 +47,22 @@ describe('progressive root window', () => {
     ).toEqual({ start: 0, end: 100 });
   });
 
+  it('reveals the earlier loaded card even when the newest page had no overflow to scroll', () => {
+    expect(reconcileProgressiveRootWindow(['new'], ['older', 'new'], { start: 0, end: 1 }, 100))
+      .toEqual({ start: 0, end: 2 });
+  });
+
+  it('preserves a window away from the start when roots are prepended', () => {
+    expect(reconcileProgressiveRootWindow(['a', 'b', 'c'], ['older', 'a', 'b', 'c'], { start: 1, end: 3 }, 100))
+      .toEqual({ start: 2, end: 4 });
+  });
+
   it('resets an out-of-range window after revert shrinks the renderable roots', () => {
     const previous = Array.from({ length: 250 }, (_, index) => `root-${index}`);
     const next = previous.slice(0, 101);
 
     expect(
-      preserveProgressiveRootWindowOnAppend(previous, next, { start: 230, end: 250 }, 100),
+      reconcileProgressiveRootWindow(previous, next, { start: 230, end: 250 }, 100),
     ).toEqual({ start: 81, end: 101 });
   });
 });

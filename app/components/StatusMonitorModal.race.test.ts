@@ -186,6 +186,21 @@ describe('StatusMonitorModal stale request isolation', () => {
     app.unmount();
   });
 
+  it('shows the current server version while another status request is pending', async () => {
+    const skills = deferred<unknown[]>();
+    registryMock.getAdapter.mockReturnValue(createBackend({
+      getGlobalHealth: async () => ({ healthy: true, version: '0.171.0' }),
+      getSkillStatus: () => skills.promise,
+    }));
+    const { app, root } = mountStatusMonitor();
+    try {
+      await vi.waitFor(() => expect(root.textContent).toContain('0.171.0'));
+    } finally {
+      skills.resolve([]);
+      app.unmount();
+    }
+  });
+
   it('keeps a newer backend refresh after the older refresh settles', async () => {
     const firstHealth = deferred<{ healthy: boolean; version: string }>();
     const secondHealth = deferred<{ healthy: boolean; version: string }>();

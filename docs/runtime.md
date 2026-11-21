@@ -56,3 +56,10 @@ v0.9.0-alpha 引入统一运行环境：客户端经一个 Bridge 入口连接�
 - Host Thread 与协作：[collaboration.md](./collaboration.md)
 - HTTP/WS 端点参考：[API.md](./API.md)
 - 测试组织：[testing.md](./testing.md)
+
+
+### Bridge 异常退出后的恢复
+
+在 Linux 上，Bridge 守护进程会记录运行时数据库持有者的进程身份。下次启动时，如果同一启动周期和 PID 命名空间内的原进程已退出，或已验证的本地文件系统上的记录来自上一次内核启动，Bridge 可以重新取得租约并保留数据库内容。
+
+旧版本留下的租约可能没有进程身份。同一启动周期内，PID 命名空间不同、进程仍存在或身份无法核实，也会阻止自动接管。若升级后仍返回 HTTP 503 或 `source_unavailable`，先用 `vis_bridge status` 检查并用 `vis_bridge stop` 停止已确认的 Bridge 实例，再启动验证。同一状态目录涉及多个实例时，请先核对实例归属。若停止后依然无法启动，保留原状态目录并备份其中的 `runtime/runtime.db`，以便根据原租约与进程证据恢复。移除数据库会丢失其中的统一运行时状态。

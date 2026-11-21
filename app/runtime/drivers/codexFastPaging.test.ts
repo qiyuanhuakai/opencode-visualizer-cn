@@ -42,3 +42,16 @@ it('rejects repeated model cursors instead of changing configuration or looping'
   await expect(run()).rejects.toMatchObject({ code: 'reconcile_required', field: 'codex.models.cursor' });
   expect(accept).not.toHaveBeenCalled();
 });
+
+it('limits plugin status to local marketplaces even when remote catalogs are enabled', async () => {
+  const request = vi.fn(async () => ({ marketplaces: [] }));
+  const native = createCodexNativeOperations({
+    request, validateContext() {},
+  } as unknown as Parameters<typeof createCodexNativeOperations>[0]);
+  await expect(native.getPluginStatus({
+    environmentId: parseEnvironmentId('11111111-1111-4111-8111-111111111111'),
+    harnessInstanceId: parseHarnessInstanceId('22222222-2222-4222-8222-222222222222'),
+    params: {},
+  })).resolves.toEqual({ marketplaces: [] });
+  expect(request).toHaveBeenCalledExactlyOnceWith('plugin/list', { marketplaceKinds: ['local'] });
+});

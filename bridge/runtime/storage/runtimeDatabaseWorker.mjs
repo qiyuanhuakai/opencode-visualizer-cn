@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, chmodSync, openSync, closeSync } from 'node:fs';
+import { mkdirSync, chmodSync, openSync, closeSync, readFileSync, readlinkSync } from 'node:fs';
 import path from 'node:path';
 import { parseOptions, parseRequest, StoreError, storageError } from './storeProtocol.js';
 import { prepareSchema, transaction } from './schema.js';
@@ -15,6 +15,26 @@ function assertOwner() {
   const current = queries.meta();
   if (current.owner !== lease || current.fence !== fence || current.epoch !== options.epoch) throw new StoreError('conflict', 'stale_owner');
 }
+function localProcessScope() {
+  if (process.platform !== 'linux') return null;
+  try {
+    return {
+      boot: readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(),
+      namespace: readlinkSync('/proc/self/ns/pid'),
+    };
+  } catch { return null; }
+}
+function canRecoverDeadOwner(current, scope) {
+  if (!options.recoverDeadOwner || !scope || !current?.owner) return false;
+  const processOwner = db.prepare('SELECT * FROM runtime_owner_processes WHERE environment=? AND owner=?')
+    .get(options.environmentId, current.owner);
+  if (!processOwner || !Number.isSafeInteger(processOwner.pid) || processOwner.pid <= 0) return false;
+  if (processOwner.boot !== scope.boot) return locality.local === true;
+  if (processOwner.namespace !== scope.namespace) return false;
+  try { process.kill(processOwner.pid, 0); }
+  catch (error) { return error?.code === 'ESRCH'; }
+  return false;
+}
 function initialize(input) {
   options = parseOptions(input);
   const directory = path.resolve(options.stateDirectory, 'runtime');
@@ -28,12 +48,16 @@ function initialize(input) {
   db.exec('PRAGMA journal_mode=DELETE');
   if (options.storageBudgetBytes) db.exec(`PRAGMA max_page_count=${Math.floor(options.storageBudgetBytes / db.prepare('PRAGMA page_size').get().page_size)}`);
   queries = createQueries(db, { ...options, assertOwner }); lease = randomUUID();
+  const scope = localProcessScope();
   transaction(db, () => {
     const current = queries.meta();
-    if (current?.owner && options.takeover?.expectedFence !== current.fence) throw new StoreError('conflict', 'owner_conflict');
+    if (current?.owner && options.takeover?.expectedFence !== current.fence && !canRecoverDeadOwner(current, scope)) throw new StoreError('conflict', 'owner_conflict');
     if (options.takeover && options.takeover.expectedFence !== current?.fence) throw new StoreError('conflict', 'stale_takeover');
     fence = (current?.fence ?? 0) + 1;
     db.prepare('INSERT INTO runtime_meta(environment,owner,epoch,fence) VALUES(?,?,?,?) ON CONFLICT(environment) DO UPDATE SET owner=excluded.owner,epoch=excluded.epoch,fence=excluded.fence').run(options.environmentId, lease, options.epoch, fence);
+    db.prepare('DELETE FROM runtime_owner_processes WHERE environment=?').run(options.environmentId);
+    if (scope) db.prepare('INSERT INTO runtime_owner_processes(environment,owner,pid,boot,namespace) VALUES(?,?,?,?,?)')
+      .run(options.environmentId, lease, process.pid, scope.boot, scope.namespace);
     queries.claimPriorStorage(current?.fence, fence);
     if (current && current.epoch !== options.epoch) {
       db.prepare('DELETE FROM runtime_events WHERE environment=?').run(options.environmentId);

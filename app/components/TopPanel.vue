@@ -59,18 +59,6 @@
             <span v-else class="selected-title">{{ $t('topPanel.selectSession') }}</span>
           </template>
           <template #default="{ close }">
-            <template v-if="runtimeMode">
-              <div class="tree-menu runtime-tree-menu">
-                <slot name="runtime-sessions" :close="close" :management-mode="managementMode" :done="toggleManagementMode" />
-              </div>
-              <DropdownItem v-if="selectedSessionId && sessionActions.rename" value="rename" @click="handleSessionRename(selectedSessionId); close()">{{ $t('topPanel.sessionActions.rename') }}</DropdownItem>
-              <DropdownItem v-if="selectedSessionId && runtimeForkAvailable" value="fork" @click="emit('fork-session', selectedSessionId); close()">{{ $t('topPanel.sessionActions.fork') }}</DropdownItem>
-              <DropdownItem v-if="selectedSessionId && runtimeCompactAvailable" value="compact" @click="emit('compact-session', selectedSessionId); close()">{{ $t('topPanel.sessionActions.compact') }}</DropdownItem>
-              <DropdownItem v-if="selectedSessionId && !runtimeArchived && sessionActions.archive" value="archive" @click="emit('archive-session', selectedSessionId); close()">{{ $t('topPanel.management.archive') }}</DropdownItem>
-              <DropdownItem v-if="selectedSessionId && runtimeArchived && sessionActions.unarchive" value="restore" @click="emit('unarchive-session', selectedSessionId); close()">{{ $t('topPanel.sessionActions.unarchive') }}</DropdownItem>
-              <DropdownItem v-if="selectedSessionId && sessionActions.delete" value="delete" @click="emit('delete-session', selectedSessionId); close()">{{ $t('topPanel.sessionActions.deletePermanently') }}</DropdownItem>
-            </template>
-            <template v-else>
             <div class="tree-menu">
               <DropdownSearch
                 v-model="searchQuery"
@@ -416,7 +404,7 @@
                     >
                       <DropdownItem
                         v-if="!managementMode"
-                        :href="sessionShareHref(session.projectId ?? worktree.projectId, session.id)"
+                        :href="runtimeMode ? undefined : sessionShareHref(session.projectId ?? worktree.projectId, session.id)"
                         :value="{
                           projectId: session.projectId ?? worktree.projectId,
                           worktree: worktree.directory,
@@ -632,12 +620,18 @@
             </div>
 
             <div class="tree-footer">
+              <button v-if="selectedSessionId && runtimeForkAvailable" type="button" class="tree-footer-button" @click="emit('fork-session', selectedSessionId); close()">
+                {{ $t('topPanel.sessionActions.fork') }}
+              </button>
+              <button v-if="selectedSessionId && runtimeCompactAvailable" type="button" class="tree-footer-button" @click="emit('compact-session', selectedSessionId); close()">
+                {{ $t('topPanel.sessionActions.compact') }}
+              </button>
               <button type="button" class="tree-footer-button" @click="handleOpenDirectory(close)">
                 <Icon icon="lucide:folder-open" :width="14" :height="14" />
                 {{ $t('topPanel.openProject') }}
               </button>
             </div>
-            </template>
+            <slot v-if="runtimeMode" name="runtime-sessions" :close="close" :management-mode="managementMode" :done="toggleManagementMode" />
           </template>
         </Dropdown>
 
@@ -826,7 +820,6 @@
         <Dropdown :aria-label="$t('app.runtimeBridgeMenu.title')" :button-class="['control-button']" :popup-style="{ minWidth: '220px' }">
           <template #label><Icon icon="lucide:server" :width="16" :height="16" /></template>
           <template #default="{ close }">
-            <DropdownItem value="connections" @click="$emit('open-connection-entry'); close()">{{ $t('app.runtimeBridgeMenu.connections') }}</DropdownItem>
             <DropdownItem value="migration" @click="$emit('open-workspace-migration'); close()">{{ $t('app.runtimeBridgeMenu.migration') }}</DropdownItem>
             <DropdownItem value="agents" @click="$emit('open-harness-settings'); close()">{{ $t('app.runtimeBridgeMenu.agentSettings') }}</DropdownItem>
           </template>
@@ -958,7 +951,6 @@ type SessionActionCapabilities = {
 
 const props = defineProps<{
   runtimeMode?: boolean;
-  runtimeArchived?: boolean;
   runtimeForkAvailable?: boolean;
   runtimeCompactAvailable?: boolean;
   runtimeCreateAvailable?: boolean;
@@ -1334,7 +1326,8 @@ function worktreeAccentStyle(worktree: TopPanelWorktree) {
 function onTreeSelect(payload: unknown) {
   if (!payload || typeof payload !== 'object') return;
   const value = payload as Partial<SessionSelectPayload>;
-  if (!value.worktree || !value.directory || !value.sessionId) return;
+  if (!value.sessionId || typeof value.worktree !== 'string' || typeof value.directory !== 'string') return;
+  if (!props.runtimeMode && (!value.worktree || !value.directory)) return;
   emit('select-session', {
     projectId: value.projectId,
     worktree: value.worktree,
@@ -1514,7 +1507,7 @@ async function emitBatchSessionAction(action: TopPanelBatchSessionActionPayload[
   const sessions = batchSessionTargetsByAction.value[action];
   if (sessions.length === 0) return;
 
-  if (action === 'delete') {
+  if (action === 'delete' && !props.runtimeMode) {
     const confirmed = showConfirm
       ? await showConfirm(
           t(
@@ -1681,11 +1674,6 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   --theme-top-control-bg: var(--theme-top-dropdown-control-bg, #0b1320);
   --theme-top-text: var(--theme-top-dropdown-text, #e2e8f0);
   --theme-top-bg: var(--theme-top-dropdown-bg, rgba(15, 23, 42, 0.92));
-}
-
-.runtime-tree-menu {
-  flex: 0 0 auto;
-  height: min(440px, 58vh);
 }
 
 .codex-menu-root {

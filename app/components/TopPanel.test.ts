@@ -110,16 +110,22 @@ function requireButton(root: ParentNode, selector: string) {
 }
 
 describe('TopPanel', () => {
-  it('uses qualified-runtime navigation and supported current-session actions without the legacy project list', async () => {
+  it('shows qualified runtime sessions in the original dropdown and preserves row actions', async () => {
     const { default: TopPanel } = await import('./TopPanel.vue');
     const root = document.createElement('div'); document.body.appendChild(root);
     const rename = vi.fn();
+    const pin = vi.fn();
     const app = createApp({ render: () => h(TopPanel, {
-      treeData: [], notificationSessions: [], projectDirectory: '', activeDirectory: '/workspace', selectedSessionId: 'native-session',
+      treeData: [{
+        directory: '/workspace', label: 'Workspace', sandboxes: [{
+          directory: '/workspace', sessions: [{ id: 'native-session', title: 'Native session', status: 'idle' }],
+        }],
+      }],
+      notificationSessions: [], projectDirectory: '/workspace', activeDirectory: '/workspace', selectedSessionId: 'native-session',
       runtimeMode: true, runtimeForkAvailable: true, runtimePinsAvailable: true,
       nativeSelectedDisplay: { branch: 'workspace', title: 'Native session', status: 'idle' },
-      sessionActionCapabilities: { rename: true, archive: true, unarchive: true, delete: false, pin: false, unpin: false },
-      onRenameSession: rename,
+      sessionActionCapabilities: { rename: true, archive: true, unarchive: true, delete: false, pin: true, unpin: true },
+      onRenameSession: rename, onPinSession: pin,
     }, {
       'runtime-sessions': ({ managementMode }: { managementMode: boolean }) => h('div', { 'data-testid': 'runtime-picker', 'data-management': managementMode }),
     }) });
@@ -127,11 +133,12 @@ describe('TopPanel', () => {
     app.mount(root);
     requireButton(root, '.tree-dropdown-root .ui-dropdown-button').click(); await nextTick();
     expect(root.querySelector('[data-testid="runtime-picker"]')).not.toBeNull();
-    expect(root.querySelector('.tree-search')).toBeNull();
-    const item = [...root.querySelectorAll<HTMLElement>('.ui-dropdown-item')].find(node => node.textContent?.trim() === 'Rename');
-    if (!item) throw new Error('Missing runtime rename action');
-    item.click(); await nextTick();
+    expect(root.querySelector('.tree-search')).not.toBeNull();
+    expect(root.querySelector('.tree-session-main')?.textContent).toContain('Native session');
+    requireButton(root, '.session-rename').click();
+    requireButton(root, '.session-pin').click();
     expect(rename).toHaveBeenCalledWith('native-session');
+    expect(pin).toHaveBeenCalledWith('native-session');
     requireButton(root, '.management-toggle-button').click();
     await nextTick();
     expect(root.querySelector('[data-testid="runtime-picker"]')?.getAttribute('data-management')).toBe('true');

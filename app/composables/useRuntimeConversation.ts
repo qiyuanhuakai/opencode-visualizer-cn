@@ -103,15 +103,21 @@ export function useRuntimeConversation(options: { publish(entries: unknown[]): v
           let value: unknown;
           if (item.kind === 'inline') value = item.value;
           else {
-            requireValue(item.descriptor.totalBytes <= 4 * 1024 * 1024, 'history.render_record_budget', 'source_unavailable');
-            const decoder = new TextDecoder('utf-8', { fatal: true });
-            let text = '';
-            for await (const chunk of owner.export(page.value.pageId, item.descriptor)) text += decoder.decode(chunk.bytes, { stream: true });
-            text += decoder.decode();
-            value = JSON.parse(text);
+            const renderLimit = selectedKind === 'codex' ? 32 * 1024 * 1024 : 4 * 1024 * 1024;
+            requireValue(item.descriptor.totalBytes <= renderLimit, 'history.render_record_budget', 'source_unavailable');
+            const bytes = new Uint8Array(item.descriptor.totalBytes);
+            let offset = 0;
+            for await (const chunk of owner.export(page.value.pageId, item.descriptor)) {
+              if (current !== revision || !selected.isCurrent()) return;
+              requireValue(chunk.bytes.length <= bytes.length - offset, 'history.render_record_size', 'replay_required');
+              bytes.set(chunk.bytes, offset);
+              offset += chunk.bytes.length;
+            }
+            requireValue(offset === bytes.length, 'history.render_record_size', 'replay_required');
+            value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
           }
           if (current !== revision || !selected.isCurrent()) return;
-          const projected = normalize(value);
+          const projected = normalize(value, item.kind === 'stream' ? item.descriptor.totalBytes : undefined);
           if (selectedKind === 'codex') entries.clear();
           for (const entry of projected) {
             requireValue(entry !== null && typeof entry === 'object' && 'info' in entry, 'history.entry');

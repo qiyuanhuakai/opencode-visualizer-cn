@@ -93,7 +93,7 @@ export async function runDaemonProcess(options, createBridgeServer) {
   options = { ...options, ...startOptions.secrets };
   const paths = createDaemonPaths();
   const configStore = createBridgeConfigStore({ configPath: options.configPath });
-  const runtime = createBridgeRuntime({ configStore });
+  const runtime = createBridgeRuntime({ configStore, recoverDeadOwner: true });
   const server = createBridgeServer({ ...options, runtime });
   const serverSockets = trackConnections(server);
   let controlServer;

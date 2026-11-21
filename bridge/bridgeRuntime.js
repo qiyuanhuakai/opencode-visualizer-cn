@@ -83,7 +83,7 @@ export function createBridgeRuntime(options = {}) {
       const { createRuntimeServices } = await import('./runtime/runtimeServices.js');
       if (closing) throw new Error('Bridge runtime is shutting down.');
       const config = await startSources();
-      const services = await createRuntimeServices({ environmentId, stateRoot: options.stateRoot ?? path.dirname(configStore.configPath), role: options.role ?? 'local', roots: options.localWorkspaceRoots ?? [{ root: process.cwd(), permissions: ['read', 'write', 'command', 'pty', 'reverse'] }], config, nativeSupervisor, acpManager, startRequestedAgent, runtime: { mutate: operation => host.mutate(operation) }, factories: options.runtimeDriverFactories, runtimeStoreTakeover: options.runtimeStoreTakeover, remoteServices });
+      const services = await createRuntimeServices({ environmentId, stateRoot: options.stateRoot ?? path.dirname(configStore.configPath), role: options.role ?? 'local', roots: options.localWorkspaceRoots ?? [{ root: process.cwd(), permissions: ['read', 'write', 'command', 'pty', 'reverse'] }], config, nativeSupervisor, acpManager, startRequestedAgent, runtime: { mutate: operation => host.mutate(operation) }, factories: options.runtimeDriverFactories, runtimeStoreTakeover: options.runtimeStoreTakeover, recoverDeadOwner: options.recoverDeadOwner, remoteServices });
       if (closing) { await services.close(); throw new Error('Bridge runtime is shutting down.'); }
       host = createRuntimeHost({
         environmentId,

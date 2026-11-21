@@ -20,7 +20,7 @@ export async function createRuntimeServices(options) {
   const keys = ['opencode', 'codex', 'kimi-web', 'dsh', ...(options.config.acpAgents.length ? options.config.acpAgents.map(agent => 'acp:' + agent.id) : ['acp:unconfigured'])];
   const registrations = await loadRuntimeRegistrations(options.stateRoot, keys);
   let active = true, closed, repositoryDiscovery;
-  const store = createRuntimeStore({ stateDirectory: options.stateRoot, environmentId: options.environmentId, ownerId: instanceId, epoch, takeover: options.runtimeStoreTakeover });
+  const store = createRuntimeStore({ stateDirectory: options.stateRoot, environmentId: options.environmentId, ownerId: instanceId, epoch, takeover: options.runtimeStoreTakeover, recoverDeadOwner: options.recoverDeadOwner });
   const cleanup = [];
   try {
     cleanup.push(() => store.close());

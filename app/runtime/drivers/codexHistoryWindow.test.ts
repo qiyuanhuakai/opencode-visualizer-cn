@@ -121,3 +121,44 @@ it('does not turn a streamed continuation failure into an empty completed transc
     await expect(handle.page({ signal, cursor: first.cursor!, releasePageIds: [first.pageId] })).rejects.toMatchObject({ code: 'invalid_request', nativeCode: -32600 });
   } finally { await handle.close(); client.close(); await store.close(); await rm(root, { recursive: true, force: true }); }
 });
+
+it('drains earlier ordinary replies and defers later queries across a result-first history frame', async () => {
+  let deliver: (message: string) => void = () => {};
+  const rawStarted = Promise.withResolvers<number>();
+  const releaseHistory = Promise.withResolvers<void>();
+  const calls: Array<{ id: number; method: string }> = [];
+  const client = createAppServerClient({ transport: {
+    subscribe(message) { deliver = message; return () => {}; },
+    send(raw) { calls.push(JSON.parse(raw)); },
+    close() {},
+    requestRaw(raw, id) {
+      calls.push(JSON.parse(raw));
+      rawStarted.resolve(id);
+      return (async function* () {
+        await releaseHistory.promise;
+        yield Buffer.from(JSON.stringify({ result: { data: [], nextCursor: null }, id }));
+      })();
+    },
+  }, onMessage() {} });
+  try {
+    const before = client.request('model/list', {});
+    const history = client.requestHistory('thread/items/list', {});
+    const readHistory = Array.fromAsync(history.stream);
+    const after = client.request('collaborationMode/list', {});
+    await Promise.resolve();
+    expect(calls.map(call => call.method)).toEqual(['model/list']);
+    deliver(JSON.stringify({ result: { data: ['model'] }, id: calls[0]!.id }));
+    await expect(before).resolves.toEqual({ data: ['model'] });
+    expect(await rawStarted.promise).toBe(history.id);
+    expect(calls.map(call => call.method)).toEqual(['model/list', 'thread/items/list']);
+    releaseHistory.resolve();
+    await readHistory;
+    expect(history.envelope().id).toBe(history.id);
+    expect(calls.map(call => call.method)).toEqual(['model/list', 'thread/items/list', 'collaborationMode/list']);
+    deliver(JSON.stringify({ result: { data: ['plan'] }, id: calls[2]!.id }));
+    await expect(after).resolves.toEqual({ data: ['plan'] });
+  } finally {
+    releaseHistory.resolve();
+    client.close();
+  }
+});

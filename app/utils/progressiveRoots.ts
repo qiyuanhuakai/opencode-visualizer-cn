@@ -22,7 +22,7 @@ export function shiftProgressiveRootWindow(
   return { start: Math.max(window.start, end - maxSize), end };
 }
 
-export function preserveProgressiveRootWindowOnAppend(
+export function reconcileProgressiveRootWindow(
   previousRootIds: string[],
   nextRootIds: string[],
   window: ProgressiveRootWindow,
@@ -32,6 +32,13 @@ export function preserveProgressiveRootWindowOnAppend(
   const appended =
     nextRootIds.length >= previousRootIds.length &&
     previousRootIds.every((rootId, index) => nextRootIds[index] === rootId);
+  const addedBefore = nextRootIds.length - previousRootIds.length;
+  const prepended = addedBefore > 0 &&
+    previousRootIds.every((rootId, index) => nextRootIds[index + addedBefore] === rootId);
+  if (prepended) {
+    const start = window.start === 0 ? Math.max(0, addedBefore - maxSize + 1) : window.start + addedBefore;
+    return { start, end: Math.min(window.end + addedBefore, start + maxSize) };
+  }
   if (!appended) {
     const size = Math.min(maxSize, Math.max(1, window.end - window.start));
     return { start: Math.max(0, nextRootIds.length - size), end: nextRootIds.length };

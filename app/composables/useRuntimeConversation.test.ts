@@ -9,7 +9,7 @@ import type { HistoryStatus } from '../runtime/historyCache';
 
 const controlled = vi.hoisted(() => {
   const status: HistoryStatus = { status: 'partial' };
-  return { page: vi.fn(), select: vi.fn(async () => {}), dispose: vi.fn(async () => {}), canPoll: true, status };
+  return { page: vi.fn(), export: vi.fn(), select: vi.fn(async () => {}), dispose: vi.fn(async () => {}), canPoll: true, status };
 });
 vi.mock('../runtime/historyCache', () => ({ createHistoryCache: () => controlled }));
 
@@ -46,6 +46,43 @@ describe('selected conversation cancellation', () => {
     } finally {
       held.resolve(ready);
       await Promise.allSettled(work);
+      await conversation.dispose(); client.dispose(); connection.dispose();
+    }
+  });
+  it('loads an earlier Codex card larger than one transport frame and keeps its reply visible', async () => {
+    controlled.canPoll = false;
+    const connection = createRuntimeConnection({ reference: { url: 'ws://127.0.0.1:23004/runtime' }, resolveAuthentication: async () => ({}) });
+    const client = createRuntimeClient({ connection });
+    const target = parseEnvironmentId('11111111-1111-4111-8111-111111111111');
+    const capture: SelectionCapture = {
+      selection: { profileId: parseConnectionProfileId('22222222-2222-4222-8222-222222222222'), session: { environmentId: target, harnessInstanceId: parseHarnessInstanceId('33333333-3333-4333-8333-333333333333'), nativeSessionId: 'native' } },
+      selectionGeneration: 1, clientScope: { binding: { target, epoch: 'epoch', generation: 1 }, generation: 1, isCurrent: () => true }, signal: new AbortController().signal, isCurrent: () => true,
+    };
+    const text = '界'.repeat(1_500_000);
+    const bytes = new TextEncoder().encode(JSON.stringify({
+      turnId: 'turn', item: { type: 'userMessage', id: 'question', content: [{ type: 'text', text }] },
+    }));
+    const descriptor = { totalBytes: bytes.length };
+    controlled.export.mockImplementation(async function* () {
+      for (let offset = 0; offset < bytes.length; offset += 65536) yield { bytes: bytes.subarray(offset, offset + 65536) };
+    });
+    controlled.page.mockResolvedValueOnce({
+      value: { items: [{ kind: 'inline', value: { turnId: 'turn', item: { id: 'answer', type: 'agentMessage', text: 'Reply' } } }], cursor: 'earlier' }, release() {},
+    }).mockResolvedValueOnce({
+      value: { pageId: 'older-page', items: [{ kind: 'stream', descriptor }], cursor: null }, release() {},
+    });
+    const publish = vi.fn(), conversation = useRuntimeConversation({ publish });
+    try {
+      await conversation.select(client, capture, 'codex');
+      expect(conversation.hasMore.value).toBe(true);
+      await conversation.loadMore();
+      const [question, reply] = publish.mock.lastCall![0];
+      expect(question.parts[0].text).toBe(text);
+      expect(reply.parts[0].text).toBe('Reply');
+      expect(reply.info.parentID).toBe(question.info.id);
+      expect(conversation.hasMore.value).toBe(false);
+      expect(conversation.error.value).toBe('');
+    } finally {
       await conversation.dispose(); client.dispose(); connection.dispose();
     }
   });

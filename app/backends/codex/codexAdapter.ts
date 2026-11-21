@@ -2507,6 +2507,7 @@ export class CodexAdapter implements BackendAdapter {
   }
 
   async getGlobalHealth() {
+    if (this.nativeRequest) return this.request<{ healthy: boolean; version: string }>('vis/health');
     await this.ensureInitialized();
     return { healthy: true, version: this.appServerVersion || 'unknown' };
   }

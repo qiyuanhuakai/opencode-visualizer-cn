@@ -17,7 +17,7 @@ export function parseOptions(value) {
   if (value.requestTimeoutMs !== undefined) requireStore(Number.isInteger(value.requestTimeoutMs) && value.requestTimeoutMs >= 100 && value.requestTimeoutMs <= 15000, 'request_timeout');
   if (value.storageBudgetBytes !== undefined) requireStore(Number.isSafeInteger(value.storageBudgetBytes) && value.storageBudgetBytes >= 131072, 'storage_budget');
   if (value.takeover) requireStore(Number.isSafeInteger(value.takeover.expectedFence) && value.takeover.expectedFence > 0, 'fence');
-  return { stateDirectory: value.stateDirectory, environmentId: parseEnvironmentId(value.environmentId), ownerId: parseInstanceId(value.ownerId), epoch: parseInstanceId(value.epoch), ...(value.takeover ? { takeover: { expectedFence: value.takeover.expectedFence } } : {}), ...(value.installRoot ? { installRoot: text(value.installRoot) } : {}), ...(value.requestTimeoutMs ? { requestTimeoutMs: value.requestTimeoutMs } : {}), ...(value.storageBudgetBytes ? { storageBudgetBytes: value.storageBudgetBytes } : {}) };
+  return { stateDirectory: value.stateDirectory, environmentId: parseEnvironmentId(value.environmentId), ownerId: parseInstanceId(value.ownerId), epoch: parseInstanceId(value.epoch), ...(value.recoverDeadOwner === true ? { recoverDeadOwner: true } : {}), ...(value.takeover ? { takeover: { expectedFence: value.takeover.expectedFence } } : {}), ...(value.installRoot ? { installRoot: text(value.installRoot) } : {}), ...(value.requestTimeoutMs ? { requestTimeoutMs: value.requestTimeoutMs } : {}), ...(value.storageBudgetBytes ? { storageBudgetBytes: value.storageBudgetBytes } : {}) };
 }
 export function parseRequest(method, input = {}) {
   requireStore(input !== null && typeof input === 'object' && !Array.isArray(input), 'params');
