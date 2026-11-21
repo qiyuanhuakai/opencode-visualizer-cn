@@ -19,6 +19,12 @@ export async function createRuntimeServices(options) {
   const epoch = randomUUID(), instanceId = randomUUID();
   const keys = ['opencode', 'codex', 'kimi-web', 'dsh', ...(options.config.acpAgents.length ? options.config.acpAgents.map(agent => 'acp:' + agent.id) : ['acp:unconfigured'])];
   const registrations = await loadRuntimeRegistrations(options.stateRoot, keys);
+  const agentNames = new Map(options.config.acpAgents.map(agent => [registrations.harnesses.get('acp:' + agent.id), agent.name]));
+  function harnessMetadata(manifest) {
+    const displayName = agentNames.get(manifest.harnessInstanceId);
+    return { environmentId: manifest.environmentId, harnessInstanceId: manifest.harnessInstanceId, kind: manifest.kind, manifest,
+      ...(typeof displayName === 'string' && displayName.trim() ? { displayName: displayName.trim().slice(0, 128) } : {}) };
+  }
   let active = true, closed, repositoryDiscovery;
   const store = createRuntimeStore({ stateDirectory: options.stateRoot, environmentId: options.environmentId, ownerId: instanceId, epoch, takeover: options.runtimeStoreTakeover, recoverDeadOwner: options.recoverDeadOwner });
   const cleanup = [];
@@ -60,7 +66,7 @@ export async function createRuntimeServices(options) {
         const prior = await store.get({ collection: 'harnesses', key: manifest.harnessInstanceId });
         try {
           await store.mutate({ intentId: randomUUID(), changes: [{ collection: 'harnesses', key: manifest.harnessInstanceId, expectedRevision: prior?.revision ?? 0,
-            value: { ...prior?.value, environmentId: manifest.environmentId, harnessInstanceId: manifest.harnessInstanceId, kind: manifest.kind, manifest } }] });
+            value: { ...prior?.value, ...harnessMetadata(manifest) } }] });
           return;
         } catch (error) { if (error?.code !== 'conflict' || attempt === 7) throw error; }
       }
@@ -87,7 +93,7 @@ export async function createRuntimeServices(options) {
       grant: Object.freeze({ target: options.environmentId, role: options.role, capabilities, permissions, workspaceKeys: workspace.workspaces.map(entry => entry.key) }),
       async start({ signal } = {}) {
         if (options.role === 'manager' || signal?.aborted) return;
-        for (const manifest of drivers.registry.list()) await store.mutate({ intentId: randomUUID(), changes: [{ collection: 'harnesses', key: manifest.harnessInstanceId, value: { environmentId: manifest.environmentId, harnessInstanceId: manifest.harnessInstanceId, kind: manifest.kind, manifest } }] });
+        for (const manifest of drivers.registry.list()) await store.mutate({ intentId: randomUUID(), changes: [{ collection: 'harnesses', key: manifest.harnessInstanceId, value: harnessMetadata(manifest) }] });
         for (let offset = 0; offset < workspace.workspaces.length; offset += 200) {
           for (let attempt = 0; attempt < 8; attempt++) {
             const changes = [];
@@ -121,7 +127,7 @@ export async function createRuntimeServices(options) {
         for (const manifest of drivers.registry.list()) {
           for (let attempt = 0; attempt < 4; attempt++) {
             const prior = await store.get({ collection: 'harnesses', key: manifest.harnessInstanceId });
-            try { await store.mutate({ intentId: randomUUID(), changes: [{ collection: 'harnesses', key: manifest.harnessInstanceId, expectedRevision: prior?.revision ?? 0, value: { ...prior?.value, environmentId: manifest.environmentId, harnessInstanceId: manifest.harnessInstanceId, kind: manifest.kind, manifest, ...(manifest.core.listSessionPage.state === 'unsupported' ? { indexDiscovery: [{ scopeKey: '{}', status: 'partial', count: 0, reason: manifest.core.listSessionPage.reason }] } : {}) } }] }); break; }
+            try { await store.mutate({ intentId: randomUUID(), changes: [{ collection: 'harnesses', key: manifest.harnessInstanceId, expectedRevision: prior?.revision ?? 0, value: { ...prior?.value, ...harnessMetadata(manifest), ...(manifest.core.listSessionPage.state === 'unsupported' ? { indexDiscovery: [{ scopeKey: '{}', status: 'partial', count: 0, reason: manifest.core.listSessionPage.reason }] } : {}) } }] }); break; }
             catch (error) { if (error.code !== 'conflict' || attempt === 3) throw error; }
           }
         }

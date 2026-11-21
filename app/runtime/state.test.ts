@@ -168,6 +168,25 @@ describe('runtime state through production client and frame codecs', () => {
     await vi.advanceTimersByTimeAsync(25);
     expect(read(state).items.find(item => item.key === key)?.value).toMatchObject({ title: 'incoming after window' });
   });
+  it('keeps child summaries out of startup and live root-session capacity', async () => {
+    const { state, wire } = await fixture(265);
+    const parent = session(264);
+    for (let index = 0; index < 210; index++) {
+      const identity = session(index), key = encodeSessionKey(identity);
+      wire.canonical.set(key, {
+        collection: 'session_summaries', key, revision: index + 1,
+        value: { session: identity, title: `child-${index}`, parentSession: parent },
+      });
+    }
+    await state.start(target, { collection: 'session_summaries', visible: true, sessionWindow: true });
+    expect(read(state).items).toHaveLength(55);
+    expect(read(state).items.some(item => item.key === encodeSessionKey(parent))).toBe(true);
+
+    wire.event(265, { session: session(265), title: 'new child', parentSession: parent });
+    await vi.advanceTimersByTimeAsync(25);
+    expect(read(state).items).toHaveLength(55);
+  });
+
   it('opens a usable session window when legal long summaries exceed the lookahead budget', async () => {
     const { state, wire } = await fixture(500);
     wire.summaryPageLimit = 14;

@@ -58,6 +58,7 @@ const messages: LocaleMessages = {
       remoteLocalApplication: '本地应用仅打开本机文件',
     },
     runtimeBridgeMenu: {
+      filterAgent: '仅显示此 Agent',
       title: 'Bridge',
       connections: '连接管理',
       migration: '迁移工作区数据',

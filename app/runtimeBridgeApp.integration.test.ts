@@ -23,8 +23,7 @@ it('connects through Bridge login and renders selected native history over the a
   await vi.waitFor(() => expect(fixture.element.textContent).toContain('History through the qualified Bridge boundary'), { timeout: 10000 });
   expect(fixture.historyOpens).toEqual([expect.objectContaining({ environmentId: fixture.environmentId, nativeSessionId: 'session-a' })]);
   expect(fixture.element.querySelectorAll('.thread-block')).toHaveLength(1);
-  const manager = fixture.element.querySelector('[data-testid="management-agent-selector"]')!;
-  expect(manager.querySelector('button')?.textContent).toContain('OpenCode');
+  expect(fixture.element.querySelector('.app-runtime-actions [data-testid="management-agent-selector"]')).toBeNull();
   fixture.element.querySelector<HTMLButtonElement>('button[title="Status monitor"]')!.click();
   const monitor = await vi.waitFor(() => {
     const button = fixture.element.querySelector<HTMLButtonElement>('.status-monitor-popover [data-testid="management-agent-selector"] button');
@@ -39,7 +38,6 @@ it('connects through Bridge login and renders selected native history over the a
   });
   codex.click();
   await vi.waitFor(() => {
-    expect(manager.querySelector('button')?.textContent).toContain('Codex');
     expect(monitor.getAttribute('aria-label')).toContain('Codex');
   });
   fixture.element.querySelector<HTMLButtonElement>('button[aria-label="Close status monitor"]')!.click();

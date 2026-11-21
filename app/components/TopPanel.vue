@@ -60,6 +60,7 @@
           </template>
           <template #default="{ close }">
             <div class="tree-menu">
+              <slot v-if="runtimeMode" name="runtime-agent-controls" />
               <DropdownSearch
                 v-model="searchQuery"
                 :placeholder="$t('topPanel.searchPlaceholder')"
@@ -685,7 +686,7 @@
           v-if="showCodexButton"
           class="codex-menu-root"
           :title="$t('codexPanel.title')"
-          :button-class="['control-button', 'codex-button']"
+          :button-class="['control-button', 'codex-panel-button']"
           menu-icon="lucide:chevron-down"
           :popup-style="{ minWidth: '220px', width: '240px' }"
           :auto-focus="false"
@@ -814,17 +815,9 @@
         </Dropdown>
       </div>
       <div class="top-right">
-        <button v-if="runtimeMode" type="button" class="control-button" :title="$t('app.runtimeConnection.sshSlurm')" :aria-label="$t('app.runtimeConnection.sshSlurm')" @click="$emit('open-connection-entry')">
+        <button v-if="runtimeMode" type="button" class="control-button remote-button" :title="$t('app.runtimeConnection.sshSlurm')" :aria-label="$t('app.runtimeConnection.sshSlurm')" @click="$emit('open-connection-entry')">
           <Icon icon="lucide:network" :width="16" :height="16" aria-hidden="true" />
         </button>
-        <Dropdown :aria-label="$t('app.runtimeBridgeMenu.title')" :button-class="['control-button']" :popup-style="{ minWidth: '220px' }">
-          <template #label><Icon icon="lucide:server" :width="16" :height="16" /></template>
-          <template #default="{ close }">
-            <DropdownItem value="migration" @click="$emit('open-workspace-migration'); close()">{{ $t('app.runtimeBridgeMenu.migration') }}</DropdownItem>
-            <DropdownItem value="agents" @click="$emit('open-harness-settings'); close()">{{ $t('app.runtimeBridgeMenu.agentSettings') }}</DropdownItem>
-          </template>
-        </Dropdown>
-
         <a
           href="https://github.com/qiyuanhuakai/opencode-visualizer-cn"
           target="_blank"
@@ -1011,8 +1004,6 @@ const emit = defineEmits<{
   (event: 'edit-project', payload: { projectId: string; worktree: string }): void;
   (event: 'open-settings'): void;
   (event: 'open-connection-entry'): void;
-  (event: 'open-workspace-migration'): void;
-  (event: 'open-harness-settings'): void;
   (event: 'open-provider-manager'): void;
   (event: 'open-status-monitor'): void;
   (event: 'open-codex-panel'): void;
@@ -2339,6 +2330,20 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   flex-shrink: 0;
 }
 
+.forge-button {
+  width: 32px;
+  padding: 0;
+}
+
+.codex-menu-root :deep(.codex-panel-button) {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 6px;
+  background: var(--theme-top-dropdown-control-bg, #0b1320);
+  border-color: var(--theme-top-dropdown-border, #334155);
+  color: var(--theme-top-dropdown-text, #e2e8f0);
+}
+
 .new-session-button {
   width: 32px;
   height: 32px;
@@ -2508,6 +2513,7 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
 }
 
 .settings-button,
+.remote-button,
 .provider-manager-button,
 .status-monitor-button,
 .codex-button,
@@ -2524,6 +2530,7 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
 }
 
 .settings-button:hover,
+.remote-button:hover,
 .provider-manager-button:hover,
 .status-monitor-button:hover,
 .codex-button:hover,

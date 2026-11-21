@@ -173,6 +173,20 @@
           >
             <Icon icon="lucide:chevron-right" :width="16" :height="16" class="setting-link-icon" />
           </SettingRow>
+          <template v-if="runtimeActions">
+            <SettingRow
+              v-for="action in runtimeSettingActions"
+              :key="action.event"
+              tag="button"
+              type="button"
+              class="setting-link-row"
+              :label="$t(action.label)"
+              description=""
+              @click="emit(action.event)"
+            >
+              <Icon icon="lucide:chevron-right" :width="16" :height="16" class="setting-link-icon" />
+            </SettingRow>
+          </template>
         </template>
 
         <template v-else-if="activePage === 'transformers'">
@@ -1042,6 +1056,7 @@ type ThemePresetCard = {
 
 const props = defineProps<{
   open: boolean;
+  runtimeActions?: boolean;
   initialPage?: SettingsPage;
   connectedBridgeState?: ConnectedBridgeVersion | null;
   refreshBridgeVersion?: () => Promise<boolean>;
@@ -1057,8 +1072,13 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (event: 'close'): void;
+  (event: 'close' | 'open-workspace-migration' | 'open-harness-settings'): void;
 }>();
+
+const runtimeSettingActions = [
+  { event: 'open-workspace-migration', label: 'app.runtimeBridgeMenu.migration' },
+  { event: 'open-harness-settings', label: 'app.runtimeBridgeMenu.agentSettings' },
+] as const;
 
 const { t } = useI18n();
 const dialogRef = ref<HTMLDialogElement | null>(null);

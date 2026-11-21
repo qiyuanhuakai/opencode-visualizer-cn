@@ -192,6 +192,7 @@ export type HarnessControlSupport =
       capability: ControlCapability;
       reason: string;
       source: HarnessSource | null;
+      missingDeclaration?: true;
     }>;
 
 export type WorkspaceControlSupport =
@@ -324,6 +325,7 @@ export function resolveControlSupport(input: Readonly<{
   if (!support) {
     return Object.freeze({
       state: 'unsupported', channel: 'harness', control, operation: entry.operation, capability: entry.capability,
+      missingDeclaration: true,
       reason: `${manifest.kind} does not declare the "${entry.operation}" operation`,
       source,
     });

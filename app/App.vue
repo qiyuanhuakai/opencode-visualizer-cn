@@ -52,8 +52,6 @@
           @edit-project="handleEditProject"
           @open-settings="openSettings()"
           @open-connection-entry="openConnectionEntry()"
-          @open-harness-settings="isHarnessSettingsOpen = true"
-          @open-workspace-migration="openWorkspaceMigration()"
           @open-provider-manager="isProviderManagerOpen = true"
           @open-status-monitor="isStatusMonitorOpen = true"
           @open-codex-panel="openCodexPanel"
@@ -62,6 +60,15 @@
           @logout="handleLogout"
           @dropdown-closed="focusInput"
         >
+          <template #runtime-agent-controls>
+            <div class="runtime-dropdown-agents">
+              <AgentInstanceSelector :instances="harnessManifests" :names="runtimeAgentNames" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
+              <label v-if="managementHarnessInstanceId">
+                <input v-model="filterTopPanelAgent" type="checkbox" />
+                {{ t('app.runtimeBridgeMenu.filterAgent', 'Only this Agent') }}
+              </label>
+            </div>
+          </template>
           <template #runtime-sessions="{ close, managementMode, done }">
             <details class="runtime-dropdown-discovery">
               <summary>{{ t('runtime.sessionTree.searchAll') }}</summary>
@@ -97,13 +104,12 @@
             </details>
           </template>
         </TopPanel>
-        <div class="app-runtime-actions">
-          <AgentInstanceSelector :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
+        <div v-if="showHostThreadAction || runtimeThreadState.threadId.value" class="app-runtime-actions">
           <button
             type="button"
             class="app-runtime-action"
             data-testid="open-runtime-thread"
-            :disabled="unifiedSessionTree === null || !runtimeSelectedSessionRef || (!runtimeSelectedDirectory && !runtimeThreadState.threadId.value)"
+            v-if="showHostThreadAction"
             :title="t('runtime.thread.openTitle')"
             @click="openRuntimeThreadForSelection()"
           >
@@ -113,7 +119,7 @@
             type="button"
             class="app-runtime-action"
             data-testid="open-runtime-collaboration"
-            :disabled="runtimeThreadState.threadId.value === null"
+            v-if="runtimeThreadState.threadId.value"
             :title="t('runtime.collaboration.openTitle')"
             @click="openCollaborationPanel()"
           >
@@ -197,7 +203,6 @@
           <main ref="outputEl" class="app-output">
             <div class="output-workspace">
               <p v-if="runtimeConversation.error.value" class="runtime-history-notice" :class="{ 'is-unavailable': runtimeSelectedSessionRef && !runtimeSelectedDirectory }" role="alert">{{ runtimeConversation.error.value }}</p>
-              <button v-if="runtimeConversation.hasMore.value" type="button" class="app-runtime-action" :disabled="runtimeConversation.loading.value" @click="runtimeConversation.loadMore()">{{ t('common.loadMore', 'Load more') }}</button>
               <div class="tool-window-layer">
                 <div class="output-split">
                   <OutputPanel
@@ -242,6 +247,7 @@
                     :has-message-diffs="activeBackendKind === 'kimi-web' ? hasKimiMessageDiffs : undefined"
                     :kimi-session-context="kimiSessionContext"
                     :is-loading="isLoadingHistory"
+                    :load-older-history="runtimeConversation.hasMore.value && !runtimeConversation.loading.value ? loadOlderRuntimeHistory : undefined"
                     :is-anchoring="isOutputAnchoring"
                     @message-rendered="handleOutputPanelMessageRendered"
                     @resume-follow="handleOutputPanelResumeFollow"
@@ -543,7 +549,7 @@
         <h2 id="runtime-settings-title">{{ t('app.runtimeBridgeMenu.agentSettings') }}</h2>
         <button type="button" class="action-button" @click="isHarnessSettingsOpen = false">{{ t('floatingWindow.close') }}</button>
       </header>
-      <AgentInstanceSelector :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
+      <AgentInstanceSelector :instances="harnessManifests" :names="runtimeAgentNames" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
       <HarnessSettings v-if="harnessInstanceScope" :harness-kind="harnessSettingsKind" :manifests="harnessManifests" :scope="harnessInstanceScope" :controls="harnessSettingsControls" :action-labels="harnessSettingsActions" @save="handleHarnessSettingsSave" />
     </dialog>
     <CollaborationPanel
@@ -598,6 +604,9 @@
     <SettingsModal
       :open="isSettingsOpen"
       :initial-page="settingsInitialPage"
+      :runtime-actions="runtimeOnline"
+      @open-workspace-migration="isSettingsOpen = false; openWorkspaceMigration()"
+      @open-harness-settings="isSettingsOpen = false; isHarnessSettingsOpen = true"
       :connected-bridge-state="connectedBridgeState"
       :refresh-bridge-version="desktopBridgeVersion.refresh"
       @close="isSettingsOpen = false"
@@ -623,7 +632,7 @@
       @open-acp-auth-terminal="openAcpAuthTerminal"
     >
       <template #agent-selector>
-        <AgentInstanceSelector v-if="harnessManifests.length" :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
+        <AgentInstanceSelector v-if="harnessManifests.length" :instances="harnessManifests" :names="runtimeAgentNames" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
       </template>
     </ProviderManagerModal>
     <StatusMonitorModal
@@ -646,7 +655,7 @@
       @refresh="managementStatusRefresh++"
     >
       <template #agent-selector>
-        <AgentInstanceSelector v-if="harnessManifests.length" :instances="harnessManifests" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
+        <AgentInstanceSelector v-if="harnessManifests.length" :instances="harnessManifests" :names="runtimeAgentNames" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
       </template>
     </StatusMonitorModal>
     <ProjectSettingsDialog
@@ -9942,6 +9951,7 @@ const activeRuntimeEnvironmentId = computed(() => {
   return environment;
 });
 const activeHarnessKind = computed<HarnessKind>(() => activeBackendKind.value);
+const runtimeAgentNames = shallowRef<Readonly<Record<string, string>>>({});
 const managementHarnessInstanceId = ref<HarnessInstanceId | null>(null);
 
 let runtimeWorkspaceKeys: readonly import('../shared/runtime/identity.js').WorkspaceKey[] = [];
@@ -9973,6 +9983,7 @@ async function connectRuntimeBridge(openRemote = false): Promise<void> {
   runtimeIndexAvailable.value = false;
   runtimeEnvironmentId.value = null;
   bridgeReference.value = null;
+  runtimeAgentNames.value = {};
   const owner = useRuntimeConnection({
     reference: managementCandidate(bridgeLoginUrl.value),
     bootstrapTree: !openRemote,
@@ -10126,10 +10137,13 @@ function buildUnifiedSessionTree(): void {
     onCanonical: entity => {
       runtimeTurns.apply(entity); runtimeInteractionProjection?.observeOperation(entity);
       if (entity.collection === 'harnesses' && entity.value) {
-        const raw = asRuntimeRecord(entity.value).manifest;
+        const { manifest: raw, displayName } = asRuntimeRecord(entity.value);
         if (raw) {
           const manifest = validateHarnessManifest(raw);
           if (manifest.environmentId === target && manifest.harnessInstanceId === entity.key) {
+            if (typeof displayName === 'string' && displayName !== runtimeAgentNames.value[manifest.harnessInstanceId]) {
+              runtimeAgentNames.value = { ...runtimeAgentNames.value, [manifest.harnessInstanceId]: displayName };
+            }
             const instances = harnessManifests.value;
             harnessManifests.value = instances.some(entry => entry.harnessInstanceId === manifest.harnessInstanceId)
               ? instances.map(entry => entry.harnessInstanceId === manifest.harnessInstanceId ? manifest : entry)
@@ -10177,7 +10191,12 @@ watch([() => runtimePins.value, () => runtimePins.value?.revision.value, () => u
     if (!controller.signal.aborted) runtimeTopPanelPinnedKeys.value = result;
   }).catch(() => {});
 });
-const runtimeTopPanelTree = computed(() => buildRuntimeTopPanelTree(unifiedSessionTree.value?.tree.value ?? [], runtimeTopPanelPinnedKeys.value));
+const filterTopPanelAgent = ref(false);
+const runtimeTopPanelTree = computed(() => buildRuntimeTopPanelTree(
+  unifiedSessionTree.value?.tree.value ?? [],
+  runtimeTopPanelPinnedKeys.value,
+  filterTopPanelAgent.value ? managementHarnessInstanceId.value ?? undefined : undefined,
+));
 const unifiedTreeRows = computed<readonly UnifiedFlatRow[] | undefined>(() => unifiedSessionTree.value?.rows.value);
 const unifiedTreeSources = computed<readonly HarnessEntry[]>(() => {
   const entries = new Map((unifiedSessionTree.value?.harnesses.value ?? []).map(entry => [entry.harnessInstanceId, entry]));
@@ -10407,6 +10426,10 @@ watch(
 
 const missingThreadRepositoryNotice = 'This session has no repository on the connected target, so no Host Thread can be opened for it.';
 
+const showHostThreadAction = computed(() => Boolean(
+  unifiedSessionTree.value && runtimeSelectedSessionRef.value
+    && (runtimeSelectedDirectory.value || runtimeThreadState.threadId.value),
+));
 async function openRuntimeThreadForSelection(): Promise<void> {
   if (runtimeThreadState.threadId.value) {
     try {
@@ -11065,6 +11088,10 @@ const runtimeConversation = useRuntimeConversation({ publish: entries => {
   const session = runtimeSelectedSessionRef.value;
   if (session) storeThreadNativeWindow(session, entries);
 } });
+async function loadOlderRuntimeHistory() {
+  try { await runtimeConversation.loadMore(); }
+  catch (error) { log('Earlier runtime history unavailable', error); }
+}
 watch(runtimeConversation.loading, value => { isLoadingHistory.value = value; });
 onScopeDispose(() => {
   void runtimeConversation.dispose().catch(error => log('Runtime history cleanup failed', error));
@@ -14907,6 +14934,20 @@ body {
   border-radius: var(--radius-control);
   cursor: pointer;
 }
+.runtime-dropdown-agents {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--type-sm);
+}
+
+.runtime-dropdown-agents label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .runtime-dropdown-discovery {
   color: var(--theme-top-dropdown-text);
   background: var(--theme-top-dropdown-bg);

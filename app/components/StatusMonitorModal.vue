@@ -275,7 +275,7 @@ function monitorControlSupport(control: string): ControlSupport | null {
 
 function monitorControlSourceLine(control: string): string {
   const support = monitorControlSupport(control);
-  if (!support || support.state !== 'unsupported') return '';
+  if (!support || support.state !== 'unsupported' || (support.channel === 'harness' && support.missingDeclaration)) return '';
   return describeControlSupport(support);
 }
 

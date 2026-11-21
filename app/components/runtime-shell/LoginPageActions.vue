@@ -7,10 +7,6 @@ const remoteIcon = {
   width: 24, height: 24,
   body: '<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="16" y="16" width="6" height="6" rx="1"/><path d="M12 8v4m-7 4v-4h14v4"/></g>',
 };
-const settingsIcon = {
-  width: 24, height: 24,
-  body: '<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h5m4 0h7M4 17h9m4 0h3"/><circle cx="11" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></g>',
-};
 </script>
 
 <template>
@@ -19,7 +15,7 @@ const settingsIcon = {
       <Icon :icon="remoteIcon" :width="16" :height="16" aria-hidden="true" />
     </button>
     <button type="button" :aria-label="t('app.runtimeConnection.settings')" :title="t('app.runtimeConnection.settings')" @click="$emit('openSettings')">
-      <Icon :icon="settingsIcon" :width="16" :height="16" aria-hidden="true" />
+      <Icon icon="lucide:settings" :width="16" :height="16" aria-hidden="true" />
     </button>
   </div>
 </template>
@@ -38,11 +34,11 @@ button {
   inline-size: 32px;
   block-size: 32px;
   padding: 0;
-  border: 1px solid var(--theme-top-dropdown-border, var(--theme-border-default));
+  border: none;
   border-radius: 8px;
-  color: var(--theme-top-dropdown-text, var(--theme-text-primary));
-  background: var(--theme-top-dropdown-control-bg, var(--theme-surface-panel));
+  color: var(--theme-top-text-muted, var(--theme-text-muted));
+  background: transparent;
   cursor: pointer;
 }
-button:hover { background: var(--theme-top-dropdown-active-bg, var(--theme-surface-hover)); }
+button:hover { color: var(--theme-text-primary); }
 </style>

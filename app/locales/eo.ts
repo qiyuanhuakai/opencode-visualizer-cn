@@ -59,6 +59,7 @@ const messages: LocaleMessages = {
       remoteLocalApplication: 'la loka aplikaĵo malfermas nur dosierojn en ĉi tiu maŝino',
     },
     runtimeBridgeMenu: {
+      filterAgent: 'Nur ĉi tiu agento',
       title: 'Bridge',
       connections: 'Konektoj',
       migration: 'Migri laborspacajn datumojn',

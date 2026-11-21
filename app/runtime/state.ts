@@ -84,7 +84,14 @@ export function createRuntimeState(options: RuntimeStateOptions) {
     if (fits) view.splice(index, 0, lease);
     return fits;
   }
+  function visibleRow(entry: TargetState, item: CanonicalEntity) {
+    // Child sessions have their own parent-scoped expansion. Keep the startup
+    // window and its refill budget available for navigable root sessions.
+    return item.value !== null && !(entry.request.sessionWindow && item.collection === 'session_summaries'
+      && item.value !== undefined && record(item.value) && item.value.parentSession != null);
+  }
   function retain(entry: TargetState, item: CanonicalEntity, fillWindow: boolean) {
+    if (!visibleRow(entry, item)) return;
     if (lookaheadFilled && (!fillWindow || windowFilled)) return;
     const lease = cache.get(address(entry, item));
     if (!lease) return;
@@ -146,7 +153,7 @@ export function createRuntimeState(options: RuntimeStateOptions) {
     const index = window.findIndex(lease => holds(lease, entry, canonical));
     if (index >= 0) {
       window[index].release(); window.splice(index, 1);
-      if (canonical.value !== null) {
+      if (visibleRow(entry, canonical)) {
         const lease = cache.get(address(entry, canonical));
         if (lease && hold(window, lease, index)) return;
         lease?.release();
@@ -158,13 +165,13 @@ export function createRuntimeState(options: RuntimeStateOptions) {
     const pending = lookahead.findIndex(lease => holds(lease, entry, canonical));
     if (pending >= 0) {
       lookahead[pending].release(); lookahead.splice(pending, 1);
-      if (canonical.value !== null) {
+      if (visibleRow(entry, canonical)) {
         const lease = cache.get(address(entry, canonical));
         if (lease && !hold(lookahead, lease, pending)) lease.release();
       }
       return;
     }
-    if (canonical.value !== null) {
+    if (visibleRow(entry, canonical)) {
       const lease = cache.get(address(entry, canonical));
       if (lease && !hold(window, lease) && !hold(lookahead, lease)) lease.release();
     }

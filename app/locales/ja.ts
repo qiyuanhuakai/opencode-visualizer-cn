@@ -60,6 +60,7 @@ const messages: LocaleMessages = {
       remoteLocalApplication: 'ローカルアプリはこのマシンのファイルのみ開きます',
     },
     runtimeBridgeMenu: {
+      filterAgent: 'このエージェントのみ',
       title: 'Bridge',
       connections: '接続管理',
       migration: 'ワークスペースデータの移行',
