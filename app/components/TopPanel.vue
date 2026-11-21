@@ -300,7 +300,7 @@
                       <div class="tree-actions">
                         <button
                           v-if="
-                            (!runtimeMode || runtimeCreateAvailable) &&
+                            (!runtimeMode || (runtimeCreateAvailable && (runtimeCanCreateInDirectory?.(sandbox.directory) ?? true))) &&
                             sandbox.kind !== 'global' &&
                             (sandbox.kind !== 'sandbox' || sandbox.sessions.length > 0)
                           "
@@ -978,6 +978,7 @@ type SessionActionCapabilities = {
 const props = defineProps<{
   runtimeMode?: boolean;
   runtimeCreateAvailable?: boolean;
+  runtimeCanCreateInDirectory?: (directory: string) => boolean;
   nativeSelectedDisplay?: { branch: string; title: string; status: 'idle' | 'busy' | 'retry' | 'unknown' };
   treeData: TopPanelWorktree[];
   notificationSessions: TopPanelNotificationSession[];

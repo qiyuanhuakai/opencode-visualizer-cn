@@ -15,6 +15,7 @@
           :project-directory="projectDirectory"
           :active-directory="activeDirectory"
           :selected-session-id="runtimeActionClient ? unifiedTreeSelectedKey : selectedSessionId"
+          :runtime-can-create-in-directory="canCreateRuntimeSessionInDirectory"
           :runtime-create-available="topPanelCreationManifest?.core.createSession.state === 'supported' && !!runtimeActionClient"
           :native-selected-display="nativeSelectedDisplay"
           :home-path="homePath"
@@ -11846,6 +11847,14 @@ function findRuntimeProjectWorkspace(environmentId: EnvironmentId, directory: st
   }
   return undefined;
 }
+function canCreateRuntimeSessionInDirectory(directory: string) {
+  const manifest = topPanelCreationManifest.value;
+  if (manifest?.core.createSession.state !== 'supported') return false;
+  const workspace = findRuntimeProjectWorkspace(manifest.environmentId, directory);
+  return !!workspace && (manifest.kind !== 'acp' || (
+    !workspace.relative && runtimeProjectDirectories.value?.includes(workspace.workspace.canonicalPath) === true
+  ));
+}
 async function listRuntimeProjectDirectory(directory: string) {
   const environmentId = topPanelCreationManifest.value?.environmentId ?? runtimeEnvironmentId.value;
   const client = requireRuntimeActionClient();
@@ -11859,19 +11868,16 @@ async function createRuntimeSession(directory?: string): Promise<BackendSessionI
   const client = runtimeActionClient.value;
   if (!manifest || !client) throw new Error('Select a connected Agent instance.');
   const scope = client.scope(manifest.environmentId);
-  const workspaces = runtimeWorkspaceKeys.value.map(key => decodeWorkspaceKey(key))
-    .filter(workspace => workspace.environmentId === manifest.environmentId);
-  let requested = directory ?? (workspaces.length === 1 ? workspaces[0].canonicalPath : undefined);
+  const roots = runtimeProjectDirectories.value ?? [];
+  let requested = directory ?? (roots.length === 1 ? roots[0] : undefined);
   if (!requested) {
-    const path = await showPrompt(`Workspace (${workspaces.map(entry => entry.canonicalPath).join(', ')})`, '');
+    if (!roots.length) throw new Error(t('runtime.session.noWorkspace'));
+    const path = await showPrompt(`Workspace (${roots.join(', ')})`, '');
     if (path === null) return undefined;
     requested = path;
   }
   const workspace = findRuntimeProjectWorkspace(manifest.environmentId, requested);
-  if (!workspace || (manifest.kind === 'acp' && !runtimeProjectDirectories.value?.includes(workspace.workspace.canonicalPath))) {
-    throw new Error(t('runtime.session.noWorkspace'));
-  }
-  if (manifest.kind === 'acp' && workspace.relative) throw new Error(t('runtime.session.noWorkspace'));
+  if (!workspace || !canCreateRuntimeSessionInDirectory(requested)) throw new Error(t('runtime.session.noWorkspace'));
   const currentManifest = topPanelCreationManifest.value;
   if (client !== runtimeActionClient.value || !scope.isCurrent()
     || currentManifest?.harnessInstanceId !== manifest.harnessInstanceId
@@ -11911,7 +11917,10 @@ function asRuntimeRecord(value: unknown): Record<string, unknown> {
 
 const backendSessionLifecycle = useBackendSessionLifecycle({
   createRuntimeSession,
-  runtimeCreateDirectory: () => runtimeSelectedDirectory.value?.trim() || undefined,
+  runtimeCreateDirectory: () => {
+    const directory = runtimeSelectedDirectory.value?.trim();
+    return directory && canCreateRuntimeSessionInDirectory(directory) ? directory : undefined;
+  },
   activeBackendKind,
   codexProjectId: CODEX_PROJECT_ID,
   acpProjectId: ACP_PROJECT_ID,

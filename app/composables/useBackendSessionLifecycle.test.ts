@@ -151,6 +151,19 @@ describe('useBackendSessionLifecycle', () => {
     expect(createSession).toHaveBeenCalledTimes(1);
   });
 
+  it('uses the runtime default when the current session directory is ineligible', async () => {
+    const createRuntimeSession = vi.fn(async () => undefined);
+    const { lifecycle } = createLifecycleFixture({
+      activeDirectory: ref('/repo/sub'),
+      runtimeCreateDirectory: () => undefined,
+      createRuntimeSession,
+    });
+    await lifecycle.createNewSession();
+    expect(createRuntimeSession).toHaveBeenCalledExactlyOnceWith(undefined);
+    await lifecycle.createSessionInDirectory('/repo', { reuseExisting: false });
+    expect(createRuntimeSession).toHaveBeenLastCalledWith('/repo');
+  });
+
   it('createNewSession always creates a fresh ACP session even when one exists in the directory', async () => {
     const selectedProjectId = ref('');
     const selectedSessionId = ref('');

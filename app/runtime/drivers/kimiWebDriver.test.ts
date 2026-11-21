@@ -408,6 +408,9 @@ it('reads and edits the goal through the current Kimi protocol without a REST go
     for (const name of ['kimi.goal', 'kimi.goal.update']) {
       expect(manifest.extensions.find(extension => extension.name === name)?.support.state).toBe('supported');
     }
+    for (const control of ['pause', 'resume', 'cancel']) {
+      expect(manifest.extensions.find(extension => extension.name === `kimi.goal.${control}`)?.support.state).toBe('unsupported');
+    }
     const context = { environmentId, harnessInstanceId, session };
     await expect(native.native['kimi.goal']!({ ...context, params: {} })).resolves.toBeNull();
     await expect(native.native['kimi.goal.update']!({ ...context, params: { body: { objective: 'Verify native goal' }, idempotencyKey: 'update-goal' } }))
@@ -467,7 +470,7 @@ describe('Kimi Web native selected-history producer over controlled raw HTTP and
         if (name === 'openHistory') continue;
         expect(support).toEqual({ state: 'supported' });
       }
-      expect(driver.registration.manifest.extensions.map((entry) => entry.name).sort()).toEqual([...Object.keys(KIMI_PROVIDER_OPERATIONS), ...Object.keys(KIMI_PLUGIN_OPERATIONS), ...Object.keys(KIMI_SESSION_OPERATIONS), 'archiveSession', 'deleteSession', 'kimi.listWorkspacePage', 'kimi.meta', 'kimi.sessionStatus', 'kimi.updateProfile', 'listProviders', 'restoreSession'].sort());
+      expect(driver.registration.manifest.extensions.map((entry) => entry.name).sort()).toEqual([...Object.keys(KIMI_PROVIDER_OPERATIONS), ...Object.keys(KIMI_PLUGIN_OPERATIONS), ...Object.keys(KIMI_SESSION_OPERATIONS), 'kimi.goal.pause', 'kimi.goal.resume', 'kimi.goal.cancel', 'archiveSession', 'deleteSession', 'kimi.listWorkspacePage', 'kimi.meta', 'kimi.sessionStatus', 'kimi.updateProfile', 'listProviders', 'restoreSession'].sort());
     } finally { await fixture.close(); }
   });
   it('updates goals with PATCH on the captured session and rejects invalid objectives before dispatch', async () => {
