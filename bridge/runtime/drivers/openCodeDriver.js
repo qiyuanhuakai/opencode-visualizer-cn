@@ -1,3 +1,4 @@
+import { LIMITS } from '../../../shared/runtime/protocol.js';
 import { randomUUID } from 'node:crypto';
 import { parseEnvironmentId, parseHarnessInstanceId, parseSessionRef, encodeSessionKey } from '../../../shared/runtime/identity.js';
 import { ProtocolError, requireValue, jsonValue, textValue } from '../../../shared/runtime/capabilities.js';
@@ -11,6 +12,28 @@ import { createSseDecoder, createEventSubscriptions } from '../../../shared/runt
 import { createOpenCodeStoreReader } from './openCodeStoreReader.mjs';
 import { createOpenCodeDiscovery } from './openCodeDiscovery.js';
 import { createOpenCodeHistory, OPEN_CODE_HISTORY_LIMITS } from './openCodeHistory.js';
+
+function providerCatalog(result) {
+  if (!Array.isArray(result?.all) || !Array.isArray(result.connected)) return result;
+  const catalog = {
+    all: result.all.map(({ id, name, source, models }) => ({
+      id, name, source,
+      models: Object.fromEntries(Object.entries(models ?? {}).map(([key, model]) => {
+        const { id, name, providerID, status, variants, capabilities, limit, cost, family } = model;
+        return [key, { id, name, providerID, status, variants, capabilities, limit, cost, family }];
+      })),
+    })),
+    connected: result.connected,
+    default: result.default,
+  };
+  const fits = () => Buffer.byteLength(JSON.stringify(catalog)) <= LIMITS.jsonBytes - 4096;
+  if (!fits()) {
+    const connected = new Set(catalog.connected);
+    catalog.all = catalog.all.map(provider => connected.has(provider.id) ? provider : { ...provider, models: {} });
+  }
+  requireValue(fits(), 'opencode.provider_catalog_size', 'source_unavailable');
+  return JSON.parse(JSON.stringify(catalog));
+}
 
 export async function createOpenCodeDriver(options) {
   const identity = { environmentId: parseEnvironmentId(options.environmentId), harnessInstanceId: parseHarnessInstanceId(options.harnessInstanceId) };
@@ -261,10 +284,18 @@ export async function createOpenCodeDriver(options) {
   };
   const native = {};
   const extensions = Object.keys(OPEN_CODE_OPERATIONS).map((name) => {
-    const operation = OPEN_CODE_OPERATIONS[name]; const supported = supportsNativeRoute(document, name);
+    const operation = OPEN_CODE_OPERATIONS[name]; const supported = name === 'getGlobalHealth' || supportsNativeRoute(document, name);
     if (supported) native[name] = async (input) => {
       const { session, params } = context(input, operation.scope === 'session'); await fence(); const route = nativeRoute(name, session, params);
-      if (route.method === 'GET') { const result = await request(route.path, { query: { directory: params.directory, workspace: params.workspace, messageID: params.messageID } }); await fence(); return route.redact ? redactSettings(result) : result; }
+      if (route.method === 'GET') {
+        const result = await request(route.path, {
+          query: { directory: params.directory, workspace: params.workspace, messageID: params.messageID },
+          ...(name === 'listProviders' ? { maxBytes: 16 * 1024 * 1024 } : {}),
+        });
+        await fence();
+        const safe = route.redact ? redactSettings(result) : result;
+        return name === 'listProviders' ? providerCatalog(safe) : safe;
+      }
       return operation.scope === 'session' ? sessionMutation(name, session, params, route, name === 'sendCommand') : instanceMutation(name, params, route);
     };
     return { name, owner: identity.harnessInstanceId, scope: operation.scope, permission: `opencode.${operation.method === 'GET' ? 'read' : 'write'}`, schemaVersion: 1, support: supported ? { state: 'supported' } : unsupported('native endpoint absent') };

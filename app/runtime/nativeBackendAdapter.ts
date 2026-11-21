@@ -173,6 +173,12 @@ export function createNativeBackendAdapter(client: RuntimeClient, manifest: Harn
   if (supported('listProviderAuthMethods')) adapter.listProviderAuthMethods = query('listProviderAuthMethods');
   if (supported('getMcpStatus')) adapter.getMcpStatus = query('getMcpStatus');
   if (supported('getLspStatus')) adapter.getLspStatus = query('getLspStatus');
+  if (supported('getGlobalHealth')) adapter.getGlobalHealth = async () => {
+    const value = await facade.query('getGlobalHealth');
+    const health = value && typeof value === 'object' ? Object.fromEntries(Object.entries(value)) : {};
+    requireValue(typeof health.healthy === 'boolean' && typeof health.version === 'string', 'runtime.health');
+    return { healthy: health.healthy, version: health.version };
+  };
   if (supported('getSkillStatus')) adapter.getSkillStatus = query('getSkillStatus');
   if (supported('getSessionStatusMap')) adapter.getSessionStatusMap = query('getSessionStatusMap');
   if (supported('getPluginStatus')) adapter.getPluginStatus = query('getPluginStatus');

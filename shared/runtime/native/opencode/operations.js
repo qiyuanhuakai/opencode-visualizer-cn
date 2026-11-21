@@ -17,6 +17,7 @@ export const OPEN_CODE_OPERATIONS = Object.freeze({
   getSessionTodos: sessionRead('/todo'),
   sendCommand: sessionWrite('POST', '/command'),
   patchMessagePart: sessionWrite('PATCH', '/message/{messageID}/part/{partID}'),
+  getGlobalHealth: instance('GET', '/global/health'),
   getGlobalConfig: instance('GET', '/global/config', true),
   updateGlobalConfig: instance('PATCH', '/global/config', true),
   listProviders: instance('GET', '/provider', true),

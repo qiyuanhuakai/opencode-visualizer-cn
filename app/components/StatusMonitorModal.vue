@@ -228,6 +228,7 @@ type KimiWebSessionStateReader = {
 const props = defineProps<{
   open: boolean;
   nativeAdapter?: Partial<BackendAdapter>;
+  getNativeKimiMeta?: () => Promise<KimiWebMeta>;
   initialTab?: TabId;
   initialUsageView?: 'daily' | 'weekly' | 'cumulative';
   sessionId?: string;
@@ -896,6 +897,15 @@ async function fetchKimiWebGlobalHealth(): Promise<{ healthy: boolean; version: 
 }
 
 async function refreshKimiWebStatus(requestId: number) {
+  if (props.getNativeKimiMeta) {
+    const meta = await props.getNativeKimiMeta();
+    if (requestId !== refreshRequestId) return;
+    kimiMeta.value = meta;
+    serverHealth.value = { healthy: true, version: meta.server_version };
+    applyKimiWebStatusSurfaceSupport();
+    hasLoaded.value = true;
+    return;
+  }
   const { bridgeUrl, bridgeToken } = kimiWebBridgeCredentials();
   const healthUrl = resolveDesktopBridgeHealthUrl({
     backendKind: 'kimi-web',

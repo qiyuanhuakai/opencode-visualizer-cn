@@ -13,6 +13,7 @@ export function createNativeCodexAdapter(client: RuntimeClient, manifest: Harnes
   return new CodexAdapter({
     url: '',
     nativeRequest: async (method, params) => {
+      if (method === 'vis/health') return facade.query('getGlobalHealth');
       const declaration = Object.entries(NATIVE_METHODS).find(([, spec]) => spec.method === method);
       requireValue(declaration !== undefined, 'codex.native_method', 'unsupported');
       const [operation, spec] = declaration;

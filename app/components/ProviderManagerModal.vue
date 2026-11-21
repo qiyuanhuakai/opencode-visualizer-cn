@@ -322,7 +322,7 @@
                         type="checkbox"
                         class="toggle-input"
                         :disabled="
-                          busyProviderId === provider.id || isBackendManagedProvider(provider)
+                          busyProviderId === provider.id || isBackendManagedProvider(provider) || !providerControlAvailable('updateGlobalConfig')
                         "
                         :title="
                           isBackendManagedProvider(provider)
@@ -1471,6 +1471,7 @@ async function toggleProvider(providerId: string, nextEnabled: boolean) {
     setFeedback(t('providerManager.messages.backendManagedProvider'), 'info');
     return;
   }
+  if (!providerControlAvailable('updateGlobalConfig')) return;
   busyProviderId.value = providerId;
   try {
     const updateGlobalConfig = requireBackendMethod(

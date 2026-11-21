@@ -635,6 +635,7 @@
       :native-adapter="managementNativeAdapter ?? undefined"
       :magic-context-workers="magicContextWorkers"
       :kimi-web-bridge="kimiWebMessageBridge"
+      :get-native-kimi-meta="managementKimiMeta"
       :dsh-status="runtimeActionClient ? managementDshStatus : dshStatusSnapshot"
       :harness-scope="harnessInstanceScope ?? undefined"
       :harness-manifests="harnessManifests"
@@ -9857,7 +9858,10 @@ function backend() {
       getVcsInfo: () => selected && selected.environmentId === context.target
         ? createHostClient(context.client, context.target).read({ domain: 'thread', operation: 'repository', args: { session: selected } }, value => value)
         : Promise.resolve(null),
-      listFiles: ({ directory, path }) => files.list(filePath(directory, path || '.')),
+      listFiles: async ({ directory, path }) => {
+        const items = await files.list(filePath(directory, path || '.'));
+        return items.map(item => ({ ...item, path: filePath(context.root, item.path) }));
+      },
       readFileContentBytes: ({ directory, path }) => files.read(filePath(directory, path)),
       readFileContent: async ({ directory, path }) => {
         const bytes = await files.read(filePath(directory, path));
@@ -9880,6 +9884,12 @@ function backend() {
 const bridgeLoginUrl = ref(storageGet('vis.runtime.bridgeUrl') || DEFAULT_RUNTIME_BRIDGE_URL);
 const bridgeLoginToken = ref('');
 const bridgeReference = shallowRef<PublicConnectionReference | null>(null);
+watch(uiInitState, state => {
+  if (state !== 'ready') return;
+  const reference = bridgeReference.value;
+  if (reference && !bridgeLoginToken.value) storageSet('vis.runtime.autoLogin', reference.url);
+  else storageRemove('vis.runtime.autoLogin');
+});
 const runtimePins = shallowRef<ReturnType<typeof createRuntimePins> | null>(null);
 watch(() => bridgeReference.value?.profileId, profileId => {
   void runtimePins.value?.dispose();
@@ -10585,7 +10595,7 @@ function findWorkspaceContext(directory?: string) {
     const root = entry.value.canonicalPath.replace(/\\/g, '/').replace(/\/+$/, '');
     return normalized === root || normalized?.startsWith(`${root}/`);
   }) ?? (!normalized && workspaces.length === 1 ? workspaces[0] : undefined);
-  return selected ? { client, target, workspaceKey: selected.key } : undefined;
+  return selected ? { client, target, workspaceKey: selected.key, root: selected.value.canonicalPath } : undefined;
 }
 
 function selectedWorkspaceContext(directory?: string) {
@@ -11156,6 +11166,13 @@ const managementNativeAdapter = computed(() => {
   const manifest = managementManifest.value;
   const client = runtimeActionClient.value;
   return manifest && client ? createNativeBackendAdapter(client, manifest) : null;
+});
+const managementKimiMeta = computed(() => {
+  const manifest = managementManifest.value;
+  const client = runtimeActionClient.value;
+  if (manifest?.kind !== 'kimi-web' || !client) return undefined;
+  const native = createNativeKimiSessionClient(client, manifest);
+  return () => native.getMeta();
 });
 const managementKimiProviders = computed(() => {
   const manifest = managementManifest.value;
@@ -13566,6 +13583,7 @@ async function handleLogout() {
   if (runtimeDraftFailure.value) return;
   const bridgeConnected = runtimeConnectionOwner !== undefined;
   bridgeLoginGeneration++;
+  storageRemove('vis.runtime.autoLogin');
   bridgeLoginToken.value = '';
   stopRuntimeRecovery?.();
   runtimeOnline.value = false;
@@ -13655,6 +13673,9 @@ onMounted(() => {
   window.addEventListener('focus', handleWindowAttentionChange);
   window.addEventListener('blur', handleWindowAttentionChange);
   updateFloatingExtentObserver();
+  if (uiInitState.value === 'login' && storageGet('vis.runtime.autoLogin') === bridgeLoginUrl.value) {
+    void handleLogin();
+  }
   globalEventUnsubscribers.push(
     ge.on('connection.open', () => {
       if (runtimeActionClient.value) return;

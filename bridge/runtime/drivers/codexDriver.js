@@ -417,6 +417,10 @@ export async function createCodexDriver(options) {
       'version_mismatch',
     );
     client.notify('initialized', {});
+    native.getGlobalHealth = context => {
+      validateContext(context);
+      return { healthy: true, version: protocolProfile };
+    };
     const registration = validateHarnessRegistration({
       manifest: codexManifest(scope, native),
       driver: { core, native },

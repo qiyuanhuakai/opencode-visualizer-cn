@@ -5,7 +5,7 @@ defineEmits<{ connectRemote: []; openSettings: [] }>();
 const { t } = useI18n();
 const remoteIcon = {
   width: 24, height: 24,
-  body: '<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/></g>',
+  body: '<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="16" y="16" width="6" height="6" rx="1"/><path d="M12 8v4m-7 4v-4h14v4"/></g>',
 };
 const settingsIcon = {
   width: 24, height: 24,

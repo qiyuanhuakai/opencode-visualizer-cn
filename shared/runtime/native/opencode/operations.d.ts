@@ -5,7 +5,7 @@ import type { OperationScope } from '../../../../bridge/runtime/operationJournal
 import type { ProcessGuard } from './instanceOperations.js';
 export type OpenCodeNativeOperation = 'compactSession' | 'forkSession' | 'updateSession' | 'deleteSession' | 'revertSession' | 'unrevertSession'
   | 'getSessionDiff' | 'getSessionChildren' | 'getSessionMessage' | 'getSessionTodos' | 'sendCommand' | 'patchMessagePart'
-  | 'getGlobalConfig' | 'updateGlobalConfig' | 'listProviders' | 'listProviderAuthMethods' | 'authorizeProviderOAuth'
+  | 'getGlobalHealth' | 'getGlobalConfig' | 'updateGlobalConfig' | 'listProviders' | 'listProviderAuthMethods' | 'authorizeProviderOAuth'
   | 'completeProviderOAuth' | 'setProviderAuth' | 'deleteProviderAuth' | 'listAgents' | 'listCommands' | 'getSessionStatusMap'
   | 'listPendingPermissions' | 'listPendingQuestions' | 'getMcpStatus' | 'getLspStatus' | 'updateMcp' | 'getSkillStatus';
 export interface NativeRoute { readonly method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; readonly scope: 'instance' | 'session'; readonly path: string; readonly redact?: boolean }

@@ -28,8 +28,9 @@ function canRecoverDeadOwner(current, scope) {
   if (!options.recoverDeadOwner || !scope || !current?.owner) return false;
   const processOwner = db.prepare('SELECT * FROM runtime_owner_processes WHERE environment=? AND owner=?')
     .get(options.environmentId, current.owner);
-  if (!processOwner || processOwner.boot !== scope.boot || processOwner.namespace !== scope.namespace
-    || !Number.isSafeInteger(processOwner.pid) || processOwner.pid <= 0) return false;
+  if (!processOwner || !Number.isSafeInteger(processOwner.pid) || processOwner.pid <= 0) return false;
+  if (processOwner.boot !== scope.boot) return locality.local === true;
+  if (processOwner.namespace !== scope.namespace) return false;
   try { process.kill(processOwner.pid, 0); }
   catch (error) { return error?.code === 'ESRCH'; }
   return false;

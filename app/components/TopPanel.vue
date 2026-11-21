@@ -826,7 +826,6 @@
         <Dropdown :aria-label="$t('app.runtimeBridgeMenu.title')" :button-class="['control-button']" :popup-style="{ minWidth: '220px' }">
           <template #label><Icon icon="lucide:server" :width="16" :height="16" /></template>
           <template #default="{ close }">
-            <DropdownItem value="connections" @click="$emit('open-connection-entry'); close()">{{ $t('app.runtimeBridgeMenu.connections') }}</DropdownItem>
             <DropdownItem value="migration" @click="$emit('open-workspace-migration'); close()">{{ $t('app.runtimeBridgeMenu.migration') }}</DropdownItem>
             <DropdownItem value="agents" @click="$emit('open-harness-settings'); close()">{{ $t('app.runtimeBridgeMenu.agentSettings') }}</DropdownItem>
           </template>
