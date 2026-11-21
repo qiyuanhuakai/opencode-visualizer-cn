@@ -647,8 +647,13 @@ async function refresh() {
 
   const currentRefresh = (async () => {
     try {
+      const healthRequest = Promise.resolve().then(async () => {
+        const health = healthUnsupported ? null : await activeBackend.getGlobalHealth?.() ?? null;
+        if (requestId === refreshRequestId) serverHealth.value = health;
+        return health;
+      });
       const [health, mcp, lsp, skills, cfg, plugins] = await Promise.allSettled([
-        healthUnsupported ? Promise.resolve(null) : (activeBackend.getGlobalHealth?.() ?? Promise.resolve(null)),
+        healthRequest,
         mcpUnsupportedControl ? Promise.resolve(null) : (activeBackend.getMcpStatus?.() ?? Promise.resolve({})),
         lspUnsupportedControl ? Promise.resolve(null) : (activeBackend.getLspStatus?.() ?? Promise.resolve([])),
         skillUnsupportedControl ? Promise.resolve(null) : (activeBackend.getSkillStatus?.(isDshBackend.value ? props.sessionId : undefined) ?? Promise.resolve([])),
@@ -656,7 +661,6 @@ async function refresh() {
         pluginUnsupportedControl ? Promise.resolve(null) : (activeBackend.getPluginStatus?.() ?? Promise.resolve([])),
       ]);
       if (requestId !== refreshRequestId) return;
-      serverHealth.value = healthUnsupported ? null : (health.status === 'fulfilled' ? health.value : null);
       mcpData.value =
         mcpUnsupportedControl ? null : (mcp.status === 'fulfilled' ? ((mcp.value as typeof mcpData.value) ?? {}) : null);
       lspData.value =
