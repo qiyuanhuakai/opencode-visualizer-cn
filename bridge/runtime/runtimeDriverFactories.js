@@ -17,7 +17,7 @@ import {
 import { ProtocolError, requireValue } from '../../shared/runtime/capabilities.js';
 import { createResourceOwnership } from './resourceOwnership.js';
 
-export function unavailableRegistration(identity, state) {
+export function unavailableRegistration(identity, state, reason = state) {
   return validateHarnessRegistration({
     manifest: {
       ...identity,
@@ -25,7 +25,7 @@ export function unavailableRegistration(identity, state) {
       core: Object.fromEntries(
         Object.keys(CORE_OPERATIONS).map((name) => [
           name,
-          name === 'inspect' ? { state: 'supported' } : unsupported(state),
+          name === 'inspect' ? { state: 'supported' } : unsupported(reason),
         ]),
       ),
       extensions: [],
@@ -88,7 +88,9 @@ export function createRuntimeDriverFactories(options) {
       identity,
       authority,
       isCurrent: () => true,
-      registration: unavailableRegistration(identity, item.enabled ? 'starting' : 'disabled'),
+      registration: item.enabled && options.config.agentStartup === 'on-demand'
+        ? unavailableRegistration(identity, 'supported', 'on-demand')
+        : unavailableRegistration(identity, item.enabled ? 'starting' : 'disabled'),
       close: async () => {},
     });
   }
@@ -326,6 +328,26 @@ export function createRuntimeDriverFactories(options) {
       );
       return slot.source.discover();
     },
+    requestStart(harnessInstanceId) {
+      const slot = [...slots.values()].find(item => item.identity.harnessInstanceId === harnessInstanceId);
+      requireValue(active && sessionIndex && slot?.enabled && options.config.agentStartup === 'on-demand', 'factory.start_source', 'source_unavailable');
+      if (slot.startRequest || slot.source) return;
+      const standby = unavailableRegistration(slot.identity, 'starting', 'on-demand-starting');
+      replace(slot.key, standby);
+      const work = (async () => {
+        await options.onHarnessReady?.(standby.manifest);
+        await controller.start(sessionIndex, harnessInstanceId);
+      })().catch(async () => {
+        if (!active) return;
+        const failed = unavailableRegistration(slot.identity, 'failed', 'on-demand-failed');
+        replace(slot.key, failed);
+        await options.onHarnessReady?.(failed.manifest);
+      });
+      slot.startRequest = work;
+      pendingStarts.add(work);
+      const retire = () => { pendingStarts.delete(work); slot.startRequest = undefined; };
+      void work.then(retire, retire);
+    },
     async retry(harnessInstanceId) {
       const slot = [...slots.values()].find(item => item.identity.harnessInstanceId === harnessInstanceId);
       requireValue(active && sessionIndex && slot?.enabled, 'factory.retry_source', 'source_unavailable');
@@ -336,12 +358,13 @@ export function createRuntimeDriverFactories(options) {
       sessionIndex = index;
       const work = Promise.all(
         [...slots.values()].filter(slot => harnessInstanceId === undefined || slot.identity.harnessInstanceId === harnessInstanceId).map(slot => {
-          if (!slot.enabled) return;
+          if (!slot.enabled || (harnessInstanceId === undefined && options.config.agentStartup === 'on-demand')) return;
           const prior = initializations.get(slot.identity.harnessInstanceId);
           if (prior) return prior;
           const initialization = (async () => {
             const factory = options.factories?.[slot.key] ?? options.factories?.[slot.kind];
             try {
+              if (!factory && options.config.agentStartup === 'on-demand') await options.startRequestedAgent(slot.kind, slot.agent?.id);
               if (!factory && slot.kind !== 'codex' && slot.kind !== 'acp') {
                 const item = status(slot.kind);
                 requireValue(
@@ -419,6 +442,7 @@ export function createRuntimeDriverFactories(options) {
                     : error.code === 'unauthorized'
                       ? 'auth-required'
                       : 'failed',
+                  options.config.agentStartup === 'on-demand' ? 'on-demand-failed' : undefined,
                 ),
               );
               const manifest = registry.list().find(item => item.harnessInstanceId === slot.identity.harnessInstanceId);

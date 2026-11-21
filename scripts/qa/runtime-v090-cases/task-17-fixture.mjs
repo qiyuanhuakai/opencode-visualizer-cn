@@ -106,7 +106,7 @@ export async function createFixture(register, wire, options = {}) {
   let authCalls = 0, invalidations = 0;
   return { state, installedGateway, port, origin, requests, streams,
     auth: { async getCookie() { authCalls++; return 'private-fixture-cookie'; }, invalidate() { invalidations++; } },
-    getOwnedEndpoint: () => ({ state: 'ready', ownership: 'owned', nativeVersion: '0.2.0-rc.2', origin, generation: state.generation }),
+    getOwnedEndpoint: () => ({ state: 'ready', ownership: 'owned', nativeVersion: '0.2.2-rc.5', origin, generation: state.generation }),
     authInspection: () => ({ authCalls, invalidations }),
     disconnect() { for (const socket of clients) socket.destroy(); },
     follow(value, nativeSessionId = 'native-1') {

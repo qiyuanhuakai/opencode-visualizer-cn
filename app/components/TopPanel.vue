@@ -37,8 +37,8 @@
           :placeholder="$t('topPanel.selectSession')"
           :title="$t('topPanel.selectSession') + ' (Ctrl-G)'"
           :auto-close="!managementMode"
-          :popup-style="runtimeMode ? { minWidth: '200px', width: '240px', maxWidth: '90vw' } : { minWidth: '420px', width: 'min(680px, 90vw)', maxWidth: '90vw' }"
-          :popup-class="runtimeMode ? '' : 'max-lg:left-0! max-lg:w-screen! max-lg:min-w-0! max-lg:max-w-none!'"
+          :popup-style="{ minWidth: '420px', width: 'min(680px, 90vw)', maxWidth: '90vw' }"
+          :popup-class="'max-lg:left-0! max-lg:w-screen! max-lg:min-w-0! max-lg:max-w-none!'"
           @select="onTreeSelect"
         >
           <template #label>
@@ -59,7 +59,7 @@
           </template>
           <template #default="{ close }">
             <template v-if="runtimeMode">
-              <DropdownItem value="browse" @click="emit('open-runtime-sessions'); close()">{{ $t('topPanel.selectSession') }}</DropdownItem>
+              <slot name="runtime-sessions" :close="close" :management-mode="managementMode" />
               <DropdownItem v-if="selectedSessionId && sessionActions.rename" value="rename" @click="handleSessionRename(selectedSessionId); close()">{{ $t('topPanel.sessionActions.rename') }}</DropdownItem>
               <DropdownItem v-if="selectedSessionId && runtimeForkAvailable" value="fork" @click="emit('fork-session', selectedSessionId); close()">{{ $t('topPanel.sessionActions.fork') }}</DropdownItem>
               <DropdownItem v-if="selectedSessionId && runtimeCompactAvailable" value="compact" @click="emit('compact-session', selectedSessionId); close()">{{ $t('topPanel.sessionActions.compact') }}</DropdownItem>
@@ -662,15 +662,15 @@
           class="control-button management-toggle-button"
           :class="{ 'is-active': managementMode }"
           :title="
-            runtimeMode ? $t('topPanel.selectSession') : managementMode
+            managementMode
               ? $t('topPanel.managementMode.exit')
               : $t('topPanel.managementMode.enter')
           "
           @pointerdown.stop.prevent
-          @click.stop="runtimeMode ? emit('open-runtime-sessions') : toggleManagementMode()"
+          @click.stop="toggleManagementMode()"
         >
           <Icon
-            :icon="runtimeMode ? 'lucide:list-tree' : managementMode ? 'lucide:check-check' : 'lucide:list-checks'"
+            :icon="managementMode ? 'lucide:check-check' : 'lucide:list-checks'"
             :width="16"
             :height="16"
           />
@@ -997,7 +997,6 @@ const emit = defineEmits<{
   (event: 'create-worktree-from', worktree: string): void;
   (event: 'new-session'): void;
   (event: 'new-session-in', payload: { worktree: string; directory: string }): void;
-  (event: 'open-runtime-sessions'): void;
   (event: 'fork-session', value: string): void;
   (event: 'compact-session', value: string): void;
   (event: 'toggle-runtime-pin'): void;
@@ -1042,7 +1041,6 @@ watch(treeDropdownOpen, (open) => {
 });
 
 function openSessionDropdown() {
-  if (props.runtimeMode) { emit('open-runtime-sessions'); return; }
   treeDropdownOpen.value = true;
 }
 
@@ -1051,7 +1049,6 @@ function closeSessionDropdown() {
 }
 
 function toggleSessionDropdown() {
-  if (props.runtimeMode) { emit('open-runtime-sessions'); return; }
   treeDropdownOpen.value = !treeDropdownOpen.value;
 }
 

@@ -61,7 +61,7 @@
 | **ACP Agent 集成 (Alpha)** | ACP v1 作为第三后端复用主会话界面；状态监控中管理 Pi、Oh My Pi、Kimi Code 等 ACP Agent | 🅰️ Alpha |
 | **Kimi Web 集成 (Beta)** | 第四个独立后端；通过 vis_bridge 连接 Kimi Code 的 Web 服务，复用会话、文件、审批、思考与子代理界面；详情见下文 | 🅱️ Beta |
 | **Forge 集成 (Beta)** | 基于 zsh PTY 的 Forge 悬浮终端；命令菜单、结构化会话侧栏、状态读取与刷新恢复 | 🅱️ Beta |
-| **DSH 集成 (Beta)** | 第五个后端：经 vis_bridge 连接 DeepSeek Harness 的 `dsh web` 服务，复用会话、模型目录、文件树、审批与状态监控界面；只支持协议代 `0.2.0-rc.2`，bridge 侧默认不托管（opt-in）。适配范围与未实测项见 [DSH 说明](docs/dsh.md) | 🅱️ Beta |
+| **DSH 集成 (Beta)** | 第五个后端：经 vis_bridge 连接 DeepSeek Harness 的 `dsh web` 服务，复用会话、模型目录、文件树、审批与状态监控界面；只支持协议代 `0.2.2-rc.5`，bridge 侧默认不托管（opt-in）。适配范围与未实测项见 [DSH 说明](docs/dsh.md) | 🅱️ Beta |
 | **统一运行环境 (Alpha)** | v0.9.0-alpha 新增 `/runtime` v1 协议：一个 Bridge 入口按 target 路由，一次连接按 repository/worktree 浏览全部五类来源；Host Thread 跨 Harness 接力、任务/团队协作、隔离改动与审查、SSH 与 Slurm 远程执行。协议破坏性变更、废弃登录路径、数据保留与升级路径见 [迁移说明](docs/migration-v090.md)；能力与版本实测矩阵见 [运行时说明](docs/runtime.md) | 🅰️ Alpha |
 
 > 📋 **详细变更日志**：请参阅 [CHANGELOG.md](./CHANGELOG.md)  
@@ -198,7 +198,7 @@ forge setup
 | [pnpm](https://pnpm.io/) | 11.21.0 (推荐) | 包管理器，本项目使用 `packageManager` 锁定 |
 | [OpenCode Server](https://github.com/sst/opencode) | 可选 | 使用 OpenCode 后端时需要 |
 | Kimi Code CLI（`@moonshot-ai/kimi-code`） | 可选 | 使用 Kimi Web 后端时需要，`kimi` 命令须在 bridge 所在主机的 PATH 中 |
-| DSH CLI（`@deepseek-ai/dsh`） | `0.2.0-rc.2`（钉版本） | 使用 DSH 后端时需要：`npm i -g @deepseek-ai/dsh@0.2.0-rc.2`，`dsh` 命令须在 bridge 所在主机的 PATH 中；协议代不符时 bridge 拒绝托管该服务并给出同一条安装命令 |
+| DSH CLI（`@deepseek-ai/dsh`） | `0.2.2-rc.5`（钉版本） | 使用 DSH 后端时需要：`npm i -g @deepseek-ai/dsh@latest`，`dsh` 命令须在 bridge 所在主机的 PATH 中；协议代不符时 bridge 拒绝托管该服务并给出同一条安装命令 |
 | ACP Agent CLI | 可选 | 如 `pi-acp`、`omp --mode acp`、`kimi acp`；在状态监控中按需启用 |
 | 系统 `$EDITOR` | 可选 | 用于"用编辑器打开"功能（如 VS Code、Neovim 等） |
 
@@ -291,9 +291,11 @@ vis_bridge config --config /path/to/bridge.json
 }
 ```
 
+设置顶层 `"agentStartup": "on-demand"` 并重启 Bridge，可在顶部会话下拉栏的「来源」中逐个启动已启用的 Agent（包括 ACP）。默认模式 `"eager"` 在启动时加载已启用的 Agent。
+
 旧配置若缺少 `nativeServices`，原有三个服务仍默认启用。此开关只控制 bridge 的进程托管，不会关闭已由其他程序启动的服务或阻止直接连接。
 
-**DSH 托管默认 `false`（opt-in）**：dsh 仍处 rc 阶段，bridge 只支持协议代 `0.2.0-rc.2`，版本不符时拒绝启动该服务并提示 `npm i -g @deepseek-ai/dsh@0.2.0-rc.2`。开启前先在 bridge 所在主机安装该版本并确认 `dsh --version` 输出一致，再把 `dsh` 改为 `true`。bridge 只按名派生 `dsh web --no-open --port 3080`，不会接管外部已启动的 dsh（其 launch token 只在自身 stdout 上，无法完成 cookie 交换）；真实对话还需要 DeepSeek 凭据（账号登录或 `DEEPSEEK_API_KEY`）。适配范围、已实测与未实测清单见 [DSH 说明](docs/dsh.md)。
+**DSH 托管默认 `false`（opt-in）**：dsh 仍处 rc 阶段，bridge 只支持协议代 `0.2.2-rc.5`，版本不符时拒绝启动该服务并提示 `npm i -g @deepseek-ai/dsh@latest`。开启前先在 bridge 所在主机安装该版本并确认 `dsh --version` 输出一致，再把 `dsh` 改为 `true`。bridge 只按名派生 `dsh web --no-open --port 3080`，不会接管外部已启动的 dsh（其 launch token 只在自身 stdout 上，无法完成 cookie 交换）；真实对话还需要 DeepSeek 凭据（账号登录或 `DEEPSEEK_API_KEY`）。适配范围、已实测与未实测清单见 [DSH 说明](docs/dsh.md)。
 
 在 bridge 所在主机的外部终端中手动更新：
 
@@ -326,7 +328,7 @@ vis_bridge 会自动探测或启动默认的 OpenCode、Codex 与 Kimi Web 服�
 
 1. 在运行 `vis_bridge` 的主机上安装并配置 **`@moonshot-ai/kimi-code`**，确认 `kimi --version` 可运行。首次使用请先按 Kimi Code 自身流程完成登录。
 2. 安装并启动 `vis_bridge`。它默认探测或启动 `kimi web --port 58627 --no-open`；Kimi Web 与 bridge 应运行在同一主机。
-3. 在 Vis 首屏连接 Vis Bridge（默认 `ws://127.0.0.1:23004/runtime`）。Bridge 配置了 token 时，在首屏填写，然后从统一会话树选择 Kimi Web 会话。
+3. 在 Vis 首屏连接 Vis Bridge（默认 `ws://127.0.0.1:23004/runtime`）。Bridge 配置了 token 时，在首屏填写，然后从顶部会话下拉栏选择 Kimi Web 会话。
 4. bridge 从本机 `~/.kimi-code/server.token` 读取上游凭据并转发 REST/WS；无需在 Vis 中填写 Kimi token。连接失败时先检查“状态监控”中的 Kimi Web 服务状态和 bridge 日志。
 
 ---
@@ -476,7 +478,7 @@ All upstream [Vis](https://github.com/xenodrive/vis) core features are fully pre
 | **ACP Agent Integration (Alpha)** | ACP v1 as a third backend using the shared main chat UI; manage Pi, Oh My Pi, Kimi Code, and other ACP agents in Status Monitor | 🅰️ Alpha |
 | **Kimi Web Integration (Beta)** | Fourth independent backend; connects to Kimi Code's Web service through vis_bridge and reuses the session, file, approval, thinking, and subagent UI; details below | 🅱️ Beta |
 | **Forge Integration (Beta)** | zsh PTY-based Forge floating terminal with command menus, structured conversation sidebar, status reads, and refresh restoration | 🅱️ Beta |
-| **DSH Integration (Beta)** | Fifth backend: connects to DeepSeek Harness's `dsh web` service through vis_bridge and reuses the session, model catalog, file tree, approval, and status monitoring UI; only protocol generation `0.2.0-rc.2` is supported and bridge-side supervision is opt-in (off by default). Coverage and untested items: [DSH notes](docs/dsh.md) | 🅱️ Beta |
+| **DSH Integration (Beta)** | Fifth backend: connects to DeepSeek Harness's `dsh web` service through vis_bridge and reuses the session, model catalog, file tree, approval, and status monitoring UI; only protocol generation `0.2.2-rc.5` is supported and bridge-side supervision is opt-in (off by default). Coverage and untested items: [DSH notes](docs/dsh.md) | 🅱️ Beta |
 | **Unified Runtime (Alpha)** | v0.9.0-alpha adds the `/runtime` v1 protocol: one Bridge entry routes by target, and one connection browses all five sources by repository/worktree. Host Thread handoff across harnesses, task/team collaboration, isolated changes with review, and SSH/Slurm remote execution. Breaking protocol changes, deprecated login paths, data preservation, and the upgrade path: [migration notes](docs/migration-v090.md); the measured capability/version matrix: [runtime notes](docs/runtime.md) | 🅰️ Alpha |
 
 > 📋 **Detailed changelog**: [CHANGELOG.md](./CHANGELOG.md)  
@@ -564,7 +566,7 @@ Before getting started, ensure your environment meets the following criteria:
 | [pnpm](https://pnpm.io/) | 11.21.0 (recommended) | Package manager, locked via `packageManager` |
 | [OpenCode Server](https://github.com/sst/opencode) | Optional | Required for the OpenCode backend |
 | Kimi Code CLI (`@moonshot-ai/kimi-code`) | Optional | Required for the Kimi Web backend; `kimi` must be on the bridge host’s PATH |
-| DSH CLI (`@deepseek-ai/dsh`) | `0.2.0-rc.2` (pinned) | Required for the DSH backend: `npm i -g @deepseek-ai/dsh@0.2.0-rc.2`; `dsh` must be on the bridge host’s PATH. When the protocol generation does not match, the bridge refuses to supervise the service and prints the same install command |
+| DSH CLI (`@deepseek-ai/dsh`) | `0.2.2-rc.5` (pinned) | Required for the DSH backend: `npm i -g @deepseek-ai/dsh@latest`; `dsh` must be on the bridge host’s PATH. When the protocol generation does not match, the bridge refuses to supervise the service and prints the same install command |
 | ACP Agent CLI | Optional | For example `pi-acp`, `omp --mode acp`, or `kimi acp`; enable agents as needed in Status Monitor |
 | System `$EDITOR` | Optional | For "Open in Editor" feature (e.g., VS Code, Neovim) |
 
@@ -659,9 +661,11 @@ If the running bridge uses a custom config path, `vis_bridge config` opens that 
 }
 ```
 
+Set the top-level `"agentStartup": "on-demand"` and restart the Bridge to start enabled agents individually from Sources in the top session dropdown. This includes ACP agents. The default `"eager"` mode loads enabled agents at startup.
+
 Older configs without `nativeServices` keep the original three services enabled. These switches control bridge process supervision; they do not stop a service started by another program or block direct connections.
 
-**DSH supervision defaults to `false` (opt-in).** dsh is still rc-stage and the bridge supports only protocol generation `0.2.0-rc.2`; on a mismatch it refuses to start the service and prints `npm i -g @deepseek-ai/dsh@0.2.0-rc.2`. Install that version on the bridge host and confirm `dsh --version` reports it before flipping `dsh` to `true`. The bridge only spawns `dsh web --no-open --port 3080` by name and never adopts an externally started dsh (its launch token exists only on its own stdout, so the cookie exchange cannot complete). Real conversations also need a DeepSeek credential (account sign-in or `DEEPSEEK_API_KEY`). Coverage plus the tested/untested register: [DSH notes](docs/dsh.md).
+**DSH supervision defaults to `false` (opt-in).** dsh is still rc-stage and the bridge supports only protocol generation `0.2.2-rc.5`; on a mismatch it refuses to start the service and prints `npm i -g @deepseek-ai/dsh@latest`. Install that version on the bridge host and confirm `dsh --version` reports it before flipping `dsh` to `true`. The bridge only spawns `dsh web --no-open --port 3080` by name and never adopts an externally started dsh (its launch token exists only on its own stdout, so the cookie exchange cannot complete). Real conversations also need a DeepSeek credential (account sign-in or `DEEPSEEK_API_KEY`). Coverage plus the tested/untested register: [DSH notes](docs/dsh.md).
 
 `start` waits until the bridge is listening and the initial service probe has completed. If OpenCode, Codex, or an ACP agent fails to start, the CLI prints the component name and error while keeping the usable bridge online; the full error also appears under **Status Monitor → ACP**. Bridge-level failures such as an invalid config or occupied listen port make `start` fail instead of publishing a superficially healthy service.
 

@@ -42,7 +42,7 @@ const messages: LocaleMessages = {
         nativeServicesDisabled: 'The dsh native service is disabled in the bridge config. Set nativeServices.dsh to true with `vis_bridge config`, then restart vis_bridge.',
         launchTokenMissing: 'The dsh launch token is unavailable. The bridge must spawn its own dsh web instance; close any external dsh web process and reconnect.',
         versionMismatch:
-          "The local dsh version does not match the supported protocol generation. Install dsh{'@'}0.2.0-rc.2 and reconnect.",
+          "The local dsh version does not match the supported protocol generation. Install dsh{'@'}0.2.2-rc.5 and reconnect.",
       },
       authRequired: 'The server requires authentication',
       connect: 'Connect',
@@ -61,6 +61,10 @@ const messages: LocaleMessages = {
       agentSettings: 'Agent settings',
     },
     runtimeConnection: {
+      sshSlurm: 'SSH / Slurm',
+      startAgent: 'Start agent',
+      agentStandby: 'On demand',
+      settings: 'Settings',
       title: 'Connect to a Bridge target',
       description:
         'Connect to vis_bridge to access your agents and sessions.',
@@ -321,6 +325,7 @@ const messages: LocaleMessages = {
     confirm: {
       deleteWorktree: 'Delete worktree "{directory}"?',
       deleteSession: 'Delete session?',
+      deleteRuntimeSessions: 'Permanently delete {count} selected session(s), including any hidden by filters? This cannot be undone.',
       deleteSessions: 'Delete {count} selected session(s)?',
       deleteCodexSession: 'Permanently delete this Codex session? This cannot be undone.',
       deleteCodexSessions:

@@ -83,6 +83,7 @@ export async function createRuntimeServices(options) {
       target: options.environmentId, epoch, instanceId, role: options.role, connectionProfileId: registrations.connectionProfileId,
       workspace, store, index, hostServices, remoteServices: options.remoteServices, snapshots: index.snapshots, events: index.events, registry: drivers.registry, acceptance, capabilities,
       authority: id => drivers.authority(id),
+      requestSourceStart: id => drivers.requestStart(id),
       grant: Object.freeze({ target: options.environmentId, role: options.role, capabilities, permissions, workspaceKeys: workspace.workspaces.map(entry => entry.key) }),
       async start({ signal } = {}) {
         if (options.role === 'manager' || signal?.aborted) return;

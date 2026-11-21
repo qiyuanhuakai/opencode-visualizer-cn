@@ -68,7 +68,7 @@ export function sessionSummary(value, scope) {
   const item = record(value, 'session');
   const id = nativeText(item.id, 'session_id', 512);
   const meta = item.meta ?? item;
-  const workspace = item.workspace ?? { id: item.workspace_id ?? null, cwd: item.metadata?.cwd ?? null };
+  const workspace = item.workspace ?? { id: item.workspace_id ?? null, cwd: item.metadata?.cwd ?? item.cwd ?? null };
   return {
     session: { ...scope, nativeSessionId: id },
     title: typeof meta.title === 'string' ? meta.title : '',
@@ -88,6 +88,7 @@ export function parseNativeCapabilities(metaValue, openapiValue, asyncapiValue) 
   const messages = record(record(asyncapiValue).components?.messages ?? {});
   const route = (path, method = 'get') => typeof paths[path]?.[method] === 'object';
   const v2 = meta.backend === 'v2';
+  const agentTurns = meta.kimi_agent_protocol_version === '1.0.0' && route('/api/v1/sessions/{session_id}/agents/{agent_id}/turns');
   // Kimi 2.1.1 serves :abort through the same dispatcher but omits that alias from OpenAPI.
   // This exact profile is verified with a live pending native turn and cancellation readback.
   const knownAbortDispatcher = v2 && meta.server_version === '2.1.1' &&
@@ -95,6 +96,8 @@ export function parseNativeCapabilities(metaValue, openapiValue, asyncapiValue) 
   const promptAbort = v2 && meta.server_version === '2.5.2' && paths['/api/v1/sessions/{session_id}/prompts/{tail}']?.post?.operationId === 'promptAction';
   return Object.freeze({
     promptAbort,
+    agentTurns,
+    catalogV1: agentTurns && route('/api/v1/sessions'),
     modernQuestions: promptAbort && route('/api/v1/sessions/{session_id}/interactions/{interaction_id}', 'post'),
     modernApprovals: promptAbort && route('/api/v1/sessions/{session_id}/interactions/{interaction_id}', 'post'),
     catalogV2: v2 && route('/api/v2/sessions'),

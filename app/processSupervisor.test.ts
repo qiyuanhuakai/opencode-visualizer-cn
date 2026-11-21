@@ -50,6 +50,26 @@ afterEach(() => {
   }
 });
 
+it('in on-demand mode probes only the requested enabled native agent', async () => {
+  const probeService = vi.fn(async () => true);
+  const supervisor = createProcessSupervisor({ probeService });
+  const enabled = { opencode: true, codex: true, 'kimi-web': false, dsh: false };
+  try {
+    await supervisor.start(enabled, { onDemand: true });
+    expect(probeService).not.toHaveBeenCalled();
+    await supervisor.startOne?.('opencode');
+    expect(probeService).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: 'opencode' }));
+    expect(supervisor.getStatus()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'opencode', state: 'adopted' }),
+      expect.objectContaining({ id: 'codex', state: 'stopped' }),
+      expect.objectContaining({ id: 'dsh', state: 'disabled' }),
+    ]));
+    await expect(supervisor.startOne?.('dsh')).rejects.toThrow('disabled');
+  } finally {
+    await supervisor.stop();
+  }
+});
+
 function fakeKimiSpawn(url?: string, delayMs = 0) {
   return vi.fn((_command: string, _args: readonly string[], options: SpawnOptions) => {
     const child = spawn(process.execPath, [FAKE_KIMI_SCRIPT], {
@@ -115,7 +135,7 @@ function dshDependencies(fence: DshWebFenceState = { state: 'idle' }) {
     probeDshWebAuth: vi
       .fn<(cookie: string) => Promise<DshWebAuthProbeResult>>()
       .mockResolvedValue({ ok: true }),
-    dshVersionProbe: vi.fn<() => Promise<string>>().mockResolvedValue('0.2.0-rc.2'),
+    dshVersionProbe: vi.fn<() => Promise<string>>().mockResolvedValue('0.2.2-rc.5'),
     dshExchange: fakeDshExchange(),
   };
 }
@@ -504,7 +524,7 @@ describe('processSupervisor dsh web (spawn-only port contract)', () => {
         id: 'dsh',
         state: 'running',
         owned: true,
-        version: '0.2.0-rc.2',
+        version: '0.2.2-rc.5',
       }),
     );
     const serialized = JSON.stringify(supervisor.getStatus());
@@ -567,7 +587,7 @@ describe('processSupervisor dsh web (spawn-only port contract)', () => {
     expectChildStopped(spawnedChildren[0]);
   });
 
-  it('stops the dsh child and reports version guidance when dsh is not 0.2.0-rc.2', async () => {
+  it('stops the dsh child and reports version guidance when dsh is not 0.2.2-rc.5', async () => {
     const spawnProcess = fakeDshSpawn(DSH_LAUNCH_LINE);
     const deps = dshDependencies();
     deps.dshVersionProbe.mockResolvedValue('9.9.9');
@@ -589,11 +609,11 @@ describe('processSupervisor dsh web (spawn-only port contract)', () => {
         state: 'error',
         owned: false,
         version: '9.9.9',
-        error: expect.stringContaining('0.2.0-rc.2'),
+        error: expect.stringContaining('0.2.2-rc.5'),
       }),
     );
     expect(status.error).toContain('9.9.9');
-    expect(status.error).toContain('npm i -g @deepseek-ai/dsh@0.2.0-rc.2');
+    expect(status.error).toContain('npm i -g @deepseek-ai/dsh@latest');
     expectChildStopped(spawnedChildren[0]);
   });
 
@@ -616,7 +636,7 @@ describe('processSupervisor dsh web (spawn-only port contract)', () => {
       expect.objectContaining({
         state: 'error',
         owned: false,
-        error: expect.stringContaining('npm i -g @deepseek-ai/dsh@0.2.0-rc.2'),
+        error: expect.stringContaining('npm i -g @deepseek-ai/dsh@latest'),
       }),
     );
     expectChildStopped(spawnedChildren[0]);
@@ -720,7 +740,7 @@ describe('processSupervisor dsh web (spawn-only port contract)', () => {
         id: 'dsh',
         state: 'error',
         owned: false,
-        error: expect.stringContaining('npm i -g @deepseek-ai/dsh@0.2.0-rc.2'),
+        error: expect.stringContaining('npm i -g @deepseek-ai/dsh@latest'),
       }),
     );
   });

@@ -24,20 +24,20 @@
         <HarnessBadge class="discovery-status-badge" :harness="source.kind" :detail="source.reason ?? undefined" />
         <span class="discovery-status-state">{{ stateLabel(source.status) }}</span>
         <button
-          v-if="source.status === 'error'"
+          v-if="source.status === 'error' || source.status === 'standby'"
           type="button"
           class="discovery-status-retry"
           data-testid="source-retry"
           :data-harness="source.kind"
           :disabled="props.retrying.has(source.harnessInstanceId)"
-          :title="rt('Retry source')"
-          :aria-label="`${rt('Retry source')}: ${HARNESS_LABELS[source.kind]}`"
+          :title="retryLabel(source)"
+          :aria-label="`${retryLabel(source)}: ${HARNESS_LABELS[source.kind]}`"
           @click.stop="emit('retry', source.harnessInstanceId)"
         >
           <Icon
             class="discovery-status-retry-icon"
             :class="{ 'is-retrying': props.retrying.has(source.harnessInstanceId) }"
-            :icon="props.retrying.has(source.harnessInstanceId) ? 'lucide:loader-2' : 'lucide:refresh-cw'"
+            :icon="props.retrying.has(source.harnessInstanceId) ? 'lucide:loader-2' : source.status === 'standby' ? 'lucide:play' : 'lucide:refresh-cw'"
             :width="12"
             :height="12"
           />
@@ -60,6 +60,8 @@ import HarnessBadge from './HarnessBadge.vue';
 import { useRuntimeUi } from '../../locales/runtimeUi';
 
 const { rt } = useRuntimeUi();
+import { useI18n } from 'vue-i18n';
+const { t } = useI18n();
 
 const props = withDefaults(defineProps<{
   sources: readonly HarnessEntry[];
@@ -74,7 +76,12 @@ const enabledCount = computed(() => props.sources.filter((source) => source.stat
 const errorCount = computed(() => props.sources.filter((source) => source.status === 'error').length);
 watch(errorCount, (count) => { if (count > 0) open.value = true; });
 
+function retryLabel(source: HarnessEntry): string {
+  return source.status === 'standby' ? t('app.runtimeConnection.startAgent') : rt('Retry source');
+}
+
 function stateLabel(status: HarnessEntry['status']): string {
+  if (status === 'standby') return t('app.runtimeConnection.agentStandby');
   if (status === 'complete') return rt('ready');
   if (status === 'error') return rt('failed');
   if (status === 'partial') return rt('partial');

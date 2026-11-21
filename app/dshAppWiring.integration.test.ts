@@ -1089,7 +1089,7 @@ describe('dshSessionApi (Todo 27 session action routing)', () => {
 
 describe('dsh lifecycle wiring (Todo 33)', () => {
   function bridgeLoginFixture(
-    connectRuntimeBridge = vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    connectRuntimeBridge = vi.fn<(openRemote?: boolean) => Promise<void>>().mockResolvedValue(undefined),
     activateQualifiedComposerDrafts = vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
   ) {
     const program = transpile(`${appFunctionDeclaration('handleLogin')};${appFunctionDeclaration('handleAbortInit')};({ login: handleLogin, abort: handleAbortInit });`);
@@ -1097,9 +1097,15 @@ describe('dsh lifecycle wiring (Todo 33)', () => {
     const connectionState = box('idle');
     const initErrorMessage = box('');
     const sidePanelActiveTab = box('project');
-    const { login, abort } = runInNewContext(program, {
+    const context = createContext({
       activateQualifiedComposerDrafts,
-      connectRuntimeBridge,
+      async connectRuntimeBridge(openRemote: boolean) {
+        await connectRuntimeBridge(openRemote);
+        context.remoteLoginPending = openRemote;
+      },
+      remoteLoginPending: false,
+      isConnectionEntryOpen: box(false),
+      managedRemote: { close: vi.fn() },
       bridgeLoginGeneration: 0,
       runtimeConnectionOwner: undefined,
       stopRuntimeRecovery: undefined,
@@ -1110,7 +1116,8 @@ describe('dsh lifecycle wiring (Todo 33)', () => {
       initErrorMessage,
       sidePanelActiveTab,
       toErrorMessage: String,
-    }) as { login: () => Promise<void>; abort: () => void };
+    });
+    const { login, abort } = runInContext(program, context) as { login: (openRemote?: boolean) => Promise<void>; abort: () => void };
     return { login, abort, activateQualifiedComposerDrafts, connectRuntimeBridge, uiInitState, connectionState, initErrorMessage, sidePanelActiveTab };
   }
 
@@ -1118,11 +1125,36 @@ describe('dsh lifecycle wiring (Todo 33)', () => {
     const login = bridgeLoginFixture();
     await login.login();
     expect(login.activateQualifiedComposerDrafts).toHaveBeenCalledExactlyOnceWith();
-    expect(login.connectRuntimeBridge).toHaveBeenCalledExactlyOnceWith();
+    expect(login.connectRuntimeBridge).toHaveBeenCalledExactlyOnceWith(false);
     expect(login.activateQualifiedComposerDrafts).toHaveBeenCalledBefore(login.connectRuntimeBridge);
     expect(login.uiInitState.value).toBe('ready');
     expect(login.connectionState.value).toBe('ready');
     expect(login.sidePanelActiveTab.value).toBe('session');
+  });
+
+  it('keeps the sign-in surface while an SSH or Slurm target is pending', async () => {
+    const login = bridgeLoginFixture();
+    await login.login(true);
+    expect(login.connectRuntimeBridge).toHaveBeenCalledExactlyOnceWith(true);
+    expect(login.uiInitState.value).toBe('login');
+    expect(login.connectionState.value).toBe('ready');
+  });
+
+  it.each([false, true])('confirms the deduplicated batch deletion count (confirmed=%s)', async (confirmed) => {
+    const remove = vi.fn(async () => {});
+    const confirm = vi.fn(async () => confirmed);
+    const batch = runInNewContext(transpile(`${appFunctionDeclaration('handleRuntimeSessionBatch')};handleRuntimeSessionBatch;`), {
+      activeProfileId: box('profile'),
+      runtimeActionClient: box({}),
+      decodeSessionKey: (key: string) => key,
+      runtimeTargetAttached: () => true,
+      showConfirm: confirm,
+      t: (_key: string, values: { count: number }) => `Delete ${values.count} selected sessions`,
+      runtimeSessionRuntime: { router: { delete: remove } },
+    }) as (action: string, keys: string[]) => Promise<void>;
+    await batch('delete', ['a', 'a', 'hidden-b']);
+    expect(confirm).toHaveBeenCalledExactlyOnceWith('Delete 2 selected sessions');
+    expect(remove.mock.calls).toHaveLength(confirmed ? 2 : 0);
   });
 
   it('shows a rejected Bridge connection and keeps the login form available to retry', async () => {

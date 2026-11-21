@@ -46,7 +46,7 @@ const messages: LocaleMessages = {
         launchTokenMissing:
           'La dsh-lanĉĵetono ne disponeblas. La bridge mem devas ekigi sian propran dsh web-proceson; fermi iun ajn eksteran dsh web-proceson kaj rekonektu.',
         versionMismatch:
-          "La loka versio de dsh ne kongruas kun la subtenata protokola generacio. Instalu dsh{'@'}0.2.0-rc.2 kaj rekonektu.",
+          "La loka versio de dsh ne kongruas kun la subtenata protokola generacio. Instalu dsh{'@'}0.2.2-rc.5 kaj rekonektu.",
       },
       authRequired: 'La servilo postulas aŭtentigon',
       connect: 'Konekti',
@@ -65,6 +65,10 @@ const messages: LocaleMessages = {
       agentSettings: 'Agentaj agordoj',
     },
     runtimeConnection: {
+      sshSlurm: 'SSH / Slurm',
+      startAgent: 'Startigi agenton',
+      agentStandby: 'Laŭpete',
+      settings: 'Agordoj',
       title: 'Konekti al Bridge-celo',
       description: 'Konektu al vis_bridge por aliri viajn agentojn kaj seancojn.',
       profilesLabel: 'Konektaj profiloj',
@@ -313,6 +317,7 @@ const messages: LocaleMessages = {
     confirm: {
       deleteWorktree: 'Forigi worktree "{directory}"?',
       deleteSession: 'Forigi seancon?',
+      deleteRuntimeSessions: 'Ĉu definitive forigi {count} elektitajn seancojn, inkluzive de tiuj kaŝitaj de filtriloj? Ĉi tiu ago ne estas malfarebla.',
       deleteSessions: 'Forigi {count} elektita(j)n seanco(j)n?',
       deleteCodexSession: 'Ĉu definitive forigi ĉi tiun Codex-seancon? Tion oni ne povas malfari.',
       deleteCodexSessions: 'Ĉu definitive forigi {count} elektita(j)n Codex-seanco(j)n? Tion oni ne povas malfari.',

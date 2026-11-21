@@ -45,7 +45,7 @@ const messages: LocaleMessages = {
         launchTokenMissing:
           'dsh 啟動權杖不可用。bridge 必須自行啟動 dsh web 程序；請關閉外部 dsh web 程序後重新連線。',
         versionMismatch:
-          "本機 dsh 版本與支援的通訊協定世代不符。請安裝 dsh{'@'}0.2.0-rc.2 後重新連線。",
+          "本機 dsh 版本與支援的通訊協定世代不符。請安裝 dsh{'@'}0.2.2-rc.5 後重新連線。",
       },
       authRequired: '伺服器需要身分驗證',
       connect: '連線',
@@ -64,6 +64,10 @@ const messages: LocaleMessages = {
       agentSettings: '代理設定',
     },
     runtimeConnection: {
+      sshSlurm: 'SSH / Slurm',
+      startAgent: '啟動 Agent',
+      agentStandby: '等待啟動',
+      settings: '設定',
       title: '連線到 Bridge 目標',
       description: '連線至 vis_bridge，存取你的 Agent 和工作階段。',
       profilesLabel: '連線設定檔',
@@ -311,6 +315,7 @@ const messages: LocaleMessages = {
     confirm: {
       deleteWorktree: '刪除工作區 "{directory}"?',
       deleteSession: '刪除工作階段?',
+      deleteRuntimeSessions: '永久刪除選取的 {count} 個工作階段（包括篩選後隱藏的工作階段）？此操作無法復原。',
       deleteSessions: '刪除 {count} 個選中的工作階段?',
       deleteCodexSession: '永久刪除這個 Codex 工作階段？此操作無法復原。',
       deleteCodexSessions: '永久刪除選取的 {count} 個 Codex 工作階段？此操作無法復原。',

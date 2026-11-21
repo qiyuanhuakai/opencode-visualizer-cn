@@ -94,7 +94,13 @@ export function parseBridgeConfig(input) {
     if (ids.has(agent.id)) throw new Error(`Duplicate ACP agent id: ${agent.id}.`);
     ids.add(agent.id);
   }
-  return { version: CONFIG_VERSION, nativeServices: parseNativeServices(input.nativeServices), acpAgents };
+  const startup = input.agentStartup;
+  if (startup !== undefined && startup !== 'eager' && startup !== 'on-demand') {
+    throw new Error('Bridge config agentStartup must be "eager" or "on-demand".');
+  }
+  return { version: CONFIG_VERSION, nativeServices: parseNativeServices(input.nativeServices), acpAgents,
+    ...(startup === undefined ? {} : { agentStartup: startup }) };
+
 }
 
 export function defaultBridgeConfigPath(env = process.env) {

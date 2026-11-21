@@ -68,7 +68,7 @@ const runtime = createBridgeRuntime({
     'kimi-web': traceFactory('kimi-web', (context) => createKimiWebDriver({ ...context, endpoint: native.kimi, ownership: 'borrowed', getAuthorization: async () => 'Bearer fixture-token-one', getAuthority: context.authority })),
     dsh: traceFactory('dsh', (context) => createDshDriver({
       ...context, auth: { getCookie: async () => 'private-fixture-cookie', invalidate() {} },
-      getOwnedEndpoint: () => ({ state: 'ready', ownership: 'owned', nativeVersion: '0.2.0-rc.2', origin: native.dsh, generation: 1 }),
+      getOwnedEndpoint: () => ({ state: 'ready', ownership: 'owned', nativeVersion: '0.2.2-rc.5', origin: native.dsh, generation: 1 }),
     })),
   },
 });

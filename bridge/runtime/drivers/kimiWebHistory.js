@@ -149,7 +149,7 @@ const INVALIDATION = Object.freeze(['transcript.reset', 'transcript.ops', 'repla
  * this module never builds an endpoint, holds credentials or observes any other session.
  */
 export function createKimiWebHistoryProducer(options) {
-  const { session, authority, current, assertCurrent, pull, subscribe, releaseOwner, sessionEpoch, randomUUID } = options;
+  const { session, authority, current, assertCurrent, pull, subscribe, releaseOwner, sessionEpoch, randomUUID, ordinalCursor = false, live = true } = options;
   const nativeSessionId = nativeText(session.nativeSessionId, 'kimi.history_session', 512);
   let store, observer, pump, opened = false, closed = false, through = 0, nativeCursor = null, failure;
   const pages = new Set();
@@ -174,17 +174,25 @@ export function createKimiWebHistoryProducer(options) {
     requireValue(current(), 'kimi.generation', 'reconcile_required');
   }
   async function fenced(signal) { alive(signal); await assertCurrent(); alive(signal); }
-  let envelope, rootRecords = false, wrappedRecords = false;
+  let envelope, rootRecords = false, wrappedRecords = false, smallestOrdinal, turnCount;
   const grammar = Object.freeze({
-    records: Object.freeze([['items', '*'], ['data', 'items', '*']].map(path => Object.freeze({
+    records: Object.freeze((ordinalCursor ? [['turns', '*'], ['data', 'turns', '*']] : [['items', '*'], ['data', 'items', '*']]).map(path => Object.freeze({
       path: Object.freeze(path),
-      fields: Object.freeze([
+      fields: ordinalCursor ? [
+        { name: 'turnId', path: ['turn_id'] },
+        { name: 'ordinal', path: ['ordinal'] },
+      ] : Object.freeze([
         Object.freeze({ name: 'turnId', path: Object.freeze(['turnId']) }),
         Object.freeze({ name: 'markerId', path: Object.freeze(['markerId']) }),
         Object.freeze({ name: 'refId', path: Object.freeze(['refId']) }),
       ]),
       validate(metadata) {
         if (path[0] === 'data') wrappedRecords = true; else rootRecords = true;
+        if (ordinalCursor) {
+          const ordinal = integerValue(metadata.ordinal, 'kimi.history_ordinal');
+          requireValue(++turnCount <= 20, 'kimi.history_turn_count');
+          smallestOrdinal = smallestOrdinal === undefined ? ordinal : Math.min(smallestOrdinal, ordinal);
+        }
         if (metadata.turnId !== undefined) return `turn:${nativeText(metadata.turnId, 'kimi.history_turn_id', 512)}`;
         if (metadata.markerId !== undefined) return `marker:${nativeText(metadata.markerId, 'kimi.history_marker_id', 512)}`;
         if (metadata.refId !== undefined) return `ref:${nativeText(metadata.refId, 'kimi.history_ref_id', 512)}`;
@@ -208,31 +216,33 @@ export function createKimiWebHistoryProducer(options) {
       } else requireValue(metadata.dataHasMore === undefined && metadata.dataSeq === undefined && metadata.dataEpoch === undefined, 'kimi.history_native_envelope');
       requireValue(wrapped ? !rootRecords : !wrappedRecords, 'kimi.history_mixed_envelope');
       const hasMore = wrapped ? metadata.dataHasMore : metadata.hasMore;
-      const seq = wrapped ? metadata.dataSeq : metadata.seq;
+      const seq = ordinalCursor ? 0 : wrapped ? metadata.dataSeq : metadata.seq;
       const rawEpoch = wrapped ? metadata.dataEpoch : metadata.epoch;
       requireValue(typeof hasMore === 'boolean', 'kimi.history_has_more');
       integerValue(seq, 'kimi.history_native_seq');
       const epoch = rawEpoch === undefined ? undefined : nativeText(rawEpoch, 'kimi.history_native_epoch', 512);
       const known = sessionEpoch();
       if (epoch !== undefined && known !== undefined && known !== epoch) throw new ProtocolError('replay_required', 'kimi.history_epoch_changed');
-      envelope = Object.freeze({ hasMore, seq, epoch: epoch ?? null });
+      envelope = Object.freeze({ hasMore, seq, epoch: epoch ?? null, nextOrdinal: smallestOrdinal });
     },
   });
   async function open({ signal, streamStore }) {
     requireValue(!opened && !closed, 'kimi.history_open', 'conflict');
     await fenced(signal);
     opened = true; store = streamStore;
-    observer = subscribe((event) => event?.type !== undefined && INVALIDATION.includes(event.type) && event.session?.nativeSessionId === nativeSessionId);
-    pump = (async () => {
-      try {
-        for (;;) {
-          const next = await observer.next();
-          if (next.done) { failure ??= new ProtocolError('source_unavailable', 'kimi.history_observer_closed'); break; }
-          if (next.value !== undefined) { through++; wake(); }
-        }
-      } catch (error) { failure ??= error instanceof ProtocolError ? error : new ProtocolError('replay_required', 'kimi.history_observer'); }
-      finally { wake(); }
-    })();
+    if (live) {
+      observer = subscribe((event) => event?.type !== undefined && INVALIDATION.includes(event.type) && event.session?.nativeSessionId === nativeSessionId);
+      pump = (async () => {
+        try {
+          for (;;) {
+            const next = await observer.next();
+            if (next.done) { failure ??= new ProtocolError('source_unavailable', 'kimi.history_observer_closed'); break; }
+            if (next.value !== undefined) { through++; wake(); }
+          }
+        } catch (error) { failure ??= error instanceof ProtocolError ? error : new ProtocolError('replay_required', 'kimi.history_observer'); }
+        finally { wake(); }
+      })();
+    }
     return { fence: { id: randomUUID(), sourceGeneration: authority.epoch } };
   }
   async function page({ cursor, releasePageIds = [], signal }) {
@@ -247,7 +257,7 @@ export function createKimiWebHistoryProducer(options) {
     await fenced(signal);
     const before = cursor === undefined || cursor === null ? null : nativeText(cursor, 'kimi.history_cursor', 512);
     requireValue(before === null || before === nativeCursor, 'kimi.history_cursor', 'replay_required');
-    envelope = undefined; rootRecords = false; wrappedRecords = false;
+    envelope = undefined; rootRecords = false; wrappedRecords = false; smallestOrdinal = undefined; turnCount = 0;
     let pulled;
     try {
       pulled = await pull({ before, signal });
@@ -262,12 +272,16 @@ export function createKimiWebHistoryProducer(options) {
       await fenced(signal);
       requireValue(envelope !== undefined, 'kimi.history_envelope', 'replay_required');
       const boundary = output.records.find((record) => record.recordId.startsWith('turn:'));
-      if (envelope.hasMore) {
+      if (envelope.hasMore && !ordinalCursor) {
         requireValue(boundary !== undefined, 'kimi.history_cursor', 'replay_required');
         requireValue(boundary.recordId.slice(5) !== before, 'kimi.history_repeated_cursor', 'replay_required');
       }
       pages.add(output.id);
-      nativeCursor = envelope.hasMore ? boundary.recordId.slice(5) : null;
+      if (envelope.hasMore && ordinalCursor) {
+        integerValue(envelope.nextOrdinal, 'kimi.history_next_ordinal');
+        requireValue(before === null || envelope.nextOrdinal < Number(before), 'kimi.history_repeated_cursor', 'replay_required');
+      }
+      nativeCursor = envelope.hasMore ? (ordinalCursor ? String(envelope.nextOrdinal) : boundary.recordId.slice(5)) : null;
       return {
         pageId: output.id,
         items: output.records.map((record) => ({ recordId: record.recordId, kind: 'stream', descriptor: { id: record.id, format: record.format, totalBytes: record.totalBytes, sha256: record.sha256 } })),
@@ -313,5 +327,5 @@ export function createKimiWebHistoryProducer(options) {
     store = undefined;
     await releaseOwner?.();
   }
-  return Object.freeze({ capabilities: Object.freeze({ archive: 'paged', recordStream: true, live: 'invalidate' }), open, page, chunk, read, close });
+  return Object.freeze({ capabilities: Object.freeze({ archive: 'paged', recordStream: true, live: live ? 'invalidate' : 'unsupported' }), open, page, chunk, read, close });
 }

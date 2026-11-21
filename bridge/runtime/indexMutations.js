@@ -33,17 +33,25 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
     for (let offset = 0; offset < pending.length; offset += 4) {
       scan.assertCurrent();
       const batch = await Promise.all(pending.slice(offset, offset + 4).map(async ({ directory }) => {
-        const workspace = await resolveWorkspace({ source: scan.source, directory });
+        let workspace;
+        try {
+          workspace = await resolveWorkspace({ source: scan.source, directory });
+        } catch (error) {
+          if (error?.code === 'ENOENT' || error?.code === 'unauthorized' && error.field === 'runtime.workspace') return null;
+          throw error;
+        }
         if (workspace.environmentId !== scan.source.environmentId) throw new StoreError('unauthorized', 'index_workspace_target');
         return workspace;
       }));
       scan.assertCurrent();
       authorized.push(...batch);
     }
-    const keys = await catalog.registerMany(authorized.map(workspace => ({ workspace, harnessInstanceId: scan.source.harnessInstanceId, harness: scan.source.kind === 'kimi-web' ? 'kimi' : scan.source.kind })));
+    const keys = await catalog.registerMany(authorized.filter(Boolean).map(workspace => ({ workspace, harnessInstanceId: scan.source.harnessInstanceId, harness: scan.source.kind === 'kimi-web' ? 'kimi' : scan.source.kind })));
     scan.assertCurrent();
+    let keyIndex = 0;
     pending.forEach(({ directory, cacheKey }, index) => {
-      const key = keys[index];
+      if (authorized[index] === null) { resolved.delete(directory); return; }
+      const key = keys[keyIndex++];
       if (workspaces.size >= 512) workspaces.delete(workspaces.keys().next().value);
       workspaces.set(cacheKey, key); resolved.set(directory, key);
     });
@@ -106,7 +114,9 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
         // in the regular write batch.
         const chunk = matching.slice(offset, offset + (firstPage && offset === 0 ? 4 : 20));
         const resolved = await workspaceBatch(scan, chunk);
-        for (const summary of chunk) summaries.set(encodeSessionKey(summary.session), { summary, workspaceKey: resolved.get(summary.directory) });
+        for (const summary of chunk) {
+          if (resolved.has(summary.directory)) summaries.set(encodeSessionKey(summary.session), { summary, workspaceKey: resolved.get(summary.directory) });
+        }
         const committed = await flush();
         applied += committed;
         onBatchCommitted?.(committed);

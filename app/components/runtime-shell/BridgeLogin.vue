@@ -6,7 +6,7 @@ import { DEFAULT_RUNTIME_BRIDGE_URL } from '../../runtime/connectionUrl';
 const url = defineModel<string>('url', { required: true });
 const token = defineModel<string>('token', { required: true });
 defineProps<{ error: string }>();
-defineEmits<{ connect: [] }>();
+defineEmits<{ connect: []; connectRemote: []; openSettings: [] }>();
 const { t } = useI18n();
 </script>
 
@@ -20,6 +20,10 @@ const { t } = useI18n();
     <input id="bridge-token" v-model="token" class="bridge-control" name="bridgeToken" type="password" autocomplete="current-password" />
     <p v-if="error" role="alert" class="bridge-error">{{ error }}</p>
     <button type="submit" class="action-button primary">{{ t('app.login.connect') }}</button>
+    <div class="bridge-login-actions">
+      <button type="button" class="action-button" @click="$emit('connectRemote')">{{ t('app.runtimeConnection.sshSlurm') }}</button>
+      <button type="button" class="action-button" @click="$emit('openSettings')">{{ t('app.runtimeConnection.settings') }}</button>
+    </div>
   </form>
 </template>
 
@@ -30,5 +34,6 @@ p, label { font-size: var(--type-sm); }
 p { color: var(--theme-login-text-muted, var(--theme-text-muted)); }
 input, button { border: 1px solid var(--theme-border-default); border-radius: var(--radius-control); padding: var(--space-2) var(--space-3); background: var(--theme-surface-panel); color: var(--theme-text-primary); font: inherit; }
 button { cursor: pointer; }
+.bridge-login-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .bridge-error { color: var(--codex-status-danger, var(--theme-text-primary)); overflow-wrap: anywhere; }
 </style>

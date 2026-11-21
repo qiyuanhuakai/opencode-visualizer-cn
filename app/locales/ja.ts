@@ -47,7 +47,7 @@ const messages: LocaleMessages = {
         launchTokenMissing:
           'dsh 起動トークンが利用できません。bridge が独自の dsh web プロセスを起動する必要があります。外部の dsh web プロセスを終了して再接続してください。',
         versionMismatch:
-          "ローカルの dsh バージョンがサポート対象のプロトコル世代と一致しません。dsh{'@'}0.2.0-rc.2 をインストールして再接続してください。",
+          "ローカルの dsh バージョンがサポート対象のプロトコル世代と一致しません。dsh{'@'}0.2.2-rc.5 をインストールして再接続してください。",
       },
       authRequired: 'サーバーで認証が必要です',
       connect: '接続',
@@ -66,6 +66,10 @@ const messages: LocaleMessages = {
       agentSettings: 'エージェント設定',
     },
     runtimeConnection: {
+      sshSlurm: 'SSH / Slurm',
+      startAgent: 'エージェントを起動',
+      agentStandby: '起動待ち',
+      settings: '設定',
       title: 'Bridge ターゲットに接続',
       description: 'vis_bridge に接続して、エージェントとセッションにアクセスします。',
       profilesLabel: '接続プロファイル',
@@ -315,6 +319,7 @@ const messages: LocaleMessages = {
     confirm: {
       deleteWorktree: 'ワークツリー「{directory}」を削除しますか？',
       deleteSession: 'セッションを削除しますか？',
+      deleteRuntimeSessions: 'フィルターで非表示のものを含む選択済み {count} 件のセッションを完全に削除しますか？この操作は元に戻せません。',
       deleteSessions: '選択した{count}件のセッションを削除しますか？',
       deleteCodexSession: 'このCodexセッションを完全に削除しますか？元に戻せません。',
       deleteCodexSessions: '選択した{count}件のCodexセッションを完全に削除しますか？元に戻せません。',

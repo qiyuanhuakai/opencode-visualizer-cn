@@ -6,7 +6,7 @@ export interface DiscoveryEvent extends DiscoveryGeneration { readonly type: str
 export interface OpenCodePage extends DiscoveryGeneration {
   readonly items: readonly { readonly summary: OpenCodeSummary; readonly revision: number }[];
   readonly cursor: string | null; readonly completeness: 'complete' | 'partial' | 'unsupported'; readonly reason: string;
-  readonly retryable: boolean; readonly provenance?: StoreProvenance;
+  readonly retryable: boolean; readonly provenance?: StoreProvenance | { readonly nativeVersion: string; readonly summaryOnly: true };
 }
 export interface OpenCodeDiscovery {
   listSessionPage(params?: { readonly cursor?: string | null; readonly limit?: number; readonly scope?: DiscoveryScope }): Promise<OpenCodePage>;
@@ -14,6 +14,7 @@ export interface OpenCodeDiscovery {
 }
 export function createOpenCodeDiscovery(options: {
   readonly reader?: OpenCodeStoreReader;
-  readonly request: (route: string, options: { readonly query: Readonly<Record<string, string | number>> }) => Promise<unknown>;
+  readonly cursorApi?: string;
+  readonly request: (route: string, options: { readonly query: Readonly<Record<string, string | number | undefined>> }) => Promise<unknown>;
   readonly current: () => DiscoveryGeneration; readonly assertCurrent: () => void | Promise<void>;
 }): OpenCodeDiscovery;

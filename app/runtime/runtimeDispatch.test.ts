@@ -13,7 +13,7 @@ import type { Duplex } from 'node:stream';
 import { mkdtemp, rm, readFile, readdir, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRuntimeServices } from '../../bridge/runtime/runtimeServices.js';
 import { unavailableRegistration } from '../../bridge/runtime/runtimeDriverFactories.js';
 import { createRuntimeHost } from '../../bridge/runtime/runtimeHost.js';
@@ -21,7 +21,7 @@ import { createVisBridgeServer } from '../../vis_bridge.js';
 import { createBridgeRuntime } from '../../bridge/bridgeRuntime.js';
 import { createBridgeConfigStore } from '../../bridge/bridgeConfig.js';
 import { encodeBinary, type Frame, type Hello, type Result, type Request } from '../../shared/runtime/protocol.js';
-import type { RuntimeMethod } from '../../shared/runtime/runtimeWire.js';
+import type { RuntimeInspection, RuntimeMethod } from '../../shared/runtime/runtimeWire.js';
 import { createHarnessRegistry, unsupported } from '../../shared/runtime/harnessContract.js';
 import type { InternalNativeHistoryHandle } from '../../bridge/runtime/historyService.js';
 import { encodeSessionKey, parseSessionRef, parseEnvironmentId, parseHarnessInstanceId } from '../../shared/runtime/identity.js';
@@ -75,6 +75,39 @@ async function client(host: ReturnType<typeof createRuntimeHost>) {
 async function runtime(role: 'local' | 'manager' = 'local') {
   const context = await graph(role); const host = createRuntimeHost({ environmentId: context.services.target, role, services: context.services }); host.start(); cleanups.push(() => host.stop()); return { ...context, host, connection: await client(host) };
 }
+it('acknowledges only the requested lazy agents while independent launches are still pending', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'vis-lazy-start-'));
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  const configStore = createBridgeConfigStore({ configPath: path.join(root, 'bridge.json') });
+  await configStore.save({ ...config, agentStartup: 'on-demand', nativeServices: { ...config.nativeServices, opencode: true, 'kimi-web': true } });
+  const launch = gate();
+  const startOne = vi.fn(async () => { await launch.promise; throw new Error('fixture launch failed'); });
+  const bridge = createBridgeRuntime({ configStore, stateRoot: root, nativeSupervisor: { ...supervisor, startOne }, acpManager: acp });
+  cleanups.push(() => bridge.stop());
+  await bridge.start();
+  const link = await client(await bridge.getRuntimeHost!());
+  const inspect = async () => {
+    const result = await link.request('runtime.inspect', {});
+    if (!result.ok) throw new Error('inspect failed');
+    return result.result as RuntimeInspection;
+  };
+  try {
+    const before = await inspect();
+    expect(startOne).not.toHaveBeenCalled();
+    const ids = before.harnesses.filter(item => ['opencode', 'kimi-web'].includes(item.manifest.kind)).map(item => item.manifest.harnessInstanceId);
+    expect(ids).toHaveLength(2);
+    for (const harnessInstanceId of ids) {
+      expect(await link.request('session.list', { harnessInstanceId, args: {} })).toMatchObject({ ok: true, result: { reason: 'agent-starting' } });
+    }
+    await vi.waitFor(() => expect(startOne).toHaveBeenCalledTimes(2));
+    expect((await inspect()).harnesses.filter(item => ids.includes(item.manifest.harnessInstanceId)).map(item => item.inspection.state)).toEqual(['starting', 'starting']);
+    launch.release();
+    await vi.waitFor(async () => {
+      expect((await inspect()).harnesses.filter(item => ids.includes(item.manifest.harnessInstanceId)).map(item => item.inspection.state)).toEqual(['failed', 'failed']);
+    });
+  } finally { launch.release(); }
+});
+
 async function historyRuntime(options: { readonly openGate?: Promise<void>; readonly closeGate?: Promise<void> } = {}) {
   const { services } = await graph(); const registry = createHarnessRegistry();
   const session = parseSessionRef({ environmentId: services.target, harnessInstanceId: randomUUID(), nativeSessionId: 'controlled-history' });

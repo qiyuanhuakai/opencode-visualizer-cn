@@ -1,5 +1,6 @@
 import { jsonValue, ProtocolError } from '../../capabilities.js';
 export { ProtocolError as DshError };
+export const DSH_RUNTIME_VERSION = '0.2.2-rc.5';
 export const fail = (code, reason) => { throw new ProtocolError(code, `dsh.${reason}`); };
 export function record(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('invalid_request', 'object');

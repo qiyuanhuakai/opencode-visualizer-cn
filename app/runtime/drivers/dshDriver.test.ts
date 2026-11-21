@@ -204,7 +204,7 @@ describe('DSH producer', () => {
     const origin = `http://127.0.0.1:${address.port}`;
     const options = {
       environmentId: driverIdentity.environmentId, harnessInstanceId: driverIdentity.harnessInstanceId, epoch, store,
-      getOwnedEndpoint: () => ({ state: 'ready' as const, origin, nativeVersion: '0.2.0-rc.2', ownership: 'owned' as const, generation: 1 }),
+      getOwnedEndpoint: () => ({ state: 'ready' as const, origin, nativeVersion: '0.2.2-rc.5', ownership: 'owned' as const, generation: 1 }),
       auth: { getCookie: async () => 'fixture-cookie', invalidate: () => {} },
       onEvent: () => {},
     };
@@ -743,7 +743,7 @@ describe('DSH driver lifecycle', () => {
     const store = decorate ? decorate(created) : created;
     const driver = createDshDriver({
       ...driverIdentity, store, onEvent: (event) => { events.push(event as Record<string, unknown>); },
-      getOwnedEndpoint: () => ({ state: 'ready', ownership: 'owned', nativeVersion: '0.2.0-rc.2', origin: controlled.origin, generation: 1 }),
+      getOwnedEndpoint: () => ({ state: 'ready', ownership: 'owned', nativeVersion: '0.2.2-rc.5', origin: controlled.origin, generation: 1 }),
       auth: { getCookie: async () => 'private-fixture-cookie', invalidate: () => {} },
     });
     const harness: DshHarness = {

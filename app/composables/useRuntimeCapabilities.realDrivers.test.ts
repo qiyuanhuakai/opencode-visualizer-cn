@@ -84,7 +84,7 @@ async function realDshManifest(): Promise<HarnessManifest> {
     epoch: EPOCH,
     store,
     auth: { getCookie: async () => 'fixture-cookie', invalidate: () => undefined },
-    getOwnedEndpoint: () => ({ state: 'ready', origin: 'http://127.0.0.1:3080', nativeVersion: '0.2.0-rc.2', ownership: 'owned', generation: 1 }),
+    getOwnedEndpoint: () => ({ state: 'ready', origin: 'http://127.0.0.1:3080', nativeVersion: '0.2.2-rc.5', ownership: 'owned', generation: 1 }),
     onEvent: () => undefined,
   });
   teardown.push(async () => { await store.close(); });

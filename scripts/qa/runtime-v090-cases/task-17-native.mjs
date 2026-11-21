@@ -8,8 +8,9 @@ import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { createDshAuthProvider } from '../../../bridge/dshAuth.js';
 import { createDshTransport } from '../../../bridge/runtime/drivers/dshTransport.js';
+import { DSH_RUNTIME_VERSION } from '../../../shared/runtime/native/dsh/protocol.js';
 
-export const nativeRoot = '/home/qiyuaner/.nvm/versions/node/v24.14.1/lib/node_modules/@deepseek-ai/dsh';
+export const nativeRoot = process.env.VIS_QA_DSH_PACKAGE_ROOT ?? '/home/qiyuaner/.nvm/versions/node/v24.14.1/lib/node_modules/@deepseek-ai/dsh';
 const installed = (name) => path.join(nativeRoot, 'node_modules/@deepseek-ai', name, 'lib/index.js');
 export async function createInstalledGateway(register) {
   const source = installed('dsh-api-gateway'), bytes = await readFile(source);
@@ -56,7 +57,7 @@ export async function startNativeDsh({ root, register, log, port = 0, expectFail
   register({ kind: 'private-cli-version-probe', command: [process.execPath, path.join(nativeRoot, 'lib/bin.js'), '--version'], teardown: 'synchronous process exit with10000ms deadline' });
   const nativeVersion = execFileSync(process.execPath, [path.join(nativeRoot, 'lib/bin.js'), '--version'], { cwd: workspace, env, timeout: 10000, encoding: 'utf8' }).trim();
   log({ kind: 'native-version', nativeVersion });
-  assert.equal(nativeVersion, '0.2.0-rc.2');
+  assert.equal(nativeVersion, DSH_RUNTIME_VERSION);
   const command = [process.execPath, path.join(nativeRoot, 'lib/bin.js'), 'web', '--host', '127.0.0.1', '--port', String(port), '--no-open'];
   const child = spawn(command[0], command.slice(1), { cwd: workspace, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
   register({ kind: 'native-child', pid: child.pid, command, cwd: workspace, environmentPolicy: 'allowlist only; no inherited API credentials', teardown: 'SIGTERM owned process group, then SIGKILL only on deadline; await exit' });
