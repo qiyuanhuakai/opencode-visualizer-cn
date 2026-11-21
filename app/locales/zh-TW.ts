@@ -1645,6 +1645,7 @@ threadOpen: '為目前工作階段開啟 Host Thread',
     loading: '正在載入 PDF...',
   },
   outputPanel: {
+    reloadHistory: '重新載入歷史',
     scrollToLatest: '捲動至最新',
   },
   welcome: {

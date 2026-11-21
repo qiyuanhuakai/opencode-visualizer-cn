@@ -206,8 +206,8 @@
             <div class="output-workspace">
               <div v-if="runtimeConversation.error.value" class="runtime-history-notice" :class="{ 'is-unavailable': runtimeSelectedSessionRef && !runtimeSelectedDirectory }">
                 <span role="alert">{{ runtimeConversation.error.value }}</span>
-                <button v-if="runtimeConversation.hasMore.value" type="button" class="app-runtime-action"
-                  :disabled="runtimeConversation.loading.value" @click="loadOlderRuntimeHistory()">{{ t('common.retry') }}</button>
+                <button v-if="runtimeSelectedDirectory && runtimeSelectedSessionRef" type="button" class="app-runtime-action" data-testid="reload-runtime-history"
+                  :disabled="runtimeConversation.loading.value" @click="reloadRuntimeHistory()">{{ t('outputPanel.reloadHistory', 'Reload history') }}</button>
               </div>
               <div class="tool-window-layer">
                 <div class="output-split">
@@ -11104,6 +11104,13 @@ const runtimeConversation = useRuntimeConversation({ publish: entries => {
 async function loadOlderRuntimeHistory() {
   try { await runtimeConversation.loadMore(); }
   catch (error) { log('Earlier runtime history unavailable', error); }
+}
+async function reloadRuntimeHistory() {
+  const capture = runtimeSelectionCapture();
+  if (!capture || !capture.isCurrent()) return;
+  const { session, profileId } = capture.selection;
+  try { await runtimeSessionRuntime.router.history({ session, profileId }, {}); }
+  catch (error) { log('Could not reopen runtime history', error); }
 }
 watch(runtimeConversation.loading, value => { isLoadingHistory.value = value; });
 onScopeDispose(() => {

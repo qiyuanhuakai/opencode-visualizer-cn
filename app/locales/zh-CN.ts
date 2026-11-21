@@ -1646,6 +1646,7 @@ threadOpen: '为当前会话打开 Host Thread',
     loading: '正在加载 PDF...',
   },
   outputPanel: {
+    reloadHistory: '重新加载历史',
     scrollToLatest: '滚动到最新',
   },
   welcome: {

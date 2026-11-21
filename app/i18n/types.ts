@@ -1557,6 +1557,7 @@ export interface LocaleMessages {
     failedToLoad: string;
   };
   outputPanel: {
+    reloadHistory: string;
     scrollToLatest: string;
   };
   errors: {

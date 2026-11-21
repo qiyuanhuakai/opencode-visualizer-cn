@@ -43,7 +43,7 @@ vi.mock('../composables/useGlobalEvents', () => ({ useGlobalEvents: () => ({
 type NativeHistory = Readonly<{ info: Readonly<Record<string, JsonValue>>; parts: readonly JsonValue[] }>;
 
 /** Real App + TCP/WebSocket + production Runtime/SQLite, controlled native harness boundary. */
-export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; dshAccount?: JsonValue; readDshAccount?: () => Promise<JsonValue>; bridgeToken?: string; managedBridge?: boolean; additionalModelId?: string; editableProvider?: boolean; beforeProviderWrite?: () => Promise<void>; beforeProviderRead?: () => Promise<void>; archivedAcpSession?: boolean; secondWorktree?: boolean; codexFactory?: RuntimeDriverFactory; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
+export async function mountRuntimeApp(history: readonly NativeHistory[], options: { draftStore?: () => Promise<unknown>; childSessions?: readonly string[]; historyPageSize?: number; beforeHistoryPage?: (cursor: string | null) => void; dshAccount?: JsonValue; readDshAccount?: () => Promise<JsonValue>; bridgeToken?: string; managedBridge?: boolean; additionalModelId?: string; editableProvider?: boolean; beforeProviderWrite?: () => Promise<void>; beforeProviderRead?: () => Promise<void>; archivedAcpSession?: boolean; secondWorktree?: boolean; codexFactory?: RuntimeDriverFactory; readHistory?: (session: SessionRef) => Promise<readonly NativeHistory[]> } = {}) {
   // Load the Node worker owner without Vite's browser asset URL rewriting.
   // The worker itself still runs the production module in a real subprocess.
   const requireNodeModule = createRequire(path.resolve(process.cwd(), 'package.json'));
@@ -126,6 +126,7 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
               open: async () => { historyOpens.push(selected); return { fence: { id: randomUUID(), sourceGeneration: 1 } }; },
               page: async (params: { cursor?: string | null }) => {
                 historyPages.push({ session: selected, cursor: params.cursor ?? null });
+                options.beforeHistoryPage?.(params.cursor ?? null);
                 const rows = options.readHistory ? await options.readHistory(selected) : history.filter(row => row.info.sessionID === selected.nativeSessionId);
                 const offset = Number(params.cursor ?? 0), limit = options.historyPageSize ?? rows.length;
                 const end = Math.min(rows.length, offset + limit);

@@ -1652,6 +1652,7 @@ threadOpen: 'Malfermu la Host-fadenon por la elektita seanco',
     loading: 'Ŝargas PDF...',
   },
   outputPanel: {
+    reloadHistory: 'Reŝargi historion',
     scrollToLatest: 'Rulumi al plej freŝa',
   },
   welcome: {
