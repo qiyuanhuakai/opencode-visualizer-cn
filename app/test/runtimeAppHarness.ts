@@ -260,22 +260,31 @@ export async function mountRuntimeApp(history: readonly NativeHistory[], options
       if (!element.querySelector('.top-panel')) throw new Error(`${element.querySelector('[role=alert]')?.textContent ?? 'App is not ready'}; ${JSON.stringify(transport.frames.slice(-3))}`);
     }, { timeout: 10000 });
   }
-  async function select(title: string) {
-    await vi.waitFor(() => {
-      if (!element.querySelector('[data-testid=unified-search-input]')) throw new Error(`Session tree is not available: ${element.querySelector('.side-panel')?.outerHTML.slice(0, 2500) ?? element.textContent?.slice(0, 1500)}`);
+  async function openSessionMenu() {
+    if (!element.querySelector('.tree-menu')) {
+      element.querySelector<HTMLButtonElement>('.tree-dropdown-root .ui-dropdown-button')!.click();
+    }
+    return vi.waitFor(() => {
+      const input = element.querySelector<HTMLInputElement>('.tree-menu .tree-search input');
+      if (!input) throw new Error('Top session menu search is not available');
+      return input;
     }, { timeout: 10000 });
-    const input = element.querySelector<HTMLInputElement>('[data-testid=unified-search-input]')!;
-    input.value = title;
+  }
+  async function searchSessionMenu(query: string) {
+    const input = await openSessionMenu();
+    input.value = query;
     input.dispatchEvent(new Event('input', { bubbles: true }));
     await nextTick();
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  }
+  async function select(title: string) {
+    await searchSessionMenu(title);
     await vi.waitFor(() => {
-      const result = [...element.querySelectorAll<HTMLButtonElement>('[data-testid=search-result]')].find(row => row.textContent?.includes(title));
-      if (!result) throw new Error(`Missing search result: ${title}`);
+      const result = [...element.querySelectorAll<HTMLButtonElement>('.tree-menu [data-testid=search-result]')].find(row => row.textContent?.includes(title));
+      if (!result) throw new Error(`Missing top-menu search result: ${title}`);
       result.click();
     }, { timeout: 10000 });
   }
-  return { element, endpoint, directory, secondDirectory, workspaceTopology: () => services.index.topology({ collection: 'workspaces' }), environmentId: services.target, historyOpens, historyCloses, historyPages, nativeQueries, frames: transport.frames, submitBridgeLogin, connect, select, unmountRenderer, unmount };
+  return { element, endpoint, directory, secondDirectory, workspaceTopology: () => services.index.topology({ collection: 'workspaces' }), environmentId: services.target, historyOpens, historyCloses, historyPages, nativeQueries, frames: transport.frames, submitBridgeLogin, connect, openSessionMenu, searchSessionMenu, select, unmountRenderer, unmount };
 }
 
 function expectLogin(element: HTMLElement) {

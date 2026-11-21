@@ -106,12 +106,12 @@ describe('the task-22 runtime session binding is supplied in App.vue', () => {
 // ---------------------------------------------------------------------------
 
 describe('the task-23 harness scope props are bound in App.vue', () => {
-  it('renders HarnessSettings with its required scope and manifests', () => {
-    expect(APP_TEMPLATE).toMatch(/HarnessSettings/);
-    const usage = APP_TEMPLATE.match(/<HarnessSettings[\s\S]*?\/>/);
+  it('renders HarnessSettings in the floating window with its required scope and manifests', () => {
+    const usage = APP_SOURCE.match(/h\(HarnessSettings, \{[\s\S]*?\}\)/);
     expect(usage).not.toBeNull();
-    expect(usage?.[0]).toMatch(/:scope=/);
-    expect(usage?.[0]).toMatch(/:manifests=/);
+    expect(usage?.[0]).toMatch(/scope: harnessInstanceScope\.value/);
+    expect(usage?.[0]).toMatch(/manifests: harnessManifests\.value/);
+    expect(APP_SOURCE).toMatch(/component: HarnessSettingsWindow/);
   });
 
   it('passes the harness scope to ProviderManagerModal', () => {
