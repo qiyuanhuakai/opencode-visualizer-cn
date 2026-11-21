@@ -226,9 +226,11 @@ function bridgeStub(state: KimiWebBridgeSessionState | undefined) {
   };
 }
 
+type PluginClient = import('../utils/kimiWebPlugins').KimiWebPluginsClient;
 async function mountKimiWebModal(options: {
   bridge?: { sessionState(sessionId: string): KimiWebBridgeSessionState | undefined };
   initialTab?: 'token' | 'server';
+  nativePlugins?: { value: PluginClient | null };
 } = {}) {
   const root = document.createElement('div');
   document.body.appendChild(root);
@@ -244,6 +246,7 @@ async function mountKimiWebModal(options: {
             sessionId: SESSION_ID,
             codexApi: useCodexApi(),
             kimiWebBridge: options.bridge,
+            nativeKimiPlugins: options.nativePlugins?.value,
             ...(options.initialTab ? { initialTab: options.initialTab } : {}),
           });
       },
@@ -633,6 +636,21 @@ describe('StatusMonitorModal kimi-web capability-gated unsupported copy', () => 
     expect(root.textContent).not.toContain('not exposed by this backend');
     expect(root.textContent).not.toContain('not exposed by this ACP agent');
     app.unmount();
+  });
+
+  it('does not reuse a legacy plugin endpoint when the selected Runtime instance has no plugin operation', async () => {
+    const first = { list: vi.fn(async () => []), marketplace: vi.fn(async () => []), action: vi.fn(async () => null) };
+    const selected = ref<PluginClient | null>(first);
+    const { root, app } = await mountKimiWebModal({ nativePlugins: selected });
+    try {
+      clickTab(root, 'Plugins');
+      await vi.waitFor(() => expect(first.list).toHaveBeenCalledOnce());
+      selected.value = null;
+      await vi.waitFor(() => expect(root.querySelector('.kimi-plugins')).toBeNull());
+      expect(root.textContent).toContain('Structured plugin status is not exposed by Kimi Web.');
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/v1/plugins'))).toBe(false);
+      expect(first.action).not.toHaveBeenCalled();
+    } finally { app.unmount(); }
   });
 
   it('opens live Kimi plugin management from the existing Plugins tab', async () => {

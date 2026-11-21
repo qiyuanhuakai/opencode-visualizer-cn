@@ -45,6 +45,28 @@ describe('OutputPanel card continuity', () => {
     document.body.replaceChildren();
   });
 
+  it('loads the earlier native page when the first page has no visible cards', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const load = vi.fn(async () => { messages.loadHistory([makeUserHistoryEntry(0)]); });
+    const readyForEarlier = ref(false);
+    const app = createApp({
+      render: () => h(OutputPanel, {
+        isFollowing: false, isStatusError: false, isThinking: false,
+        statusText: 'Idle', theme: 'github-dark', currentSessionId: 'root-session',
+        loadOlderHistory: readyForEarlier.value ? load : undefined,
+      }),
+    });
+    mountedApps.add(app);
+    app.use(createI18n({ legacy: false, locale: 'en', messages: { en } }));
+    app.mount(host);
+
+    expect(host.querySelector('.thread-block')).toBeNull();
+    readyForEarlier.value = true;
+    await vi.waitFor(() => expect(host.querySelector('.thread-block')).not.toBeNull());
+    expect(load).toHaveBeenCalledOnce();
+  });
+
   it('renders every thread continuously without virtual spacer gaps', async () => {
     messages.loadHistory(Array.from({ length: 25 }, (_, index) => makeUserHistoryEntry(index)));
     const host = document.createElement('div');

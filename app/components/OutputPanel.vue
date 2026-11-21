@@ -20,6 +20,9 @@
             >
               <div class="app-loading-spinner" aria-hidden="true"></div>
             </div>
+            <button v-if="loadOlderHistory" type="button" class="sr-only focus:not-sr-only" @click="loadOlderHistory()">
+              {{ $t('common.loadMore') }}
+            </button>
             <div class="output-panel-messages">
               <div
                 v-for="root in visibleThreadRoots"
@@ -530,6 +533,13 @@ const { getAssistantHtml } = useAssistantPreRenderer({
   onRendered: handleMessageRendered,
 });
 
+watch(
+  [() => props.loadOlderHistory, () => renderableRoots.value.length],
+  ([loadOlderHistory, roots]) => {
+    if (loadOlderHistory && roots === 0) void loadOlderHistory();
+  },
+);
+
 function onHistoryWheel(event: WheelEvent) {
   const panel = event.currentTarget;
   if (event.deltaY < 0 && props.loadOlderHistory && panel instanceof HTMLDivElement && panel.scrollTop <= 0) {
@@ -564,7 +574,13 @@ async function onPanelScroll(event: Event) {
     `.thread-card-item[data-root-id="${anchorRootId ?? ''}"]`,
   );
   if (!anchorBefore) {
-    windowShiftInProgress = false;
+    try { await loadOlderHistory?.(); }
+    finally {
+      if (shiftGeneration === windowShiftGeneration) {
+        windowShiftInProgress = false;
+        windowShiftQueued = false;
+      }
+    }
     return;
   }
   await preserveScrollAnchor(panel, anchorBefore, async () => {

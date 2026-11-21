@@ -231,7 +231,6 @@ const props = defineProps<{
   runtimeGrantRevision?: number;
   getNativeKimiMeta?: () => Promise<KimiWebMeta>;
   nativeKimiPlugins?: KimiWebPluginsClient | null;
-  directKimiPluginBridge?: { bridgeUrl: string; bridgeToken: string };
   initialTab?: TabId;
   initialUsageView?: 'daily' | 'weekly' | 'cumulative';
   sessionId?: string;
@@ -856,7 +855,6 @@ function kimiWebBridgeCredentials() {
 const kimiWebPluginsClient = computed(() => {
   if (!props.open || !isKimiWebBackend.value) return null;
   if (props.nativeKimiPlugins) return props.nativeKimiPlugins;
-  if (props.directKimiPluginBridge) return createKimiWebPluginsClient(props.directKimiPluginBridge);
   if (props.nativeKimiPlugins === null) return null;
   return createKimiWebPluginsClient(kimiWebBridgeCredentials());
 });

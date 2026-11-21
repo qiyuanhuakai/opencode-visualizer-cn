@@ -248,7 +248,7 @@
                     :has-message-diffs="activeBackendKind === 'kimi-web' ? hasKimiMessageDiffs : undefined"
                     :kimi-session-context="kimiSessionContext"
                     :is-loading="isLoadingHistory && !runtimeConversation.hasMore.value"
-                    :load-older-history="runtimeConversation.hasMore.value && !runtimeConversation.loading.value ? loadOlderRuntimeHistory : undefined"
+                    :load-older-history="runtimeConversation.hasMore.value && !runtimeConversation.loading.value && !runtimeConversation.error.value ? loadOlderRuntimeHistory : undefined"
                     :is-anchoring="isOutputAnchoring"
                     @message-rendered="handleOutputPanelMessageRendered"
                     @resume-follow="handleOutputPanelResumeFollow"
@@ -650,7 +650,6 @@
       :kimi-web-bridge="kimiWebMessageBridge"
       :get-native-kimi-meta="managementKimiMeta"
       :native-kimi-plugins="managementKimiPlugins"
-      :direct-kimi-plugin-bridge="managementKimiPluginBridge"
       :dsh-status="runtimeActionClient ? managementDshStatus : dshStatusSnapshot"
       :harness-scope="harnessInstanceScope ?? undefined"
       :harness-manifests="harnessManifests"
@@ -11235,7 +11234,7 @@ async function handleRuntimeSessionBatch(action: 'pin' | 'unpin' | 'archive' | '
   const profileId = activeProfileId.value;
   const client = runtimeActionClient.value;
   if (!client) return;
-  const selections = [...new Set(keys)].map(key => ({ profileId, session: decodeSessionKey(key) }));
+  const selections = [...new Set(keys)].filter(key => runtimeActionsForSession(key)[action]).map(key => ({ profileId, session: decodeSessionKey(key) }));
   if (!selections.length) return;
   if (action === 'pin' || action === 'unpin') {
     await runtimePins.value?.setPinned(selections, action === 'pin');
@@ -11331,14 +11330,6 @@ const managementKimiMeta = computed(() => {
 const managementKimiPlugins = computed(() => {
   const manifest = managementManifest.value, client = runtimeActionClient.value;
   return manifest?.kind === 'kimi-web' && client ? createNativeKimiPlugins(client, manifest) : client ? null : undefined;
-});
-const managementKimiPluginBridge = computed(() => {
-  const reference = bridgeReference.value;
-  const manifest = managementManifest.value;
-  if (!reference || manifest?.kind !== 'kimi-web' || manifest.environmentId !== reference.expectedEnvironmentId) return undefined;
-  const url = new URL(reference.url);
-  url.pathname = '/kimi-web/ws';
-  return { bridgeUrl: url.toString(), bridgeToken: bridgeLoginToken.value };
 });
 const managementKimiProviders = computed(() => {
   const manifest = managementManifest.value;
@@ -11713,16 +11704,22 @@ async function createRuntimeSession(directory?: string): Promise<BackendSessionI
   const manifest = topPanelCreationManifest.value;
   const client = runtimeActionClient.value;
   if (!manifest || !client) throw new Error('Select a connected Agent instance.');
+  const scope = client.scope(manifest.environmentId);
   const workspaces = runtimeWorkspaceKeys.map(key => ({ key, workspace: decodeWorkspaceKey(key) })).filter(entry => entry.workspace.environmentId === manifest.environmentId);
   let workspace = workspaces.find(entry => entry.workspace.canonicalPath === directory);
-  if (!workspace && workspaces.length === 1) workspace = workspaces[0];
+  if (!workspace && !directory && workspaces.length === 1) workspace = workspaces[0];
   if (!workspace) {
     const path = await showPrompt(`Workspace (${workspaces.map(entry => entry.workspace.canonicalPath).join(', ')})`, directory ?? '');
     if (path === null) return undefined;
     workspace = workspaces.find(entry => entry.workspace.canonicalPath === path);
   }
   if (!workspace) throw new Error('Select a workspace authorized by this Bridge.');
-  const scope = client.scope(manifest.environmentId);
+  const currentManifest = topPanelCreationManifest.value;
+  if (client !== runtimeActionClient.value || !scope.isCurrent()
+    || currentManifest?.harnessInstanceId !== manifest.harnessInstanceId
+    || currentManifest.environmentId !== manifest.environmentId) {
+    throw new Error('The selected Agent changed. Choose the workspace again.');
+  }
   const mutation = client.mutate(manifest.environmentId, 'session.create', {
     harnessInstanceId: manifest.harnessInstanceId,
     workspaceKey: workspace.key,
