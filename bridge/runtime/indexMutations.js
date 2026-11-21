@@ -37,7 +37,7 @@ export function createIndexMutations({ store, catalog, resolveWorkspace, onCommi
         try {
           workspace = await resolveWorkspace({ source: scan.source, directory });
         } catch (error) {
-          if (error?.code === 'ENOENT' || error?.code === 'unauthorized' && error.message === 'unauthorized: runtime.workspace') return null;
+          if (error?.code === 'ENOENT' || error?.code === 'unauthorized' && error.field === 'runtime.workspace') return null;
           throw error;
         }
         if (workspace.environmentId !== scan.source.environmentId) throw new StoreError('unauthorized', 'index_workspace_target');
