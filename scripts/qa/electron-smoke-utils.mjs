@@ -18,11 +18,13 @@ export const EXPECTED_PRELOAD_SCHEMA = {
     'platform',
     'sessionDatabase',
     'versions',
+    'windowControls',
   ],
   clipboard: ['readText', 'writeText'],
   desktop: ['check', 'configure', 'download', 'getState', 'install', 'notify', 'onNotificationClick', 'onState', 'reportBridgeVersion'],
   persistentStorage: ['getItem', 'migrate', 'removeItem', 'setItem', 'setItemAsync'],
   sessionDatabase: ['clearHistory', 'exportBinding', 'exportOpen', 'exportPage', 'flush', 'onHistoryChanged', 'readHistory', 'upsertHistory'],
+  windowControls: ['close', 'isMaximized', 'minimize', 'onMaximized', 'refresh', 'toggleMaximize'],
   localFile: [
     'clearApplication',
     'close',
@@ -76,6 +78,7 @@ export const collectPreloadSchema = () => {
     desktop: Object.keys(api.desktop).sort(),
     persistentStorage: Object.keys(api.persistentStorage).sort(),
     sessionDatabase: Object.keys(api.sessionDatabase).sort(),
+    windowControls: Object.keys(api.windowControls).sort(),
     localFile: Object.keys(api.localFile).sort(),
     versions: Object.keys(api.versions).sort(),
   };
