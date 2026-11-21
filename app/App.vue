@@ -10404,6 +10404,8 @@ watch(
   { immediate: true },
 );
 
+const missingThreadRepositoryNotice = 'This session has no repository on the connected target, so no Host Thread can be opened for it.';
+
 async function openRuntimeThreadForSelection(): Promise<void> {
   if (runtimeThreadState.threadId.value) {
     try {
@@ -10430,13 +10432,16 @@ async function openRuntimeThreadForSelection(): Promise<void> {
     const result = await host.read({ domain: 'thread', operation: 'repository', args: { session } }, value => value);
     if (!host.isCurrent() || !runtimeSelectedSessionRef.value || encodeSessionKey(runtimeSelectedSessionRef.value) !== encodeSessionKey(session)) return;
     if (!result || typeof result !== 'object' || !('repoKey' in result) || typeof result.repoKey !== 'string') {
-      setSendStatusText('This session has no repository on the connected target, so no Host Thread can be opened for it.');
+      setSendStatusText(missingThreadRepositoryNotice);
       return;
     }
     await runtimeThreadState.openThread({ session, repo: decodeRepoKey(result.repoKey) });
     if (!runtimeSelectedSessionRef.value || encodeSessionKey(runtimeSelectedSessionRef.value) !== encodeSessionKey(session)) return;
     if (runtimeThreadState.threadId.value) await enterThreadComposer();
     isThreadPanelOpen.value = runtimeThreadState.threadId.value !== null;
+    if (isThreadPanelOpen.value && sendStatus.value.mode === 'text' && sendStatus.value.text === missingThreadRepositoryNotice) {
+      setSendStatusKey('app.status.ready');
+    }
   } catch (error) { if (host.isCurrent()) setSendStatusText(toErrorMessage(error)); }
 }
 
