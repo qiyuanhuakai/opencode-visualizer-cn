@@ -82,11 +82,13 @@ function kimiAgentTurn(turn: Record<string, unknown>): KimiWebTranscriptTurn {
 }
 
 export function createNativeHistoryProjection(kind: HarnessKind, sessionId: string) {
-  const codexItems = new Map<string, ReturnType<typeof normalizeCodexTurnsToHistory>>();
+  const codexItems = new Map<string, { entries: ReturnType<typeof normalizeCodexTurnsToHistory>; bytes: number }>();
+  let codexBytes = 0;
+  let codexCount = 0;
   const acp = createAcpSessionState({ id: sessionId, title: sessionId });
   const dsh = createDshNormalizer({ address: { kind: 'session', sessionId }, retainRecords: false });
   const dshEntries = new Map<string, { info: MessageInfo; parts: MessagePart[] }>();
-  return (value: unknown): unknown[] => {
+  return (value: unknown, recordBytes?: number): unknown[] => {
     const row = record(value);
     switch (kind) {
       case 'opencode':
@@ -99,16 +101,25 @@ export function createNativeHistoryProjection(kind: HarnessKind, sessionId: stri
         // Native archive pages arrive newest first. Keep canonical entries only,
         // then rebuild chronological parent links as older prompts arrive. A
         // continuation must never inherit a newer turn's prompt.
-        codexItems.set(JSON.stringify([row.turnId, item.id]), normalizeCodexTurnsToHistory({ sessionId, turns: [{ id: row.turnId, items: [item], startedAt: row.startedAtMs, completedAt: row.completedAtMs }] }));
-        let count = [...codexItems.values()].reduce((sum, entries) => sum + entries.length, 0);
-        while (codexItems.size > 200 || count > 200) {
-          const oldest = codexItems.keys().next();
+        const key = JSON.stringify([row.turnId, item.id]);
+        const previous = codexItems.get(key);
+        const entries = normalizeCodexTurnsToHistory({
+          sessionId, turns: [{ id: row.turnId, items: [item], startedAt: row.startedAtMs, completedAt: row.completedAtMs }],
+        });
+        const bytes = recordBytes ?? new TextEncoder().encode(JSON.stringify(row)).byteLength;
+        codexItems.set(key, { entries, bytes });
+        codexBytes += bytes - (previous?.bytes ?? 0);
+        codexCount += entries.length - (previous?.entries.length ?? 0);
+        while (codexItems.size > 200 || codexCount > 200 || codexBytes > 64 * 1024 * 1024) {
+          const oldest = codexItems.entries().next();
           if (oldest.done) break;
-          count -= codexItems.get(oldest.value)!.length;
-          codexItems.delete(oldest.value);
+          const [id, entry] = oldest.value;
+          codexBytes -= entry.bytes;
+          codexCount -= entry.entries.length;
+          codexItems.delete(id);
         }
         let parentID = '';
-        return [...codexItems.values()].reverse().flatMap(entries => entries.map(entry => {
+        return [...codexItems.values()].reverse().flatMap(({ entries }) => entries.map(entry => {
           if (entry.info.role === 'user') { parentID = entry.info.id; return entry; }
           return { ...entry, info: { ...entry.info, parentID } };
         }));
