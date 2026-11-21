@@ -83,7 +83,7 @@ const ownerId = '44444444-4444-4444-8444-444444444444';
 const nativeSession = { id: 'ses_real', projectID: 'global', directory: '/non-git', title: 'Original', version: '1.18.34', time: { created: 10, updated: 20 } };
 const session = parseSessionRef({ environmentId, harnessInstanceId, nativeSessionId: nativeSession.id });
 const input = (params: Json = {}, ref = session) => ({ environmentId, harnessInstanceId, session: ref, params });
-async function controlledNative(compactFixture = false) {
+async function controlledNative(compactFixtureBytes = 0) {
   const dir = await mkdtemp(path.join(tmpdir(), 'vis-opencode-http-')); temporary.push(dir);
   const calls: { method: string; path: string; body: unknown }[] = [];
   const streams = new Set<ServerResponse>();
@@ -115,8 +115,10 @@ async function controlledNative(compactFixture = false) {
     if (route.pathname === '/session' && request.method === 'GET') { response.end(JSON.stringify([nativeSession])); return; }
     if (route.pathname === '/session/ses_real') { response.end(JSON.stringify(nativeSession)); return; }
     if (route.pathname.endsWith('/prompt_async')) { response.statusCode = 204; response.end(); return; }
-    if (compactFixture && route.pathname.endsWith('/message') && route.searchParams.get('limit') === '1') {
-      response.end(JSON.stringify([{ info: { id: 'newest', sessionID: session.nativeSessionId, role: 'user', model: { providerID: 'historical-provider', modelID: 'historical-model' } }, parts: [] }]));
+    if (compactFixtureBytes && route.pathname.endsWith('/message') && route.searchParams.get('limit') === '1') {
+      // Keep the model after the large text to exercise real streaming, not just an early header.
+      response.end(JSON.stringify([{ parts: [{ type: 'text', text: 'a'.repeat(compactFixtureBytes) }],
+        info: { id: 'newest', sessionID: session.nativeSessionId, role: 'user', model: { providerID: 'historical-provider', modelID: 'historical-model' } } }]));
       return;
     }
     if (route.pathname.endsWith('/message') && route.searchParams.get('limit') === '200') {
@@ -176,8 +178,8 @@ describe('OpenCode Bridge driver over controlled HTTP/SSE with real durable stor
       await driver.close();
     } finally { await fixture.close(); }
   });
-  it('compacts the requested session using that session’s native model', async () => {
-    const fixture = await controlledNative(true);
+  it.each([1024, 3 * 1024 * 1024])('compacts the target session using its model after a %i-byte message', async bytes => {
+    const fixture = await controlledNative(bytes);
     const driver = await createOpenCodeDriver(fixture.options);
     try {
       const compact = driver.registration.driver.native.compactSession;

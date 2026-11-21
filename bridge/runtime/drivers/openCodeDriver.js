@@ -11,6 +11,7 @@ import { OPEN_CODE_OPERATIONS, nativeRoute, supportsNativeRoute, cancelOwnedOper
 import { createSseDecoder, createEventSubscriptions } from '../../../shared/runtime/native/opencode/sse.js';
 import { createOpenCodeStoreReader } from './openCodeStoreReader.mjs';
 import { createOpenCodeDiscovery } from './openCodeDiscovery.js';
+import { HISTORY_JSON_LIMITS, tokenizeHistoryJson } from '../historyJsonStream.js';
 import { createOpenCodeHistory, OPEN_CODE_HISTORY_LIMITS } from './openCodeHistory.js';
 
 function providerCatalog(result) {
@@ -96,7 +97,7 @@ export async function createOpenCodeDriver(options) {
   }
   /** Raw native history pull: same origin/authorization/redirect/deadline as `request`, but the body stays unparsed and the admission slot is held until the caller releases it on cancel, drain or body close. */
   function pullHistoryPage(session) {
-    return async ({ before, signal }) => {
+    return async ({ before, signal, limit = OPEN_CODE_HISTORY_LIMITS.page, directory }) => {
       requireValue(processCurrent(), 'opencode.generation', 'reconcile_required');
       requireValue(ordinaryRequests < 16, 'opencode.http_queue', 'source_unavailable');
       ordinaryRequests++;
@@ -104,7 +105,8 @@ export async function createOpenCodeDriver(options) {
       const release = () => { if (released) return; released = true; ordinaryRequests--; };
       const controller = AbortSignal.any([lifetime.signal, ...(signal ? [signal] : []), AbortSignal.timeout(options.requestTimeoutMs ?? 15000)]);
       const url = new URL(`session/${encodeURIComponent(session.nativeSessionId)}/message`, origin.href.endsWith('/') ? origin : new URL(`${origin.href}/`));
-      url.searchParams.set('limit', String(OPEN_CODE_HISTORY_LIMITS.page));
+      url.searchParams.set('limit', String(limit));
+      if (directory !== undefined) url.searchParams.set('directory', directory);
       if (before !== null && before !== undefined) url.searchParams.set('before', before);
       try {
         const response = await fetch(url, { method: 'GET', headers: { Accept: 'application/json', ...(options.authorization ? { Authorization: options.authorization } : {}) }, signal: controller, redirect: 'error' });
@@ -120,6 +122,45 @@ export async function createOpenCodeDriver(options) {
       }
     };
   }
+  async function readCompactionModel(session, directory) {
+    const response = await pullHistoryPage(session)({ limit: 1, directory });
+    async function* boundedBody() {
+      let bytes = 0;
+      for await (const chunk of response.body) {
+        for (let offset = 0; offset < chunk.length; offset += HISTORY_JSON_LIMITS.inputBytes) {
+          const block = chunk.slice(offset, offset + HISTORY_JSON_LIMITS.inputBytes);
+          bytes += block.length;
+          requireValue(bytes <= 64 * 1024 * 1024, 'opencode.compact_history_budget', 'source_unavailable');
+          yield block;
+        }
+      }
+    }
+    const info = {}, model = {};
+    try {
+      for await (const token of tokenizeHistoryJson(boundedBody())) {
+        const [ordinal, field, key, modelKey] = token.path;
+        if (ordinal !== 0 || field !== 'info') continue;
+        if (token.kind === 'end' && token.path.length === 2) break;
+        if (token.kind !== 'string-data') continue;
+        const target = token.path.length === 3 && ['sessionID', 'providerID', 'modelID'].includes(key) ? info
+          : token.path.length === 4 && key === 'model' && ['providerID', 'modelID'].includes(modelKey) ? model : null;
+        if (target) {
+          const name = target === info ? key : modelKey;
+          const value = (target[name] ?? '') + token.text;
+          requireValue(value.length <= 512, 'opencode.compact_model_field', 'source_unavailable');
+          target[name] = value;
+        }
+      }
+    } finally {
+      response.release();
+    }
+    requireValue(info.sessionID === session.nativeSessionId, 'opencode.compact_no_model', 'source_unavailable');
+    const providerID = model.providerID ?? info.providerID;
+    const modelID = model.modelID ?? info.modelID;
+    requireValue(providerID && modelID, 'opencode.compact_no_model', 'source_unavailable');
+    return { providerID, modelID };
+  }
+
   async function bind(session) {
     const key = encodeSessionKey(session);
     if (!bound.has(key)) {
@@ -297,13 +338,8 @@ export async function createOpenCodeDriver(options) {
         return name === 'listProviders' ? providerCatalog(safe) : safe;
       }
       if (name === 'compactSession' && params.body?.providerID === undefined && params.body?.modelID === undefined) {
-        const rows = await request(`/session/${encodeURIComponent(session.nativeSessionId)}/message`, { query: { directory: params.directory, limit: 1 } });
-        requireValue(Array.isArray(rows) && rows.length <= 1, 'opencode.compact_history', 'reconcile_required');
-        const info = rows[0]?.info;
-        requireValue(info?.sessionID === session.nativeSessionId, 'opencode.compact_no_model', 'source_unavailable');
-        const model = info.model ?? info;
-        requireValue(typeof model.providerID === 'string' && model.providerID && typeof model.modelID === 'string' && model.modelID, 'opencode.compact_no_model', 'source_unavailable');
-        return sessionMutation(name, session, { ...params, body: { ...params.body, providerID: model.providerID, modelID: model.modelID } }, route);
+        const model = await readCompactionModel(session, params.directory);
+        return sessionMutation(name, session, { ...params, body: { ...params.body, ...model } }, route);
       }
       return operation.scope === 'session' ? sessionMutation(name, session, params, route, name === 'sendCommand') : instanceMutation(name, params, route);
     };

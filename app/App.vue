@@ -6,7 +6,7 @@
       <DesktopWindowControls :controls="windowControls" />
     </header>
     <template v-if="uiInitState === 'ready'">
-      <header class="app-header">
+      <header ref="appHeaderEl" class="app-header">
         <TopPanel
           ref="topPanelRef"
           :runtime-mode="!!runtimeActionClient"
@@ -2079,7 +2079,7 @@ const ptyToFileMap = new Map<string, string>();
 const codexSessionCreationByDirectory = new Map<string, Promise<SessionInfo | undefined>>();
 const ptyMetaDecoder = new TextDecoder();
 let floatingExtentResizeObserver: ResizeObserver | null = null;
-let floatingExtentObservedEl: HTMLDivElement | null = null;
+const appHeaderEl = ref<HTMLElement | null>(null);
 let floatingExtentFrameId: number | null = null;
 let shellFitAllFrameId: number | null = null;
 let windowResizeFrameId: number | null = null;
@@ -5126,7 +5126,7 @@ function handleWindowResize() {
 
 function syncFloatingExtent() {
   const canvas = toolWindowCanvasEl.value;
-  const header = document.querySelector('.app-header') as HTMLElement | null;
+  const header = appHeaderEl.value;
   const input = inputEl.value;
   if (!canvas || !header || !input) return;
   const headerRect = header.getBoundingClientRect();
@@ -5163,15 +5163,11 @@ function updateFloatingExtentObserver() {
       syncFloatingExtent();
     });
   }
-  const nextEl = toolWindowCanvasEl.value;
-  if (floatingExtentObservedEl && floatingExtentObservedEl !== nextEl) {
-    floatingExtentResizeObserver.unobserve(floatingExtentObservedEl);
+  floatingExtentResizeObserver.disconnect();
+  for (const element of [appHeaderEl.value, inputEl.value]) {
+    if (element) floatingExtentResizeObserver.observe(element);
   }
-  if (nextEl && nextEl !== floatingExtentObservedEl) {
-    floatingExtentResizeObserver.observe(nextEl);
-  }
-  floatingExtentObservedEl = nextEl ?? null;
-  if (nextEl) syncFloatingExtent();
+  if (toolWindowCanvasEl.value) syncFloatingExtent();
 }
 
 function getCanvasMetrics() {
@@ -7895,7 +7891,7 @@ function focusInput() {
 }
 
 watch(
-  () => toolWindowCanvasEl.value,
+  [toolWindowCanvasEl, appHeaderEl, inputEl],
   () => {
     updateFloatingExtentObserver();
   },
@@ -14191,7 +14187,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('blur', handleWindowAttentionChange);
   floatingExtentResizeObserver?.disconnect();
   floatingExtentResizeObserver = null;
-  floatingExtentObservedEl = null;
   if (floatingExtentFrameId !== null) {
     cancelAnimationFrame(floatingExtentFrameId);
     floatingExtentFrameId = null;
