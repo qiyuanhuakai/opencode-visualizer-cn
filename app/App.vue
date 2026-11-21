@@ -635,6 +635,7 @@
       :codex-api="managementCodexApi"
       :active-backend-kind="managementManifest?.kind ?? activeBackendKind"
       :native-adapter="managementNativeAdapter ?? undefined"
+      :runtime-grant-revision="managementGrantRevision"
       :magic-context-workers="magicContextWorkers"
       :kimi-web-bridge="kimiWebMessageBridge"
       :get-native-kimi-meta="managementKimiMeta"
@@ -11235,13 +11236,20 @@ const managementAgentScope = computed<ManagementAgentScope | null>(previous => {
   try { return { ...client.scope(environmentId), client, harness: harnessInstanceId }; }
   catch { return null; }
 });
+const managementGrantRevision = ref(0);
 watch([isStatusMonitorOpen, isProviderManagerOpen, managementAgentScope], async ([monitor, providers, scope], _previous, onCleanup) => {
   if ((!monitor && !providers) || !scope) return;
   let current = true;
   onCleanup(() => { current = false; });
   try {
     const target = scope.binding.target;
-    const inspection = await scope.client.request(target, 'runtime.inspect', {}, { selectionCurrent: scope.isCurrent });
+    // The management inspection applies the verified connection grants. A raw
+    // target inspection only returns manifests and cannot refresh permissions.
+    const grantsInspection = await scope.client.inspect();
+    if (!current || !scope.isCurrent()) return;
+    const inspection = grantsInspection.harnesses.some(entry => entry.manifest.environmentId === target)
+      ? grantsInspection
+      : await scope.client.request(target, 'runtime.inspect', {}, { selectionCurrent: scope.isCurrent });
     if (!current || !scope.isCurrent()) return;
     const verified = inspection.harnesses.map(entry => entry.manifest)
       .filter(manifest => manifest.environmentId === target);
@@ -11252,8 +11260,10 @@ watch([isStatusMonitorOpen, isProviderManagerOpen, managementAgentScope], async 
       const prior = byId.get(manifest.harnessInstanceId);
       return prior && JSON.stringify(prior) === JSON.stringify(manifest) ? prior : manifest;
     });
-    if (updated.length === existing.length && updated.every(manifest => byId.get(manifest.harnessInstanceId) === manifest)) return;
-    harnessManifests.value = [...harnessManifests.value.filter(manifest => manifest.environmentId !== target), ...updated];
+    if (updated.length !== existing.length || updated.some(manifest => byId.get(manifest.harnessInstanceId) !== manifest)) {
+      harnessManifests.value = [...harnessManifests.value.filter(manifest => manifest.environmentId !== target), ...updated];
+    }
+    managementGrantRevision.value++;
   } catch (error) {
     if (current && scope.isCurrent()) log('Agent status inspection failed', error);
   }
@@ -11282,7 +11292,7 @@ const managementDshRpcClient = computed(() => {
 });
 const managementDshStatus = shallowRef<DshStatusSnapshot>();
 const managementDshStatusRefresh = ref(0);
-watch([managementDshRpcClient, isStatusMonitorOpen, managementDshStatusRefresh], async ([rpc, open], _previous, onCleanup) => {
+watch([managementDshRpcClient, isStatusMonitorOpen, managementDshStatusRefresh, managementGrantRevision], async ([rpc, open], _previous, onCleanup) => {
   managementDshStatus.value = undefined;
   if (!rpc || !open) return;
   const accountOperation = managementManifest.value?.extensions.find(entry => entry.name === 'dsh.ui.account.getState');
@@ -11336,7 +11346,7 @@ watch(managementNativeAdapter, adapter => {
   managementCodexApi.disconnectTransport();
   if (adapter instanceof CodexAdapter) managementCodexApi.attachRuntimeAdapter(adapter, '');
 });
-watch([managementNativeAdapter, managementAgentScope], () => {
+watch([managementNativeAdapter, managementAgentScope, managementGrantRevision], () => {
   if (isProviderManagerOpen.value) void refreshManagementProviders();
 });
 watch(isProviderManagerOpen, open => { if (open) void refreshManagementProviders(); });
