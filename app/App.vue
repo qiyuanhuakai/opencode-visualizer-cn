@@ -11245,9 +11245,15 @@ watch([isStatusMonitorOpen, isProviderManagerOpen, managementAgentScope], async 
     if (!current || !scope.isCurrent()) return;
     const verified = inspection.harnesses.map(entry => entry.manifest)
       .filter(manifest => manifest.environmentId === target);
-    if (verified.some(manifest => manifest.harnessInstanceId === scope.harness)) {
-      harnessManifests.value = [...harnessManifests.value.filter(manifest => manifest.environmentId !== target), ...verified];
-    }
+    if (!verified.some(manifest => manifest.harnessInstanceId === scope.harness)) return;
+    const existing = harnessManifests.value.filter(manifest => manifest.environmentId === target);
+    const byId = new Map(existing.map(manifest => [manifest.harnessInstanceId, manifest]));
+    const updated = verified.map(manifest => {
+      const prior = byId.get(manifest.harnessInstanceId);
+      return prior && JSON.stringify(prior) === JSON.stringify(manifest) ? prior : manifest;
+    });
+    if (updated.length === existing.length && updated.every(manifest => byId.get(manifest.harnessInstanceId) === manifest)) return;
+    harnessManifests.value = [...harnessManifests.value.filter(manifest => manifest.environmentId !== target), ...updated];
   } catch (error) {
     if (current && scope.isCurrent()) log('Agent status inspection failed', error);
   }

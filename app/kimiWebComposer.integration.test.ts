@@ -158,7 +158,8 @@ describe('kimi-web composer integration', () => {
       { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
     ).outputText;
     await runInNewContext(program, {
-      agentsRequestFence: { start: () => ({ generation: 1 }) },
+      agentsRequestFence: { start: () => ({ generation: 1 }), isCurrent: () => true },
+      runtimeActionClient: ref(null),
       agentLoadingOwner: 0, agentsLoading: ref(false), agentOptions: ref([]),
       activeBackendKind: ref('kimi-web'), selectedMode: mode, selectedSessionId: ref('session-b'),
       kimiWebSessionModes: { sessionState: () => ({ confidence: 'unknown' }) },
