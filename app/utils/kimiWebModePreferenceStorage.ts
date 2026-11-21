@@ -20,14 +20,17 @@ function parsePreferences(value: unknown): KimiWebEventSessionModePatch | undefi
   return Object.keys(modes).length ? modes : undefined;
 }
 
-export function createKimiWebModePreferenceStore(getScope: () => string) {
-  function keyFor(sessionId: string): string {
-    return `kimiWebSessionModes.${encodeURIComponent(JSON.stringify([getScope(), sessionId]))}`;
+export function createKimiWebModePreferenceStore(getScope: () => string, getLegacyScope?: () => string | undefined) {
+  function keyFor(sessionId: string, scope = getScope()): string {
+    return `kimiWebSessionModes.${encodeURIComponent(JSON.stringify([scope, sessionId]))}`;
   }
 
   return {
     read(sessionId: string): KimiWebEventSessionModePatch | undefined {
-      return parsePreferences(storageGetJSON<unknown>(keyFor(sessionId)));
+      const scope = getLegacyScope?.();
+      const previous = scope ? parsePreferences(storageGetJSON<unknown>(keyFor(sessionId, scope))) : undefined;
+      const current = parsePreferences(storageGetJSON<unknown>(keyFor(sessionId)));
+      return current && previous ? { ...previous, ...current } : current ?? previous;
     },
     write(sessionId: string, change: KimiWebSessionModeChange): void {
       const key = keyFor(sessionId);

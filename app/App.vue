@@ -5822,10 +5822,12 @@ async function fetchAgents() {
     }
     if (activeBackendKind.value === 'kimi-web') {
       agentOptions.value = [];
-      const draftMode = readComposerDraft(selectedSessionId.value)?.agent;
+      const draftMode = runtimeActionClient.value ? undefined : readComposerDraft(selectedSessionId.value)?.agent;
+      const fallback = !runtimeActionClient.value || canReadLocalRuntimeMode('kimi-web')
+        ? lastKimiPermissionMode.value : kimiWebServerDefaultPermissionMode.value;
       selectedMode.value =
         kimiWebSessionModes.sessionState(selectedSessionId.value).permissionMode ??
-        (isKimiWebPermissionMode(draftMode) ? draftMode : lastKimiPermissionMode.value);
+        (isKimiWebPermissionMode(draftMode) ? draftMode : fallback);
       return;
     }
     if (activeBackendKind.value === 'codex') {
@@ -8463,7 +8465,10 @@ async function loadKimiWebDefaultPermissionMode() {
 function kimiWebScopeKey() {
   return runtimeNativePreferenceScope.value || credentials.kimiWebBridgeUrl.value;
 }
-const kimiWebModePreferences = createKimiWebModePreferenceStore(kimiWebScopeKey);
+const kimiWebModePreferences = createKimiWebModePreferenceStore(kimiWebScopeKey, () =>
+  activeBackendKind.value === 'kimi-web' && canReadLocalRuntimeMode('kimi-web')
+    ? credentials.kimiWebBridgeUrl.value : undefined,
+);
 const kimiWebSessionModes = useKimiWebSessionModes({
   getScope: kimiWebScopeKey,
   readModes: kimiWebModePreferences.read,
@@ -9907,6 +9912,22 @@ watch(() => bridgeReference.value?.profileId, profileId => {
   void runtimePins.value?.show();
 });
 onScopeDispose(() => { void runtimePins.value?.dispose(); });
+function isLoopbackBridgeAddress(address: string): boolean {
+  try {
+    return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(address).hostname);
+  } catch { return false; }
+}
+
+function canReadLocalRuntimeMode(kind: 'codex' | 'kimi-web'): boolean {
+  const reference = bridgeReference.value;
+  if (!reference?.expectedEnvironmentId || !isLoopbackBridgeAddress(reference.url)) return false;
+  if (runtimeConnectionOwner?.inspection.value?.role !== 'local' || runtimeEnvironmentId.value !== reference.expectedEnvironmentId) return false;
+  const previous = kind === 'codex' ? credentials.codexBridgeUrl.value : credentials.kimiWebBridgeUrl.value;
+  return isLoopbackBridgeAddress(previous) && harnessManifests.value.filter(source =>
+    source.environmentId === reference.expectedEnvironmentId && source.kind === kind,
+  ).length === 1;
+}
+
 const activeBridgeUrl = computed(() => bridgeReference.value?.url ?? '');
 const activeProfileId = computed(() => {
   const profile = bridgeReference.value?.profileId;
@@ -10257,13 +10278,19 @@ async function handleUnifiedSelectKey(key: string, origin: 'session-navigation' 
   modelOptions.value = [];
   agentOptions.value = [];
   commands.value = [];
+  if (manifest.kind === 'codex' || manifest.kind === 'kimi-web') selectedMode.value = '';
   const draftContext = draftKeyForSelectedContext();
   const normalContext = composerBodyKey({ kind: 'session', selection });
   const preferenceKey = composerPreferenceKey(selection);
-  const savedPreferences = runtimeDraftMode.value && qualifiedComposerDrafts
+  const qualifiedPreferences = runtimeDraftMode.value && qualifiedComposerDrafts
     ? await qualifiedComposerDrafts.readPreferences(preferenceKey, normalContext)
     : readComposerDraft(preferenceKey) ?? readComposerDraft(normalContext);
   if (generation !== runtimeSelectionGeneration || !capture.isCurrent()) return;
+  const legacyMode = !qualifiedPreferences?.agent && (manifest.kind === 'codex' || manifest.kind === 'kimi-web')
+    && canReadLocalRuntimeMode(manifest.kind) ? readComposerDraftStore()[session.nativeSessionId]?.agent : undefined;
+  const preferences = legacyMode
+    ? { agent: legacyMode, model: qualifiedPreferences?.model ?? '', variant: qualifiedPreferences?.variant }
+    : qualifiedPreferences;
   await loadQualifiedComposerDraft(draftContext);
   if (generation !== runtimeSelectionGeneration || draftKeyForSelectedContext() !== draftContext) return;
   restoreComposerDraftForContext(draftContext);
@@ -10272,7 +10299,10 @@ async function handleUnifiedSelectKey(key: string, origin: 'session-navigation' 
   if (generation !== runtimeSelectionGeneration || !capture.isCurrent()) return;
   await Promise.all([fetchProviders(true), fetchAgents(), fetchCommands()]);
   if (generation !== runtimeSelectionGeneration || !capture.isCurrent() || draftKeyForSelectedContext() !== draftContext) return;
-  if (savedPreferences) applyComposerPreferencesToState(savedPreferences);
+  if (preferences) {
+    const kimiMode = manifest.kind === 'kimi-web' ? kimiWebSessionModes.sessionState(session.nativeSessionId).permissionMode : undefined;
+    applyComposerPreferencesToState(kimiMode ? { ...preferences, agent: kimiMode } : preferences);
+  }
   const ready = threadComposerContext.complete(transition, { bodyKey: draftContext, preferenceKey, sessionKey: encodeSessionKey(session), optionsReady: true });
   if (!ready) return;
   runtimeComposerReadyState = ready;

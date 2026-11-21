@@ -33,6 +33,20 @@ describe('Kimi Web mode preferences', () => {
     expect(store.read('same-session')).toBeUndefined();
   });
 
+  it('inherits missing mode fields from the previous local Bridge without overwriting them', () => {
+    const previous = createKimiWebModePreferenceStore(() => 'ws://127.0.0.1:23004/kimi-web');
+    previous.write('session-a', { field: 'permissionMode', value: 'auto' });
+    previous.write('session-a', { field: 'planMode', value: true });
+    let previousScope: string | undefined = 'ws://127.0.0.1:23004/kimi-web';
+    const qualified = createKimiWebModePreferenceStore(() => 'environment:instance', () => previousScope);
+    expect(qualified.read('session-a')).toEqual({ permissionMode: 'auto', planMode: true });
+    qualified.write('session-a', { field: 'planMode', value: false });
+    expect(qualified.read('session-a')).toEqual({ permissionMode: 'auto', planMode: false });
+    expect(previous.read('session-a')).toEqual({ permissionMode: 'auto', planMode: true });
+    previousScope = undefined;
+    expect(qualified.read('session-a')).toEqual({ planMode: false });
+  });
+
   it('keeps valid boolean fields while discarding malformed stored fields', () => {
     // Given
     const store = createKimiWebModePreferenceStore(() => 'server-a');

@@ -1842,7 +1842,7 @@ function resolveAgentStyle(name?: string, explicitColor?: string) {
 
 function agentValueStyle(id: unknown) {
   const agent = findAgentOption(id) ?? findAgent(id);
-  return resolveAgentStyle(agent?.id, agent?.color);
+  return resolveAgentStyle(agent?.id ?? (typeof id === 'string' ? id : undefined), agent?.color);
 }
 
 function agentOptionNameStyle(agent: AgentOption) {
