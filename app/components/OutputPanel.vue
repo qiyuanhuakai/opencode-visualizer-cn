@@ -546,12 +546,13 @@ async function onPanelScroll(event: Event) {
     windowShiftQueued = true;
     return;
   }
-  const atTop = panel.scrollTop <= 80;
-  const nearTop = atTop && rootWindow.value.start > 0;
+  const hasMountedEarlier = rootWindow.value.start > 0;
+  const hasMountedLater = rootWindow.value.end < renderableRoots.value.length;
+  if (!hasMountedEarlier && !hasMountedLater && !props.loadOlderHistory) return;
+  const atTop = (hasMountedEarlier || props.loadOlderHistory) && panel.scrollTop <= 80;
+  const nearTop = atTop && hasMountedEarlier;
   const loadOlderHistory = atTop && !nearTop ? props.loadOlderHistory : undefined;
-  const nearBottom =
-    panel.scrollHeight - panel.scrollTop - panel.clientHeight <= 80 &&
-    rootWindow.value.end < renderableRoots.value.length;
+  const nearBottom = hasMountedLater && panel.scrollHeight - panel.scrollTop - panel.clientHeight <= 80;
   if (!nearTop && !nearBottom && !loadOlderHistory) return;
   windowShiftInProgress = true;
   const shiftGeneration = ++windowShiftGeneration;

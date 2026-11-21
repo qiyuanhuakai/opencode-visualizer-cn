@@ -19,7 +19,8 @@
           :sandbox-first-mode="activeBackendCapabilities.sessionManagementMode === 'sandbox-first'"
           :codex-connected="codexApi.connected.value"
           :pty-supported="ptySupported"
-          :session-action-capabilities="runtimeActionClient ? runtimeSessionActionCapabilities : {
+          :resolve-session-actions="runtimeActionClient ? runtimeActionsForSession : undefined"
+          :session-action-capabilities="{
             rename: activeBackendCapabilities.sessionRename,
             pin: activeBackendCapabilities.sessionPin,
             unpin: activeBackendCapabilities.sessionUnpin,
@@ -246,7 +247,7 @@
                     :load-message-diffs="activeBackendKind === 'kimi-web' ? loadKimiMessageDiffs : undefined"
                     :has-message-diffs="activeBackendKind === 'kimi-web' ? hasKimiMessageDiffs : undefined"
                     :kimi-session-context="kimiSessionContext"
-                    :is-loading="isLoadingHistory"
+                    :is-loading="isLoadingHistory && !runtimeConversation.hasMore.value"
                     :load-older-history="runtimeConversation.hasMore.value && !runtimeConversation.loading.value ? loadOlderRuntimeHistory : undefined"
                     :is-anchoring="isOutputAnchoring"
                     @message-rendered="handleOutputPanelMessageRendered"
@@ -648,6 +649,8 @@
       :magic-context-workers="magicContextWorkers"
       :kimi-web-bridge="kimiWebMessageBridge"
       :get-native-kimi-meta="managementKimiMeta"
+      :native-kimi-plugins="managementKimiPlugins"
+      :direct-kimi-plugin-bridge="managementKimiPluginBridge"
       :dsh-status="runtimeActionClient ? managementDshStatus : dshStatusSnapshot"
       :harness-scope="harnessInstanceScope ?? undefined"
       :harness-manifests="harnessManifests"
@@ -842,7 +845,7 @@ import { createNativeBackendAdapter } from './runtime/nativeBackendAdapter';
 import { createWorkspacePty, type PtySocket, type WorkspacePty } from './runtime/workspacePty';
 import { createWorkspaceFiles } from './runtime/workspaceFiles';
 import { capturedBackend } from './runtime/capturedBackend';
-import { createNativeKimiProviders, createNativeKimiSessionClient } from './runtime/nativeKimiClient';
+import { createNativeKimiPlugins, createNativeKimiProviders, createNativeKimiSessionClient } from './runtime/nativeKimiClient';
 import { createRuntimeTurnProjection } from './runtime/turnProjection';
 import { createNativeDshRpc } from './runtime/nativeDshRpc';
 import BridgeLogin from './components/runtime-shell/BridgeLogin.vue';
@@ -10426,10 +10429,13 @@ watch(
 
 const missingThreadRepositoryNotice = 'This session has no repository on the connected target, so no Host Thread can be opened for it.';
 
-const showHostThreadAction = computed(() => Boolean(
-  unifiedSessionTree.value && runtimeSelectedSessionRef.value
-    && (runtimeSelectedDirectory.value || runtimeThreadState.threadId.value),
-));
+const showHostThreadAction = computed(() => {
+  const tree = unifiedSessionTree.value;
+  if (!tree || !runtimeSelectedSessionRef.value) return false;
+  if (runtimeThreadState.threadId.value) return true;
+  const directory = runtimeSelectedDirectory.value;
+  return !!directory && !tree.workspaces.value.some(row => row.path === directory && row.gitKind === 'non-git');
+});
 async function openRuntimeThreadForSelection(): Promise<void> {
   if (runtimeThreadState.threadId.value) {
     try {
@@ -11186,12 +11192,22 @@ const runtimeConversationManifest = computed(() => {
   return session ? harnessManifests.value.find(entry => entry.environmentId === session.environmentId && entry.harnessInstanceId === session.harnessInstanceId) : undefined;
 });
 function runtimeSupports(operation: string): boolean { return runtimeConversationManifest.value?.extensions.some(entry => entry.name === operation && entry.support.state === 'supported') === true; }
-const runtimeSessionActionCapabilities = computed(() => ({
-  rename: runtimeSupports(runtimeConversationManifest.value?.kind === 'kimi-web' ? 'kimi.updateProfile' : 'updateSession'),
-  archive: runtimeSupports(runtimeConversationManifest.value?.kind === 'kimi-web' ? 'archiveSession' : 'updateSession'),
-  unarchive: runtimeSupports(runtimeConversationManifest.value?.kind === 'kimi-web' ? 'restoreSession' : 'updateSession'),
-  delete: runtimeSupports('deleteSession'), pin: !!runtimePins.value, unpin: !!runtimePins.value,
-}));
+const sessionActionsByHarness = computed(() => new Map(harnessManifests.value.map(manifest => {
+  const supported = new Set(manifest.extensions.filter(entry => entry.support.state === 'supported').map(entry => entry.name));
+  const kimi = manifest.kind === 'kimi-web';
+  return [manifest.harnessInstanceId, {
+    rename: supported.has(kimi ? 'kimi.updateProfile' : 'updateSession'),
+    archive: supported.has(kimi ? 'archiveSession' : 'updateSession'),
+    unarchive: supported.has(kimi ? 'restoreSession' : 'updateSession'),
+    delete: supported.has('deleteSession'),
+    pin: !!runtimePins.value,
+    unpin: !!runtimePins.value,
+  }] as const;
+})));
+function runtimeActionsForSession(key: string) {
+  const actions = sessionActionsByHarness.value.get(decodeSessionKey(key).harnessInstanceId);
+  return actions ?? { rename: false, archive: false, unarchive: false, delete: false, pin: !!runtimePins.value, unpin: !!runtimePins.value };
+}
 function handleTopPanelBatchAction(payload: TopPanelBatchSessionActionPayload) {
   if (runtimeActionClient.value) return handleRuntimeSessionBatch(payload.action, payload.sessions.map(row => row.sessionId));
   return backendSessionActions.handleTopPanelBatchSessionAction(payload);
@@ -11308,6 +11324,18 @@ const managementKimiMeta = computed(() => {
   if (manifest?.kind !== 'kimi-web' || !client) return undefined;
   const native = createNativeKimiSessionClient(client, manifest);
   return () => native.getMeta();
+});
+const managementKimiPlugins = computed(() => {
+  const manifest = managementManifest.value, client = runtimeActionClient.value;
+  return manifest?.kind === 'kimi-web' && client ? createNativeKimiPlugins(client, manifest) : client ? null : undefined;
+});
+const managementKimiPluginBridge = computed(() => {
+  const reference = bridgeReference.value;
+  const manifest = managementManifest.value;
+  if (!reference || manifest?.kind !== 'kimi-web' || manifest.environmentId !== reference.expectedEnvironmentId) return undefined;
+  const url = new URL(reference.url);
+  url.pathname = '/kimi-web/ws';
+  return { bridgeUrl: url.toString(), bridgeToken: bridgeLoginToken.value };
 });
 const managementKimiProviders = computed(() => {
   const manifest = managementManifest.value;

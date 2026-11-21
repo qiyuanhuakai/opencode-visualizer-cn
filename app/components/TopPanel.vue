@@ -120,7 +120,7 @@
                     {{ $t('topPanel.management.clear') }}
                   </button>
                   <button
-                    v-if="sessionActions.pin"
+                    v-if="runtimeMode || sessionActions.pin"
                     type="button"
                     class="management-action"
                     :disabled="batchPinTargets.length === 0"
@@ -129,7 +129,7 @@
                     {{ $t('topPanel.management.pin') }} · {{ batchPinTargets.length }}
                   </button>
                   <button
-                    v-if="sessionActions.unpin"
+                    v-if="runtimeMode || sessionActions.unpin"
                     type="button"
                     class="management-action"
                     :disabled="batchUnpinTargets.length === 0"
@@ -138,7 +138,7 @@
                     {{ $t('topPanel.management.unpin') }} · {{ batchUnpinTargets.length }}
                   </button>
                   <button
-                    v-if="sessionActions.archive"
+                    v-if="runtimeMode || sessionActions.archive"
                     type="button"
                     class="management-action"
                     :disabled="batchArchiveTargets.length === 0"
@@ -147,7 +147,7 @@
                     {{ $t('topPanel.management.archive') }} · {{ batchArchiveTargets.length }}
                   </button>
                   <button
-                    v-if="sessionActions.unarchive"
+                    v-if="runtimeMode || sessionActions.unarchive"
                     type="button"
                     class="management-action"
                     :disabled="batchUnarchiveTargets.length === 0"
@@ -156,7 +156,7 @@
                     {{ $t('topPanel.management.unarchive') }} · {{ batchUnarchiveTargets.length }}
                   </button>
                   <button
-                    v-if="sessionActions.delete"
+                    v-if="runtimeMode || sessionActions.delete"
                     type="button"
                     class="management-action is-danger"
                     :disabled="batchDeleteTargets.length === 0"
@@ -448,7 +448,7 @@
                         <template #action>
                           <div class="tree-session-actions">
                             <button
-                              v-if="!session.archivedAt && sessionActions.rename"
+                              v-if="!session.archivedAt && actionsForSession(session.id).rename"
                               type="button"
                               class="tree-action-button session-rename"
                               :title="$t('topPanel.sessionActions.rename')"
@@ -460,8 +460,8 @@
                               v-if="
                                 !session.archivedAt &&
                                 (session.isPinned || session.isImplicitlyPinned
-                                  ? sessionActions.unpin
-                                  : sessionActions.pin)
+                                  ? actionsForSession(session.id).unpin
+                                  : actionsForSession(session.id).pin)
                               "
                               type="button"
                               class="tree-action-button session-pin"
@@ -496,7 +496,7 @@
                               />
                             </button>
                             <button
-                              v-if="session.archivedAt && sessionActions.unarchive"
+                              v-if="session.archivedAt && actionsForSession(session.id).unarchive"
                               type="button"
                               class="tree-action-button session-unarchive"
                               :title="$t('topPanel.sessionActions.unarchive')"
@@ -507,13 +507,13 @@
                             <button
                               v-if="
                                 !session.archivedAt &&
-                                (sessionActions.archive || sessionActions.delete)
+                                (actionsForSession(session.id).archive || actionsForSession(session.id).delete)
                               "
                               type="button"
                               class="tree-action-button session-del"
-                              :class="shouldDeleteSession() ? 'danger' : 'archive'"
+                              :class="shouldDeleteSession(session.id) ? 'danger' : 'archive'"
                               :title="
-                                shouldDeleteSession()
+                                shouldDeleteSession(session.id)
                                   ? $t('topPanel.sessionActions.deletePermanently')
                                   : $t('topPanel.sessionActions.archive')
                               "
@@ -521,7 +521,7 @@
                             >
                               <Icon
                                 :icon="
-                                  shouldDeleteSession() ? 'lucide:trash-2' : 'lucide:archive'
+                                  shouldDeleteSession(session.id) ? 'lucide:trash-2' : 'lucide:archive'
                                 "
                                 :width="16"
                                 :height="16"
@@ -958,6 +958,7 @@ const props = defineProps<{
   codexConnected?: boolean;
   ptySupported?: boolean;
   sessionActionCapabilities?: SessionActionCapabilities;
+  resolveSessionActions?: (sessionId: string) => SessionActionCapabilities;
   worktreesEnabled?: boolean;
 }>();
 
@@ -972,6 +973,10 @@ const sessionActions = computed<SessionActionCapabilities>(
       delete: true,
     },
 );
+
+function actionsForSession(sessionId: string): SessionActionCapabilities {
+  return props.resolveSessionActions?.(sessionId) ?? sessionActions.value;
+}
 
 const notifications = computed(() => props.notificationSessions ?? []);
 const totalNotificationCount = computed(() =>
@@ -1113,7 +1118,7 @@ const batchPinTargets = computed(() =>
   selectedEntries.value
     .filter(
       (entry) =>
-        !entry.session.archivedAt && !entry.session.isPinned && !entry.session.isImplicitlyPinned,
+        actionsForSession(entry.session.id).pin && !entry.session.archivedAt && !entry.session.isPinned && !entry.session.isImplicitlyPinned,
     )
     .map((entry) => entry.target),
 );
@@ -1122,23 +1127,23 @@ const batchUnpinTargets = computed(() =>
   selectedEntries.value
     .filter(
       (entry) =>
-        !entry.session.archivedAt &&
+        actionsForSession(entry.session.id).unpin && !entry.session.archivedAt &&
         Boolean(entry.session.isPinned || entry.session.isImplicitlyPinned),
     )
     .map((entry) => entry.target),
 );
 
 const batchArchiveTargets = computed(() =>
-  selectedEntries.value.filter((entry) => !entry.session.archivedAt).map((entry) => entry.target),
+  selectedEntries.value.filter((entry) => actionsForSession(entry.session.id).archive && !entry.session.archivedAt).map((entry) => entry.target),
 );
 
 const batchUnarchiveTargets = computed(() =>
   selectedEntries.value
-    .filter((entry) => Boolean(entry.session.archivedAt))
+    .filter((entry) => actionsForSession(entry.session.id).unarchive && Boolean(entry.session.archivedAt))
     .map((entry) => entry.target),
 );
 
-const batchDeleteTargets = computed(() => selectedEntries.value.map((entry) => entry.target));
+const batchDeleteTargets = computed(() => selectedEntries.value.filter(entry => actionsForSession(entry.session.id).delete).map(entry => entry.target));
 
 const batchSessionTargetsByAction = computed(() => {
   return {
@@ -1417,15 +1422,16 @@ async function handleSessionDelete(sessionId: string, close?: () => void) {
 }
 
 async function handleSessionAction(sessionId: string, close?: () => void) {
-  if (shouldDeleteSession()) {
+  if (shouldDeleteSession(sessionId)) {
     await handleSessionDelete(sessionId, close);
     return;
   }
-  if (sessionActions.value.archive) emit('archive-session', sessionId);
+  if (actionsForSession(sessionId).archive) emit('archive-session', sessionId);
 }
 
-function shouldDeleteSession() {
-  return sessionActions.value.delete && (!sessionActions.value.archive || isShiftPressed.value);
+function shouldDeleteSession(sessionId: string) {
+  const actions = actionsForSession(sessionId);
+  return actions.delete && (!actions.archive || isShiftPressed.value);
 }
 
 function handleSessionUnarchive(sessionId: string) {

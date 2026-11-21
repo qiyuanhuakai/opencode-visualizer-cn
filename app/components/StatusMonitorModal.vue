@@ -208,7 +208,7 @@ import CodexAccountTokenUsage from './codex/CodexAccountTokenUsage.vue';
 import KimiAccountUsage from './kimiWeb/KimiAccountUsage.vue';
 import AcpManagerPanel from './AcpManagerPanel.vue';
 import KimiWebPluginManager from './kimiWeb/KimiWebPluginManager.vue';
-import { createKimiWebPluginsClient } from '../utils/kimiWebPlugins';
+import { createKimiWebPluginsClient, type KimiWebPluginsClient } from '../utils/kimiWebPlugins';
 import type { HarnessManifest } from '../../shared/runtime/harnessContract.js';
 import { describeControlSupport, resolveControlSupport } from '../composables/useRuntimeCapabilities';
 import type { ControlScope, ControlSupport } from '../composables/useRuntimeCapabilities';
@@ -230,6 +230,8 @@ const props = defineProps<{
   nativeAdapter?: Partial<BackendAdapter>;
   runtimeGrantRevision?: number;
   getNativeKimiMeta?: () => Promise<KimiWebMeta>;
+  nativeKimiPlugins?: KimiWebPluginsClient | null;
+  directKimiPluginBridge?: { bridgeUrl: string; bridgeToken: string };
   initialTab?: TabId;
   initialUsageView?: 'daily' | 'weekly' | 'cumulative';
   sessionId?: string;
@@ -853,6 +855,9 @@ function kimiWebBridgeCredentials() {
 
 const kimiWebPluginsClient = computed(() => {
   if (!props.open || !isKimiWebBackend.value) return null;
+  if (props.nativeKimiPlugins) return props.nativeKimiPlugins;
+  if (props.directKimiPluginBridge) return createKimiWebPluginsClient(props.directKimiPluginBridge);
+  if (props.nativeKimiPlugins === null) return null;
   return createKimiWebPluginsClient(kimiWebBridgeCredentials());
 });
 
@@ -1986,7 +1991,7 @@ watch(tabs, (available) => {
 
         <!-- Plugins Tab -->
         <div v-if="activeTab === 'plugins'" class="status-monitor-content">
-          <KimiWebPluginManager v-if="isKimiWebBackend && kimiWebPluginsClient" :client="kimiWebPluginsClient" />
+          <KimiWebPluginManager v-if="isKimiWebBackend && kimiWebPluginsClient" :key="harnessScope?.kind === 'instance' ? harnessScope.harnessInstanceId : undefined" :client="kimiWebPluginsClient" />
           <div v-else-if="loading && !configData" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
