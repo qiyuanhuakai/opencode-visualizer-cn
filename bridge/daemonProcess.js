@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { createBridgeConfigStore } from './bridgeConfig.js';
 import { createBridgeRuntime } from './bridgeRuntime.js';
-import { collectStartupFailures } from './daemonController.js';
+import { collectStartupFailures, daemonRuntimeUrl } from './daemonController.js';
 import { createDaemonPaths, removeDaemonState, writeDaemonState } from './daemonState.js';
 
 function listenServer(server, port, host) {
@@ -181,7 +181,7 @@ export async function runDaemonProcess(options, createBridgeServer) {
     });
     process.send?.({ type: 'ready', host: options.host, port, path: options.path, failures });
     process.disconnect?.();
-    console.log(`vis_bridge listening on ws://${options.host}:${port}${options.path}`);
+    console.log(`vis_bridge listening on ${daemonRuntimeUrl(options.host, port)}`);
     console.log(`vis_bridge proxy target: ${options.target}`);
   } catch (error) {
     if (shutdownPromise) {

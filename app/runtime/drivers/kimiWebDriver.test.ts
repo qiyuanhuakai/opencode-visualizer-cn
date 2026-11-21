@@ -918,3 +918,10 @@ it.each(['history only', 'subscription first', 'history first'] as const)('recla
     }
   } finally { await driver.close(); await fixture.close(); }
 }, 30000);
+
+it('accepts newer Kimi servers that still advertise the verified Agent protocol', () => {
+  const meta = { server_version: '2.8.0', kimi_agent_protocol_version: '1.0.0' };
+  const spec = { paths: { '/api/v1/sessions/{session_id}/agents/{agent_id}/turns': { get: {} } } };
+  expect(parseNativeCapabilities(meta, spec, {}).agentTurns).toBe(true);
+  expect(parseNativeCapabilities({ ...meta, kimi_agent_protocol_version: '2.0.0' }, spec, {}).agentTurns).toBe(false);
+});

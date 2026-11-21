@@ -13,6 +13,7 @@ export interface KimiCapabilities {
   readonly modernQuestions: boolean;
   readonly modernApprovals: boolean;
   readonly updateProfile: boolean; readonly archive: boolean; readonly restore: boolean; readonly delete: boolean;
+  readonly agentTurns: boolean; readonly catalogV1: boolean;
   readonly catalogV2: boolean; readonly transcript: boolean; readonly snapshot: boolean; readonly sessionRead: boolean;
   readonly subscribeV2: boolean; readonly subscribe: boolean; readonly create: boolean;
   readonly send: boolean; readonly cancel: boolean; readonly approvals: boolean;

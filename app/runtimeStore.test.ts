@@ -1,4 +1,7 @@
 // @vitest-environment node
+import { fork } from 'node:child_process';
+import { once } from 'node:events';
+import { fileURLToPath } from 'node:url';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -28,6 +31,27 @@ describe('runtime durable store', () => {
       } finally { await restarted.close(); }
     } finally { await store.terminate(); await rm(stateDirectory, { recursive: true, force: true }); }
   });
+  it('releases its lease when the daemon IPC connection closes', async () => {
+    const stateDirectory = await mkdtemp(path.join(tmpdir(), 'runtime-store-disconnect-'));
+    const workerFile = fileURLToPath(new URL('../bridge/runtime/storage/runtimeDatabaseWorker.mjs', import.meta.url));
+    const worker = fork(workerFile, [], { execArgv: [], stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+    const exited = once(worker, 'exit');
+    try {
+      const reply = once(worker, 'message');
+      worker.send({ id: 1, method: 'initialize', params: { stateDirectory, environmentId, ownerId, epoch } });
+      expect((await reply)[0]).toMatchObject({ ok: true });
+      worker.disconnect();
+      await exited;
+      const reopened = createRuntimeStore({ stateDirectory, environmentId, ownerId, epoch });
+      try { await expect(reopened.ready).resolves.toMatchObject({ fence: 2 }); }
+      finally { await reopened.close(); }
+    } finally {
+      if (worker.exitCode === null && worker.signalCode === null) worker.kill('SIGTERM');
+      await exited;
+      await rm(stateDirectory, { recursive: true, force: true });
+    }
+  });
+
   it('failure rejects another owner without implicit takeover', async () => {
     // Given an active owner.
     const stateDirectory = await mkdtemp(path.join(tmpdir(), 'runtime-store-test-'));

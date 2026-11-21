@@ -127,4 +127,20 @@ process.on('message', (message) => {
     if (message.method === 'initialize') { if (db) db.close(); process.disconnect(); }
   }
 });
-process.on('disconnect', () => { if (db?.isOpen) db.close(); });
+function releaseLease() {
+  if (!db?.isOpen) return;
+  try {
+    if (lease && fence) {
+      transaction(db, () => {
+        db.prepare('UPDATE runtime_meta SET owner=NULL WHERE environment=? AND owner=? AND epoch=? AND fence=?')
+          .run(options.environmentId, lease, options.epoch, fence);
+      });
+    }
+  } finally {
+    db.close();
+  }
+}
+process.on('disconnect', releaseLease);
+process.once('SIGTERM', () => {
+  try { releaseLease(); } finally { process.exit(); }
+});
