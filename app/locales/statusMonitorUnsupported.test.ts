@@ -38,6 +38,12 @@ describe('statusMonitor unsupported message locale completeness', () => {
     expect(String(value)).not.toContain('ACP');
   });
 
+  it.each(acpLocales)('%s keeps the generic skill fallback independent of OpenCode', (_locale, messages) => {
+    const value = messages.statusMonitor.skills.unsupported;
+    expectNonEmptyString(value);
+    expect(value).not.toContain('OpenCode');
+  });
+
   it('keeps unsupported message keys identical across locales', () => {
     for (const [_locale, messages] of acpLocales) {
       const keys = sections.flatMap((section) =>
