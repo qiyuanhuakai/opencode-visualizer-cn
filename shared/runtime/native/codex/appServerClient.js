@@ -189,6 +189,15 @@ export function createAppServerClient({
     draining = false;
   const pending = new Map(),
     queue = [];
+  let pendingIdle, historySlot;
+  let waitingRequests = 0;
+  function finishRequest(id) {
+    pending.delete(id);
+    if (!pending.size) {
+      pendingIdle?.resolve();
+      pendingIdle = undefined;
+    }
+  }
   function close(error = new ProtocolError('source_unavailable', 'codex.connection')) {
     if (closed) return;
     closed = true;
@@ -200,6 +209,10 @@ export function createAppServerClient({
       waiter.reject(error);
     }
     pending.clear();
+    pendingIdle?.resolve();
+    pendingIdle = undefined;
+    historySlot?.resolve();
+    historySlot = undefined;
     transport.close();
     onFailure?.(error);
   }
@@ -247,7 +260,7 @@ export function createAppServerClient({
         const waiter = pending.get(message.id);
         if (!waiter) return;
         clearTimeout(waiter.timer);
-        pending.delete(message.id);
+        finishRequest(message.id);
         if (message.error) {
           const nativeCode = Number.isInteger(message.error.code) ? message.error.code : null;
           const code =
@@ -276,12 +289,19 @@ export function createAppServerClient({
     transport.send(raw);
   }
   return {
-    request(method, params) {
-      requireValue(!closed && pending.size < 512, 'codex.pending', 'source_unavailable');
+    async request(method, params) {
+      requireValue(!closed && pending.size + waitingRequests < 512, 'codex.pending', 'source_unavailable');
+      waitingRequests++;
+      try {
+        while (historySlot && !closed) await historySlot.promise;
+      } finally {
+        waitingRequests--;
+      }
+      requireValue(!closed, 'codex.closed', 'source_unavailable');
       const id = ++nextId;
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
-          pending.delete(id);
+          finishRequest(id);
           reject(new ProtocolError('timeout', `codex.rpc.${method}`));
         }, deadlineMs);
         pending.set(id, { resolve, reject, timer, method });
@@ -289,7 +309,7 @@ export function createAppServerClient({
           write({ id, method, params });
         } catch (error) {
           clearTimeout(timer);
-          pending.delete(id);
+          finishRequest(id);
           reject(error);
         }
       });
@@ -298,15 +318,30 @@ export function createAppServerClient({
       requireValue(!closed && pending.size < 512, 'codex.pending', 'source_unavailable');
       requireValue(method === 'thread/items/list', 'codex.history_method', 'unsupported');
       requireValue(typeof transport.requestRaw === 'function', 'codex.history_transport', 'unsupported');
+      // Result-first native frames carry their request ID at the end. Give the
+      // streaming transport sole ownership of response frames while reading history.
+      requireValue(!historySlot, 'codex.raw_request', 'conflict');
+      const slot = Promise.withResolvers();
+      historySlot = slot;
+      const olderReplies = pending.size ? (pendingIdle ??= Promise.withResolvers()).promise : null;
       const id = ++nextId;
       const scanner = createEnvelopeScanner();
       let envelope,
         failure,
         done = false,
         cancelled = false;
-      const frame = transport.requestRaw(JSON.stringify({ id, method, params }), id);
+      let frame;
+      function release() {
+        if (historySlot !== slot) return;
+        historySlot = undefined;
+        slot.resolve();
+      }
       async function* stream() {
         try {
+          if (olderReplies) await Promise.race([olderReplies, slot.promise]);
+          if (cancelled) return;
+          requireValue(!closed, 'codex.closed', 'source_unavailable');
+          frame = transport.requestRaw(JSON.stringify({ id, method, params }), id);
           for await (const chunk of frame) {
             scanner.push(chunk);
             yield chunk;
@@ -334,6 +369,7 @@ export function createAppServerClient({
           throw error;
         } finally {
           done = true;
+          release();
         }
       }
       return {
@@ -342,7 +378,8 @@ export function createAppServerClient({
         cancel() {
           if (cancelled) return;
           cancelled = true;
-          frame.cancel?.();
+          frame?.cancel?.();
+          release();
         },
         envelope() {
           if (failure) throw failure;
