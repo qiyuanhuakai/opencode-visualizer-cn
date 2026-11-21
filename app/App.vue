@@ -13,7 +13,7 @@
           :project-directory="projectDirectory"
           :active-directory="activeDirectory"
           :selected-session-id="runtimeActionClient ? unifiedTreeSelectedKey : selectedSessionId"
-          :runtime-create-available="(runtimeConversationManifest ?? managementManifest)?.core.createSession.state === 'supported' && !!runtimeActionClient"
+          :runtime-create-available="topPanelCreationManifest?.core.createSession.state === 'supported' && !!runtimeActionClient"
           :native-selected-display="nativeSelectedDisplay"
           :home-path="homePath"
           :sandbox-first-mode="activeBackendCapabilities.sessionManagementMode === 'sandbox-first'"
@@ -63,8 +63,8 @@
         >
           <template #runtime-agent-controls>
             <div class="runtime-dropdown-agents">
-              <AgentInstanceSelector :instances="harnessManifests" :names="runtimeAgentNames" :selected="managementHarnessInstanceId" @select="managementHarnessInstanceId = $event" />
-              <label v-if="managementHarnessInstanceId">
+              <AgentInstanceSelector :instances="harnessManifests" :names="runtimeAgentNames" :selected="topPanelCreationManifest?.harnessInstanceId ?? null" @select="topPanelHarnessChoice = $event" />
+              <label v-if="topPanelCreationManifest">
                 <input v-model="filterTopPanelAgent" type="checkbox" />
                 {{ t('app.runtimeBridgeMenu.filterAgent', 'Only this Agent') }}
               </label>
@@ -9987,6 +9987,8 @@ async function connectRuntimeBridge(openRemote = false): Promise<void> {
   runtimeEnvironmentId.value = null;
   bridgeReference.value = null;
   runtimeAgentNames.value = {};
+  topPanelHarnessChoice.value = null;
+  filterTopPanelAgent.value = false;
   const owner = useRuntimeConnection({
     reference: managementCandidate(bridgeLoginUrl.value),
     bootstrapTree: !openRemote,
@@ -10195,10 +10197,11 @@ watch([() => runtimePins.value, () => runtimePins.value?.revision.value, () => u
   }).catch(() => {});
 });
 const filterTopPanelAgent = ref(false);
+const topPanelHarnessChoice = ref<HarnessInstanceId | null>(null);
 const runtimeTopPanelTree = computed(() => buildRuntimeTopPanelTree(
   unifiedSessionTree.value?.tree.value ?? [],
   runtimeTopPanelPinnedKeys.value,
-  filterTopPanelAgent.value ? managementHarnessInstanceId.value ?? undefined : undefined,
+  filterTopPanelAgent.value ? topPanelCreationManifest.value?.harnessInstanceId : undefined,
 ));
 const unifiedTreeRows = computed<readonly UnifiedFlatRow[] | undefined>(() => unifiedSessionTree.value?.rows.value);
 const unifiedTreeSources = computed<readonly HarnessEntry[]>(() => {
@@ -11701,8 +11704,13 @@ const backendSessionActions = useBackendSessionActions({
   runtime: runtimeSessionRuntime,
 });
 
+const topPanelCreationManifest = computed(() =>
+  harnessManifests.value.find(manifest => manifest.harnessInstanceId === topPanelHarnessChoice.value)
+    ?? runtimeConversationManifest.value ?? managementManifest.value,
+);
+
 async function createRuntimeSession(directory?: string): Promise<BackendSessionInfo | undefined> {
-  const manifest = runtimeConversationManifest.value ?? managementManifest.value;
+  const manifest = topPanelCreationManifest.value;
   const client = runtimeActionClient.value;
   if (!manifest || !client) throw new Error('Select a connected Agent instance.');
   const workspaces = runtimeWorkspaceKeys.map(key => ({ key, workspace: decodeWorkspaceKey(key) })).filter(entry => entry.workspace.environmentId === manifest.environmentId);

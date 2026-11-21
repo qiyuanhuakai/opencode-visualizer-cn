@@ -296,6 +296,7 @@
                       <div class="tree-actions">
                         <button
                           v-if="
+                            (!runtimeMode || runtimeCreateAvailable) &&
                             sandbox.kind !== 'global' &&
                             (sandbox.kind !== 'sandbox' || sandbox.sessions.length > 0)
                           "
@@ -639,7 +640,7 @@
         <button
           type="button"
           class="control-button new-session-button"
-          :disabled="!selectedSessionId && !runtimeCreateAvailable"
+          :disabled="runtimeMode ? !runtimeCreateAvailable : !selectedSessionId"
           @click="$emit('new-session')"
           :title="$t('topPanel.newSessionShortcut')"
         >
@@ -2342,9 +2343,11 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
 }
 
 .codex-menu-root :deep(.codex-panel-button) {
+  width: 32px;
   min-width: 32px;
   height: 32px;
-  padding: 0 6px;
+  padding: 0 2px;
+  gap: 1px;
   background: var(--theme-top-dropdown-control-bg, #0b1320);
   border-color: var(--theme-top-dropdown-border, #334155);
   color: var(--theme-top-dropdown-text, #e2e8f0);
