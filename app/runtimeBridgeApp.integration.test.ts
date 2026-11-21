@@ -33,13 +33,13 @@ it('connects through Bridge login and renders selected native history over the a
   });
   monitor.click();
   const codex = await vi.waitFor(() => {
-    const item = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(option => option.textContent?.includes('Codex'));
+    const item = [...fixture.element.querySelectorAll<HTMLElement>('.status-monitor-popover [role="option"]')].find(option => option.textContent?.trim() === 'Codex');
     expect(item).toBeTruthy();
     return item!;
   });
   codex.click();
   await vi.waitFor(() => {
-    expect(monitor.getAttribute('aria-label')).toContain('Codex');
+    expect(fixture.element.querySelector('.status-monitor-popover [data-testid="management-agent-selector"] button')?.getAttribute('aria-label')).toContain('Codex');
   });
   fixture.element.querySelector<HTMLButtonElement>('button[aria-label="Close status monitor"]')!.click();
   fixture.element.querySelector<HTMLButtonElement>('button[title="Providers & models"]')!.click();

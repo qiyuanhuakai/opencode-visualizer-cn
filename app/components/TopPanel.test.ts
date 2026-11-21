@@ -210,7 +210,7 @@ describe('TopPanel', () => {
     // When: the top toolbar renders its management and backend panel controls.
     const management = requireButton(root, '.management-toggle-button');
     const forge = requireButton(root, '.forge-button');
-    const codex = requireButton(root, '.codex-button');
+    const codex = requireButton(root, '.codex-panel-button');
 
     // Then: the order is management mode, Forge panel, then Codex panel.
     expect(management.compareDocumentPosition(forge) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(

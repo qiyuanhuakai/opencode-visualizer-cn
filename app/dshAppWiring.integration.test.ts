@@ -1148,11 +1148,12 @@ describe('dsh lifecycle wiring (Todo 33)', () => {
       runtimeActionClient: box({}),
       decodeSessionKey: (key: string) => key,
       runtimeTargetAttached: () => true,
+      batchActionAvailable: (_action: string, key: string) => key !== 'unsupported',
       showConfirm: confirm,
       t: (_key: string, values: { count: number }) => `Delete ${values.count} selected sessions`,
       runtimeSessionRuntime: { router: { delete: remove } },
     }) as (action: string, keys: string[]) => Promise<void>;
-    await batch('delete', ['a', 'a', 'hidden-b']);
+    await batch('delete', ['a', 'a', 'hidden-b', 'unsupported']);
     expect(confirm).toHaveBeenCalledExactlyOnceWith('Delete 2 selected sessions');
     expect(remove.mock.calls).toHaveLength(confirmed ? 2 : 0);
   });

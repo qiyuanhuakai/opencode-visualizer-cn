@@ -9,7 +9,7 @@ import { expect, it, vi } from 'vitest';
 import { mountRuntimeApp } from './test/runtimeAppHarness';
 import type { LegacyPageRequest } from './runtime/migration/legacyExport';
 
-it('lists and binds real desktop SQLite history from the Bridge migration menu in App', async () => {
+it('lists and binds real desktop SQLite history from the Settings migration entry in App', async () => {
   const fixture = await mountRuntimeApp([]);
   const root = await mkdtemp(path.join(tmpdir(), 'vis-desktop-migration-app-'));
   const file = path.join(root, 'renderer-storage.json');
@@ -37,8 +37,8 @@ it('lists and binds real desktop SQLite history from the Bridge migration menu i
       exportBinding: (request: { sourceKey: string }) => withWorker(worker => worker.exportBinding(request)),
     } } });
     Object.defineProperty(window, 'indexedDB', { configurable: true, value: { databases: async () => [] } });
-    fixture.element.querySelector<HTMLButtonElement>('button[aria-label="Bridge"]')!.click(); await nextTick();
-    const menu = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(entry => entry.textContent?.includes('Migrate workspace data'));
+    fixture.element.querySelector<HTMLButtonElement>('button[title="Settings"]')!.click(); await nextTick();
+    const menu = [...fixture.element.querySelectorAll<HTMLElement>('dialog[open][aria-labelledby="settings-modal-title"] .setting-link-row')].find(entry => entry.textContent?.includes('Migrate workspace data'));
     expect(menu).toBeDefined(); menu!.click();
     const hash = (text: string) => createHash('sha256').update(text).digest('hex');
     const sourceKey = hash(JSON.stringify([`electron:${hash(path.resolve(file))}/sqlite/kv`, key]));
