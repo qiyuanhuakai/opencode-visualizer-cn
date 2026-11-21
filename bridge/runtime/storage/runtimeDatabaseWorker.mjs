@@ -7,7 +7,10 @@ import { prepareSchema, transaction } from './schema.js';
 import { probeLocalFilesystem } from './localFilesystem.js';
 import { createQueries } from './storeQueries.js';
 let db; let options; let queries; let fence; let lease; let backupPath; let locality;
-const send = (value) => { if (process.connected) process.send(value); };
+const send = (value) => {
+  if (!process.connected) return;
+  process.send(value, error => { if (error) shutdownWorker(); });
+};
 function assertOwner() {
   const current = queries.meta();
   if (current.owner !== lease || current.fence !== fence || current.epoch !== options.epoch) throw new StoreError('conflict', 'stale_owner');
@@ -140,7 +143,15 @@ function releaseLease() {
     db.close();
   }
 }
-process.on('disconnect', releaseLease);
-process.once('SIGTERM', () => {
-  try { releaseLease(); } finally { process.exit(); }
-});
+function shutdownWorker() {
+  try {
+    releaseLease();
+  } catch (error) {
+    const failure = storageError(error);
+    console.error(`vis_bridge runtime store cleanup failed: ${failure.code}/${failure.reason}`);
+    process.exitCode = 1;
+  }
+  if (process.connected) process.disconnect();
+}
+process.on('disconnect', shutdownWorker);
+process.once('SIGTERM', shutdownWorker);

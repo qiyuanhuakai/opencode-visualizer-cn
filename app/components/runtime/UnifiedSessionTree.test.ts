@@ -647,7 +647,13 @@ describe('task 21 — unified session tree acceptance', () => {
     } });
     mounted.push(tree);
     await vi.waitFor(() => expect(tree.root.querySelectorAll('.unified-pin-button.is-pinned')).toHaveLength(1));
-    tree.root.querySelector<HTMLButtonElement>('.unified-pin-button.is-pinned')!.click();
+    const pin = tree.root.querySelector<HTMLButtonElement>('.unified-pin-button.is-pinned')!;
+    for (const key of ['Enter', ' ']) {
+      const keydown = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      pin.dispatchEvent(keydown);
+      expect(keydown.defaultPrevented).toBe(false);
+    }
+    pin.click();
     expect(toggleKey).toHaveBeenCalledExactlyOnceWith(sessionKey(1, 'codex'));
     expect(tree.emitted.has('select-key')).toBe(false);
   });

@@ -33,6 +33,7 @@
         <Dropdown
           v-model:open="treeDropdownOpen"
           class="tree-dropdown-root"
+          :menu-role="runtimeMode ? 'dialog' : 'listbox'"
           :label="dropdownLabel"
           :placeholder="$t('topPanel.selectSession')"
           :title="$t('topPanel.selectSession') + ' (Ctrl-G)'"

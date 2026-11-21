@@ -589,6 +589,7 @@ function rowLabel(row: UnifiedFlatRow): string {
   return row.node.session.title;
 }
 function onKeyDown(event: KeyboardEvent): void {
+  if (event.target !== event.currentTarget) return;
   const rows = props.treeRows ?? [];
   if (!rows.length) return;
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
