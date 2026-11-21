@@ -32,6 +32,9 @@
               {{ root }}
             </button>
           </div>
+          <p v-if="runtimeRootOnly && runtimeDirectories?.length" class="error-text">
+            {{ $t('projectPicker.acpBoundRoot', 'This ACP agent creates sessions at its configured workspace root.') }}
+          </p>
           <p v-if="runtimeDirectories?.length === 0" class="error-text">{{ $t('runtime.session.noWorkspace') }}</p>
           <div class="path-row">
             <input
@@ -39,6 +42,7 @@
               :value="rawInput"
               class="path-input"
               type="text"
+              :readonly="runtimeRootOnly"
               :placeholder="$t('projectPicker.placeholder')"
               @input="handleInput"
               @keydown="handleInputKeydown"
@@ -97,6 +101,7 @@ const props = defineProps<{
   homePath?: string;
   backendKind: BackendKind;
   runtimeDirectories?: readonly string[];
+  runtimeRootOnly?: boolean;
   listRuntimeDirectory?: (directory: string) => Promise<{ name: string; path: string; type: FileNode['type'] }[]>;
 }>();
 
@@ -188,6 +193,7 @@ const isDrillDownLocked = computed(() => {
 // ---------------------------------------------------------------------------
 
 watch(currentDir, (dir) => {
+  if (props.runtimeRootOnly) return;
   if (!dir) {
     allEntries.value = [];
     hasGitDirectory.value = false;
@@ -203,7 +209,7 @@ watch(
     if (!el) return;
     if (open) {
       if (!el.open) el.showModal();
-      dropdownOpen.value = true;
+      dropdownOpen.value = !props.runtimeRootOnly;
       void initPicker();
     } else if (el.open) {
       el.close();
@@ -224,7 +230,7 @@ function initPicker() {
   const initial = props.runtimeDirectories ? props.runtimeDirectories[0] ?? '' : homePrefix.value || '/';
   rawInput.value = initial ? collapseTilde(ensureTrailingSlash(normalizePath(initial))) : '';
   const dir = currentDir.value;
-  if (dir) void fetchDirectory(dir);
+  if (dir && !props.runtimeRootOnly) void fetchDirectory(dir);
 
   nextTick(() => {
     inputRef.value?.focus();
@@ -348,6 +354,10 @@ function handleInputKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
     e.preventDefault();
     handleClose();
+    return;
+  }
+  if (props.runtimeRootOnly) {
+    if (e.key === 'Enter') { e.preventDefault(); handleOpen(); }
     return;
   }
   if (e.key === 'ArrowDown') {

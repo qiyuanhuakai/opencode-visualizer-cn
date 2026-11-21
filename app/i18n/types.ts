@@ -303,6 +303,7 @@ export interface LocaleMessages {
       archived: string;
     };
     sessionActions: {
+      loadChildren: string;
       agents: string;
       fork: string;
       compact: string;
@@ -1346,6 +1347,7 @@ export interface LocaleMessages {
     };
   };
   projectPicker: {
+    acpBoundRoot: string;
     title: string;
     placeholder: string;
     open: string;

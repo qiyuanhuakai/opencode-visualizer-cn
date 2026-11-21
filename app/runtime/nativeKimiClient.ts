@@ -29,6 +29,15 @@ export function createNativeKimiSessionClient(client: RuntimeClient, manifest: H
         requireValue(scope.isCurrent(), 'kimi.session_generation', 'reconcile_required');
         const sessionFacade = nativeSessionId === session.nativeSessionId ? facade : createNativeFacade(client, manifest, parseSessionRef({ ...session, nativeSessionId }));
         const prefix = `/api/v1/sessions/${encodeURIComponent(nativeSessionId)}`;
+        if (spec.method === 'POST' && spec.path === `${prefix}/profile`) {
+          const configuration = (spec.body as { agent_config?: { goal_control?: string } } | undefined)?.agent_config;
+          const control = configuration?.goal_control;
+          if (control && ['pause', 'resume', 'cancel'].includes(control)) {
+            const mutation = sessionFacade.mutate(`kimi.goal.${control}`, {});
+            void mutation.accepted.catch(() => undefined);
+            return (await mutation.executed).value;
+          }
+        }
         const routes = {
           ...KIMI_SESSION_OPERATIONS,
           'kimi.updateProfile': { method: 'POST', suffix: '/profile' },
@@ -89,7 +98,9 @@ export function createNativeKimiSessionClient(client: RuntimeClient, manifest: H
       throw new Error(`runtime.kimi: undeclared provider operation ${spec.method} ${spec.path}`);
     },
   });
-  return { ...native, canUpdateGoalObjective: manifest.extensions.some(entry => entry.name === 'kimi.goal.update' && entry.support.state === 'supported') };
+  const supports = (name: string) => manifest.extensions.some(entry => entry.name === name && entry.support.state === 'supported');
+  return { ...native, canUpdateGoalObjective: supports('kimi.goal.update'),
+    canControlGoal: (control: 'pause' | 'resume' | 'cancel') => supports(`kimi.goal.${control}`) };
 }
 
 export function createNativeKimiProviders(client: RuntimeClient, manifest: HarnessManifest): KimiWebProvidersClient {

@@ -308,6 +308,7 @@ const messages: LocaleMessages = {
       archived: '已封存',
     },
     sessionActions: {
+      loadChildren: '載入子工作階段',
       agents: '子智慧體管理',
       fork: '複製完整工作階段',
       compact: '壓縮工作階段上下文',
@@ -1397,6 +1398,7 @@ threadOpen: '為目前工作階段開啟 Host Thread',
     },
   },
   projectPicker: {
+    acpBoundRoot: '此 ACP Agent 只能在設定的工作區根目錄建立工作階段。',
     title: '開啟專案',
     placeholder: '目錄路徑...',
     open: '開啟',

@@ -312,6 +312,7 @@ const messages: LocaleMessages = {
       archived: 'アーカイブ',
     },
     sessionActions: {
+      loadChildren: '子セッションを読み込む',
       agents: 'サブエージェント管理',
       fork: 'セッション全体を複製',
       compact: 'セッションのコンテキストを圧縮',
@@ -1407,6 +1408,7 @@ threadOpen: '選択中のセッションの Host Thread を開く',
     },
   },
   projectPicker: {
+    acpBoundRoot: 'この ACP エージェントは、設定済みのワークスペースのルートでセッションを作成します。',
     title: 'プロジェクトを開く',
     placeholder: 'ディレクトリパス…',
     open: '開く',

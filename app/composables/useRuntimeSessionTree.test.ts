@@ -1,3 +1,4 @@
+import { buildRuntimeTopPanelTree } from '../runtime/topPanelTree';
 import { describe, expect, it, vi } from 'vitest';
 import { HARNESS_KINDS, useRuntimeSessionTree, type HarnessKind } from './useRuntimeSessionTree';
 import { encodeSessionKey, parseConnectionProfileId } from '../../shared/runtime/identity.js';
@@ -436,6 +437,54 @@ describe('useRuntimeSessionTree — index view freshness (review round 613858028
 
       expect(client.minted).toHaveLength(1);
       expect([...(client.minted[0] ?? [])].sort()).toEqual(['harnesses', 'workspaces']);
+    } finally {
+      await tree.dispose();
+    }
+  });
+
+  it('keeps the selected Agent instance filter on every search page', async () => {
+    const client = new ReactiveClient();
+    seedTopology(client);
+    for (let index = 0; index < 202; index++) {
+      client.add('session_summaries', canonical(sessionKey(index), index + 2, titled(index, 'shared title')));
+      client.add('session_summaries', canonical(sessionKey(index, 'codex'), index + 2, {
+        ...titled(index, 'shared title'), session: sessionRef(index, 'codex'),
+      }));
+    }
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV });
+    try {
+      await tree.start();
+      const first = await tree.search('shared title', HARNESS_IDS.codex);
+      expect(first.totalMatched).toBe(202);
+      expect(first.matches).toHaveLength(200);
+      expect(first.matches.every(row => row.harnessInstanceId === HARNESS_IDS.codex)).toBe(true);
+      const second = await tree.searchMore();
+      expect(second.matches).toHaveLength(2);
+      expect(second.matches.every(row => row.harnessInstanceId === HARNESS_IDS.codex)).toBe(true);
+      expect(second.hasMore).toBe(false);
+    } finally {
+      await tree.dispose();
+    }
+  });
+
+  it('projects newly loaded children into the top menu after a root-only start', async () => {
+    const client = new ReactiveClient();
+    seedTopology(client);
+    const parentKey = sessionKey(0);
+    client.add('session_summaries', canonical(parentKey, 1, titled(0, 'parent-session')));
+    const { history } = historySpy();
+    const tree = useRuntimeSessionTree({ client: client as never, profileId: PROFILE, target: ENV, history: history as never });
+    const menuRows = () => buildRuntimeTopPanelTree(tree.tree.value, new Set(), undefined, new Set(), tree.childScans.value)
+      .flatMap(project => project.sandboxes.flatMap(branch => branch.sessions));
+    try {
+      await tree.start();
+      expect(menuRows()).toEqual([expect.objectContaining({ id: parentKey, canLoadChildren: true })]);
+      client.add('session_summaries', canonical(sessionKey(1), 3, titled(1, 'child-session', sessionRef(0))));
+      await tree.loadMoreChildren(parentKey);
+      expect(menuRows()).toEqual([
+        expect.objectContaining({ id: parentKey, canLoadChildren: false }),
+        expect.objectContaining({ id: sessionKey(1), canLoadChildren: false }),
+      ]);
     } finally {
       await tree.dispose();
     }

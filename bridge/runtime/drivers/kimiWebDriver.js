@@ -61,6 +61,8 @@ export async function createKimiWebDriver(options) {
   const sessionSupport = new Map();
   let goalSubscription = false, goalProfileEdit = false;
   const goalReads = new Map();
+  const goalControls = ['pause', 'resume', 'cancel'];
+  let supportedGoalControls = new Set();
   const admission = options.admission ?? createAdmissionQueue();
   const transport = state === 'starting' ? createKimiWebTransport({ endpoint: options.endpoint, getAuthorization: options.getAuthorization, deadlineMs: options.deadlineMs }) : undefined;
   const lifecycleTransport = transport ? createKimiWebTransport({ endpoint: options.endpoint, getAuthorization: options.getAuthorization, deadlineMs: options.deadlineMs }) : undefined;
@@ -511,6 +513,7 @@ export async function createKimiWebDriver(options) {
         && profileSchema.goal_control?.enum?.includes('edit') === true;
       if (goalSubscription) sessionSupport.set('kimi.goal', true);
       if (goalProfileEdit) sessionSupport.set('kimi.goal.update', true);
+      supportedGoalControls = new Set(goalControls.filter(control => profileSchema?.goal_control?.enum?.includes(control) === true));
       for (const [name, route] of Object.entries(KIMI_PROVIDER_OPERATIONS)) {
         const template = route.path.replace(/\{id\}/g, '{}');
         const found = Object.entries(record(spec).paths ?? {}).some(([pathname, methods]) => pathname.replace(/\{[^}]+\}/g, '{}') === template && typeof methods?.[route.method.toLowerCase()] === 'object');
@@ -986,6 +989,13 @@ export async function createKimiWebDriver(options) {
     const params = record(context.params), body = operation === 'kimi.updateProfile' ? record(params.body) : {};
     return operations.nativeMutation(captured, operation, body, params.idempotencyKey, `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}${suffix}`);
   };
+  for (const control of goalControls) native[`kimi.goal.${control}`] = async context => {
+    const captured = capture(context, true);
+    requireValue(supportedGoalControls.has(control), 'kimi.goal_control', 'unsupported');
+    const params = record(context.params);
+    const pathname = `/api/v1/sessions/${encodeURIComponent(captured.session.nativeSessionId)}/profile`;
+    return operations.nativeMutation(captured, `kimi.goal.${control}`, { agent_config: { goal_control: control } }, params.idempotencyKey, pathname);
+  };
   function queueStartupRecovery() {
     const generation = ++startupGeneration;
     startupWork = startupWork.then(() => new Promise(resolve => setImmediate(resolve))).then(() => restoreOwnedTasks(generation));
@@ -1076,6 +1086,7 @@ export async function createKimiWebDriver(options) {
     cancel: capabilities.cancel, respondInteraction: capabilities.approvals || capabilities.questions,
   };
   const extensions = [
+    ...goalControls.map(control => ({ name: `kimi.goal.${control}`, scope: 'session', enabled: supportedGoalControls.has(control), mutation: true })),
     ...Object.entries(KIMI_SESSION_OPERATIONS).map(([name, route]) => ({ name, scope: 'session', enabled: sessionSupport.get(name) === true, mutation: route.method !== 'GET' })),
     ...Object.entries(KIMI_PROVIDER_OPERATIONS).map(([name, route]) => ({ name, scope: 'instance', enabled: providerSupport.get(name) === true, mutation: route.method !== 'GET' })),
     ...Object.entries(KIMI_PLUGIN_OPERATIONS).map(([name, route]) => ({ name, scope: 'instance', enabled: pluginSupport.get(name) === true, mutation: route.method !== 'GET' })),

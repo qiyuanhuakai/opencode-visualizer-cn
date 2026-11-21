@@ -308,6 +308,7 @@ const messages: LocaleMessages = {
       archived: '已归档',
     },
     sessionActions: {
+      loadChildren: '加载子会话',
       agents: '子智能体管理',
       fork: '复制完整会话',
       compact: '压缩会话上下文',
@@ -1398,6 +1399,7 @@ threadOpen: '为当前会话打开 Host Thread',
     },
   },
   projectPicker: {
+    acpBoundRoot: '此 ACP Agent 只能在配置的工作区根目录创建会话。',
     title: '打开项目',
     placeholder: '目录路径...',
     open: '打开',

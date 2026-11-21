@@ -12,6 +12,7 @@ export type TopPanelSession = {
   pinnedAt?: number;
   isPinned?: boolean;
   isImplicitlyPinned?: boolean;
+  canLoadChildren?: boolean;
 };
 
 export type TopPanelSandbox = {

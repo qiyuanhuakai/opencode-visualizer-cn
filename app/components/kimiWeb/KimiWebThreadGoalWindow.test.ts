@@ -9,6 +9,28 @@ afterEach(() => {
 });
 
 describe('Kimi thread goal window', () => {
+  it('leaves objective editing available on an edit-only Agent', async () => {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const app = createApp(KimiWebThreadGoalWindow, { sessionId: 'pinned', client: {
+      getGoal: async () => ({ goalId: 'goal', objective: 'Existing goal', status: 'active', turnsUsed: 0, tokensUsed: 0, wallClockMs: 0 }),
+      updateProfile: vi.fn(),
+      canUpdateGoalObjective: true,
+      canControlGoal: () => false,
+    } });
+    app.use(createI18n({ legacy: false, locale: 'en', messages: { en: { common: { save: 'Save', refresh: 'Refresh' } } } }));
+    app.mount(root);
+    try {
+      await nextTick();
+      await nextTick();
+      expect(root.textContent).toContain('Active');
+      expect(root.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false);
+      expect(root.textContent).not.toMatch(/Pause goal|Resume work|Cancel goal/);
+    } finally {
+      app.unmount();
+    }
+  });
+
   it('shows server status and routes objective and control buttons to its pinned session', async () => {
     let goal: KimiWebGoal | null = null;
     const client = {

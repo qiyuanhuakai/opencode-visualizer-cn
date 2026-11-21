@@ -455,6 +455,16 @@
                         <template #action>
                           <div class="tree-session-actions">
                             <button
+                              v-if="session.canLoadChildren"
+                              type="button"
+                              class="tree-action-button session-children"
+                              :title="$t('topPanel.sessionActions.loadChildren', 'Load child sessions')"
+                              :aria-label="$t('topPanel.sessionActions.loadChildren', 'Load child sessions')"
+                              @click.stop.prevent="emit('load-session-children', session.id)"
+                            >
+                              <Icon icon="lucide:git-fork" :width="16" :height="16" aria-hidden="true" />
+                            </button>
+                            <button
                               v-if="!session.archivedAt && actionsForSession(session.id).fork"
                               type="button"
                               class="tree-action-button session-fork"
@@ -1005,6 +1015,7 @@ const totalNotificationCount = computed(() =>
 );
 
 const emit = defineEmits<{
+  (event: 'load-session-children', key: string): void;
   (event: 'search-sessions', query: string): void;
   (event: 'select-notification'): void;
   (event: 'select-session', payload: SessionSelectPayload): void;
@@ -1080,7 +1091,7 @@ const MAX_SESSIONS = Infinity;
 
 const searchQuery = ref('');
 watch(searchQuery, query => {
-  if (props.runtimeMode && treeDropdownOpen.value) emit('search-sessions', query.trim());
+  if (props.runtimeMode) emit('search-sessions', query.trim());
 });
 
 const isShiftPressed = ref(false);

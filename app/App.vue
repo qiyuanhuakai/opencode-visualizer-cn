@@ -31,6 +31,7 @@
             delete: activeBackendCapabilities.sessionDelete,
           }"
           :worktrees-enabled="activeBackendCapabilities.worktrees"
+          @load-session-children="handleUnifiedLoadMoreChildren"
           @search-sessions="handleUnifiedSearch"
           @select-notification="handleNotificationSessionSelect"
           @create-worktree-from="createWorktreeFromWorktree"
@@ -554,6 +555,7 @@
       :open="isProjectPickerOpen"
       :home-path="projectPickerHomePath"
       :runtime-directories="runtimeProjectDirectories"
+      :runtime-root-only="topPanelCreationManifest?.kind === 'acp'"
       :list-runtime-directory="runtimeActionClient ? listRuntimeProjectDirectory : undefined"
       :backend-kind="activeBackendKind"
       @close="isProjectPickerOpen = false"
@@ -10262,6 +10264,7 @@ const runtimeTopPanelTree = computed(() => buildRuntimeTopPanelTree(
   runtimeTopPanelPinnedKeys.value,
   filterTopPanelAgent.value ? topPanelCreationManifest.value?.harnessInstanceId : undefined,
   new Set(runtimeContainerPins.value.map(pin => pin.key)),
+  unifiedSessionTree.value?.childScans.value,
 ));
 const unifiedTreeSources = computed<readonly HarnessEntry[]>(() => {
   const entries = new Map((unifiedSessionTree.value?.harnesses.value ?? []).map(entry => [entry.harnessInstanceId, entry]));
@@ -10397,9 +10400,17 @@ async function handleUnifiedSelectKey(key: string, origin: 'session-navigation' 
 
 
 
-function handleUnifiedSearch(query: string): void {
-  void unifiedSessionTree.value?.search(query).catch(() => {});
+function handleUnifiedLoadMoreChildren(key: string) {
+  void unifiedSessionTree.value?.loadMoreChildren(key).catch(error => { sessionError.value = toErrorMessage(error); });
 }
+const topPanelSearchQuery = ref('');
+function handleUnifiedSearch(query: string): void {
+  topPanelSearchQuery.value = query;
+}
+watch([topPanelSearchQuery, filterTopPanelAgent, topPanelHarnessChoice], ([query, filtered]) => {
+  const harness = filtered ? topPanelCreationManifest.value?.harnessInstanceId : undefined;
+  void unifiedSessionTree.value?.search(query, harness).catch(() => {});
+});
 
 function handleUnifiedSearchMore(): void {
   void unifiedSessionTree.value?.searchMore().catch(() => {});
@@ -11809,11 +11820,15 @@ const topPanelCreationManifest = computed(() =>
     ?? harnessManifests.value[0],
 );
 
-const runtimeProjectDirectories = computed(() => runtimeActionClient.value
-  ? runtimeWorkspaceKeys.value.map(key => decodeWorkspaceKey(key))
-    .filter(workspace => workspace.environmentId === (topPanelCreationManifest.value?.environmentId ?? runtimeEnvironmentId.value))
-    .map(workspace => workspace.canonicalPath)
-  : undefined);
+const runtimeProjectDirectories = computed(() => {
+  if (!runtimeActionClient.value) return undefined;
+  const manifest = topPanelCreationManifest.value;
+  const target = manifest?.environmentId ?? runtimeEnvironmentId.value;
+  const roots = runtimeWorkspaceKeys.value.map(key => decodeWorkspaceKey(key))
+    .filter(workspace => workspace.environmentId === target)
+    .map(workspace => workspace.canonicalPath);
+  return manifest?.kind === 'acp' ? roots.slice(0, 1) : roots;
+});
 
 function findRuntimeProjectWorkspace(environmentId: EnvironmentId, directory: string) {
   const normalize = (path: string) => path.replaceAll('\\', '/').replace(/\/+$/, '');
@@ -11853,7 +11868,10 @@ async function createRuntimeSession(directory?: string): Promise<BackendSessionI
     requested = path;
   }
   const workspace = findRuntimeProjectWorkspace(manifest.environmentId, requested);
-  if (!workspace) throw new Error('Select a workspace authorized by this Bridge.');
+  if (!workspace || (manifest.kind === 'acp' && !runtimeProjectDirectories.value?.includes(workspace.workspace.canonicalPath))) {
+    throw new Error(t('runtime.session.noWorkspace'));
+  }
+  if (manifest.kind === 'acp' && workspace.relative) throw new Error(t('runtime.session.noWorkspace'));
   const currentManifest = topPanelCreationManifest.value;
   if (client !== runtimeActionClient.value || !scope.isCurrent()
     || currentManifest?.harnessInstanceId !== manifest.harnessInstanceId
@@ -11893,6 +11911,7 @@ function asRuntimeRecord(value: unknown): Record<string, unknown> {
 
 const backendSessionLifecycle = useBackendSessionLifecycle({
   createRuntimeSession,
+  runtimeCreateDirectory: () => runtimeSelectedDirectory.value?.trim() || undefined,
   activeBackendKind,
   codexProjectId: CODEX_PROJECT_ID,
   acpProjectId: ACP_PROJECT_ID,

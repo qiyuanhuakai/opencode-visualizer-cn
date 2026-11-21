@@ -1,7 +1,7 @@
 import type { UnifiedTreeNode } from '../composables/useRuntimeSessionTree';
 import type { TopPanelSandbox, TopPanelSession, TopPanelWorktree } from '../types/top-panel';
 
-export function buildRuntimeTopPanelTree(nodes: readonly UnifiedTreeNode[], pins: ReadonlySet<string>, harnessInstanceId?: string, containerPins: ReadonlySet<string> = new Set()): TopPanelWorktree[] {
+export function buildRuntimeTopPanelTree(nodes: readonly UnifiedTreeNode[], pins: ReadonlySet<string>, harnessInstanceId?: string, containerPins: ReadonlySet<string> = new Set(), childScans: ReadonlySet<string> = new Set()): TopPanelWorktree[] {
   function sessions(children: readonly UnifiedTreeNode[]): TopPanelSession[] {
     return children.flatMap(node => {
       if (node.kind !== 'session' && node.kind !== 'native') return sessions(node.children);
@@ -17,6 +17,7 @@ export function buildRuntimeTopPanelTree(nodes: readonly UnifiedTreeNode[], pins
         timeUpdated: time(row.updatedAt),
         archivedAt: row.archived ? time(row.updatedAt) || 1 : undefined,
         isPinned: pins.has(row.key),
+        canLoadChildren: node.kind === 'session' && !childScans.has(row.key),
       }, ...sessions(node.children)];
     });
   }
@@ -40,7 +41,7 @@ export function buildRuntimeTopPanelTree(nodes: readonly UnifiedTreeNode[], pins
       return [{ key: node.key, directory: node.directory, name: node.name, label: node.name, sandboxes: [sandbox(node, 'branch')] }];
     }
     if (node.kind === 'section') {
-      if (node.section !== 'global') return buildRuntimeTopPanelTree(node.children, pins, harnessInstanceId, containerPins);
+      if (node.section !== 'global') return buildRuntimeTopPanelTree(node.children, pins, harnessInstanceId, containerPins, childScans);
       const sandboxes = node.children.map(child => sandbox(child, 'folder')).filter(child => child.sessions.length > 0);
       return [{
         key: node.key, directory: '', projectId: 'global', kind: 'global',
