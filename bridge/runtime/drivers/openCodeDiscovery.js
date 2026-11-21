@@ -3,12 +3,29 @@ import { ProtocolError, requireValue } from '../../../shared/runtime/capabilitie
 import { OPEN_CODE_LIMITS, summary, pageLimit, discoveryScope } from '../../../shared/runtime/native/opencode/protocol.js';
 
 /** Events are revision fences over provisional native pages, never a second full catalog. */
-export function createOpenCodeDiscovery({ reader, request, current, assertCurrent }) {
+export function createOpenCodeDiscovery({ reader, request, current, assertCurrent, cursorApi }) {
   const scans = new Map();
   let failure = null;
   let closed = false;
   const same = (left, right) => left.epoch === right.epoch && left.processGeneration === right.processGeneration;
   const partial = (reason, items = []) => ({ items, cursor: null, completeness: items.length ? 'partial' : 'unsupported', reason, retryable: true, ...current() });
+  const inScope = (row, scope) => (scope.projectID === undefined || row.projectID === scope.projectID)
+    && (scope.directory === undefined || row.directory === scope.directory)
+    && (scope.parentID === undefined || row.parentID === scope.parentID)
+    && (scope.roots !== true || row.parentID === undefined)
+    && (scope.archived === undefined || Boolean(row.time.archived) === scope.archived);
+  async function apiPage(limit, scan) {
+    const { scope, nativeCursor } = scan;
+    const result = await request('/api/session', { query: { limit, order: 'asc', project: scope.projectID, directory: scope.directory, cursor: nativeCursor ?? undefined } });
+    requireValue(Array.isArray(result?.data) && result.data.length <= limit && result.cursor && typeof result.cursor === 'object', 'opencode.cursor_page');
+    const cursor = result.cursor.next ?? null;
+    requireValue(cursor === null || typeof cursor === 'string' && cursor.length > 0 && cursor.length <= 8192, 'opencode.cursor_page');
+    const items = result.data.map(row => {
+      requireValue(typeof row?.location?.directory === 'string', 'opencode.cursor_directory');
+      return summary({ ...row, directory: row.location.directory, version: cursorApi });
+    });
+    return { items, cursor, completeness: cursor ? 'partial' : 'complete', reason: cursor ? 'more-pages' : 'native-api-eof', provenance: { nativeVersion: cursorApi, summaryOnly: true } };
+  }
   function reconcileRow(scan, item) {
     const overlay = scan.overlay.get(item.id);
     if (!overlay) return { summary: item, revision: scan.seq };
@@ -57,20 +74,24 @@ export function createOpenCodeDiscovery({ reader, request, current, assertCurren
       // Install before awaiting the worker: a delete racing the first page is also fenced.
       const token = randomUUID(); scans.set(token, scan);
       try {
-        if (!reader) throw new ProtocolError('unsupported', 'opencode.store_unavailable');
-        const page = await reader.page({ limit, scope, cursor: scan.nativeCursor });
+        if (!reader && !cursorApi) throw new ProtocolError('unsupported', 'opencode.store_unavailable');
+        const page = reader ? await reader.page({ limit, scope, cursor: scan.nativeCursor }) : await apiPage(limit, scan);
         await assertCurrent();
         if (!same(scan, current())) throw new ProtocolError('reconcile_required', 'opencode.generation');
         const seen = new Set();
         const items = [];
         for (const native of page.items) {
           const item = summary(native);
-          requireValue(!seen.has(item.id) && (scan.lastId === undefined || Buffer.compare(Buffer.from(item.id), Buffer.from(scan.lastId)) > 0), 'opencode.repeated_page', 'reconcile_required');
+          const ordered = reader
+            ? scan.lastId === undefined || Buffer.compare(Buffer.from(item.id), Buffer.from(scan.lastId)) > 0
+            : item.id !== scan.lastId && (scan.lastCreated === undefined || item.time.created >= scan.lastCreated);
+          requireValue(!seen.has(item.id) && ordered, 'opencode.repeated_page', 'reconcile_required');
           seen.add(item.id);
+          scan.lastId = item.id;
+          scan.lastCreated = item.time.created;
           const row = reconcileRow(scan, item);
-          if (row) items.push(row);
+          if (row && inScope(row.summary, scope)) items.push(row);
         }
-        scan.lastId = page.items.at(-1)?.id ?? scan.lastId;
         requireValue(page.cursor === null || (page.cursor !== scan.nativeCursor && page.items.length > 0), 'opencode.repeated_cursor', 'reconcile_required');
         scan.nativeCursor = page.cursor;
         // An update without a native row may have moved into or out of this scan's scope.
@@ -94,11 +115,7 @@ export function createOpenCodeDiscovery({ reader, request, current, assertCurren
           const items = rows.slice(0, limit).map(summary).filter((row) => {
             if (seen.has(row.id)) return false;
             seen.add(row.id);
-            return (scope.projectID === undefined || row.projectID === scope.projectID)
-              && (scope.directory === undefined || row.directory === scope.directory)
-              && (scope.parentID === undefined || row.parentID === scope.parentID)
-              && (scope.roots !== true || row.parentID === undefined)
-              && (scope.archived === undefined || Boolean(row.time.archived) === scope.archived);
+            return inScope(row, scope);
           }).map(row => reconcileRow(scan, row)).filter(Boolean);
           return { ...partial(`api-enumeration-unproven:${error.field}`, items), completeness: 'partial' };
         } catch (apiError) {

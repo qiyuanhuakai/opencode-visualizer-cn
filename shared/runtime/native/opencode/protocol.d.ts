@@ -1,5 +1,6 @@
 import type { JsonValue } from '../../capabilities.js';
 export const OPEN_CODE_VERSION: '1.18.34';
+export const OPEN_CODE_CURSOR_VERSION: '1.19.5';
 export const OPEN_CODE_LIMITS: Readonly<{ page: 100; maxPage: 200; frame: 1048576; producer: 4194304; pageBytes: 524288 }>;
 export interface OpenCodeSummary {
   readonly id: string; readonly projectID: string; readonly parentID?: string; readonly directory: string;

@@ -1,6 +1,7 @@
 import { jsonValue, requireValue, textValue, integerValue } from '../../capabilities.js';
 
 export const OPEN_CODE_VERSION = '1.18.34';
+export const OPEN_CODE_CURSOR_VERSION = '1.19.5';
 export const OPEN_CODE_LIMITS = Object.freeze({ page: 100, maxPage: 200, frame: 1048576, producer: 4194304, pageBytes: 524288 });
 export function pageLimit(value = OPEN_CODE_LIMITS.page) {
   integerValue(value, 'opencode.page', OPEN_CODE_LIMITS.maxPage);
